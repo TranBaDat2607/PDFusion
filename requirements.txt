@@ -1,0 +1,36 @@
+# Core dependencies for Windows desktop PDF translation app
+PySide6>=6.5.0
+pydantic>=2.10.6
+pydantic-settings>=2.8.1
+
+# PDF processing and translation
+babeldoc>=0.4.11,<0.5.0
+PyMuPDF>=1.23.6,<1.25.3
+rich>=13.0.0
+
+# Translation services
+openai>=1.0.0
+google-generativeai>=0.3.0
+
+# Configuration and utilities
+tomlkit>=0.12.0
+requests>=2.31.0
+chardet>=5.2.0
+tenacity>=8.2.0
+python-dotenv>=1.0.0
+
+# Async processing
+asyncio-mqtt>=0.13.0
+
+# Additional dependencies needed for the application
+# These are required for proper functioning but were missing
+typing-extensions>=4.0.0
+pillow>=9.0.0
+
+# Development dependencies (optional)
+pytest>=7.0.0
+black>=23.0.0
+isort>=5.12.0
+
+# Docker specific dependencies
+xvfbwrapper>=0.2.9

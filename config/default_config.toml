@@ -1,0 +1,43 @@
+# Default configuration for desktop PDF translator
+# This file provides example configuration with Vietnamese language priority
+
+[translation]
+default_source_lang = "auto"
+default_target_lang = "vi"  # Vietnamese as default target
+preferred_service = "openai"
+max_pages = 50
+max_file_size_mb = 50.0
+cache_translations = true
+preserve_formatting = true
+min_text_length = 5
+
+[gui]
+window_width = 1200
+window_height = 800
+theme = "system"
+show_advanced_options = false
+auto_preview = true
+vietnamese_font_priority = true
+
+[processing]
+max_workers = 4
+timeout_seconds = 300
+quality_check = true
+backup_originals = true
+
+[openai]
+# API key should be set via environment variable OPENAI_API_KEY
+api_key = "${OPENAI_API_KEY}"
+model = "gpt-4"
+temperature = 0.3
+max_tokens = 4000
+
+[gemini]
+# API key should be set via environment variable GEMINI_API_KEY  
+api_key = "${GEMINI_API_KEY}"
+model = "gemini-pro"
+temperature = 0.3
+
+# Application metadata
+version = "1.0.0"
+debug_mode = false
