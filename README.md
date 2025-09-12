@@ -119,51 +119,6 @@ desktop_pdf_translator/
    python main.py
    ```
 
-### 3. Docker Setup (Alternative)
-
-If you prefer to run the application in a Docker container:
-
-1. **Install Docker Desktop**:
-   - Download from https://www.docker.com/products/docker-desktop
-   - Install and start Docker Desktop
-
-2. **Build and run with Docker**:
-   ```bash
-   # Build the Docker image
-   docker build -t desktop-pdf-translator .
-   
-   # Run the container
-   docker run -it --rm \
-     -e OPENAI_API_KEY=your_openai_api_key_here \
-     -e GEMINI_API_KEY=your_gemini_api_key_here \
-     desktop-pdf-translator
-   ```
-
-3. **Using Docker Compose** (Recommended):
-   ```bash
-   # Build and run with docker-compose
-   docker-compose up --build
-   ```
-
-4. **Configuration with Docker**:
-   Create a `.env` file with your API keys:
-   ```
-   OPENAI_API_KEY=your_openai_api_key_here
-   GEMINI_API_KEY=your_gemini_api_key_here
-   ```
-   
-   Then run:
-   ```bash
-   docker-compose --env-file .env up --build
-   ```
-
-5. **Important Notes for Docker**:
-   - The application is a GUI desktop app, which requires special handling in Docker
-   - For full GUI functionality, you may need to configure X11 forwarding on Linux
-   - On Windows and macOS, Docker Desktop provides limited GUI support
-   - API keys must be provided via environment variables
-   - Logs are written to `/app/logs` inside the container
-
 ## Configuration
 
 ### Default Configuration

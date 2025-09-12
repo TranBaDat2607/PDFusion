@@ -17,9 +17,6 @@ src_path = Path(__file__).parent / "src"
 if src_path.exists():
     sys.path.insert(0, str(src_path))
 
-# Define DOCKER_ENV variable
-DOCKER_ENV = os.environ.get('DOCKER_ENV', '').lower() == 'true'
-
 try:
     from desktop_pdf_translator.gui.main_window import main as gui_main
     from desktop_pdf_translator.config import get_config_manager
@@ -36,12 +33,7 @@ def setup_logging(debug_mode: bool = False):
     level = logging.DEBUG if debug_mode else logging.INFO
     
     # Create logs directory
-    if DOCKER_ENV:
-        # In Docker, write logs to /app/logs
-        log_dir = Path("/app/logs")
-    else:
-        # On Windows, use AppData
-        log_dir = Path.home() / "AppData" / "Local" / "DesktopPDFTranslator" / "logs"
+    log_dir = Path.home() / "AppData" / "Local" / "DesktopPDFTranslator" / "logs"
     
     log_dir.mkdir(parents=True, exist_ok=True)
     
@@ -115,11 +107,7 @@ def check_configuration():
         config_manager = get_config_manager()
         settings = config_manager.settings
         
-        if DOCKER_ENV:
-            print("✓ Running in Docker environment")
-            print(f"✓ Configuration loaded from: {config_manager.get_default_config_path()}")
-        else:
-            print(f"✓ Configuration loaded from: {config_manager.get_default_config_path()}")
+        print(f"✓ Configuration loaded from: {config_manager.get_default_config_path()}")
         
         # Check translation service configuration
         available_services = TranslatorFactory.get_available_services()
@@ -180,9 +168,6 @@ def print_startup_info():
     # Environment info
     print(f"Python: {sys.version.split()[0]}")
     print(f"Platform: {sys.platform}")
-    if DOCKER_ENV:
-        print("Environment: Docker Container")
-    print()
 
 
 def main():
@@ -192,8 +177,7 @@ def main():
     # Check dependencies
     print("Checking dependencies...")
     if not check_dependencies():
-        if not DOCKER_ENV:
-            input("Press Enter to exit...")
+        input("Press Enter to exit...")
         return 1
     
     print()
@@ -229,8 +213,7 @@ def main():
     except Exception as e:
         logging.exception("Fatal error starting application")
         print(f"❌ Fatal error: {e}")
-        if not DOCKER_ENV:
-            input("Press Enter to exit...")
+        input("Press Enter to exit...")
         return 1
 
 
