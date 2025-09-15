@@ -339,39 +339,59 @@ class ProgressPanel(QWidget):
 
 
 class RAGChatPanel(QWidget):
-    """Panel for future RAG chat functionality."""
+    """Panel for RAG chat functionality with PDF documents."""
     
     def __init__(self):
         super().__init__()
         self._setup_ui()
+        self.document_context_mode = False  # False = general, True = document-specific
+        self.current_page_reference = None  # For future page reference functionality
     
     def _setup_ui(self):
         """Setup RAG chat panel UI."""
         layout = QVBoxLayout(self)
+        layout.setSpacing(5)
+        layout.setContentsMargins(5, 5, 5, 5)
         
-        # Header
-        header = QLabel("💬 Chat with PDF (Coming Soon)")
+        # Header with title and controls
+        header_layout = QHBoxLayout()
+        
+        header = QLabel("💬 Chat with PDF")
         header.setStyleSheet("""
             QLabel {
                 font-size: 16px;
                 font-weight: bold;
-                padding: 10px;
-                background-color: #e3f2fd;
-                border-radius: 5px;
+                padding: 5px;
             }
         """)
-        layout.addWidget(header)
+        header_layout.addWidget(header)
+        header_layout.addStretch()
+        
+        # Document context toggle button
+        self.context_toggle_btn = QPushButton("🌐 General Context")
+        self.context_toggle_btn.setCheckable(True)
+        self.context_toggle_btn.setToolTip("Toggle between general and document-specific context")
+        self.context_toggle_btn.clicked.connect(self.toggle_document_context)
+        header_layout.addWidget(self.context_toggle_btn)
+        
+        # Clear chat button
+        self.clear_btn = QPushButton("🗑️ Clear Chat")
+        self.clear_btn.setToolTip("Clear conversation history")
+        self.clear_btn.clicked.connect(self.clear_chat)
+        header_layout.addWidget(self.clear_btn)
+        
+        layout.addLayout(header_layout)
         
         # Chat display area
         self.chat_display = QTextEdit()
         self.chat_display.setReadOnly(True)
         self.chat_display.setPlaceholderText(
-            "This panel will allow you to chat with your translated PDF using RAG (Retrieval-Augmented Generation).\n\n"
-            "Features coming soon:\n"
+            "Ask questions about your PDF document...\n\n"
+            "Toggle 'Document Context' to switch between general and document-specific Q&A.\n"
+            "Features:\n"
             "• Ask questions about the PDF content\n"  
             "• Get context-aware answers\n"
-            "• Search within the document\n"
-            "• Summarization capabilities"
+            "• Page-specific referencing (coming soon)"
         )
         layout.addWidget(self.chat_display)
         
@@ -380,15 +400,105 @@ class RAGChatPanel(QWidget):
         
         self.chat_input = QLineEdit()
         self.chat_input.setPlaceholderText("Type your question here...")
-        self.chat_input.setEnabled(False)
+        self.chat_input.returnPressed.connect(self.send_message)
         
         self.send_btn = QPushButton("Send")
-        self.send_btn.setEnabled(False)
+        self.send_btn.clicked.connect(self.send_message)
         
         input_layout.addWidget(self.chat_input, 1)
         input_layout.addWidget(self.send_btn)
         
         layout.addLayout(input_layout)
+        
+        # Status bar for context mode
+        self.status_bar = QLabel("General context mode")
+        self.status_bar.setStyleSheet("""
+            QLabel {
+                font-size: 12px;
+                color: #666;
+                padding: 2px;
+            }
+        """)
+        layout.addWidget(self.status_bar)
+    
+    def toggle_document_context(self):
+        """Toggle between general and document-specific context mode."""
+        self.document_context_mode = not self.document_context_mode
+        
+        if self.document_context_mode:
+            self.context_toggle_btn.setText("📄 Document Context")
+            self.context_toggle_btn.setStyleSheet("background-color: #e3f2fd;")
+            self.status_bar.setText("Document-specific context mode - Questions will relate to the current PDF")
+        else:
+            self.context_toggle_btn.setText("🌐 General Context")
+            self.context_toggle_btn.setStyleSheet("")
+            self.status_bar.setText("General context mode - Questions will be answered without PDF context")
+        
+        # Add a message to the chat to indicate the mode change
+        mode_text = "Document-specific" if self.document_context_mode else "General"
+        self.add_message(f"Context mode changed to: {mode_text}", "system")
+    
+    def send_message(self):
+        """Send user message and get response."""
+        message = self.chat_input.text().strip()
+        if not message:
+            return
+            
+        # Add user message to chat
+        self.add_message(message, "user")
+        
+        # Clear input
+        self.chat_input.clear()
+        
+        # Simulate AI response (to be implemented later)
+        # In the future, this will connect to the actual RAG system
+        self.simulate_ai_response(message)
+    
+    def simulate_ai_response(self, user_message):
+        """Simulate AI response (to be replaced with actual implementation)."""
+        if self.document_context_mode:
+            response = f"I understand you're asking about the document. In a future implementation, I'll analyze your PDF and provide a specific answer to: '{user_message}'"
+        else:
+            response = f"In a future implementation, I'll provide a general answer to: '{user_message}'"
+            
+        # Add AI response to chat after a short delay
+        QTimer.singleShot(500, lambda: self.add_message(response, "ai"))
+    
+    def add_message(self, message, sender):
+        """Add a message to the chat display."""
+        timestamp = time.strftime("%H:%M:%S")
+        
+        if sender == "user":
+            formatted_message = f"[{timestamp}] 👤 You: {message}"
+        elif sender == "ai":
+            formatted_message = f"[{timestamp}] 🤖 AI: {message}"
+        else:  # system
+            formatted_message = f"[{timestamp}] ⚙️ System: {message}"
+            
+        self.chat_display.append(formatted_message)
+        
+        # Scroll to bottom
+        cursor = self.chat_display.textCursor()
+        cursor.movePosition(QTextCursor.End)
+        self.chat_display.setTextCursor(cursor)
+    
+    def clear_chat(self):
+        """Clear the chat conversation."""
+        self.chat_display.clear()
+        self.add_message("Chat history cleared", "system")
+    
+    def set_page_reference(self, page_number):
+        """
+        Set the current page reference for questions (for future implementation).
+        
+        Args:
+            page_number (int): The page number to reference
+        """
+        self.current_page_reference = page_number
+        self.add_message(f"Page reference set to: {page_number}", "system")
+        
+        # This will be used in future implementation to provide page-specific context
+        # For now, we just store the reference for later use
 
 
 # Dialog classes will be implemented in separate files

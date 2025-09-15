@@ -109,11 +109,6 @@ class MainWindow(QMainWindow):
         self.show_advanced_action.triggered.connect(self.toggle_advanced_options)
         view_menu.addAction(self.show_advanced_action)
         
-        self.show_chat_action = QAction("Show &Chat Panel", self, checkable=True)
-        self.show_chat_action.setChecked(False)  # Initially hidden
-        self.show_chat_action.triggered.connect(self.toggle_chat_panel)
-        view_menu.addAction(self.show_chat_action)
-        
         # Tools menu
         tools_menu = menubar.addMenu("&Tools")
         
@@ -245,7 +240,7 @@ class MainWindow(QMainWindow):
         status_bar = self.statusBar()
         
         # Status label
-        self.status_label = QLabel("")
+        self.status_label = QLabel("Ready - Chat panel is always visible on the right side")
         status_bar.addWidget(self.status_label)
         
         # Progress bar
@@ -262,7 +257,7 @@ class MainWindow(QMainWindow):
         QTimer.singleShot(1000, self.check_service_status)
     
     def _create_main_layout(self):
-        """Create the main two-panel layout."""
+        """Create the main three-panel layout with chat on the right."""
         central_widget = QWidget()
         self.setCentralWidget(central_widget)
         
@@ -275,34 +270,30 @@ class MainWindow(QMainWindow):
         self.original_pdf_viewer = PDFViewer()
         left_layout.addWidget(self.original_pdf_viewer)
         
-        # Right panel: Translated PDF viewer
-        right_panel = QGroupBox("Translated PDF")
-        right_layout = QVBoxLayout(right_panel)
+        # Middle panel: Translated PDF viewer
+        middle_panel = QGroupBox("Translated PDF")
+        middle_layout = QVBoxLayout(middle_panel)
         self.translated_pdf_viewer = PDFViewer()
-        right_layout.addWidget(self.translated_pdf_viewer)
+        middle_layout.addWidget(self.translated_pdf_viewer)
+        
+        # Right panel: RAG chat panel
+        right_panel = QGroupBox("Chat with PDF")
+        right_layout = QVBoxLayout(right_panel)
+        self.chat_panel = RAGChatPanel()
+        self.chat_panel.setVisible(True)  # Always visible by default
+        right_layout.addWidget(self.chat_panel)
         
         # Add panels to main splitter
         main_splitter.addWidget(left_panel)
+        main_splitter.addWidget(middle_panel)
         main_splitter.addWidget(right_panel)
         
-        # Set initial splitter proportions (50% - 50%)
-        main_splitter.setSizes([500, 500])
-        
-        # Create vertical splitter for main content and future chat panel
-        vertical_splitter = QSplitter(Qt.Vertical)
-        vertical_splitter.addWidget(main_splitter)
-        
-        # Future RAG chat panel (initially hidden)
-        self.chat_panel = RAGChatPanel()
-        self.chat_panel.setVisible(False)
-        vertical_splitter.addWidget(self.chat_panel)
-        
-        # Set vertical splitter proportions (80% main, 20% chat when shown)
-        vertical_splitter.setSizes([800, 200])
+        # Set initial splitter proportions (33% - 33% - 34%)
+        main_splitter.setSizes([330, 330, 340])
         
         # Main layout
         main_layout = QVBoxLayout(central_widget)
-        main_layout.addWidget(vertical_splitter)
+        main_layout.addWidget(main_splitter)
         main_layout.setContentsMargins(0, 0, 0, 0)
     
     def _setup_connections(self):
@@ -557,15 +548,6 @@ class MainWindow(QMainWindow):
         # Since we removed the control panel, this doesn't do anything now
         # But we keep it for menu compatibility
         self.config_manager.update_settings(gui={"show_advanced_options": checked})
-    
-    def toggle_chat_panel(self, checked):
-        """Toggle RAG chat panel visibility."""
-        self.chat_panel.setVisible(checked)
-        
-        if checked:
-            self.status_label.setText("RAG chat panel enabled (coming soon)")
-        else:
-            self.status_label.setText("RAG chat panel disabled")
     
     # Service validation
     def check_service_status(self):
