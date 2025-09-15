@@ -2,7 +2,7 @@
 Configuration models for desktop PDF translator application.
 """
 
-from enum import Enum
+from enum import Enum 
 from pathlib import Path
 from typing import Optional, Literal
 
