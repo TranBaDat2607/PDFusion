@@ -1,0 +1,14 @@
+# =============================================================================
+# PDFusion AI/ML Requirements
+# Install after requirements_scientific.txt
+# =============================================================================
+
+# Fast Similarity Search
+faiss-cpu>=1.7.4,<2.0.0
+
+# Embeddings and NLP
+sentence-transformers>=2.3.0,<3.0.0
+
+# Vietnamese NLP
+underthesea>=6.8.0,<7.0.0
+spacy>=3.7.0,<4.0.0

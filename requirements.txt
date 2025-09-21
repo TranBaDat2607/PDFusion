@@ -1,36 +1,157 @@
-# Core dependencies for Windows desktop PDF translation app
-PySide6>=6.5.0
-pydantic>=2.10.6
-pydantic-settings>=2.8.1
+# =============================================================================
+# PDFusion - Desktop PDF Translator Requirements (Optimized Order)
+# Compatible with Python 3.11+ (Recommended)
+# Generated: 2025-09-21
+# =============================================================================
 
-# PDF processing and translation
+# =============================================================================
+# TIER 1: Core System Dependencies (Install First)
+# =============================================================================
+
+# Core Scientific Computing (Must install first)
+numpy>=2.0.2,<3.0.0
+
+# Type Annotations (Python 3.11 compatibility)
+typing-extensions>=4.5.0,<5.0.0
+
+# =============================================================================
+# TIER 2: Foundation Libraries
+# =============================================================================
+
+# Configuration and Data Validation
+pydantic>=2.5.0,<3.0.0
+pydantic-settings>=2.1.0,<3.0.0
+tomlkit>=0.12.0,<1.0.0
+python-dotenv>=1.0.0,<2.0.0
+
+# HTTP and Network (Core)
+requests>=2.31.0,<3.0.0
+chardet>=5.2.0,<6.0.0
+tenacity>=9.0.0,<10.0.0
+
+# =============================================================================
+# TIER 3: Scientific Computing Stack
+# =============================================================================
+
+# Scientific Libraries (depend on numpy)
+pandas>=2.1.0,<3.0.0
+matplotlib>=3.8.0,<4.0.0
+sympy>=1.12,<2.0.0
+
+# Fast Similarity Search
+faiss-cpu>=1.7.4,<2.0.0
+
+# =============================================================================
+# TIER 4: PDF and Image Processing
+# =============================================================================
+
+# PDF Processing Core (Updated for BabelDOC compatibility)
+PyMuPDF>=1.25.1,<1.26.0
+Pillow>=9.5.0,<11.0.0
+
+# BabelDOC for Layout Preservation (depends on PyMuPDF>=1.25.1, tenacity>=9.0.0)
 babeldoc>=0.4.11,<0.5.0
-PyMuPDF>=1.23.6,<1.25.3
-rich>=13.0.0
 
-# Translation services
-openai>=1.0.0
-google-generativeai>=0.3.0
+# Advanced PDF Processing
+camelot-py>=0.11.0,<1.0.0
+pdfplumber>=0.10.0,<1.0.0
+pdf2image>=1.16.0,<4.0.0
 
-# Configuration and utilities
-tomlkit>=0.12.0
-requests>=2.31.0
-chardet>=5.2.0
-tenacity>=8.2.0
-python-dotenv>=1.0.0
+# OCR Support (Optional)
+pytesseract>=0.3.10,<1.0.0
 
-# Async processing
-asyncio-mqtt>=0.13.0
+# =============================================================================
+# TIER 5: GUI Framework
+# =============================================================================
 
-# Additional dependencies needed for the application
-# These are required for proper functioning but were missing
-typing-extensions>=4.0.0
-pillow>=9.0.0
+# Core GUI Framework
+PySide6>=6.5.0,<6.8.0
 
-# Development dependencies (optional)
-pytest>=7.0.0
-black>=23.0.0
-isort>=5.12.0
+# =============================================================================
+# TIER 6: AI and ML Services
+# =============================================================================
 
-# Docker specific dependencies
-xvfbwrapper>=0.2.9
+# Translation Services
+openai>=1.3.0,<2.0.0
+google-generativeai>=0.3.0,<1.0.0
+
+# Token Management
+tiktoken>=0.5.0,<1.0.0
+
+# Embeddings and NLP
+sentence-transformers>=2.3.0,<3.0.0
+
+# Vietnamese NLP
+underthesea>=6.8.0,<7.0.0
+spacy>=3.7.0,<4.0.0
+
+# =============================================================================
+# TIER 7: RAG and Vector Database
+# =============================================================================
+
+# Vector Database
+chromadb>=0.4.15,<0.5.0
+
+# LangChain Framework
+langchain>=0.1.0,<0.3.0
+langchain-community>=0.0.10,<0.3.0
+
+# Search Utilities
+rank-bm25>=0.2.2,<1.0.0
+
+# =============================================================================
+# TIER 8: Web Research and Content Extraction
+# =============================================================================
+
+# Async Processing
+aiohttp>=3.8.0,<4.0.0
+
+# Web Scraping
+beautifulsoup4>=4.12.0,<5.0.0
+newspaper3k>=0.2.8,<1.0.0
+
+# Academic Search
+scholarly>=1.7.0,<2.0.0
+arxiv>=2.0.0,<3.0.0
+
+# Search Utilities
+googlesearch-python>=1.2.3,<2.0.0
+
+# =============================================================================
+# TIER 9: UI and Display
+# =============================================================================
+
+# CLI and Progress Display
+rich>=13.0.0,<14.0.0
+
+# Platform-Specific Dependencies
+colorama>=0.4.6; sys_platform == "win32"
+
+# =============================================================================
+# Installation Instructions (Optimized Order)
+# =============================================================================
+#
+# Step 1: Create environment
+# conda create -n pdfusion-env python=3.11
+# conda activate pdfusion-env
+#
+# Step 2: Upgrade pip
+# python -m pip install --upgrade pip
+#
+# Step 3: Install in tiers (recommended for complex dependencies)
+# pip install numpy>=2.0.2
+# pip install typing-extensions>=4.5.0
+# pip install pydantic>=2.5.0 pydantic-settings>=2.1.0
+# pip install pandas>=2.1.0 matplotlib>=3.8.0
+# pip install tenacity>=9.0.0
+# pip install PyMuPDF>=1.25.1
+# pip install babeldoc>=0.4.11
+# pip install -r requirements.txt
+#
+# Alternative: Install all at once (may work with optimized order)
+# pip install -r requirements.txt
+#
+# If conflicts occur:
+# pip install --upgrade --force-reinstall -r requirements.txt
+#
+# =============================================================================

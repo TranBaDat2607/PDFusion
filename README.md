@@ -1,27 +1,33 @@
-# Desktop PDF Translator
+# PDFusion - Desktop PDF Translator
 
-A Windows desktop application for translating PDF documents while preserving formatting, with support for Vietnamese language priority.
+A Windows desktop application for translating PDF documents while preserving formatting, with Vietnamese language priority and RAG-powered Q&A capabilities.
 
 ## Features
 
-- **Multi-Panel Interface**: Original PDF, translated PDF, and future RAG chat integration
-- **Translation Services**: OpenAI and Google Gemini support
-- **Vietnamese Priority**: Optimized for Vietnamese translations with English, Japanese, and Chinese support
-- **File Size Limits**: Supports PDFs up to 50 pages
-- **Async Processing**: Non-blocking translation with progress tracking
-- **Extensible Architecture**: Designed for future enhancements and RAG integration
-- **BabelDOC Integration**: Advanced PDF layout preservation using BabelDOC
+- **Multi-Panel Interface**: Original PDF, translated PDF, and RAG chat panel
+- **Translation Services**: OpenAI GPT-4 and Google Gemini support
+- **Vietnamese Priority**: Optimized for Vietnamese translations with multi-language support
+- **Advanced PDF Processing**: BabelDOC integration for perfect layout preservation
+- **RAG Q&A System**: Ask questions about your translated documents
+- **Web Research**: Integrated academic search (Google Scholar, arXiv)
+- **Async Processing**: Non-blocking translation with real-time progress
+- **File Limits**: Supports PDFs up to 50 pages
+- **Extensible Architecture**: Modular design for future enhancements
 
 ## Quick Start
 
-### Development Mode
+### Automatic Installation (Recommended)
 ```bash
-python main.py
+# Run the automated installer
+install_dependencies.bat
 ```
 
-### Installation (Future)
+### Manual Installation
 ```bash
-# Will be available as .exe installer
+# Create environment and install dependencies
+conda create -n pdfusion-env python=3.11
+conda activate pdfusion-env
+python main.py
 ```
 
 ## Project Structure
@@ -66,58 +72,85 @@ desktop_pdf_translator/
 └── setup_dev.bat
 ```
 
-## Setup Instructions
+## 📋 Installation Guide
 
-### 1. Prerequisites
-- Python 3.10 or higher
-- Windows operating system (currently Windows-focused)
-- API keys for translation services (OpenAI and/or Google Gemini)
+### Prerequisites
+- **Python 3.11+** (Recommended) or Python 3.10+
+- **Windows 10/11** (Primary support)
+- **Anaconda/Miniconda** (Recommended for environment management)
+- **API Keys** for translation services (OpenAI and/or Google Gemini)
 
-### 2. Installation Steps
+### 🚀 Method 1: Automatic Installation (Recommended)
 
-1. **Clone the repository**:
-   ```bash
-   git clone <repository-url>
-   cd desktop_pdf_translator
-   ```
+**Step 1**: Clone the repository
+```bash
+git clone <repository-url>
+cd PDFusion
+```
 
-2. **Install dependencies**:
-   ```bash
-   pip install -r requirements.txt
-   ```
+**Step 2**: Run the automated installer
+```bash
+# This will create environment and install all dependencies
+install_dependencies.bat
+```
 
-3. **Configure API keys**:
-   You have two options to configure API keys:
-   
-   **Option A: Using .env file (Recommended for development)**
-   ```bash
-   # Copy the example file
-   copy .env.example .env
-   
-   # Edit .env file and add your API keys
-   notepad .env
-   ```
-   
-   **Option B: Using environment variables**
-   ```bash
-   # Windows Command Prompt
-   set OPENAI_API_KEY=your_openai_api_key_here
-   set GEMINI_API_KEY=your_gemini_api_key_here
-   
-   # Windows PowerShell
-   $env:OPENAI_API_KEY="your_openai_api_key_here"
-   $env:GEMINI_API_KEY="your_gemini_api_key_here"
-   ```
-   
-   **Option C: Using setup script**
-   ```bash
-   setup_api_keys.bat
-   ```
+**Step 3**: Configure API keys
+```bash
+# Copy and edit the environment file
+copy .env.example .env
+notepad .env
+```
 
-4. **Run the application**:
-   ```bash
-   python main.py
-   ```
+**Step 4**: Run the application
+```bash
+conda activate pdfusion-env
+python main.py
+```
+
+### 🔧 Method 2: Manual Installation
+
+**Step 1**: Create Python environment
+```bash
+conda create -n pdfusion-env python=3.11
+conda activate pdfusion-env
+```
+
+**Step 2**: Install dependencies in stages (to avoid conflicts)
+```bash
+# Core dependencies
+pip install -r requirements_core.txt
+
+# Scientific computing
+pip install -r requirements_scientific.txt
+
+# AI/ML libraries
+pip install -r requirements_ai.txt
+
+# RAG and web research (optional)
+pip install -r requirements_rag.txt
+```
+
+**Step 3**: Configure API keys and run
+```bash
+copy .env.example .env
+notepad .env
+python main.py
+```
+
+### 🛠️ Method 3: Troubleshooting Installation
+
+If you encounter dependency conflicts, use the Python installer:
+```bash
+conda create -n pdfusion-env python=3.11
+conda activate pdfusion-env
+python install_dependencies.py
+```
+
+This script will:
+- ✅ Install dependencies in optimal order
+- ✅ Handle conflicts automatically  
+- ✅ Provide detailed error messages
+- ✅ Allow partial installation if needed
 
 ## Configuration
 
@@ -137,16 +170,43 @@ User-specific settings are stored in:
 - `MAX_PAGES`: (Optional) Maximum pages to process (default: 50)
 - `MAX_FILE_SIZE_MB`: (Optional) Maximum file size in MB (default: 50)
 
-## Usage
+## 📖 Usage Guide
 
-1. Launch the application with `python main.py`
-2. Click "Browse" or use "File" → "Open PDF" to select a PDF file
-3. Choose source language (Auto-detect by default) and target language (Vietnamese by default)
-4. Select translation service (OpenAI or Gemini)
-5. Click "Translate" to start the translation process
-6. View progress in the status bar and detailed progress panel
-7. The translated PDF will appear in the right panel when complete
-8. Translated files are saved in the `translated_pdfs` directory
+### Basic PDF Translation
+
+1. **Launch the application**:
+   ```bash
+   conda activate pdfusion-env
+   python main.py
+   ```
+
+2. **Load PDF**: Click "Browse" or use "File" → "Open PDF" to select a PDF file
+
+3. **Configure Translation**:
+   - Source language (Auto-detect by default)
+   - Target language (Vietnamese by default)
+   - Translation service (OpenAI or Gemini)
+
+4. **Start Translation**: Click "Translate" to begin processing
+
+5. **Monitor Progress**: View real-time progress in the status bar and progress panel
+
+6. **View Results**: The translated PDF appears in the right panel when complete
+
+7. **Save Output**: Translated files are automatically saved in the `translated_pdfs` directory
+
+### RAG Q&A System
+
+1. **After translation**, use the RAG chat panel (right side) to ask questions about your document
+
+2. **Ask Questions**: Type questions like:
+   - "What is the main topic of this document?"
+   - "Summarize the key findings"
+   - "What are the conclusions?"
+
+3. **Web Research**: Enable web research for enhanced answers with academic sources
+
+4. **Reference Navigation**: Click on references to jump to specific pages in the PDF
 
 ## Translation Services
 
@@ -202,27 +262,65 @@ src/desktop_pdf_translator/
 python -m pytest tests/
 ```
 
-## Troubleshooting
+## 🔧 Troubleshooting
 
-### Common Issues
+### Common Installation Issues
 
-1. **Missing Dependencies**:
+1. **Dependency Resolution Error**:
+   ```
+   ERROR: resolution-too-deep
+   ```
+   **Solution**: Use staged installation
+   ```bash
+   python install_dependencies.py
+   ```
+
+2. **QAction Import Error**:
+   ```
+   cannot import name 'QAction' from 'PySide6.QtWidgets'
+   ```
+   **Solution**: This is fixed in the current version. Reinstall PySide6:
+   ```bash
+   pip install --force-reinstall PySide6>=6.7.0
+   ```
+
+3. **BabelDOC Conflicts**:
+   ```
+   Cannot install babeldoc and numpy<2.0.0
+   ```
+   **Solution**: Use the optimized requirements files that specify numpy>=2.0.2
+
+4. **Missing Dependencies**:
    ```
    ImportError: No module named 'PySide6'
    ```
-   Solution: Run `pip install -r requirements.txt`
+   **Solution**: Install core dependencies first:
+   ```bash
+   pip install -r requirements_core.txt
+   ```
 
-2. **API Key Not Set**:
+5. **API Key Not Set**:
    ```
    Missing API key for openai
    ```
-   Solution: Configure API keys using one of the methods in the Setup section
+   **Solution**: Configure API keys in `.env` file:
+   ```bash
+   copy .env.example .env
+   # Edit .env and add your keys
+   ```
 
-3. **BabelDOC Not Available**:
-   ```
-   BabelDOC not available - some features will be limited
-   ```
-   Solution: Install BabelDOC with `pip install babeldoc` (if available)
+### Installation Order Issues
+
+If you get conflicts, install in this exact order:
+```bash
+pip install numpy>=2.0.2
+pip install typing-extensions>=4.5.0
+pip install pydantic>=2.5.0 pydantic-settings>=2.1.0
+pip install tenacity>=9.0.0
+pip install PyMuPDF>=1.25.1
+pip install babeldoc>=0.4.11
+pip install -r requirements_core.txt
+```
 
 ### Logs
 Application logs are stored in:

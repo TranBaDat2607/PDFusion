@@ -22,8 +22,9 @@ from ..processors import PDFProcessor
 from ..translators import TranslatorFactory
 from .widgets import (
     PDFViewer, ProgressPanel, 
-    SettingsDialog, AboutDialog, RAGChatPanel
+    SettingsDialog, AboutDialog
 )
+from .rag_chat_panel import RAGChatPanel
 from .worker import TranslationWorker
 
 
@@ -310,7 +311,11 @@ class MainWindow(QMainWindow):
         main_layout.addWidget(self.progress_panel)
         
         self.progress_panel.cancel_requested.connect(self.cancel_translation)
-    
+        
+        # RAG Chat Panel connections
+        self.chat_panel.pdf_navigation_requested.connect(self._handle_pdf_navigation)
+        self.chat_panel.web_link_requested.connect(self._handle_web_link)
+        
     def _apply_settings(self):
         """Apply current settings to UI."""
         # Set theme if supported
@@ -332,7 +337,7 @@ class MainWindow(QMainWindow):
             self.load_file(Path(file_path))
     
     def load_file(self, file_path: Path):
-        """Load PDF file into the application."""
+        """Load PDF file into the application (enhanced with RAG support)."""
         try:
             # Validate file
             if not file_path.exists():
@@ -349,6 +354,9 @@ class MainWindow(QMainWindow):
                 self.file_label.setText(file_path.name)
                 self.status_label.setText(f"Loaded: {file_path.name}")
                 self.translate_btn.setEnabled(True)
+                
+                # Process document for RAG system
+                self.chat_panel.process_document(file_path)
                 
                 logger.info(f"Loaded PDF: {file_path}")
             else:
@@ -498,6 +506,9 @@ class MainWindow(QMainWindow):
                 self.translated_pdf_viewer.load_pdf(Path(translated_file))
                 self.status_label.setText("Translation completed successfully")
                 
+                # Process document for RAG
+                self._process_document_for_rag(Path(translated_file))
+                
                 # Show success message
                 QMessageBox.information(
                     self,
@@ -531,6 +542,53 @@ class MainWindow(QMainWindow):
         self.progress_panel.setVisible(False)
         self.status_label.setText("Translation failed")
         self.progress_panel.reset()
+    
+    # RAG Integration Methods
+    def _process_document_for_rag(self, document_path: Path):
+        """Process document for RAG system after translation."""
+        try:
+            # Set current document in chat panel
+            self.chat_panel.set_current_document(document_path)
+            
+            # Process document for RAG (in background)
+            self.chat_panel.process_document(document_path)
+            
+            logger.info(f"Document processed for RAG: {document_path}")
+            
+        except Exception as e:
+            logger.error(f"Failed to process document for RAG: {e}")
+    
+    def _handle_pdf_navigation(self, page: int, bbox: object):
+        """Handle PDF navigation request from chat panel."""
+        try:
+            # Navigate to the specified page in translated PDF viewer
+            if hasattr(self.translated_pdf_viewer, 'goto_page'):
+                self.translated_pdf_viewer.goto_page(page)
+                
+                # Highlight region if bbox is provided
+                if bbox and hasattr(self.translated_pdf_viewer, 'highlight_region'):
+                    self.translated_pdf_viewer.highlight_region(bbox)
+                
+                self.status_label.setText(f"Navigated to page {page}")
+                logger.info(f"PDF navigation: page {page}")
+            else:
+                logger.warning("PDF viewer does not support navigation")
+                
+        except Exception as e:
+            logger.error(f"PDF navigation failed: {e}")
+            QMessageBox.warning(self, "Navigation Error", f"Failed to navigate to page {page}: {e}")
+    
+    def _handle_web_link(self, url: str):
+        """Handle web link request from chat panel."""
+        try:
+            import webbrowser
+            webbrowser.open(url)
+            self.status_label.setText(f"Opened web link: {url[:50]}...")
+            logger.info(f"Web link opened: {url}")
+            
+        except Exception as e:
+            logger.error(f"Failed to open web link: {e}")
+            QMessageBox.warning(self, "Link Error", f"Failed to open link: {e}")
     
     # Settings and configuration
     def open_settings(self):
