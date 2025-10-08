@@ -51,10 +51,19 @@ class MainWindow(QMainWindow):
         self.current_file: Optional[Path] = None
         self.translation_worker: Optional[TranslationWorker] = None
         
+        # RAG state - read from config, default OFF
+        self.rag_enabled = self.settings.rag.enabled
+        
         # UI setup
         self._setup_ui()
         self._setup_connections()
         self._apply_settings()
+        
+        # Initialize RAG state
+        self._initialize_rag_state()
+        
+        # Schedule panel size adjustment after window is shown
+        QTimer.singleShot(100, self._adjust_panel_sizes)
         
         logger.info("Main window initialized")
     
@@ -105,10 +114,6 @@ class MainWindow(QMainWindow):
         # View menu
         view_menu = menubar.addMenu("&View")
         
-        self.show_advanced_action = QAction("Show &Advanced Options", self, checkable=True)
-        self.show_advanced_action.setChecked(self.settings.gui.show_advanced_options)
-        self.show_advanced_action.triggered.connect(self.toggle_advanced_options)
-        view_menu.addAction(self.show_advanced_action)
         
         # Tools menu
         tools_menu = menubar.addMenu("&Tools")
@@ -187,11 +192,6 @@ class MainWindow(QMainWindow):
         toolbar.addSeparator()
         
         # Action buttons
-        self.open_btn = QPushButton("📂 Open")
-        self.open_btn.setStatusTip("Open PDF file (Ctrl+O)")
-        self.open_btn.clicked.connect(self.open_file)
-        toolbar.addWidget(self.open_btn)
-        
         self.translate_btn = QPushButton("🔄 Translate")
         self.translate_btn.setStatusTip("Start translation")
         self.translate_btn.setEnabled(False)
@@ -220,6 +220,26 @@ class MainWindow(QMainWindow):
         self.about_btn.setStatusTip("About this application")
         self.about_btn.clicked.connect(self.show_about)
         toolbar.addWidget(self.about_btn)
+        
+        toolbar.addSeparator()
+        
+        # RAG toggle button
+        self.rag_toggle_btn = QPushButton("🤖 RAG: ON" if self.rag_enabled else "🤖 RAG: OFF")
+        self.rag_toggle_btn.setStatusTip("Toggle RAG (AI Chat) functionality")
+        self.rag_toggle_btn.setCheckable(True)
+        self.rag_toggle_btn.setChecked(self.rag_enabled)
+        self.rag_toggle_btn.clicked.connect(self.toggle_rag)
+        self.rag_toggle_btn.setStyleSheet("""
+            QPushButton:checked {
+                background-color: #4CAF50;
+                color: white;
+            }
+            QPushButton:!checked {
+                background-color: #f44336;
+                color: white;
+            }
+        """)
+        toolbar.addWidget(self.rag_toggle_btn)
         
         # Add stretch to push buttons to the left
         toolbar.addWidget(QWidget())
@@ -289,8 +309,13 @@ class MainWindow(QMainWindow):
         main_splitter.addWidget(middle_panel)
         main_splitter.addWidget(right_panel)
         
-        # Set initial splitter proportions (33% - 33% - 34%)
-        main_splitter.setSizes([330, 330, 340])
+        # Set stretch factors for equal proportions (each panel gets equal weight)
+        main_splitter.setStretchFactor(0, 1)  # Left panel
+        main_splitter.setStretchFactor(1, 1)  # Middle panel
+        main_splitter.setStretchFactor(2, 1)  # Right panel
+        
+        # Store splitter reference to set sizes after show
+        self.main_splitter = main_splitter
         
         # Main layout
         main_layout = QVBoxLayout(central_widget)
@@ -355,8 +380,11 @@ class MainWindow(QMainWindow):
                 self.status_label.setText(f"Loaded: {file_path.name}")
                 self.translate_btn.setEnabled(True)
                 
-                # Process document for RAG system
-                self.chat_panel.process_document(file_path)
+                # Process document for RAG system only if RAG is enabled
+                if self.rag_enabled:
+                    self.chat_panel.process_document(file_path)
+                else:
+                    self.chat_panel.set_rag_disabled_message()
                 
                 logger.info(f"Loaded PDF: {file_path}")
             else:
@@ -506,8 +534,9 @@ class MainWindow(QMainWindow):
                 self.translated_pdf_viewer.load_pdf(Path(translated_file))
                 self.status_label.setText("Translation completed successfully")
                 
-                # Process document for RAG
-                self._process_document_for_rag(Path(translated_file))
+                # Process document for RAG only if RAG is enabled
+                if self.rag_enabled:
+                    self._process_document_for_rag(Path(translated_file))
                 
                 # Show success message
                 QMessageBox.information(
@@ -600,12 +629,6 @@ class MainWindow(QMainWindow):
             self.config_manager.save_settings(new_settings)
             self.settings = new_settings
     
-    # View operations
-    def toggle_advanced_options(self, checked):
-        """Toggle advanced options visibility."""
-        # Since we removed the control panel, this doesn't do anything now
-        # But we keep it for menu compatibility
-        self.config_manager.update_settings(gui={"show_advanced_options": checked})
     
     # Service validation
     def check_service_status(self):
@@ -679,6 +702,60 @@ class MainWindow(QMainWindow):
         
         event.accept()
         logger.info("Application closed")
+    
+    
+    def toggle_rag(self):
+        """Toggle RAG functionality on/off."""
+        self.rag_enabled = not self.rag_enabled
+        
+        # Update button appearance
+        if self.rag_enabled:
+            self.rag_toggle_btn.setText("🤖 RAG: ON")
+            self.rag_toggle_btn.setChecked(True)
+            self.status_label.setText("RAG enabled - AI Chat ready")
+            
+            # Re-enable chat panel
+            self.chat_panel.setEnabled(True)
+            self.chat_panel.set_rag_enabled_message()
+            
+            # If there's a current document, process it for RAG
+            if self.current_file:
+                self.chat_panel.process_document(self.current_file)
+        else:
+            self.rag_toggle_btn.setText("🤖 RAG: OFF")
+            self.rag_toggle_btn.setChecked(False)
+            self.status_label.setText("RAG disabled - AI Chat unavailable")
+            
+            # Disable chat panel
+            self.chat_panel.setEnabled(False)
+            self.chat_panel.set_rag_disabled_message()
+        
+        logger.info(f"RAG toggled: {'enabled' if self.rag_enabled else 'disabled'}")
+        
+        # Update RAG state in memory only (don't save to avoid TOML issues)
+        self.settings.rag.enabled = self.rag_enabled
+    
+    def _adjust_panel_sizes(self):
+        """Adjust panel sizes to be equal after window is shown."""
+        if hasattr(self, 'main_splitter'):
+            # Get actual splitter width
+            total_width = self.main_splitter.width()
+            if total_width > 0:
+                # Calculate equal width for each panel
+                panel_width = total_width // 3
+                self.main_splitter.setSizes([panel_width, panel_width, panel_width])
+                logger.info(f"Adjusted panel sizes to equal widths: {panel_width}px each")
+    
+    def _initialize_rag_state(self):
+        """Initialize RAG state based on config."""
+        if not self.rag_enabled:
+            # If RAG is disabled in config, set up the disabled state
+            self.chat_panel.setEnabled(False)
+            self.chat_panel.set_rag_disabled_message()
+        else:
+            # RAG is enabled
+            self.chat_panel.setEnabled(True)
+            self.chat_panel.set_rag_enabled_message()
 
 
 def create_app():

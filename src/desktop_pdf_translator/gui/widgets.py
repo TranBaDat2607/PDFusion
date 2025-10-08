@@ -3,6 +3,7 @@ Custom widgets for the desktop PDF translator GUI.
 """
 
 import logging
+import time
 from pathlib import Path
 from typing import Optional, Dict, Any
 
@@ -10,7 +11,8 @@ from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, 
     QComboBox, QGroupBox, QTextEdit, QProgressBar, QFileDialog,
     QFrame, QScrollArea, QGridLayout, QSpinBox, QCheckBox,
-    QSlider, QLineEdit, QGraphicsView, QGraphicsScene, QGraphicsPixmapItem
+    QSlider, QLineEdit, QGraphicsView, QGraphicsScene, QGraphicsPixmapItem,
+    QApplication
 )
 from PySide6.QtCore import Qt, Signal, QTimer, QRectF, QEvent
 from PySide6.QtGui import QPixmap, QFont, QPalette, QImage, QPainter, QTextCursor
@@ -19,67 +21,72 @@ import fitz  # PyMuPDF
 logger = logging.getLogger(__name__)
 
 
-class PDFGraphicsView(QGraphicsView):
-    """Custom graphics view with zoom support."""
+
+class PDFScrollArea(QScrollArea):
+    """Custom scroll area with zoom support."""
     
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setDragMode(QGraphicsView.ScrollHandDrag)
-        self.setRenderHint(QPainter.Antialiasing)
-        self.setRenderHint(QPainter.SmoothPixmapTransform)
-        self.setViewportUpdateMode(QGraphicsView.FullViewportUpdate)
-        self.setAlignment(Qt.AlignCenter)
+        self.pdf_viewer = parent
     
     def wheelEvent(self, event):
         """Handle mouse wheel events for zooming with Ctrl key."""
         if event.modifiers() == Qt.ControlModifier:
-            # Zoom in/out with Ctrl + mouse wheel
-            if event.angleDelta().y() > 0:
-                self.parent().zoom_in()
-            else:
-                self.parent().zoom_out()
+            # Calculate zoom factor change
+            zoom_delta = 1.15 if event.angleDelta().y() > 0 else 1.0/1.15
+            
+            # Apply zoom immediately
+            self.pdf_viewer.zoom_factor *= zoom_delta
+            self.pdf_viewer.zoom_factor = max(0.2, min(self.pdf_viewer.zoom_factor, 5.0))
+            
+            # Update pages immediately
+            self.pdf_viewer._update_all_pages()
             event.accept()
         else:
             # Normal scrolling without Ctrl
             super().wheelEvent(event)
+    
 
 
 class PDFViewer(QWidget):
-    """Simple PDF viewer widget with PyMuPDF rendering."""
+    """PDF viewer widget with continuous vertical scrolling."""
     
     def __init__(self):
         super().__init__()
         self._setup_ui()
         self.current_file: Optional[Path] = None
         self.doc = None
-        self.current_page = 0
         self.zoom_factor = 1.0
         self.base_dpi = 150.0
+        self.page_widgets = []  # Store page widgets
+        self.is_rendering = False
     
     def _setup_ui(self):
-        """Setup PDF viewer UI."""
+        """Setup PDF viewer UI with continuous scrolling."""
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         
-        # Graphics view for PDF content
-        self.graphics_view = PDFGraphicsView(self)
-        self.graphics_scene = QGraphicsScene()
-        self.graphics_view.setScene(self.graphics_scene)
-        layout.addWidget(self.graphics_view)
+        # Create scroll area for continuous viewing with zoom support
+        self.scroll_area = PDFScrollArea(self)
+        self.scroll_area.setWidgetResizable(True)
+        self.scroll_area.setAlignment(Qt.AlignCenter)
+        self.scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        self.scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
         
-        # Control buttons
+        # Container widget for all pages
+        self.pages_container = QWidget()
+        self.pages_layout = QVBoxLayout(self.pages_container)
+        self.pages_layout.setContentsMargins(10, 10, 10, 10)
+        self.pages_layout.setSpacing(10)  # Space between pages
+        
+        self.scroll_area.setWidget(self.pages_container)
+        layout.addWidget(self.scroll_area)
+        
+        # Control buttons (simplified)
         button_layout = QHBoxLayout()
         
-        self.prev_btn = QPushButton("◀ Previous")
-        self.prev_btn.clicked.connect(self.previous_page)
-        self.prev_btn.setEnabled(False)
-        
-        self.page_label = QLabel("Page 1 of 1")
+        self.page_label = QLabel("No PDF loaded")
         self.page_label.setAlignment(Qt.AlignCenter)
-        
-        self.next_btn = QPushButton("Next ▶")
-        self.next_btn.clicked.connect(self.next_page)
-        self.next_btn.setEnabled(False)
         
         self.zoom_in_btn = QPushButton("Zoom In +")
         self.zoom_in_btn.clicked.connect(self.zoom_in)
@@ -90,9 +97,7 @@ class PDFViewer(QWidget):
         self.fit_width_btn = QPushButton("Fit Width")
         self.fit_width_btn.clicked.connect(self.fit_width)
         
-        button_layout.addWidget(self.prev_btn)
         button_layout.addWidget(self.page_label)
-        button_layout.addWidget(self.next_btn)
         button_layout.addStretch()
         button_layout.addWidget(self.zoom_in_btn)
         button_layout.addWidget(self.zoom_out_btn)
@@ -110,16 +115,18 @@ class PDFViewer(QWidget):
             if self.doc:
                 self.doc.close()
             
+            # Clear previous pages
+            self.clear_pages()
+            
             self.current_file = file_path
             self.doc = fitz.open(file_path)
-            self.current_page = 0
             self.zoom_factor = 1.0
             
-            # Render first page
-            self.render_page()
+            # Render all pages
+            self.render_all_pages()
             
-            # Update navigation buttons
-            self.update_navigation()
+            # Update page label
+            self.page_label.setText(f"PDF loaded: {len(self.doc)} pages")
             
             return True
             
@@ -129,100 +136,219 @@ class PDFViewer(QWidget):
             self.show_error(f"Error loading PDF: {e}")
             return False
     
-    def render_page(self):
-        """Render current page to the viewer with proper resolution based on zoom."""
-        if not self.doc or self.current_page >= len(self.doc):
+    def render_all_pages(self):
+        """Render all pages for continuous viewing."""
+        if not self.doc or self.is_rendering:
             return
+        
+        self.is_rendering = True
+        
+        # Disable updates during rendering to reduce flicker
+        self.pages_container.setUpdatesEnabled(False)
         
         try:
             # Calculate DPI based on zoom factor
             render_dpi = self.base_dpi * self.zoom_factor
             
-            # Get page
-            page = self.doc[self.current_page]
-            
-            # Render page to pixmap with appropriate DPI
-            mat = fitz.Matrix(render_dpi / 72.0, render_dpi / 72.0)
-            pix = page.get_pixmap(matrix=mat, alpha=False)
-            
-            # Convert to QImage
-            img = QImage(pix.samples, pix.width, pix.height, pix.stride, QImage.Format_RGB888)
-            
-            # Convert to QPixmap
-            pixmap = QPixmap.fromImage(img)
-            
-            # Clean up
-            pix = None
-            
-            # Display pixmap
-            self.graphics_scene.clear()
-            self.graphics_scene.addPixmap(pixmap)
-            self.graphics_scene.setSceneRect(QRectF(0, 0, pixmap.width(), pixmap.height()))
-            
-            # Reset view to 1:1 scale (since we rendered at the correct resolution)
-            self.graphics_view.resetTransform()
-            
-            # Update page label
-            self.page_label.setText(f"Page {self.current_page + 1} of {len(self.doc)}")
+            for page_num in range(len(self.doc)):
+                # Get page
+                page = self.doc[page_num]
+                
+                # Render page to pixmap with appropriate DPI
+                mat = fitz.Matrix(render_dpi / 72.0, render_dpi / 72.0)
+                pix = page.get_pixmap(matrix=mat, alpha=False)
+                
+                # Convert to QImage
+                img = QImage(pix.samples, pix.width, pix.height, pix.stride, QImage.Format_RGB888)
+                
+                # Convert to QPixmap
+                pixmap = QPixmap.fromImage(img)
+                
+                # Clean up
+                pix = None
+                
+                # Create label for this page
+                page_label = QLabel()
+                page_label.setPixmap(pixmap)
+                page_label.setAlignment(Qt.AlignCenter)
+                page_label.setStyleSheet("border: 1px solid #ccc; margin: 2px;")
+                
+                # Add to layout
+                self.pages_layout.addWidget(page_label)
+                
+                # Store reference
+                self.page_widgets.append(page_label)
+                
+                # Process events to keep UI responsive
+                if page_num % 3 == 0:  # Every 3 pages
+                    QApplication.processEvents()
             
         except Exception as e:
-            logger.exception(f"Error rendering page: {e}")
-            self.show_error(f"Error rendering page: {e}")
+            logger.exception(f"Error rendering pages: {e}")
+            self.show_error(f"Error rendering pages: {e}")
+        finally:
+            # Re-enable updates
+            self.pages_container.setUpdatesEnabled(True)
+            self.is_rendering = False
+    
+    def _render_and_replace_pages(self, scroll_percentage):
+        """Render new pages and replace old ones smoothly."""
+        if not self.doc or self.is_rendering:
+            return
+        
+        self.is_rendering = True
+        
+        try:
+            # Calculate DPI based on zoom factor
+            render_dpi = self.base_dpi * self.zoom_factor
+            new_widgets = []
+            
+            # Render all pages first (without adding to layout)
+            for page_num in range(len(self.doc)):
+                # Get page
+                page = self.doc[page_num]
+                
+                # Render page to pixmap with appropriate DPI
+                mat = fitz.Matrix(render_dpi / 72.0, render_dpi / 72.0)
+                pix = page.get_pixmap(matrix=mat, alpha=False)
+                
+                # Convert to QImage
+                img = QImage(pix.samples, pix.width, pix.height, pix.stride, QImage.Format_RGB888)
+                
+                # Convert to QPixmap
+                pixmap = QPixmap.fromImage(img)
+                
+                # Clean up
+                pix = None
+                
+                # Create label for this page (but don't add to layout yet)
+                page_label = QLabel()
+                page_label.setPixmap(pixmap)
+                page_label.setAlignment(Qt.AlignCenter)
+                page_label.setStyleSheet("border: 1px solid #ccc; margin: 2px;")
+                
+                new_widgets.append(page_label)
+                
+                # Process events to keep UI responsive
+                if page_num % 2 == 0:  # Every 2 pages
+                    QApplication.processEvents()
+            
+            # Now quickly replace all widgets at once
+            self.pages_container.setUpdatesEnabled(False)
+            
+            # Clear old widgets
+            self.clear_pages()
+            
+            # Add all new widgets
+            for widget in new_widgets:
+                self.pages_layout.addWidget(widget)
+                self.page_widgets.append(widget)
+            
+            # Re-enable updates
+            self.pages_container.setUpdatesEnabled(True)
+            
+            # Restore scroll position
+            QTimer.singleShot(10, lambda: self._restore_scroll_position(scroll_percentage))
+            
+        except Exception as e:
+            logger.exception(f"Error rendering pages: {e}")
+            self.show_error(f"Error rendering pages: {e}")
+        finally:
+            self.is_rendering = False
+    
+    def clear_pages(self):
+        """Clear all rendered pages."""
+        # Temporarily disable updates to reduce flicker
+        self.pages_container.setUpdatesEnabled(False)
+        
+        # Hide and delete all widgets immediately
+        for widget in self.page_widgets:
+            widget.hide()
+            widget.setParent(None)
+            widget.deleteLater()
+        
+        # Clear layout
+        while self.pages_layout.count():
+            child = self.pages_layout.takeAt(0)
+            if child.widget():
+                child.widget().deleteLater()
+        
+        # Clear page widgets list
+        self.page_widgets.clear()
+        
+        # Re-enable updates
+        self.pages_container.setUpdatesEnabled(True)
+    
     
     def show_error(self, message: str):
         """Show error message in the viewer."""
-        self.graphics_scene.clear()
-        error_text = self.graphics_scene.addText(message)
-        error_text.setDefaultTextColor(Qt.red)
+        self.clear_pages()
+        error_label = QLabel(message)
+        error_label.setAlignment(Qt.AlignCenter)
+        error_label.setStyleSheet("color: red; font-size: 14px; padding: 20px;")
+        self.pages_layout.addWidget(error_label)
     
-    def next_page(self):
-        """Go to next page."""
-        if self.doc and self.current_page < len(self.doc) - 1:
-            self.current_page += 1
-            self.render_page()
-            self.update_navigation()
-    
-    def previous_page(self):
-        """Go to previous page."""
-        if self.current_page > 0:
-            self.current_page -= 1
-            self.render_page()
-            self.update_navigation()
-    
-    def update_navigation(self):
-        """Update navigation button states."""
-        if not self.doc:
-            self.prev_btn.setEnabled(False)
-            self.next_btn.setEnabled(False)
+    def _update_all_pages(self):
+        """Update all pages after zoom change."""
+        if not self.doc or self.is_rendering:
             return
         
-        self.prev_btn.setEnabled(self.current_page > 0)
-        self.next_btn.setEnabled(self.current_page < len(self.doc) - 1)
-        self.page_label.setText(f"Page {self.current_page + 1} of {len(self.doc)}")
+        # Save current scroll position as percentage
+        scrollbar = self.scroll_area.verticalScrollBar()
+        if scrollbar.maximum() > 0:
+            scroll_percentage = scrollbar.value() / scrollbar.maximum()
+        else:
+            scroll_percentage = 0
+        
+        # Render new pages in background first, then replace
+        self._render_and_replace_pages(scroll_percentage)
+    
+    def _restore_scroll_position(self, scroll_percentage):
+        """Restore scroll position after re-rendering."""
+        scrollbar = self.scroll_area.verticalScrollBar()
+        if scrollbar.maximum() > 0:
+            new_value = int(scroll_percentage * scrollbar.maximum())
+            scrollbar.setValue(new_value)
     
     def zoom_in(self):
         """Zoom in on the PDF."""
         self.zoom_factor *= 1.2
-        self.render_page()
+        if self.zoom_factor > 5.0:  # Maximum zoom level
+            self.zoom_factor = 5.0
+        self._update_all_pages()
     
     def zoom_out(self):
         """Zoom out on the PDF."""
         self.zoom_factor /= 1.2
         if self.zoom_factor < 0.2:  # Minimum zoom level
             self.zoom_factor = 0.2
-        self.render_page()
+        self._update_all_pages()
     
     def fit_width(self):
-        """Fit the PDF to the width of the view."""
-        if self.graphics_scene.items():
-            pixmap_item = self.graphics_scene.items()[0]
-            if isinstance(pixmap_item, QGraphicsPixmapItem):
-                pixmap = pixmap_item.pixmap()
-                if not pixmap.isNull():
-                    view_width = self.graphics_view.viewport().width() - 20  # Some margin
-                    current_width = pixmap.width()
-                    self.zoom_factor = view_width / current_width
-                    self.render_page()
+        """Fit one page to the width of the scroll area."""
+        if not self.doc or self.is_rendering:
+            return
+            
+        try:
+            # Get page dimensions at current DPI (use first page as reference)
+            page = self.doc[0]
+            page_rect = page.rect
+            
+            # Calculate zoom factor to fit one page width with margin
+            view_width = self.scroll_area.viewport().width() - 60  # Account for margins and scrollbar
+            page_width_at_base_dpi = page_rect.width * (self.base_dpi / 72.0)
+            
+            # Calculate new zoom factor for single page fit
+            target_zoom = view_width / page_width_at_base_dpi
+            
+            # Limit zoom to reasonable range
+            self.zoom_factor = max(0.2, min(target_zoom, 3.0))
+            
+            # Re-render all pages
+            self._update_all_pages()
+                
+        except Exception as e:
+            logger.exception(f"Error in fit_width: {e}")
     
     def clear(self):
         """Clear the PDF viewer."""
@@ -230,10 +356,8 @@ class PDFViewer(QWidget):
         if self.doc:
             self.doc.close()
             self.doc = None
-        self.graphics_scene.clear()
-        self.page_label.setText("Page 1 of 1")
-        self.prev_btn.setEnabled(False)
-        self.next_btn.setEnabled(False)
+        self.clear_pages()
+        self.page_label.setText("No PDF loaded")
         self.zoom_factor = 1.0
 
 
@@ -345,7 +469,6 @@ class RAGChatPanel(QWidget):
         super().__init__()
         self._setup_ui()
         self.document_context_mode = False  # False = general, True = document-specific
-        self.current_page_reference = None  # For future page reference functionality
     
     def _setup_ui(self):
         """Setup RAG chat panel UI."""
@@ -486,20 +609,6 @@ class RAGChatPanel(QWidget):
         """Clear the chat conversation."""
         self.chat_display.clear()
         self.add_message("Chat history cleared", "system")
-    
-    def set_page_reference(self, page_number):
-        """
-        Set the current page reference for questions (for future implementation).
-        
-        Args:
-            page_number (int): The page number to reference
-        """
-        self.current_page_reference = page_number
-        self.add_message(f"Page reference set to: {page_number}", "system")
-        
-        # This will be used in future implementation to provide page-specific context
-        # For now, we just store the reference for later use
-
 
 # Dialog classes will be implemented in separate files
 from PySide6.QtWidgets import QDialog

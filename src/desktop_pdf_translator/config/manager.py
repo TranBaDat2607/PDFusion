@@ -100,22 +100,12 @@ class ConfigManager:
             # Remove sensitive data (API keys) from saved file
             config_dict = self._remove_sensitive_data(config_dict)
             
-            # Create TOML document
-            doc = tomlkit.document()
+            # Clean None values that can't be serialized to TOML
+            config_dict = self._clean_none_values(config_dict)
             
-            # Add sections in organized way
-            for section, data in config_dict.items():
-                if isinstance(data, dict):
-                    table = tomlkit.table()
-                    for key, value in data.items():
-                        table.add(key, value)
-                    doc.add(section, table)
-                else:
-                    doc.add(section, data)
-            
-            # Write to file
+            # Write directly using tomlkit.dump without manual document creation
             with open(self.config_file, "w", encoding="utf-8") as f:
-                tomlkit.dump(doc, f)
+                tomlkit.dump(config_dict, f)
             
             logger.info(f"Settings saved to {self.config_file}")
             return True
@@ -190,9 +180,29 @@ class ConfigManager:
             if service in safe_config and isinstance(safe_config[service], dict):
                 safe_config[service] = safe_config[service].copy()
                 if "api_key" in safe_config[service]:
-                    safe_config[service]["api_key"] = "${API_KEY}"  # Placeholder
+                    safe_config[service]["api_key"] = f"${{{service.upper()}_API_KEY}}"  # Proper placeholder
         
         return safe_config
+    
+    def _clean_none_values(self, config_dict: Dict[str, Any]) -> Dict[str, Any]:
+        """Remove None values from config dict to prevent TOML serialization errors."""
+        cleaned = {}
+        
+        for key, value in config_dict.items():
+            if value is None:
+                continue
+            elif isinstance(value, dict):
+                cleaned_nested = self._clean_none_values(value)
+                if cleaned_nested:  # Only add if not empty after cleaning
+                    cleaned[key] = cleaned_nested
+            elif isinstance(value, list):
+                cleaned_list = [item for item in value if item is not None]
+                if cleaned_list:  # Only add if not empty after cleaning
+                    cleaned[key] = cleaned_list
+            else:
+                cleaned[key] = value
+        
+        return cleaned
     
     def _deep_merge(self, target: Dict[str, Any], source: Dict[str, Any]) -> None:
         """Deep merge source dictionary into target dictionary."""
@@ -257,6 +267,7 @@ class ConfigManager:
         try:
             config_dict = self.settings.dict()
             config_dict = self._remove_sensitive_data(config_dict)
+            config_dict = self._clean_none_values(config_dict)
             
             with open(export_path, "w", encoding="utf-8") as f:
                 tomlkit.dump(config_dict, f)

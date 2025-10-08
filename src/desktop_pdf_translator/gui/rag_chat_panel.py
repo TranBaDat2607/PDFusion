@@ -46,13 +46,13 @@ class RAGWorker(QThread):
     def run(self):
         """Run RAG processing in background thread."""
         try:
-            self.progress_updated.emit("Đang xử lý câu hỏi...", 20)
+            self.progress_updated.emit("Processing question...", 20)
             
             # Create event loop for async operations
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
             
-            self.progress_updated.emit("Đang tìm kiếm trong PDF...", 40)
+            self.progress_updated.emit("Searching in PDF...", 40)
             
             # Process the question
             result = loop.run_until_complete(
@@ -63,7 +63,7 @@ class RAGWorker(QThread):
                 )
             )
             
-            self.progress_updated.emit("Hoàn thành", 100)
+            self.progress_updated.emit("Completed", 100)
             self.answer_ready.emit(result)
             
         except Exception as e:
@@ -116,14 +116,13 @@ class ReferenceWidget(QFrame):
         
         # Main text
         text_label = QLabel(display_text)
-        text_label.setWordWrap(True)
         text_label.setFont(QFont("Segoe UI", 9))
         
         # Additional info for PDF references
         if self.ref_type == 'pdf':
             confidence = self.reference_data.get('confidence', 0.0)
             if confidence > 0:
-                confidence_label = QLabel(f"Độ tin cậy: {confidence:.1%}")
+                confidence_label = QLabel(f"Confidence: {confidence:.1%}")
                 confidence_label.setStyleSheet("color: #666; font-size: 8pt;")
                 layout.addWidget(confidence_label)
         
@@ -131,7 +130,7 @@ class ReferenceWidget(QFrame):
         elif self.ref_type == 'web':
             reliability = self.reference_data.get('reliability_score', 0.0)
             if reliability > 0:
-                reliability_label = QLabel(f"Độ tin cậy: {reliability:.1%}")
+                reliability_label = QLabel(f"Reliability: {reliability:.1%}")
                 reliability_label.setStyleSheet("color: #666; font-size: 8pt;")
                 layout.addWidget(reliability_label)
         
@@ -178,7 +177,7 @@ class ChatHistoryWidget(QScrollArea):
         layout = QVBoxLayout(question_frame)
         
         # Question header
-        header = QLabel("❓ Câu hỏi:")
+        header = QLabel("❓ Question:")
         header.setFont(QFont("Segoe UI", 9, QFont.Bold))
         layout.addWidget(header)
         
@@ -210,7 +209,7 @@ class ChatHistoryWidget(QScrollArea):
         layout = QVBoxLayout(answer_frame)
         
         # Answer header
-        header = QLabel("🤖 Trả lời:")
+        header = QLabel("🤖 Answer:")
         header.setFont(QFont("Segoe UI", 9, QFont.Bold))
         layout.addWidget(header)
         
@@ -227,12 +226,12 @@ class ChatHistoryWidget(QScrollArea):
         web_refs = answer_data.get('web_references', [])
         
         if pdf_refs or web_refs:
-            refs_group = QGroupBox("📚 Tài liệu tham khảo:")
+            refs_group = QGroupBox("📚 References:")
             refs_layout = QVBoxLayout(refs_group)
             
             # PDF references
             if pdf_refs:
-                pdf_label = QLabel("📄 Nguồn từ PDF:")
+                pdf_label = QLabel("📄 PDF Sources:")
                 pdf_label.setFont(QFont("Segoe UI", 8, QFont.Bold))
                 refs_layout.addWidget(pdf_label)
                 
@@ -243,7 +242,7 @@ class ChatHistoryWidget(QScrollArea):
             
             # Web references
             if web_refs:
-                web_label = QLabel("🌐 Nguồn từ Internet:")
+                web_label = QLabel("🌐 Web Sources:")
                 web_label.setFont(QFont("Segoe UI", 8, QFont.Bold))
                 refs_layout.addWidget(web_label)
                 
@@ -261,8 +260,8 @@ class ChatHistoryWidget(QScrollArea):
             completeness = quality.get('completeness', 0.0)
             
             metrics_label = QLabel(
-                f"📊 Chất lượng - Độ tin cậy: {confidence:.1%}, "
-                f"Độ đầy đủ: {completeness:.1%}"
+                f"📊 Quality - Confidence: {confidence:.1%}, "
+                f"Completeness: {completeness:.1%}"
             )
             metrics_label.setStyleSheet("color: #666; font-size: 8pt;")
             layout.addWidget(metrics_label)
@@ -329,7 +328,7 @@ class RAGChatPanel(QWidget):
         # Header
         header_layout = QHBoxLayout()
         
-        title_label = QLabel("🤖 AI Chat - Hỏi đáp thông minh")
+        title_label = QLabel("🤖 AI Chat - Smart Q&A")
         title_label.setFont(QFont("Segoe UI", 12, QFont.Bold))
         header_layout.addWidget(title_label)
         
@@ -365,7 +364,7 @@ class RAGChatPanel(QWidget):
         layout.addWidget(self.progress_bar)
         
         # Status label
-        self.status_label = QLabel("Sẵn sàng")
+        self.status_label = QLabel("Ready")
         self.status_label.setStyleSheet("color: #666; font-size: 8pt;")
         layout.addWidget(self.status_label)
     
@@ -379,23 +378,15 @@ class RAGChatPanel(QWidget):
         options_layout = QHBoxLayout()
         
         # Web research checkbox
-        self.web_research_cb = QCheckBox("Tìm kiếm web")
+        self.web_research_cb = QCheckBox("Web Search")
         self.web_research_cb.setChecked(True)
-        self.web_research_cb.setToolTip("Bao gồm thông tin từ internet trong câu trả lời")
+        self.web_research_cb.setToolTip("Include information from internet in answers")
         options_layout.addWidget(self.web_research_cb)
-        
-        # Document scope
-        scope_label = QLabel("Phạm vi:")
-        options_layout.addWidget(scope_label)
-        
-        self.scope_combo = QComboBox()
-        self.scope_combo.addItems(["Tài liệu hiện tại", "Tất cả tài liệu"])
-        options_layout.addWidget(self.scope_combo)
         
         options_layout.addStretch()
         
         # Clear button
-        clear_btn = QPushButton("🗑️ Xóa lịch sử")
+        clear_btn = QPushButton("🗑️ Clear History")
         clear_btn.clicked.connect(self.clear_chat_history)
         options_layout.addWidget(clear_btn)
         
@@ -405,36 +396,17 @@ class RAGChatPanel(QWidget):
         input_layout = QHBoxLayout()
         
         self.question_input = QLineEdit()
-        self.question_input.setPlaceholderText("Nhập câu hỏi của bạn...")
+        self.question_input.setPlaceholderText("Enter your question...")
         self.question_input.returnPressed.connect(self.ask_question)
         input_layout.addWidget(self.question_input)
         
         # Ask button
-        self.ask_button = QPushButton("Hỏi")
+        self.ask_button = QPushButton("Ask")
         self.ask_button.clicked.connect(self.ask_question)
         self.ask_button.setDefault(True)
         input_layout.addWidget(self.ask_button)
         
         layout.addLayout(input_layout)
-        
-        # Quick questions
-        quick_layout = QHBoxLayout()
-        quick_label = QLabel("Câu hỏi nhanh:")
-        quick_layout.addWidget(quick_label)
-        
-        quick_questions = [
-            "Tóm tắt tài liệu",
-            "Khái niệm chính",
-            "Kết luận quan trọng"
-        ]
-        
-        for question in quick_questions:
-            btn = QPushButton(question)
-            btn.clicked.connect(lambda checked, q=question: self.ask_quick_question(q))
-            quick_layout.addWidget(btn)
-        
-        quick_layout.addStretch()
-        layout.addLayout(quick_layout)
         
         return input_widget
     
@@ -455,16 +427,16 @@ class RAGChatPanel(QWidget):
             self.reference_manager.set_pdf_viewer_callback(self._navigate_to_pdf)
             self.reference_manager.set_web_browser_callback(self._open_web_link)
             
-            self.status_label.setText("Hệ thống RAG đã sẵn sàng")
+            self.status_label.setText("RAG system ready")
             logger.info("RAG system initialized successfully")
             
         except Exception as e:
-            error_msg = f"Lỗi khởi tạo hệ thống RAG: {str(e)}"
+            error_msg = f"RAG system initialization error: {str(e)}"
             self.status_label.setText(error_msg)
             logger.error(error_msg)
             
             # Show error message
-            QMessageBox.warning(self, "Lỗi khởi tạo", error_msg)
+            QMessageBox.warning(self, "Initialization Error", error_msg)
     
     def set_current_document(self, document_path: Path, document_id: str = None):
         """
@@ -477,7 +449,7 @@ class RAGChatPanel(QWidget):
         self.current_document_path = document_path
         self.current_document_id = document_id or str(document_path.stem)
         
-        self.status_label.setText(f"Tài liệu hiện tại: {document_path.name}")
+        self.status_label.setText(f"Current document: {document_path.name}")
         logger.info(f"Current document set: {document_path}")
     
     def process_document(self, document_path: Path):
@@ -487,12 +459,17 @@ class RAGChatPanel(QWidget):
         Args:
             document_path: Path to the PDF document
         """
+        # Check if widget is enabled (RAG is on)
+        if not self.isEnabled():
+            logger.info(f"RAG is disabled, skipping document processing: {document_path}")
+            return
+            
         if not self.vector_store:
-            QMessageBox.warning(self, "Lỗi", "Hệ thống RAG chưa được khởi tạo")
+            QMessageBox.warning(self, "Error", "RAG system not initialized")
             return
         
         try:
-            self.status_label.setText("Đang xử lý tài liệu...")
+            self.status_label.setText("Processing document...")
             self.progress_bar.setVisible(True)
             self.progress_bar.setRange(0, 100)
             self.progress_bar.setValue(10)
@@ -506,21 +483,21 @@ class RAGChatPanel(QWidget):
                 logger.info(f"Document {document_id} already processed, using existing data")
                 self.set_current_document(document_path, document_id)
                 self.progress_bar.setVisible(False)
-                self.status_label.setText(f"Tài liệu đã có sẵn: {document_path.name}")
+                self.status_label.setText(f"Document already available: {document_path.name}")
                 return
             
             self.progress_bar.setValue(30)
-            self.status_label.setText("Đang trích xuất nội dung PDF...")
+            self.status_label.setText("Extracting PDF content...")
             
             # Process PDF document
             processor = ScientificPDFProcessor()
             chunks = asyncio.run(processor.process_pdf(document_path))
             
             if not chunks:
-                raise Exception("Không thể trích xuất nội dung từ PDF")
+                raise Exception("Cannot extract content from PDF")
             
             self.progress_bar.setValue(60)
-            self.status_label.setText("Đang lưu vào cơ sở dữ liệu...")
+            self.status_label.setText("Saving to database...")
             
             # Add chunks to vector store
             success = asyncio.run(self.vector_store.add_document_chunks(
@@ -530,7 +507,7 @@ class RAGChatPanel(QWidget):
             ))
             
             if not success:
-                raise Exception("Không thể lưu tài liệu vào cơ sở dữ liệu")
+                raise Exception("Cannot save document to database")
             
             self.progress_bar.setValue(90)
             
@@ -539,17 +516,17 @@ class RAGChatPanel(QWidget):
             
             self.progress_bar.setValue(100)
             self.progress_bar.setVisible(False)
-            self.status_label.setText(f"Tài liệu đã được xử lý: {document_path.name} ({len(chunks)} đoạn)")
+            self.status_label.setText(f"Document processed: {document_path.name} ({len(chunks)} chunks)")
             
             logger.info(f"Document processed successfully: {document_path} ({len(chunks)} chunks)")
             
         except Exception as e:
-            error_msg = f"Lỗi xử lý tài liệu: {str(e)}"
+            error_msg = f"Document processing error: {str(e)}"
             self.status_label.setText(error_msg)
             self.progress_bar.setVisible(False)
             logger.error(error_msg)
             
-            QMessageBox.warning(self, "Lỗi xử lý", error_msg)
+            QMessageBox.warning(self, "Processing Error", error_msg)
     
     def ask_question(self):
         """Process user question."""
@@ -558,7 +535,7 @@ class RAGChatPanel(QWidget):
             return
         
         if not self.rag_chain:
-            QMessageBox.warning(self, "Lỗi", "Hệ thống RAG chưa sẵn sàng")
+            QMessageBox.warning(self, "Error", "RAG system not ready")
             return
         
         # Add question to chat history
@@ -567,18 +544,12 @@ class RAGChatPanel(QWidget):
         # Clear input
         self.question_input.clear()
         
-        # Determine document scope
-        document_id = None
-        if self.scope_combo.currentText() == "Tài liệu hiện tại":
-            document_id = self.current_document_id
+        # Always use current document scope (no scope selection)
+        document_id = self.current_document_id
         
         # Start processing
         self._start_rag_processing(question, document_id, self.web_research_cb.isChecked())
     
-    def ask_quick_question(self, question: str):
-        """Ask a predefined quick question."""
-        self.question_input.setText(question)
-        self.ask_question()
     
     def _start_rag_processing(self, question: str, document_id: Optional[str], include_web: bool):
         """Start RAG processing in background thread."""
@@ -613,14 +584,11 @@ class RAGChatPanel(QWidget):
         sources_used = answer_data.get('sources_used', {})
         total_sources = sources_used.get('pdf_sources', 0) + sources_used.get('web_sources', 0)
         
-        self.status_label.setText(
-            f"Hoàn thành trong {processing_time:.1f}s - {total_sources} nguồn"
-        )
+        self.status_label.setText(f"Completed in {processing_time:.1f}s - {total_sources} sources")
         
         logger.info(f"Answer generated successfully in {processing_time:.1f}s")
     
     def _handle_error(self, error_message: str):
-        """Handle RAG processing error."""
         
         # Re-enable input
         self.ask_button.setEnabled(True)
@@ -628,8 +596,8 @@ class RAGChatPanel(QWidget):
         self.progress_bar.setVisible(False)
         
         # Show error
-        self.status_label.setText(f"Lỗi: {error_message}")
-        QMessageBox.warning(self, "Lỗi xử lý", f"Không thể trả lời câu hỏi:\n{error_message}")
+        self.status_label.setText(f"Error: {error_message}")
+        QMessageBox.warning(self, "Processing Error", f"Cannot answer question:\n{error_message}")
         
         logger.error(f"RAG processing error: {error_message}")
     
@@ -671,12 +639,12 @@ class RAGChatPanel(QWidget):
         self.chat_history.clear_history()
         if self.reference_manager:
             self.reference_manager.clear_history()
-        self.status_label.setText("Lịch sử đã được xóa")
+        self.status_label.setText("History cleared")
     
     def show_settings(self):
         """Show RAG settings dialog."""
         # Placeholder for settings dialog
-        QMessageBox.information(self, "Cài đặt", "Cài đặt RAG sẽ được thêm trong phiên bản tới")
+        QMessageBox.information(self, "Settings", "RAG settings will be added in future version")
     
     def get_rag_stats(self) -> Dict[str, Any]:
         """Get RAG system statistics."""
@@ -692,3 +660,21 @@ class RAGChatPanel(QWidget):
         stats['current_document'] = self.current_document_path.name if self.current_document_path else None
         
         return stats
+    
+    def set_rag_disabled_message(self):
+        """Display message when RAG is disabled."""
+        # Disable input controls
+        self.question_input.setEnabled(False)
+        self.ask_button.setEnabled(False)
+        self.web_research_cb.setEnabled(False)
+        
+        self.status_label.setText("RAG disabled")
+    
+    def set_rag_enabled_message(self):
+        """Display message when RAG is re-enabled."""
+        # Re-enable input controls
+        self.question_input.setEnabled(True)
+        self.ask_button.setEnabled(True)
+        self.web_research_cb.setEnabled(True)
+        
+        self.status_label.setText("RAG ready")

@@ -8,7 +8,6 @@ from typing import Optional, Literal
 
 from pydantic import BaseModel, Field, validator
 
-
 class LanguageCode(str, Enum):
     """Supported language codes with Vietnamese priority."""
     
@@ -19,13 +18,11 @@ class LanguageCode(str, Enum):
     CHINESE_SIMPLIFIED = "zh-cn"
     CHINESE_TRADITIONAL = "zh-tw"
 
-
 class TranslationService(str, Enum):
     """Supported translation services."""
     
     OPENAI = "openai"
     GEMINI = "gemini"
-
 
 class OpenAISettings(BaseModel):
     """OpenAI translation service settings."""
@@ -36,14 +33,12 @@ class OpenAISettings(BaseModel):
     temperature: float = Field(0.3, ge=0.0, le=2.0, description="Translation creativity")
     max_tokens: Optional[int] = Field(None, description="Maximum tokens per request")
 
-
 class GeminiSettings(BaseModel):
     """Google Gemini translation service settings."""
     
     api_key: Optional[str] = Field(None, description="Google AI API key")
     model: str = Field("gemini-pro", description="Gemini model to use")
     temperature: float = Field(0.3, ge=0.0, le=1.0, description="Translation creativity")
-
 
 class TranslationSettings(BaseModel):
     """Translation-specific settings."""
@@ -66,7 +61,6 @@ class TranslationSettings(BaseModel):
     preserve_formatting: bool = Field(True, description="Preserve PDF formatting")
     min_text_length: int = Field(5, ge=0, description="Minimum text length to translate")
 
-
 class GUISettings(BaseModel):
     """GUI-specific settings."""
     
@@ -77,7 +71,6 @@ class GUISettings(BaseModel):
     auto_preview: bool = Field(True, description="Auto-preview translations")
     vietnamese_font_priority: bool = Field(True, description="Prioritize Vietnamese fonts")
 
-
 class ProcessingSettings(BaseModel):
     """PDF processing settings."""
     
@@ -85,6 +78,13 @@ class ProcessingSettings(BaseModel):
     timeout_seconds: int = Field(300, ge=30, le=3600, description="Processing timeout")
     quality_check: bool = Field(True, description="Enable translation quality checks")
     backup_originals: bool = Field(True, description="Keep backup of original files")
+
+class RAGSettings(BaseModel):
+    """RAG (Retrieval-Augmented Generation) settings."""
+    
+    enabled: bool = Field(False, description="Enable RAG functionality")
+    auto_process_documents: bool = Field(True, description="Auto-process documents for RAG")
+    web_research_enabled: bool = Field(True, description="Enable web research integration")
 
 
 class AppSettings(BaseModel):
@@ -98,6 +98,7 @@ class AppSettings(BaseModel):
     translation: TranslationSettings = Field(default_factory=TranslationSettings)
     gui: GUISettings = Field(default_factory=GUISettings)
     processing: ProcessingSettings = Field(default_factory=ProcessingSettings)
+    rag: RAGSettings = Field(default_factory=RAGSettings)
     
     # Application metadata
     version: str = Field("1.0.0", description="Application version")
@@ -135,7 +136,6 @@ class AppSettings(BaseModel):
             return False, f"Missing API key for {service_name}"
         
         return True, "Credentials validated"
-
 
 class FileMetadata(BaseModel):
     """Metadata for processed PDF files."""

@@ -38,6 +38,12 @@ api_key = "${GEMINI_API_KEY}"
 model = "gemini-pro"
 temperature = 0.3
 
+[rag]
+# RAG (Retrieval-Augmented Generation) settings
+enabled = false
+auto_process_documents = true
+web_research_enabled = true
+
 # Application metadata
 version = "1.0.0"
 debug_mode = false
