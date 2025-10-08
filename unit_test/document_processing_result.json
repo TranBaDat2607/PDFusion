@@ -1,0 +1,1783 @@
+{
+  "test_info": {
+    "pdf_path": "C:\\Users\\Admin\\Downloads\\CV_TranBaDat__Copy_.pdf",
+    "start_time": "2025-09-28T03:26:41.432051",
+    "end_time": "2025-09-28T03:26:41.799052",
+    "total_processing_time": 0.367001
+  },
+  "processing_result": {
+    "document_path": "C:\\Users\\Admin\\Downloads\\CV_TranBaDat__Copy_.pdf",
+    "elements_count": 31,
+    "elements": [
+      {
+        "text": "Tran Ba Dat",
+        "page": 0,
+        "elements": [],
+        "metadata": {
+          "has_equations": false,
+          "has_tables": false,
+          "has_figures": false,
+          "section_type": "content"
+        },
+        "chunk_id": "chunk_0",
+        "next_context": "Tran Ba Dat +84 397 283 862 tranbadat26072004@gmail.com linkedin.com github.com leetcode.com kaggle."
+      },
+      {
+        "text": "Tran Ba Dat +84 397 283 862 tranbadat26072004@gmail.com linkedin.com github.com leetcode.com kaggle.com Education FPT University",
+        "page": 0,
+        "elements": [
+          {
+            "type": "text",
+            "bbox": [
+              228.37600708007812,
+              33.63511657714844,
+              383.64239501953125,
+              58.422218322753906
+            ],
+            "page": 0,
+            "content": "Tran Ba Dat",
+            "metadata": {}
+          },
+          {
+            "type": "text",
+            "bbox": [
+              53.27400207519531,
+              58.17192077636719,
+              125.78179931640625,
+              68.134521484375
+            ],
+            "page": 0,
+            "content": "+84 397 283 862",
+            "metadata": {}
+          },
+          {
+            "type": "text",
+            "bbox": [
+              148.47300720214844,
+              58.17192077636719,
+              283.28680419921875,
+              68.134521484375
+            ],
+            "page": 0,
+            "content": "tranbadat26072004@gmail.com",
+            "metadata": {}
+          },
+          {
+            "type": "text",
+            "bbox": [
+              304.7200012207031,
+              58.17192077636719,
+              359.5242614746094,
+              68.134521484375
+            ],
+            "page": 0,
+            "content": "linkedin.com",
+            "metadata": {}
+          },
+          {
+            "type": "text",
+            "bbox": [
+              381.8890075683594,
+              58.17192077636719,
+              430.3271789550781,
+              68.134521484375
+            ],
+            "page": 0,
+            "content": "github.com",
+            "metadata": {}
+          },
+          {
+            "type": "text",
+            "bbox": [
+              443.04901123046875,
+              58.17192077636719,
+              498.6602783203125,
+              68.134521484375
+            ],
+            "page": 0,
+            "content": "leetcode.com",
+            "metadata": {}
+          },
+          {
+            "type": "text",
+            "bbox": [
+              511.4029846191406,
+              58.17192077636719,
+              558.725341796875,
+              68.134521484375
+            ],
+            "page": 0,
+            "content": "kaggle.com",
+            "metadata": {}
+          },
+          {
+            "type": "text",
+            "bbox": [
+              36.0,
+              79.768798828125,
+              98.86044311523438,
+              91.7239990234375
+            ],
+            "page": 0,
+            "content": "Education",
+            "metadata": {}
+          }
+        ],
+        "metadata": {
+          "has_equations": false,
+          "has_tables": false,
+          "has_figures": false,
+          "section_type": "title"
+        },
+        "chunk_id": "chunk_1",
+        "previous_context": "Tran Ba Dat",
+        "next_context": "FPT University Hoa Lac, Ha Noi Major in Artificial Intelligence, GPA: 8.12/10 2022 – Present Experie"
+      },
+      {
+        "text": "FPT University Hoa Lac, Ha Noi Major in Artificial Intelligence, GPA: 8.12/10 2022 – Present Experience Generative AI Engineer — Maxflow Technology",
+        "page": 0,
+        "elements": [
+          {
+            "type": "text",
+            "bbox": [
+              46.79999923706055,
+              101.09516906738281,
+              133.0691680908203,
+              112.00426483154297
+            ],
+            "page": 0,
+            "content": "FPT University",
+            "metadata": {}
+          },
+          {
+            "type": "text",
+            "bbox": [
+              490.14599609375,
+              101.09516906738281,
+              570.6005249023438,
+              112.00426483154297
+            ],
+            "page": 0,
+            "content": "Hoa Lac, Ha Noi",
+            "metadata": {}
+          },
+          {
+            "type": "text",
+            "bbox": [
+              46.79998779296875,
+              115.38389587402344,
+              248.50274658203125,
+              125.34649658203125
+            ],
+            "page": 0,
+            "content": "Major in Artificial Intelligence, GPA: 8.12/10",
+            "metadata": {}
+          },
+          {
+            "type": "text",
+            "bbox": [
+              504.49176025390625,
+              115.38389587402344,
+              569.6670532226562,
+              125.34649658203125
+            ],
+            "page": 0,
+            "content": "2022 – Present",
+            "metadata": {}
+          },
+          {
+            "type": "text",
+            "bbox": [
+              35.9999885559082,
+              130.8837890625,
+              104.0848617553711,
+              142.8389892578125
+            ],
+            "page": 0,
+            "content": "Experience",
+            "metadata": {}
+          }
+        ],
+        "metadata": {
+          "has_equations": false,
+          "has_tables": false,
+          "has_figures": false,
+          "section_type": "header"
+        },
+        "chunk_id": "chunk_2",
+        "previous_context": "Tran Ba Dat +84 397 283 862 tranbadat26072004@gmail.com linkedin.com github.com leetcode.com kaggle.",
+        "next_context": "Generative AI Engineer — Maxflow Technology Apr 2025 – Present Web Automation Agent Apr 2025 – June "
+      },
+      {
+        "text": "Generative AI Engineer — Maxflow Technology Apr 2025 – Present Web Automation Agent Apr 2025 – June 2025 Developed a specialized sub-agent within an existing multi-agent framework to handle user action recording and DOM-based web automation. Architected and implemented a browser extension framework that records user interactions (clicks, inputs, navigation, etc) and translates them into structured workflows for downstream agents. Designed a DOM-tree parsing module to extract meaningful page context, enabling LLMs to decide and execute precise web actions. Engineered a prompt-engineering pipeline that transforms page state and user intent into optimized LLM queries. Projects Jan 2025 – Present RAG Chatbot",
+        "page": 0,
+        "elements": [
+          {
+            "type": "text",
+            "bbox": [
+              46.79999923706055,
+              152.2091827392578,
+              311.1930236816406,
+              163.1182861328125
+            ],
+            "page": 0,
+            "content": "Generative AI Engineer — Maxflow Technology",
+            "metadata": {}
+          },
+          {
+            "type": "text",
+            "bbox": [
+              478.20599365234375,
+              152.2091827392578,
+              570.6058959960938,
+              163.1182861328125
+            ],
+            "page": 0,
+            "content": "Apr 2025 – Present",
+            "metadata": {}
+          },
+          {
+            "type": "text",
+            "bbox": [
+              46.79998779296875,
+              166.49790954589844,
+              149.20556640625,
+              176.46051025390625
+            ],
+            "page": 0,
+            "content": "Web Automation Agent",
+            "metadata": {}
+          },
+          {
+            "type": "text",
+            "bbox": [
+              471.6949157714844,
+              166.49790954589844,
+              569.2286987304688,
+              176.46051025390625
+            ],
+            "page": 0,
+            "content": "Apr 2025 – June 2025",
+            "metadata": {}
+          },
+          {
+            "type": "text",
+            "bbox": [
+              65.34567260742188,
+              177.8188934326172,
+              561.1790161132812,
+              189.08349609375
+            ],
+            "page": 0,
+            "content": "Developed a specialized sub-agent within an existing multi-agent framework to handle user action recording and",
+            "metadata": {}
+          },
+          {
+            "type": "text",
+            "bbox": [
+              70.79998779296875,
+              191.07591247558594,
+              199.13816833496094,
+              201.03851318359375
+            ],
+            "page": 0,
+            "content": "DOM-based web automation.",
+            "metadata": {}
+          },
+          {
+            "type": "text",
+            "bbox": [
+              65.34567260742188,
+              202.6089324951172,
+              535.55517578125,
+              213.63751220703125
+            ],
+            "page": 0,
+            "content": "Architected and implemented a browser extension framework that records user interactions (clicks, inputs,",
+            "metadata": {}
+          },
+          {
+            "type": "text",
+            "bbox": [
+              70.79998779296875,
+              215.6299285888672,
+              447.97406005859375,
+              225.592529296875
+            ],
+            "page": 0,
+            "content": "navigation, etc) and translates them into structured workflows for downstream agents.",
+            "metadata": {}
+          },
+          {
+            "type": "text",
+            "bbox": [
+              65.34567260742188,
+              227.16294860839844,
+              561.4679565429688,
+              238.1915283203125
+            ],
+            "page": 0,
+            "content": "Designed a DOM-tree parsing module to extract meaningful page context, enabling LLMs to decide and execute",
+            "metadata": {}
+          },
+          {
+            "type": "text",
+            "bbox": [
+              70.79998779296875,
+              240.18394470214844,
+              156.99639892578125,
+              250.14654541015625
+            ],
+            "page": 0,
+            "content": "precise web actions.",
+            "metadata": {}
+          },
+          {
+            "type": "text",
+            "bbox": [
+              65.34567260742188,
+              251.7169647216797,
+              567.266357421875,
+              262.74554443359375
+            ],
+            "page": 0,
+            "content": "Engineered a prompt-engineering pipeline that transforms page state and user intent into optimized LLM queries.",
+            "metadata": {}
+          },
+          {
+            "type": "text",
+            "bbox": [
+              35.9999885559082,
+              271.2138366699219,
+              90.75480651855469,
+              283.1690368652344
+            ],
+            "page": 0,
+            "content": "Projects",
+            "metadata": {}
+          },
+          {
+            "type": "text",
+            "bbox": [
+              479.6000061035156,
+              294.5321960449219,
+              570.6035766601562,
+              305.4413146972656
+            ],
+            "page": 0,
+            "content": "Jan 2025 – Present",
+            "metadata": {}
+          }
+        ],
+        "metadata": {
+          "has_equations": false,
+          "has_tables": false,
+          "has_figures": false,
+          "section_type": "header"
+        },
+        "chunk_id": "chunk_3",
+        "previous_context": "FPT University Hoa Lac, Ha Noi Major in Artificial Intelligence, GPA: 8.12/10 2022 – Present Experie",
+        "next_context": "RAG Chatbot LangGraph, LangChain Project link: Serving as an AI developer in the team, I develop a c"
+      },
+      {
+        "text": "RAG Chatbot LangGraph, LangChain Project link: Serving as an AI developer in the team, I develop a chatbot to assist users in hiring tutors on the website. Conducting research and development on a RAG system that enables users to interact with various text file formats (e.g., txt, pdf, doc). Designed and implemented a Text-to-SQL model architecture to translate user queries into SQL commands. Oct 2024 – Jan 2025 Land-Cover-Classification",
+        "page": 0,
+        "elements": [
+          {
+            "type": "text",
+            "bbox": [
+              46.79999923706055,
+              295.2719421386719,
+              118.09236907958984,
+              305.2345275878906
+            ],
+            "page": 0,
+            "content": "RAG Chatbot",
+            "metadata": {}
+          },
+          {
+            "type": "text",
+            "bbox": [
+              124.1845932006836,
+              295.2719421386719,
+              228.7927703857422,
+              305.2345275878906
+            ],
+            "page": 0,
+            "content": "LangGraph, LangChain",
+            "metadata": {}
+          },
+          {
+            "type": "text",
+            "bbox": [
+              235.65260314941406,
+              295.2719421386719,
+              293.39666748046875,
+              305.2345275878906
+            ],
+            "page": 0,
+            "content": "Project link:",
+            "metadata": {}
+          },
+          {
+            "type": "text",
+            "bbox": [
+              65.34568786621094,
+              306.5859375,
+              535.2365112304688,
+              317.85052490234375
+            ],
+            "page": 0,
+            "content": "Serving as an AI developer in the team, I develop a chatbot to assist users in hiring tutors on the website.",
+            "metadata": {}
+          },
+          {
+            "type": "text",
+            "bbox": [
+              65.34568786621094,
+              319.42193603515625,
+              576.0234375,
+              330.44952392578125
+            ],
+            "page": 0,
+            "content": "Conducting research and development on a RAG system that enables users to interact with various text file formats",
+            "metadata": {}
+          },
+          {
+            "type": "text",
+            "bbox": [
+              70.80000305175781,
+              332.4419250488281,
+              157.165771484375,
+              342.4045104980469
+            ],
+            "page": 0,
+            "content": "(e.g., txt, pdf, doc).",
+            "metadata": {}
+          },
+          {
+            "type": "text",
+            "bbox": [
+              65.34568786621094,
+              343.97491455078125,
+              543.2066040039062,
+              355.0035095214844
+            ],
+            "page": 0,
+            "content": "Designed and implemented a Text-to-SQL model architecture to translate user queries into SQL commands.",
+            "metadata": {}
+          },
+          {
+            "type": "text",
+            "bbox": [
+              472.26702880859375,
+              362.5751647949219,
+              570.6015625,
+              373.4842834472656
+            ],
+            "page": 0,
+            "content": "Oct 2024 – Jan 2025",
+            "metadata": {}
+          }
+        ],
+        "metadata": {
+          "has_equations": false,
+          "has_tables": false,
+          "has_figures": false,
+          "section_type": "header"
+        },
+        "chunk_id": "chunk_4",
+        "previous_context": "Generative AI Engineer — Maxflow Technology Apr 2025 – Present Web Automation Agent Apr 2025 – June ",
+        "next_context": "Land-Cover-Classification PyTorch, Pandas, Matplotlib Project link: Implemented data augmentation te"
+      },
+      {
+        "text": "Land-Cover-Classification PyTorch, Pandas, Matplotlib Project link: Implemented data augmentation techniques",
+        "page": 0,
+        "elements": [
+          {
+            "type": "text",
+            "bbox": [
+              46.80000305175781,
+              363.3149108886719,
+              175.0186767578125,
+              373.2774963378906
+            ],
+            "page": 0,
+            "content": "Land-Cover-Classification",
+            "metadata": {}
+          },
+          {
+            "type": "text",
+            "bbox": [
+              181.10560607910156,
+              363.3149108886719,
+              309.3649597167969,
+              373.2774963378906
+            ],
+            "page": 0,
+            "content": "PyTorch, Pandas, Matplotlib",
+            "metadata": {}
+          },
+          {
+            "type": "text",
+            "bbox": [
+              316.068603515625,
+              363.3149108886719,
+              373.81268310546875,
+              373.2774963378906
+            ],
+            "page": 0,
+            "content": "Project link:",
+            "metadata": {}
+          },
+          {
+            "type": "text",
+            "bbox": [
+              65.34571838378906,
+              374.62890625,
+              127.24811553955078,
+              385.89349365234375
+            ],
+            "page": 0,
+            "content": "Implemented",
+            "metadata": {}
+          }
+        ],
+        "metadata": {
+          "has_equations": false,
+          "has_tables": false,
+          "has_figures": false,
+          "section_type": "header"
+        },
+        "chunk_id": "chunk_5",
+        "previous_context": "RAG Chatbot LangGraph, LangChain Project link: Serving as an AI developer in the team, I develop a c",
+        "next_context": "data augmentation techniques (rotation, flipping, scaling) to enhance training data variability. Dev"
+      },
+      {
+        "text": "data augmentation techniques (rotation, flipping, scaling) to enhance training data variability. Developed a deep learning pipeline using UNet++",
+        "page": 0,
+        "elements": [
+          {
+            "type": "text",
+            "bbox": [
+              127.24811553955078,
+              375.930908203125,
+              281.0003356933594,
+              385.89349365234375
+            ],
+            "page": 0,
+            "content": "data augmentation techniques",
+            "metadata": {}
+          },
+          {
+            "type": "text",
+            "bbox": [
+              281.0003356933594,
+              375.930908203125,
+              561.293212890625,
+              385.89349365234375
+            ],
+            "page": 0,
+            "content": "(rotation, flipping, scaling) to enhance training data variability.",
+            "metadata": {}
+          },
+          {
+            "type": "text",
+            "bbox": [
+              65.34571838378906,
+              387.46490478515625,
+              248.9910888671875,
+              398.49249267578125
+            ],
+            "page": 0,
+            "content": "Developed a deep learning pipeline using",
+            "metadata": {}
+          }
+        ],
+        "metadata": {
+          "has_equations": false,
+          "has_tables": false,
+          "has_figures": false,
+          "section_type": "header"
+        },
+        "chunk_id": "chunk_6",
+        "previous_context": "Land-Cover-Classification PyTorch, Pandas, Matplotlib Project link: Implemented data augmentation te",
+        "next_context": "UNet++ and DeepLabV3 "
+      },
+      {
+        "text": "UNet++ and DeepLabV3",
+        "page": 0,
+        "elements": [
+          {
+            "type": "text",
+            "bbox": [
+              248.9910888671875,
+              388.5299072265625,
+              297.7239685058594,
+              398.49249267578125
+            ],
+            "page": 0,
+            "content": "UNet++",
+            "metadata": {}
+          },
+          {
+            "type": "text",
+            "bbox": [
+              297.7239685058594,
+              388.5299072265625,
+              317.1137390136719,
+              398.49249267578125
+            ],
+            "page": 0,
+            "content": "and",
+            "metadata": {}
+          }
+        ],
+        "metadata": {
+          "has_equations": false,
+          "has_tables": false,
+          "has_figures": false,
+          "section_type": "header"
+        },
+        "chunk_id": "chunk_7",
+        "previous_context": "data augmentation techniques (rotation, flipping, scaling) to enhance training data variability. Dev",
+        "next_context": "DeepLabV3 , leveraging transfer learning "
+      },
+      {
+        "text": "DeepLabV3 , leveraging transfer learning",
+        "page": 0,
+        "elements": [
+          {
+            "type": "text",
+            "bbox": [
+              317.1137390136719,
+              388.5299072265625,
+              379.2950439453125,
+              398.49249267578125
+            ],
+            "page": 0,
+            "content": "DeepLabV3",
+            "metadata": {}
+          },
+          {
+            "type": "text",
+            "bbox": [
+              379.2950134277344,
+              388.5299072265625,
+              429.1478271484375,
+              398.49249267578125
+            ],
+            "page": 0,
+            "content": ", leveraging",
+            "metadata": {}
+          }
+        ],
+        "metadata": {
+          "has_equations": false,
+          "has_tables": false,
+          "has_figures": false,
+          "section_type": "header"
+        },
+        "chunk_id": "chunk_8",
+        "previous_context": "UNet++ and DeepLabV3",
+        "next_context": "transfer learning and ensemble methods "
+      },
+      {
+        "text": "transfer learning and ensemble methods",
+        "page": 0,
+        "elements": [
+          {
+            "type": "text",
+            "bbox": [
+              429.1478271484375,
+              388.5299072265625,
+              515.872314453125,
+              398.49249267578125
+            ],
+            "page": 0,
+            "content": "transfer learning",
+            "metadata": {}
+          },
+          {
+            "type": "text",
+            "bbox": [
+              515.872314453125,
+              388.5299072265625,
+              535.4136962890625,
+              398.49249267578125
+            ],
+            "page": 0,
+            "content": "and",
+            "metadata": {}
+          }
+        ],
+        "metadata": {
+          "has_equations": false,
+          "has_tables": false,
+          "has_figures": false,
+          "section_type": "header"
+        },
+        "chunk_id": "chunk_9",
+        "previous_context": "DeepLabV3 , leveraging transfer learning",
+        "next_context": "ensemble methods for superior segmentation performance. Achieved a 4% improvement "
+      },
+      {
+        "text": "ensemble methods for superior segmentation performance. Achieved a 4% improvement",
+        "page": 0,
+        "elements": [
+          {
+            "type": "text",
+            "bbox": [
+              70.80001831054688,
+              400.4848937988281,
+              162.57550048828125,
+              410.4474792480469
+            ],
+            "page": 0,
+            "content": "ensemble methods",
+            "metadata": {}
+          },
+          {
+            "type": "text",
+            "bbox": [
+              162.57550048828125,
+              400.4848937988281,
+              336.9209899902344,
+              410.4474792480469
+            ],
+            "page": 0,
+            "content": "for superior segmentation performance.",
+            "metadata": {}
+          },
+          {
+            "type": "text",
+            "bbox": [
+              65.345703125,
+              412.01788330078125,
+              118.40132141113281,
+              423.0464782714844
+            ],
+            "page": 0,
+            "content": "Achieved a",
+            "metadata": {}
+          }
+        ],
+        "metadata": {
+          "has_equations": false,
+          "has_tables": false,
+          "has_figures": false,
+          "section_type": "header"
+        },
+        "chunk_id": "chunk_10",
+        "previous_context": "transfer learning and ensemble methods",
+        "next_context": "4% improvement in Intersection over Union (IoU) "
+      },
+      {
+        "text": "4% improvement in Intersection over Union (IoU)",
+        "page": 0,
+        "elements": [
+          {
+            "type": "text",
+            "bbox": [
+              118.40132141113281,
+              413.0838928222656,
+              206.31246948242188,
+              423.0464782714844
+            ],
+            "page": 0,
+            "content": "4% improvement",
+            "metadata": {}
+          },
+          {
+            "type": "text",
+            "bbox": [
+              206.31246948242188,
+              413.0838928222656,
+              217.94882202148438,
+              423.0464782714844
+            ],
+            "page": 0,
+            "content": "in",
+            "metadata": {}
+          }
+        ],
+        "metadata": {
+          "has_equations": false,
+          "has_tables": false,
+          "has_figures": false,
+          "section_type": "header"
+        },
+        "chunk_id": "chunk_11",
+        "previous_context": "ensemble methods for superior segmentation performance. Achieved a 4% improvement",
+        "next_context": "Intersection over Union (IoU) , reaching a peak IoU of 71.32% "
+      },
+      {
+        "text": "Intersection over Union (IoU) , reaching a peak IoU of 71.32%",
+        "page": 0,
+        "elements": [
+          {
+            "type": "text",
+            "bbox": [
+              217.94882202148438,
+              413.0838928222656,
+              371.48895263671875,
+              423.0464782714844
+            ],
+            "page": 0,
+            "content": "Intersection over Union (IoU)",
+            "metadata": {}
+          },
+          {
+            "type": "text",
+            "bbox": [
+              371.49200439453125,
+              413.0838928222656,
+              476.6970520019531,
+              423.0464782714844
+            ],
+            "page": 0,
+            "content": ", reaching a peak IoU of",
+            "metadata": {}
+          }
+        ],
+        "metadata": {
+          "has_equations": false,
+          "has_tables": false,
+          "has_figures": false,
+          "section_type": "header"
+        },
+        "chunk_id": "chunk_12",
+        "previous_context": "4% improvement in Intersection over Union (IoU)",
+        "next_context": "71.32% with DeepLabV3 "
+      },
+      {
+        "text": "71.32% with DeepLabV3",
+        "page": 0,
+        "elements": [
+          {
+            "type": "text",
+            "bbox": [
+              476.6970520019531,
+              413.0838928222656,
+              516.4121704101562,
+              423.0464782714844
+            ],
+            "page": 0,
+            "content": "71.32%",
+            "metadata": {}
+          },
+          {
+            "type": "text",
+            "bbox": [
+              516.4121704101562,
+              413.0838928222656,
+              539.1182250976562,
+              423.0464782714844
+            ],
+            "page": 0,
+            "content": "with",
+            "metadata": {}
+          }
+        ],
+        "metadata": {
+          "has_equations": false,
+          "has_tables": false,
+          "has_figures": false,
+          "section_type": "header"
+        },
+        "chunk_id": "chunk_13",
+        "previous_context": "Intersection over Union (IoU) , reaching a peak IoU of 71.32%",
+        "next_context": "DeepLabV3 ResNet101 backbone "
+      },
+      {
+        "text": "DeepLabV3 ResNet101 backbone",
+        "page": 0,
+        "elements": [
+          {
+            "type": "text",
+            "bbox": [
+              70.80001831054688,
+              425.03887939453125,
+              129.6690216064453,
+              435.00146484375
+            ],
+            "page": 0,
+            "content": "DeepLabV3",
+            "metadata": {}
+          }
+        ],
+        "metadata": {
+          "has_equations": false,
+          "has_tables": false,
+          "has_figures": false,
+          "section_type": "header"
+        },
+        "chunk_id": "chunk_14",
+        "previous_context": "71.32% with DeepLabV3",
+        "next_context": "ResNet101 backbone ). Aug 2024 – Nov 2024 Predict Storm Trajectory "
+      },
+      {
+        "text": "ResNet101 backbone ). Aug 2024 – Nov 2024 Predict Storm Trajectory",
+        "page": 0,
+        "elements": [
+          {
+            "type": "text",
+            "bbox": [
+              136.864013671875,
+              425.03887939453125,
+              241.69052124023438,
+              435.00146484375
+            ],
+            "page": 0,
+            "content": "ResNet101 backbone",
+            "metadata": {}
+          },
+          {
+            "type": "text",
+            "bbox": [
+              241.68701171875,
+              425.03887939453125,
+              248.3320770263672,
+              435.00146484375
+            ],
+            "page": 0,
+            "content": ").",
+            "metadata": {}
+          },
+          {
+            "type": "text",
+            "bbox": [
+              468.1759948730469,
+              442.5741271972656,
+              570.6014404296875,
+              453.4832458496094
+            ],
+            "page": 0,
+            "content": "Aug 2024 – Nov 2024",
+            "metadata": {}
+          }
+        ],
+        "metadata": {
+          "has_equations": false,
+          "has_tables": false,
+          "has_figures": false,
+          "section_type": "header"
+        },
+        "chunk_id": "chunk_15",
+        "previous_context": "DeepLabV3 ResNet101 backbone",
+        "next_context": "Predict Storm Trajectory BeautifulSoup, Pandas, Scikit-learn Project link: Scraped storm trajectory "
+      },
+      {
+        "text": "Predict Storm Trajectory BeautifulSoup, Pandas, Scikit-learn Project link: Scraped storm trajectory data using the BeautifulSoup library. Developed a predictive model with XGBoost and hyperparameter tuning. Honours and Awards 2024 – Present Top 10.57% in LeetCode Contest",
+        "page": 0,
+        "elements": [
+          {
+            "type": "text",
+            "bbox": [
+              46.800018310546875,
+              443.3138732910156,
+              174.87924194335938,
+              453.2764587402344
+            ],
+            "page": 0,
+            "content": "Predict Storm Trajectory",
+            "metadata": {}
+          },
+          {
+            "type": "text",
+            "bbox": [
+              181.13063049316406,
+              443.3138732910156,
+              338.6501159667969,
+              453.2764587402344
+            ],
+            "page": 0,
+            "content": "BeautifulSoup, Pandas, Scikit-learn",
+            "metadata": {}
+          },
+          {
+            "type": "text",
+            "bbox": [
+              345.485595703125,
+              443.3138732910156,
+              403.23065185546875,
+              453.2764587402344
+            ],
+            "page": 0,
+            "content": "Project link:",
+            "metadata": {}
+          },
+          {
+            "type": "text",
+            "bbox": [
+              65.34568786621094,
+              454.62786865234375,
+              345.52862548828125,
+              465.8924560546875
+            ],
+            "page": 0,
+            "content": "Scraped storm trajectory data using the BeautifulSoup library.",
+            "metadata": {}
+          },
+          {
+            "type": "text",
+            "bbox": [
+              65.34568786621094,
+              467.4628601074219,
+              391.81500244140625,
+              478.4904479980469
+            ],
+            "page": 0,
+            "content": "Developed a predictive model with XGBoost and hyperparameter tuning.",
+            "metadata": {}
+          },
+          {
+            "type": "text",
+            "bbox": [
+              36.000003814697266,
+              486.9597473144531,
+              164.14781188964844,
+              498.9149475097656
+            ],
+            "page": 0,
+            "content": "Honours and Awards",
+            "metadata": {}
+          },
+          {
+            "type": "text",
+            "bbox": [
+              500.3580017089844,
+              510.27813720703125,
+              570.6015625,
+              521.187255859375
+            ],
+            "page": 0,
+            "content": "2024 – Present",
+            "metadata": {}
+          }
+        ],
+        "metadata": {
+          "has_equations": false,
+          "has_tables": false,
+          "has_figures": false,
+          "section_type": "header"
+        },
+        "chunk_id": "chunk_16",
+        "previous_context": "ResNet101 backbone ). Aug 2024 – Nov 2024 Predict Storm Trajectory",
+        "next_context": "Top 10.57% in LeetCode Contest Achieved a highest rating of 1738 points "
+      },
+      {
+        "text": "Top 10.57% in LeetCode Contest Achieved a highest rating of 1738 points",
+        "page": 0,
+        "elements": [
+          {
+            "type": "text",
+            "bbox": [
+              46.79999923706055,
+              511.01788330078125,
+              212.88648986816406,
+              520.98046875
+            ],
+            "page": 0,
+            "content": "Top 10.57% in LeetCode Contest",
+            "metadata": {}
+          },
+          {
+            "type": "text",
+            "bbox": [
+              65.34568786621094,
+              522.3319091796875,
+              193.49937438964844,
+              533.5964965820312
+            ],
+            "page": 0,
+            "content": "Achieved a highest rating of",
+            "metadata": {}
+          }
+        ],
+        "metadata": {
+          "has_equations": false,
+          "has_tables": false,
+          "has_figures": false,
+          "section_type": "header"
+        },
+        "chunk_id": "chunk_17",
+        "previous_context": "Predict Storm Trajectory BeautifulSoup, Pandas, Scikit-learn Project link: Scraped storm trajectory ",
+        "next_context": "1738 points in LeetCode algorithm contests. Nov 7 2024 - Jan 30 2025 CZII - CryoET Object Identifica"
+      },
+      {
+        "text": "1738 points in LeetCode algorithm contests. Nov 7 2024 - Jan 30 2025 CZII - CryoET Object Identification Kaggle Competition",
+        "page": 0,
+        "elements": [
+          {
+            "type": "text",
+            "bbox": [
+              193.49937438964844,
+              523.6339111328125,
+              254.91876220703125,
+              533.5964965820312
+            ],
+            "page": 0,
+            "content": "1738 points",
+            "metadata": {}
+          },
+          {
+            "type": "text",
+            "bbox": [
+              254.91876220703125,
+              523.6339111328125,
+              397.44146728515625,
+              533.5964965820312
+            ],
+            "page": 0,
+            "content": "in LeetCode algorithm contests.",
+            "metadata": {}
+          },
+          {
+            "type": "text",
+            "bbox": [
+              448.9330139160156,
+              540.878173828125,
+              570.6021118164062,
+              551.7872924804688
+            ],
+            "page": 0,
+            "content": "Nov 7 2024 - Jan 30 2025",
+            "metadata": {}
+          }
+        ],
+        "metadata": {
+          "has_equations": false,
+          "has_tables": false,
+          "has_figures": false,
+          "section_type": "header"
+        },
+        "chunk_id": "chunk_18",
+        "previous_context": "Top 10.57% in LeetCode Contest Achieved a highest rating of 1738 points",
+        "next_context": "CZII - CryoET Object Identification Kaggle Competition Developed a deep learning pipeline using Unet"
+      },
+      {
+        "text": "CZII - CryoET Object Identification Kaggle Competition Developed a deep learning pipeline using Unet3D",
+        "page": 0,
+        "elements": [
+          {
+            "type": "text",
+            "bbox": [
+              46.800018310546875,
+              541.617919921875,
+              335.3468017578125,
+              551.5805053710938
+            ],
+            "page": 0,
+            "content": "CZII - CryoET Object Identification Kaggle Competition",
+            "metadata": {}
+          },
+          {
+            "type": "text",
+            "bbox": [
+              65.34568786621094,
+              552.931884765625,
+              248.99105834960938,
+              564.1964721679688
+            ],
+            "page": 0,
+            "content": "Developed a deep learning pipeline using",
+            "metadata": {}
+          }
+        ],
+        "metadata": {
+          "has_equations": false,
+          "has_tables": false,
+          "has_figures": false,
+          "section_type": "header"
+        },
+        "chunk_id": "chunk_19",
+        "previous_context": "1738 points in LeetCode algorithm contests. Nov 7 2024 - Jan 30 2025 CZII - CryoET Object Identifica",
+        "next_context": "Unet3D and Yolo11 "
+      },
+      {
+        "text": "Unet3D and Yolo11",
+        "page": 0,
+        "elements": [
+          {
+            "type": "text",
+            "bbox": [
+              248.99105834960938,
+              554.23388671875,
+              291.8260803222656,
+              564.1964721679688
+            ],
+            "page": 0,
+            "content": "Unet3D",
+            "metadata": {}
+          },
+          {
+            "type": "text",
+            "bbox": [
+              291.8260803222656,
+              554.23388671875,
+              311.2057189941406,
+              564.1964721679688
+            ],
+            "page": 0,
+            "content": "and",
+            "metadata": {}
+          }
+        ],
+        "metadata": {
+          "has_equations": false,
+          "has_tables": false,
+          "has_figures": false,
+          "section_type": "header"
+        },
+        "chunk_id": "chunk_20",
+        "previous_context": "CZII - CryoET Object Identification Kaggle Competition Developed a deep learning pipeline using Unet",
+        "next_context": "Yolo11 for object identification in CryoET imaging. Ranked Top 20% "
+      },
+      {
+        "text": "Yolo11 for object identification in CryoET imaging. Ranked Top 20%",
+        "page": 0,
+        "elements": [
+          {
+            "type": "text",
+            "bbox": [
+              311.2057189941406,
+              554.23388671875,
+              348.31109619140625,
+              564.1964721679688
+            ],
+            "page": 0,
+            "content": "Yolo11",
+            "metadata": {}
+          },
+          {
+            "type": "text",
+            "bbox": [
+              348.31109619140625,
+              554.23388671875,
+              544.2090454101562,
+              564.1964721679688
+            ],
+            "page": 0,
+            "content": "for object identification in CryoET imaging.",
+            "metadata": {}
+          },
+          {
+            "type": "text",
+            "bbox": [
+              65.34568786621094,
+              565.7669067382812,
+              103.59688568115234,
+              576.7954711914062
+            ],
+            "page": 0,
+            "content": "Ranked",
+            "metadata": {}
+          }
+        ],
+        "metadata": {
+          "has_equations": false,
+          "has_tables": false,
+          "has_figures": false,
+          "section_type": "header"
+        },
+        "chunk_id": "chunk_21",
+        "previous_context": "Unet3D and Yolo11",
+        "next_context": "Top 20% (187/931) in a highly competitive challenge. Oct 14 2024 - Jan 7 2025 Jane Street Real-Time "
+      },
+      {
+        "text": "Top 20% (187/931) in a highly competitive challenge. Oct 14 2024 - Jan 7 2025 Jane Street Real-Time Market Data Forecasting Kaggle Competition",
+        "page": 0,
+        "elements": [
+          {
+            "type": "text",
+            "bbox": [
+              103.59688568115234,
+              566.8328857421875,
+              150.8490753173828,
+              576.7954711914062
+            ],
+            "page": 0,
+            "content": "Top 20%",
+            "metadata": {}
+          },
+          {
+            "type": "text",
+            "bbox": [
+              150.8490753173828,
+              566.8328857421875,
+              346.5248718261719,
+              576.7954711914062
+            ],
+            "page": 0,
+            "content": "(187/931) in a highly competitive challenge.",
+            "metadata": {}
+          },
+          {
+            "type": "text",
+            "bbox": [
+              450.448974609375,
+              584.0771484375,
+              570.6017456054688,
+              594.9862670898438
+            ],
+            "page": 0,
+            "content": "Oct 14 2024 - Jan 7 2025",
+            "metadata": {}
+          }
+        ],
+        "metadata": {
+          "has_equations": false,
+          "has_tables": false,
+          "has_figures": false,
+          "section_type": "header"
+        },
+        "chunk_id": "chunk_22",
+        "previous_context": "Yolo11 for object identification in CryoET imaging. Ranked Top 20%",
+        "next_context": "Jane Street Real-Time Market Data Forecasting Kaggle Competition Applied ensemble modeling with four"
+      },
+      {
+        "text": "Jane Street Real-Time Market Data Forecasting Kaggle Competition Applied ensemble modeling with four models (XGB, NN, TabM, Ridge) to achieve the best score. Certificates Feb 26 2025 Deep Learning from DeepLearning.AI",
+        "page": 0,
+        "elements": [
+          {
+            "type": "text",
+            "bbox": [
+              46.79999542236328,
+              584.81689453125,
+              394.6142272949219,
+              594.7794799804688
+            ],
+            "page": 0,
+            "content": "Jane Street Real-Time Market Data Forecasting Kaggle Competition",
+            "metadata": {}
+          },
+          {
+            "type": "text",
+            "bbox": [
+              65.34565734863281,
+              596.1309204101562,
+              497.62762451171875,
+              607.3955078125
+            ],
+            "page": 0,
+            "content": "Applied ensemble modeling with four models (XGB, NN, TabM, Ridge) to achieve the best score.",
+            "metadata": {}
+          },
+          {
+            "type": "text",
+            "bbox": [
+              35.99997329711914,
+              615.86474609375,
+              111.97528076171875,
+              627.8199462890625
+            ],
+            "page": 0,
+            "content": "Certificates",
+            "metadata": {}
+          },
+          {
+            "type": "text",
+            "bbox": [
+              513.47900390625,
+              639.1831665039062,
+              570.5989379882812,
+              650.09228515625
+            ],
+            "page": 0,
+            "content": "Feb 26 2025",
+            "metadata": {}
+          }
+        ],
+        "metadata": {
+          "has_equations": false,
+          "has_tables": false,
+          "has_figures": false,
+          "section_type": "header"
+        },
+        "chunk_id": "chunk_23",
+        "previous_context": "Top 20% (187/931) in a highly competitive challenge. Oct 14 2024 - Jan 7 2025 Jane Street Real-Time ",
+        "next_context": "Deep Learning from DeepLearning.AI Certificate link: Deep Learning Jun 5 2025 Natural Language Proce"
+      },
+      {
+        "text": "Deep Learning from DeepLearning.AI Certificate link: Deep Learning Jun 5 2025 Natural Language Processing",
+        "page": 0,
+        "elements": [
+          {
+            "type": "text",
+            "bbox": [
+              46.79999923706055,
+              639.9229125976562,
+              237.3845672607422,
+              649.885498046875
+            ],
+            "page": 0,
+            "content": "Deep Learning from DeepLearning.AI",
+            "metadata": {}
+          },
+          {
+            "type": "text",
+            "bbox": [
+              243.4796142578125,
+              639.9229125976562,
+              314.63433837890625,
+              649.885498046875
+            ],
+            "page": 0,
+            "content": "Certificate link:",
+            "metadata": {}
+          },
+          {
+            "type": "text",
+            "bbox": [
+              314.63433837890625,
+              639.9229125976562,
+              382.7486267089844,
+              649.885498046875
+            ],
+            "page": 0,
+            "content": "Deep Learning",
+            "metadata": {}
+          },
+          {
+            "type": "text",
+            "bbox": [
+              518.3270263671875,
+              653.3751831054688,
+              570.6141967773438,
+              664.2843017578125
+            ],
+            "page": 0,
+            "content": "Jun 5 2025",
+            "metadata": {}
+          }
+        ],
+        "metadata": {
+          "has_equations": false,
+          "has_tables": false,
+          "has_figures": false,
+          "section_type": "header"
+        },
+        "chunk_id": "chunk_24",
+        "previous_context": "Jane Street Real-Time Market Data Forecasting Kaggle Competition Applied ensemble modeling with four",
+        "next_context": "Natural Language Processing Certificate link: Natural Language Processing Nov 17 2024 IBM Introducti"
+      },
+      {
+        "text": "Natural Language Processing Certificate link: Natural Language Processing Nov 17 2024 IBM Introduction to Machine Learning",
+        "page": 0,
+        "elements": [
+          {
+            "type": "text",
+            "bbox": [
+              46.800018310546875,
+              654.1149291992188,
+              193.99745178222656,
+              664.0775146484375
+            ],
+            "page": 0,
+            "content": "Natural Language Processing",
+            "metadata": {}
+          },
+          {
+            "type": "text",
+            "bbox": [
+              200.23562622070312,
+              654.1149291992188,
+              271.3893737792969,
+              664.0775146484375
+            ],
+            "page": 0,
+            "content": "Certificate link:",
+            "metadata": {}
+          },
+          {
+            "type": "text",
+            "bbox": [
+              271.3893737792969,
+              654.1149291992188,
+              403.5731201171875,
+              664.0775146484375
+            ],
+            "page": 0,
+            "content": "Natural Language Processing",
+            "metadata": {}
+          },
+          {
+            "type": "text",
+            "bbox": [
+              511.5090026855469,
+              667.5681762695312,
+              570.6034545898438,
+              678.477294921875
+            ],
+            "page": 0,
+            "content": "Nov 17 2024",
+            "metadata": {}
+          }
+        ],
+        "metadata": {
+          "has_equations": false,
+          "has_tables": false,
+          "has_figures": false,
+          "section_type": "header"
+        },
+        "chunk_id": "chunk_25",
+        "previous_context": "Deep Learning from DeepLearning.AI Certificate link: Deep Learning Jun 5 2025 Natural Language Proce",
+        "next_context": "IBM Introduction to Machine Learning Certificate link: IBM Introduction to Machine Learning Technica"
+      },
+      {
+        "text": "IBM Introduction to Machine Learning Certificate link: IBM Introduction to Machine Learning Technical Skills Programming Languages",
+        "page": 0,
+        "elements": [
+          {
+            "type": "text",
+            "bbox": [
+              46.800018310546875,
+              668.3079223632812,
+              245.24508666992188,
+              678.2705078125
+            ],
+            "page": 0,
+            "content": "IBM Introduction to Machine Learning",
+            "metadata": {}
+          },
+          {
+            "type": "text",
+            "bbox": [
+              251.49862670898438,
+              668.3079223632812,
+              322.65234375,
+              678.2705078125
+            ],
+            "page": 0,
+            "content": "Certificate link:",
+            "metadata": {}
+          },
+          {
+            "type": "text",
+            "bbox": [
+              322.65234375,
+              668.3079223632812,
+              498.4723205566406,
+              678.2705078125
+            ],
+            "page": 0,
+            "content": "IBM Introduction to Machine Learning",
+            "metadata": {}
+          },
+          {
+            "type": "text",
+            "bbox": [
+              36.0,
+              682.9478149414062,
+              138.70712280273438,
+              694.9030151367188
+            ],
+            "page": 0,
+            "content": "Technical Skills",
+            "metadata": {}
+          }
+        ],
+        "metadata": {
+          "has_equations": false,
+          "has_tables": false,
+          "has_figures": false,
+          "section_type": "header"
+        },
+        "chunk_id": "chunk_26",
+        "previous_context": "Natural Language Processing Certificate link: Natural Language Processing Nov 17 2024 IBM Introducti",
+        "next_context": "Programming Languages : Familiar with Python, Some experience with C++, JavaScript, HTML and CSS  [T"
+      },
+      {
+        "text": "Programming Languages : Familiar with Python, Some experience with C++, JavaScript, HTML and CSS  [TABLE: | Column 1 | Column 2 |\n| --- | --- |\n| Table data | not extracted |\n] Databases",
+        "page": 0,
+        "elements": [
+          {
+            "type": "text",
+            "bbox": [
+              46.79999923706055,
+              704.44091796875,
+              171.2727508544922,
+              714.4035034179688
+            ],
+            "page": 0,
+            "content": "Programming Languages",
+            "metadata": {}
+          },
+          {
+            "type": "text",
+            "bbox": [
+              171.27099609375,
+              704.44091796875,
+              528.13134765625,
+              714.4035034179688
+            ],
+            "page": 0,
+            "content": ": Familiar with Python, Some experience with C++, JavaScript, HTML and CSS",
+            "metadata": {}
+          },
+          {
+            "type": "table",
+            "bbox": [
+              46.79998779296875,
+              704.44091796875,
+              528.13134765625,
+              750.2684936523438
+            ],
+            "page": 0,
+            "content": null,
+            "metadata": {}
+          }
+        ],
+        "metadata": {
+          "has_equations": false,
+          "has_tables": true,
+          "has_figures": false,
+          "section_type": "header"
+        },
+        "chunk_id": "chunk_27",
+        "previous_context": "IBM Introduction to Machine Learning Certificate link: IBM Introduction to Machine Learning Technica",
+        "next_context": "Databases : SQL Server, MySQL Developer Tools "
+      },
+      {
+        "text": "Databases : SQL Server, MySQL Developer Tools",
+        "page": 0,
+        "elements": [
+          {
+            "type": "text",
+            "bbox": [
+              46.79999542236328,
+              716.3959350585938,
+              97.40999603271484,
+              726.3585205078125
+            ],
+            "page": 0,
+            "content": "Databases",
+            "metadata": {}
+          },
+          {
+            "type": "text",
+            "bbox": [
+              97.40399169921875,
+              716.3959350585938,
+              194.61904907226562,
+              726.3585205078125
+            ],
+            "page": 0,
+            "content": ": SQL Server, MySQL",
+            "metadata": {}
+          }
+        ],
+        "metadata": {
+          "has_equations": false,
+          "has_tables": false,
+          "has_figures": false,
+          "section_type": "header"
+        },
+        "chunk_id": "chunk_28",
+        "previous_context": "Programming Languages : Familiar with Python, Some experience with C++, JavaScript, HTML and CSS  [T",
+        "next_context": "Developer Tools : Git, VS Code, Visual Studio, PyCharm Frameworks & Libraries "
+      },
+      {
+        "text": "Developer Tools : Git, VS Code, Visual Studio, PyCharm Frameworks & Libraries",
+        "page": 0,
+        "elements": [
+          {
+            "type": "text",
+            "bbox": [
+              46.799991607666016,
+              728.3509521484375,
+              127.69629669189453,
+              738.3135375976562
+            ],
+            "page": 0,
+            "content": "Developer Tools",
+            "metadata": {}
+          },
+          {
+            "type": "text",
+            "bbox": [
+              127.69198608398438,
+              728.3509521484375,
+              307.3476257324219,
+              738.3135375976562
+            ],
+            "page": 0,
+            "content": ": Git, VS Code, Visual Studio, PyCharm",
+            "metadata": {}
+          }
+        ],
+        "metadata": {
+          "has_equations": false,
+          "has_tables": false,
+          "has_figures": false,
+          "section_type": "header"
+        },
+        "chunk_id": "chunk_29",
+        "previous_context": "Databases : SQL Server, MySQL Developer Tools",
+        "next_context": "Frameworks & Libraries : LangChain, LangGraph, TensorFlow, PyTorch, Pandas, LaTeX "
+      },
+      {
+        "text": "Frameworks & Libraries : LangChain, LangGraph, TensorFlow, PyTorch, Pandas, LaTeX",
+        "page": 0,
+        "elements": [
+          {
+            "type": "text",
+            "bbox": [
+              46.79998779296875,
+              740.305908203125,
+              168.07472229003906,
+              750.2684936523438
+            ],
+            "page": 0,
+            "content": "Frameworks & Libraries",
+            "metadata": {}
+          },
+          {
+            "type": "text",
+            "bbox": [
+              168.05499267578125,
+              740.305908203125,
+              451.19195556640625,
+              750.2684936523438
+            ],
+            "page": 0,
+            "content": ": LangChain, LangGraph, TensorFlow, PyTorch, Pandas, LaTeX",
+            "metadata": {}
+          }
+        ],
+        "metadata": {
+          "has_equations": false,
+          "has_tables": false,
+          "has_figures": false,
+          "section_type": "header"
+        },
+        "chunk_id": "chunk_30",
+        "previous_context": "Developer Tools : Git, VS Code, Visual Studio, PyCharm Frameworks & Libraries"
+      }
+    ],
+    "processing_stats": {
+      "total_elements": 107,
+      "text_elements": 106,
+      "equations": 0,
+      "tables": 1,
+      "figures": 0,
+      "pages_processed": 1
+    },
+    "element_analysis": {
+      "total_elements": 31,
+      "text_elements": 106,
+      "equation_elements": 0,
+      "table_elements": 1,
+      "figure_elements": 0,
+      "pages_processed": 1,
+      "total_text_length": 3849,
+      "chunks_with_equations": 0,
+      "chunks_with_tables": 1,
+      "chunks_with_figures": 0,
+      "avg_text_per_chunk": 124.16129032258064
+    },
+    "status": "success"
+  },
+  "status": "completed"
+}

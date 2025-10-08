@@ -1,0 +1,122 @@
+{
+  "test_info": {
+    "pdf_path": "C:\\Users\\Admin\\Downloads\\CV_TranBaDat__Copy_.pdf",
+    "question": "Tóm tắt nội dung chính của tài liệu này",
+    "include_web_research": true,
+    "start_time": "2025-09-28T03:21:12.331928",
+    "end_time": "2025-09-28T03:21:20.371959",
+    "total_processing_time": 8.040031
+  },
+  "pdf_processing": {
+    "document_id": null,
+    "error": "'ScientificPDFProcessor' object has no attribute 'process_document'",
+    "status": "failed"
+  },
+  "document_summary": {
+    "summary": "Không có tài liệu nào được xử lý"
+  },
+  "qa_result": {
+    "answer": "Dựa trên thông tin có sẵn, tôi sẽ trả lời câu hỏi: 'Tóm tắt nội dung chính của tài liệu này'\n\n**Thông tin từ tài liệu PDF:**\n- Trang 0: entire rich document page containing abundant and documents. These knowledge sources such as information at once....\n- Trang 0: AN Document Layout alysis), a novel approach enhancing both textual and visual Retrieval- 1.1...\n\n**Kết luận:** Thông tin trên cung cấp cái nhìn tổng quan về câu hỏi của bạn. Để có thông tin chi tiết hơn, vui lòng tham khảo các nguồn được trích dẫn.",
+    "pdf_references": [
+      {
+        "type": "pdf",
+        "page": 0,
+        "text": "entire rich document page containing abundant and documents. These knowledge sources such as information at once....",
+        "confidence": 0.6271086931228638,
+        "document_id": "2505.14381v1",
+        "document_path": "C:\\Users\\Admin\\Downloads\\2505.14381v1.pdf",
+        "chunk_id": "2505.14381v1_chunk_20",
+        "has_equations": false,
+        "has_tables": false,
+        "has_figures": false,
+        "bbox": [
+          306.1419982910156,
+          696.7738647460938,
+          524.4099731445312,
+          707.6063232421875
+        ]
+      },
+      {
+        "type": "pdf",
+        "page": 0,
+        "text": "AN Document Layout alysis), a novel approach enhancing both textual and visual Retrieval- 1.1...",
+        "confidence": 0.6102991104125977,
+        "document_id": "2505.14381v1",
+        "document_path": "C:\\Users\\Admin\\Downloads\\2505.14381v1.pdf",
+        "chunk_id": "2505.14381v1_chunk_8",
+        "has_equations": false,
+        "has_tables": false,
+        "has_figures": false,
+        "bbox": [
+          158.6778106689453,
+          377.3553771972656,
+          175.2542724609375,
+          387.2178649902344
+        ]
+      },
+      {
+        "type": "pdf",
+        "page": 0,
+        "text": "document pages . This is because user queries Introduction...",
+        "confidence": 0.5938536524772644,
+        "document_id": "2505.14381v1",
+        "document_path": "C:\\Users\\Admin\\Downloads\\2505.14381v1.pdf",
+        "chunk_id": "2505.14381v1_chunk_16",
+        "has_equations": false,
+        "has_tables": false,
+        "has_figures": false,
+        "bbox": [
+          306.1419982910156,
+          615.2437744140625,
+          383.9105529785156,
+          626.2614135742188
+        ]
+      },
+      {
+        "type": "pdf",
+        "page": 11,
+        "text": "Các\u0003ví\u0003dụ\u0003từ\u0003Tập\u0003dữ\u0003liệu\u0003SemanticLayout\u0003...",
+        "confidence": 0.543994567167014,
+        "document_id": "2505.14381v1.no_watermark.vi.mono",
+        "document_path": "C:\\Users\\Admin\\Desktop\\AI_traslator\\PDFusion\\translated_pdfs\\2505.14381v1.no_watermark.vi.mono.pdf",
+        "chunk_id": "2505.14381v1.no_watermark.vi.mono_chunk_111",
+        "has_equations": false,
+        "has_tables": false,
+        "has_figures": false
+      },
+      {
+        "type": "pdf",
+        "page": 2,
+        "text": "Document Layout Analysis 3.1...",
+        "confidence": 0.5682802200317383,
+        "document_id": "2505.14381v1",
+        "document_path": "C:\\Users\\Admin\\Downloads\\2505.14381v1.pdf",
+        "chunk_id": "2505.14381v1_chunk_31",
+        "has_equations": false,
+        "has_tables": false,
+        "has_figures": false,
+        "bbox": [
+          95.4114761352539,
+          201.6870574951172,
+          221.20431518554688,
+          212.5961456298828
+        ]
+      }
+    ],
+    "web_references": [],
+    "quality_metrics": {
+      "confidence": 0.5887072486422956,
+      "completeness": 0.6,
+      "pdf_confidence": 0.5887072486422956,
+      "web_confidence": 0.0,
+      "total_sources": 5
+    },
+    "processing_time": 0.29625,
+    "sources_used": {
+      "pdf_sources": 5,
+      "web_sources": 0
+    },
+    "timestamp": "2025-09-28T03:21:20.370447"
+  },
+  "status": "completed"
+}
