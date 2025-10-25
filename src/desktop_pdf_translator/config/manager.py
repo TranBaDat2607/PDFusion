@@ -36,7 +36,7 @@ class ConfigManager:
         """
         if config_dir is None:
             # Default to user's AppData directory on Windows
-            self.config_dir = Path.home() / "AppData" / "Local" / "DesktopPDFTranslator"
+            self.config_dir = Path.home() / "AppData" / "Local" / "PDFusion"
         else:
             self.config_dir = Path(config_dir)
         

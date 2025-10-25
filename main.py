@@ -33,7 +33,7 @@ def setup_logging(debug_mode: bool = False):
     level = logging.DEBUG if debug_mode else logging.INFO
     
     # Create logs directory
-    log_dir = Path.home() / "AppData" / "Local" / "DesktopPDFTranslator" / "logs"
+    log_dir = Path.home() / "AppData" / "Local" / "PDFusion" / "logs"
     
     log_dir.mkdir(parents=True, exist_ok=True)
     
