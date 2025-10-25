@@ -1,413 +1,323 @@
-# 🚀 PDFusion - Intelligent PDF Translator
+# PDFusion - Vietnamese-Optimized PDF Translator
 
-A professional Windows desktop application for translating PDF documents while preserving formatting, featuring Vietnamese language optimization and AI-powered Q&A capabilities.
+PDFusion is a Windows desktop application designed for translating PDF documents while preserving formatting and layout. The application prioritizes Vietnamese language translation and integrates advanced AI-powered features including RAG (Retrieval-Augmented Generation) for intelligent document Q&A.
 
-## ✨ Key Features
+## Table of Contents
 
-### 📄 **Advanced PDF Translation**
-- **Layout Preservation**: Maintains original document formatting using BabelDOC
-- **Multi-language Support**: Optimized for Vietnamese with 50+ language support
-- **Smart Processing**: Handles text, equations, tables, and figures
-- **Batch Processing**: Up to 50 pages per document
+- [Installation](#installation)
+- [Application Flow](#application-flow)
+- [Main Features](#main-features)
+- [Project Structure](#project-structure)
+- [Configuration](#configuration)
+- [Usage](#usage)
+- [TO-DOs](#to-dos)
 
-### 🤖 **AI-Powered Translation**
-- **OpenAI GPT-4**: Premium translation quality
-- **Google Gemini**: Alternative high-quality service
-- **Context-Aware**: Maintains document context and terminology
-- **Async Processing**: Non-blocking translation with real-time progress
+---
 
-### 🧠 **RAG Q&A System**
-- **Document Intelligence**: Ask questions about translated content
-- **Web Research**: Integrated academic search (Google Scholar, arXiv, Wikipedia)
-- **Cross-lingual**: Ask in Vietnamese, search in English
-- **Reference Navigation**: Click citations to jump to specific pages
-
-### 🎨 **Professional Interface**
-- **Multi-Panel Layout**: Original PDF, translated PDF, and chat panel
-- **Modern UI**: Built with PySide6 for native Windows experience
-- **Progress Tracking**: Real-time translation progress and status
-- **Extensible Design**: Modular architecture for future enhancements
-
-## 🚀 Quick Start
-
-### Method 1: Automatic Installation (Recommended)
-```bash
-# Clone and install
-git clone <repository-url>
-cd PDFusion
-scripts\install_dependencies.bat
-```
-
-### Method 2: Manual Installation
-```bash
-# Create environment
-conda create -n pdfusion-env python=3.11
-conda activate pdfusion-env
-pip install -e .
-```
-
-### Method 3: Development Setup
-```bash
-# For developers
-pip install -e .[dev]
-```
-
-### Method 4: Feature-specific Installation
-```bash
-# Basic translation only
-pip install -e .
-
-# With RAG features
-pip install -e .[rag]
-
-# With advanced PDF processing
-pip install -e .[advanced]
-
-# All features
-pip install -e .[all]
-```
-
-## 📁 Project Structure
-
-```
-PDFusion/
-├── 📄 pyproject.toml          # Modern Python project configuration
-├── 📄 README.md               # This file
-├── 📄 .env.example            # Environment template
-├── 📄 main.py                 # Application entry point
-├── 📂 src/                    # Source code
-│   └── desktop_pdf_translator/
-│       ├── 📂 config/         # Configuration management
-│       ├── 📂 gui/            # User interface components
-│       ├── 📂 processors/     # PDF processing pipeline
-│       ├── 📂 translators/    # Translation service adapters
-│       ├── 📂 rag/            # RAG and Q&A system
-│       └── 📂 utils/          # Utility functions
-├── 📂 config/                 # Configuration files
-├── 📂 docs/                   # Documentation
-├── 📂 tests/                  # Test suites
-├── 📂 scripts/                # Installation and setup scripts
-└── 📂 resources/              # Static resources
-```
-
-## 📋 Installation Guide
+## Installation
 
 ### Prerequisites
-- **Python 3.11+** (Recommended) or Python 3.10+
-- **Windows 10/11** (Primary support)
-- **Anaconda/Miniconda** (Recommended for environment management)
-- **API Keys** for translation services (OpenAI and/or Google Gemini)
 
-### 🚀 Method 1: Automatic Installation (Recommended)
+- **Python Version**: 3.11.14 (recommended)
+- **Operating System**: Windows 10/11
+- **External Dependencies**:
+  - Ghostscript (for PDF processing)
+  - Tesseract OCR (optional, for scanned document processing)
 
-**Step 1**: Clone the repository
+### Step 1: Clone or Download the Project
+
 ```bash
+cd /path/to/your/projects
 git clone <repository-url>
 cd PDFusion
 ```
 
-**Step 2**: Run the automated installer
+### Step 2: Create Conda Environment
+
+It is highly recommended to use a conda environment to avoid dependency conflicts.
+
 ```bash
-# This will create environment and install all dependencies
-install_dependencies.bat
+conda create -n pdffusion python=3.11.14
 ```
 
-**Step 3**: Configure API keys
+Activate the conda environment:
+
 ```bash
-# Copy and edit the environment file
-copy .env.example .env
-notepad .env
+conda activate pdffusion
 ```
 
-**Step 4**: Run the application
+### Step 3: Install Dependencies
+
+Install all required packages using the requirements.txt file:
+
 ```bash
-conda activate pdfusion-env
+pip install -r requirements.txt
+```
+
+### Step 4: Configure API Keys
+
+Create a `.env` file in the project root directory and add your API keys:
+
+```bash
+# OpenAI Configuration
+OPENAI_API_KEY=your_openai_api_key_here
+
+# Google Gemini Configuration
+GEMINI_API_KEY=your_gemini_api_key_here
+```
+
+Note: You need at least one translation service API key (OpenAI or Google Gemini) for the application to function.
+
+### Step 5: Run the Application
+
+```bash
 python main.py
 ```
 
-### 🔧 Method 2: Manual Installation
+The application will:
+1. Check all dependencies
+2. Validate API key configuration
+3. Launch the GUI window
 
-**Step 1**: Create Python environment
-```bash
-conda create -n pdfusion-env python=3.11
-conda activate pdfusion-env
+---
+
+## Application Flow
+
+### Overall Architecture
+
+PDFusion follows a modular architecture with clear separation of concerns:
+
+```
+User Interface (PySide6 GUI)
+    |
+    v
+Main Window Controller
+    |
+    +---> Translation Worker (QThread)
+    |         |
+    |         v
+    |     PDF Processor
+    |         |
+    |         +---> File Validation
+    |         +---> Translator Factory
+    |         +---> BabelDOC Integration
+    |         +---> Progress Events
+    |
+    +---> RAG Chat Panel (Optional)
+              |
+              v
+          RAG Worker (QThread)
+              |
+              +---> Document Processor
+              +---> Vector Store (ChromaDB)
+              +---> Web Research Engine
+              +---> RAG Chain
 ```
 
-**Step 2**: Install dependencies in stages (to avoid conflicts)
-```bash
-# Core dependencies
-pip install -r requirements_core.txt
+### Translation Workflow
 
-# Scientific computing
-pip install -r requirements_scientific.txt
+1. **File Selection**: User selects a PDF file through the GUI
+2. **File Validation**: System validates file format, size, and page count
+3. **Service Configuration**: User selects translation service (OpenAI/Gemini), source/target languages
+4. **Translation Initialization**: 
+   - Create TranslationWorker thread
+   - Initialize PDF Processor
+   - Create appropriate Translator instance via Factory pattern
+5. **BabelDOC Processing**:
+   - Configure BabelDOC with layout preservation settings
+   - Process PDF asynchronously
+   - Stream progress events to GUI
+6. **Result Generation**:
+   - Generate monolingual translated PDF
+   - Save to output directory
+   - Display in GUI viewer
+7. **Optional RAG Processing**: If RAG is enabled, index the document for Q&A
 
-# AI/ML libraries
-pip install -r requirements_ai.txt
+### RAG (Chat) Workflow
 
-# RAG and web research (optional)
-pip install -r requirements_rag.txt
-```
+1. **Document Processing**:
+   - Extract text and structure from PDF
+   - Split into semantic chunks
+   - Generate embeddings using sentence-transformers
+   - Store in ChromaDB vector database
+2. **Question Processing**:
+   - User submits question
+   - System searches PDF chunks using vector similarity
+   - Optionally performs web research for supplementary information
+3. **Answer Generation**:
+   - Combine PDF context and web results
+   - Generate comprehensive answer using LLM
+   - Provide references with confidence scores
+   - Display clickable references for navigation
 
-**Step 3**: Configure API keys and run
-```bash
-copy .env.example .env
-notepad .env
-python main.py
-```
+### Event-Driven Progress Tracking
 
-### 🛠️ Method 3: Troubleshooting Installation
+The application uses an event-driven architecture for progress tracking:
 
-If you encounter dependency conflicts, use the Python installer:
-```bash
-conda create -n pdfusion-env python=3.11
-conda activate pdfusion-env
-python install_dependencies.py
-```
+- **ProcessingEvent**: Base event class
+- **ProgressEvent**: Updates on processing stages
+- **CompletionEvent**: Final result with file paths
+- **ErrorEvent**: Error information with recovery options
 
-This script will:
-- ✅ Install dependencies in optimal order
-- ✅ Handle conflicts automatically  
-- ✅ Provide detailed error messages
-- ✅ Allow partial installation if needed
+Events flow from worker threads to GUI via Qt signals/slots mechanism.
+
+---
+
+## Main Features
+
+### Core Translation Features
+
+1. **Multi-Service Translation Support**
+   - OpenAI GPT-4.1 integration
+   - Google Gemini 1.5 Flash integration
+   - Easy service switching via GUI
+   - API key validation
+
+2. **Layout Preservation**
+   - BabelDOC integration for accurate layout preservation
+   - Maintains fonts, formatting, and structure
+   - Supports complex PDF layouts
+   - Configurable output modes
+
+3. **Vietnamese Language Optimization**
+   - Vietnamese set as default target language
+   - Optimized prompts for Vietnamese translation quality
+   - Vietnamese-specific text processing
+
+4. **File Handling**
+   - Support for PDF files up to 50 pages (configurable)
+   - File size validation
+   - Progress tracking during processing
+   - Output directory management
+
+### GUI Features
+
+1. **Three-Panel Layout**
+   - Left panel: Original PDF viewer
+   - Middle panel: Translated PDF viewer
+   - Right panel: RAG Chat interface
+
+2. **Comprehensive Toolbar**
+   - File browser
+   - Language selection (source/target)
+   - Service selection (OpenAI/Gemini)
+   - Model selection
+   - API key management
+   - Quick validation
+
+3. **Real-Time Progress Tracking**
+   - Visual progress bar
+   - Stage-by-stage status updates
+   - Cancellation support
+   - Processing time display
+
+4. **PDF Viewer**
+   - Zoom controls
+   - Page navigation
+   - Side-by-side comparison
+   - Export capabilities
+
+### RAG (AI Chat) Features
+
+1. **Intelligent Q&A System**
+   - Context-aware answers from PDF content
+   - Multi-source information synthesis
+   - Confidence scoring
+   - Reference tracking
+
+2. **Web Research Integration**
+   - Optional web search for supplementary information
+   - Source reliability scoring
+   - Citation management
+   - Toggle on/off functionality
+
+3. **Vector Database**
+   - ChromaDB for efficient semantic search
+   - Persistent storage
+   - Document chunking with metadata
+   - Fast retrieval
+
+4. **Interactive References**
+   - Clickable PDF references (navigate to page)
+   - Clickable web references (open in browser)
+   - Confidence and reliability scores
+   - Source preview
+
+5. **Chat Management**
+   - Conversation history
+   - Clear history function
+   - Question/answer threading
+   - Timestamp tracking
+
+### Advanced Features
+
+1. **Configuration Management**
+   - TOML-based configuration
+   - Environment variable support
+   - Encrypted API key storage
+   - User preferences persistence
+
+2. **Error Handling**
+   - Graceful error recovery
+   - User-friendly error messages
+   - Detailed logging
+   - Service validation
+
+3. **Async Processing**
+   - Non-blocking GUI
+   - Background worker threads
+   - Event-driven architecture
+   - Cancellation support
+
+4. **Extensibility**
+   - Factory pattern for translators
+   - Plugin-ready architecture
+   - Modular component design
+   - Easy service integration
 
 ## Configuration
 
 ### Default Configuration
-The application uses a default configuration file located at `config/default_config.toml` with Vietnamese as the default target language.
 
-### User Configuration
-User-specific settings are stored in:
-- Windows: `%LOCALAPPDATA%\DesktopPDFTranslator\config.toml`
+The application uses TOML-based configuration with sensible defaults:
 
-### Environment Variables
-- `OPENAI_API_KEY`: OpenAI API key for OpenAI translation service
-- `GEMINI_API_KEY`: Google Gemini API key for Gemini translation service
-- `OPENAI_MODEL`: (Optional) Specify OpenAI model (default: gpt-4)
-- `GEMINI_MODEL`: (Optional) Specify Gemini model (default: gemini-pro)
-- `DEBUG_MODE`: (Optional) Enable debug mode (default: false)
-- `MAX_PAGES`: (Optional) Maximum pages to process (default: 50)
-- `MAX_FILE_SIZE_MB`: (Optional) Maximum file size in MB (default: 50)
+- **Translation Service**: OpenAI (fallback to Gemini)
+- **Source Language**: Auto-detect
+- **Target Language**: Vietnamese
+- **Max Pages**: 50
+- **Max File Size**: 100 MB
+- **RAG**: Disabled by default
 
-## 📖 Usage Guide
+## Usage
 
-### Basic PDF Translation
+### Basic Translation Workflow
 
-1. **Launch the application**:
-   ```bash
-   conda activate pdfusion-env
-   python main.py
-   ```
+1. Launch the application: `python main.py`
+2. Click "Browse" to select a PDF file
+3. Choose source language (or use Auto-detect)
+4. Choose target language (default: Vietnamese)
+5. Select translation service (OpenAI or Gemini)
+6. Click "Translate" to start the process
+7. Monitor progress in the status bar and progress panel
+8. View the translated PDF in the middle panel when complete
 
-2. **Load PDF**: Click "Browse" or use "File" → "Open PDF" to select a PDF file
+### Using RAG Chat
 
-3. **Configure Translation**:
-   - Source language (Auto-detect by default)
-   - Target language (Vietnamese by default)
-   - Translation service (OpenAI or Gemini)
+1. Enable RAG by clicking the "RAG: OFF" button (turns to "RAG: ON")
+2. Load or translate a PDF document
+3. The document will be automatically processed for Q&A
+4. Type your question in the input field at the bottom right
+5. Toggle "Web Search" if you want additional web information
+6. Click "Ask" or press Enter
+7. View the answer with references in the chat panel
+8. Click on references to navigate to PDF pages or web sources
 
-4. **Start Translation**: Click "Translate" to begin processing
+### Cancelling Translation
 
-5. **Monitor Progress**: View real-time progress in the status bar and progress panel
+- Click the "Cancel" button in the toolbar
+- The translation will stop gracefully
+- Partial results may be available
 
-6. **View Results**: The translated PDF appears in the right panel when complete
+---
 
-7. **Save Output**: Translated files are automatically saved in the `translated_pdfs` directory
-
-### 🧠 RAG Q&A System
-
-The RAG (Retrieval-Augmented Generation) system combines knowledge from your translated PDF with web research to provide comprehensive answers.
-
-#### **How to Use:**
-
-1. **After translation**, use the RAG chat panel (right side)
-2. **Ask questions** in Vietnamese or English:
-   ```
-   🔬 Scientific/Technical:
-   - "Giải thích thuật toán này hoạt động như thế nào?"
-   - "So sánh phương pháp này với các nghiên cứu khác"
-   - "Ứng dụng thực tế của công nghệ này là gì?"
-   
-   📊 Data Analysis:
-   - "Tóm tắt kết quả thí nghiệm trong bảng 3"
-   - "Ý nghĩa của biểu đồ ở trang 15 là gì?"
-   - "Mối quan hệ giữa các biến số được trình bày như thế nào?"
-   
-   🌐 Extended Research:
-   - "Tìm thêm thông tin về chủ đề này trên internet"
-   - "Có nghiên cứu nào mới hơn về vấn đề này không?"
-   - "So sánh với tiêu chuẩn quốc tế hiện tại"
-   ```
-
-3. **Enable Web Research** for enhanced answers with academic sources
-4. **Navigate References**: Click citations to jump to specific pages or open web links
-
-#### **Features:**
-- **Cross-lingual**: Ask in Vietnamese, search in English documents
-- **Multi-source**: Combines PDF content with Google Scholar, arXiv, Wikipedia
-- **Smart Citations**: Accurate references with page navigation
-- **Quality Metrics**: Confidence and completeness scores
-
-## Translation Services
-
-### OpenAI
-- Requires `OPENAI_API_KEY` environment variable
-- Uses GPT-4 model by default (configurable)
-- Supports advanced translation features
-
-### Google Gemini
-- Requires `GEMINI_API_KEY` environment variable
-- Uses gemini-pro model by default (configurable)
-- Alternative translation service with competitive quality
-
-## Development
-
-### Project Structure
-```
-src/desktop_pdf_translator/
-├── config/
-│   ├── __init__.py
-│   ├── manager.py
-│   └── models.py
-├── gui/
-│   ├── __init__.py
-│   ├── main_window.py
-│   ├── widgets.py
-│   └── worker.py
-├── processors/
-│   ├── __init__.py
-│   ├── events.py
-│   ├── exceptions.py
-│   └── processor.py
-├── translators/
-│   ├── __init__.py
-│   ├── base.py
-│   ├── factory.py
-│   ├── gemini_translator.py
-│   └── openai_translator.py
-├── utils/
-│   └── __init__.py
-└── __init__.py
-```
-
-### Key Components
-- **Main Window**: `src/gui/main_window.py` - Main application window with three-panel layout
-- **PDF Processor**: `src/processors/processor.py` - Core PDF processing pipeline with BabelDOC integration
-- **Translators**: `src/translators/` - Adapter classes for different translation services
-- **Configuration**: `src/config/` - Settings management with TOML files and environment variables
-
-### Running Tests
-```bash
-# Run tests (when implemented)
-python -m pytest tests/
-```
-
-## 🔧 Troubleshooting
-
-### Common Installation Issues
-
-1. **Dependency Resolution Error**:
-   ```
-   ERROR: resolution-too-deep
-   ```
-   **Solution**: Use the Python installer
-   ```bash
-   python scripts/install_dependencies.py
-   ```
-
-2. **Missing Dependencies**:
-   ```
-   ImportError: No module named 'desktop_pdf_translator'
-   ```
-   **Solution**: Install in development mode
-   ```bash
-   pip install -e .
-   ```
-
-3. **API Key Not Set**:
-   ```
-   Missing API key for translation service
-   ```
-   **Solution**: Configure API keys in `.env` file:
-   ```bash
-   copy .env.example .env
-   # Edit .env and add your keys
-   ```
-
-4. **ChromaDB Issues** (RAG features):
-   ```
-   ChromaDB initialization failed
-   ```
-   **Solution**: Install RAG dependencies
-   ```bash
-   pip install -e .[rag]
-   ```
-
-5. **BabelDOC Conflicts**:
-   ```
-   Cannot install babeldoc
-   ```
-   **Solution**: Use modern numpy version
-   ```bash
-   pip install numpy>=2.0.2
-   pip install -e .
-   ```
-
-### Quick Fixes
-
-**Check Installation**:
-```bash
-python scripts/check_dependencies.py
-```
-
-**Reset Environment**:
-```bash
-conda deactivate
-conda remove -n pdfusion-env --all
-conda create -n pdfusion-env python=3.11
-conda activate pdfusion-env
-pip install -e .
-```
-
-**Test Installation**:
-```bash
-python -c "import desktop_pdf_translator; print('✅ Installation OK')"
-```
-
-### Logs and Support
-- **Logs**: `%LOCALAPPDATA%\DesktopPDFTranslator\logs\app.log`
-- **Issues**: Create GitHub issue with log files
-- **Documentation**: See `docs/` directory for detailed guides
-
-## 🔮 Future Enhancements
-
-- **Cross-platform Support**: macOS and Linux compatibility
-- **Advanced PDF Editing**: Enhanced document manipulation
-- **Batch Processing**: Multiple PDF processing capabilities
-- **Custom Glossaries**: User-defined translation dictionaries
-- **Plugin System**: Third-party extension support
-- **API Server**: RESTful API for integration
-- **Mobile App**: Companion mobile application
-
-## 📚 Documentation
-
-- **[Installation Guide](docs/INSTALLATION.md)**: Detailed setup instructions
-- **[Architecture](docs/ARCHITECTURE.md)**: Technical system overview
-- **[RAG System](docs/RAG_README.md)**: AI-powered Q&A documentation
-- **[Changelog](CHANGELOG.md)**: Version history and updates
-
-## 🤝 Contributing
-
-We welcome contributions! Please feel free to submit issues, feature requests, or pull requests.
-
-## 📄 License
-
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
-
-## 🙏 Acknowledgments
-
-- **BabelDOC**: Advanced PDF processing and layout preservation
-- **PySide6**: Modern cross-platform GUI framework
-- **OpenAI & Google**: AI translation services
-- **ChromaDB**: Vector database for RAG functionality
-- **LangChain**: RAG framework and AI orchestration
-- **PyMuPDF**: Comprehensive PDF handling library
+## TO-DOs

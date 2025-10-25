@@ -324,86 +324,91 @@ class RAGChatPanel(QWidget):
     def setup_ui(self):
         """Setup the chat panel UI."""
         layout = QVBoxLayout(self)
+        layout.setContentsMargins(5, 5, 5, 5)
+        layout.setSpacing(5)
         
-        # Header
+        # Header - compact
         header_layout = QHBoxLayout()
+        header_layout.setContentsMargins(0, 0, 0, 0)
         
-        title_label = QLabel("🤖 AI Chat - Smart Q&A")
-        title_label.setFont(QFont("Segoe UI", 12, QFont.Bold))
+        title_label = QLabel("🤖 AI Chat")
+        title_label.setFont(QFont("Segoe UI", 10, QFont.Bold))
         header_layout.addWidget(title_label)
         
         header_layout.addStretch()
         
         # Settings button
         settings_btn = QPushButton("⚙️")
-        settings_btn.setMaximumSize(30, 30)
+        settings_btn.setMaximumSize(25, 25)
         settings_btn.clicked.connect(self.show_settings)
         header_layout.addWidget(settings_btn)
         
         layout.addLayout(header_layout)
         
-        # Main splitter
-        splitter = QSplitter(Qt.Vertical)
-        
-        # Chat history area
+        # Chat history area - chiếm phần lớn không gian
         self.chat_history = ChatHistoryWidget()
-        splitter.addWidget(self.chat_history)
+        layout.addWidget(self.chat_history, stretch=1)
         
-        # Input area
+        # Input area - compact, chiếm ít không gian
         input_widget = self.create_input_area()
-        splitter.addWidget(input_widget)
+        layout.addWidget(input_widget)
         
-        # Set splitter proportions
-        splitter.setSizes([400, 150])
-        
-        layout.addWidget(splitter)
-        
-        # Progress bar
+        # Progress bar - compact
         self.progress_bar = QProgressBar()
         self.progress_bar.setVisible(False)
+        self.progress_bar.setMaximumHeight(15)
         layout.addWidget(self.progress_bar)
         
-        # Status label
+        # Status label - compact
         self.status_label = QLabel("Ready")
         self.status_label.setStyleSheet("color: #666; font-size: 8pt;")
+        self.status_label.setMaximumHeight(20)
         layout.addWidget(self.status_label)
     
     def create_input_area(self) -> QWidget:
-        """Create the input area widget."""
+        """Create the input area widget - compact layout."""
         
         input_widget = QWidget()
         layout = QVBoxLayout(input_widget)
+        layout.setContentsMargins(0, 5, 0, 0)
+        layout.setSpacing(3)
         
-        # Options row
+        # Options row - compact
         options_layout = QHBoxLayout()
+        options_layout.setSpacing(5)
         
         # Web research checkbox
-        self.web_research_cb = QCheckBox("Web Search")
+        self.web_research_cb = QCheckBox("🌐 Web")
         self.web_research_cb.setChecked(True)
         self.web_research_cb.setToolTip("Include information from internet in answers")
         options_layout.addWidget(self.web_research_cb)
         
-        options_layout.addStretch()
-        
-        # Clear button
-        clear_btn = QPushButton("🗑️ Clear History")
+        # Clear button - compact
+        clear_btn = QPushButton("🗑️ Clear")
+        clear_btn.setMaximumWidth(80)
         clear_btn.clicked.connect(self.clear_chat_history)
         options_layout.addWidget(clear_btn)
         
+        options_layout.addStretch()
+        
         layout.addLayout(options_layout)
         
-        # Question input
+        # Question input - compact
         input_layout = QHBoxLayout()
+        input_layout.setSpacing(5)
         
         self.question_input = QLineEdit()
-        self.question_input.setPlaceholderText("Enter your question...")
+        self.question_input.setPlaceholderText("Ask a question...")
         self.question_input.returnPressed.connect(self.ask_question)
+        self.question_input.setMaximumHeight(30)
         input_layout.addWidget(self.question_input)
         
-        # Ask button
-        self.ask_button = QPushButton("Ask")
+        # Ask button - compact
+        self.ask_button = QPushButton("📤 Ask")
         self.ask_button.clicked.connect(self.ask_question)
         self.ask_button.setDefault(True)
+        self.ask_button.setMaximumWidth(80)
+        self.ask_button.setMaximumHeight(30)
         input_layout.addWidget(self.ask_button)
         
         layout.addLayout(input_layout)

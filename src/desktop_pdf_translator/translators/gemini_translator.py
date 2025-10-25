@@ -201,14 +201,6 @@ Provide only the translation:"""
         
         return text
     
-    def get_supported_models(self) -> List[str]:
-        """Get list of supported Gemini models."""
-        return [
-            "gemini-pro",
-            "gemini-1.5-pro",
-            "gemini-1.5-flash"
-        ]
-    
     def validate_configuration(self) -> tuple[bool, str]:
         """Validate Gemini configuration."""
         try:
@@ -231,13 +223,3 @@ Provide only the translation:"""
                 
         except Exception as e:
             return False, f"Configuration error: {str(e)}"
-    
-    def get_translation_info(self) -> Dict[str, Any]:
-        """Get detailed translator information."""
-        base_info = super().get_translation_info()
-        base_info.update({
-            "model": self.model_name,
-            "temperature": self.temperature,
-            "api_available": GEMINI_AVAILABLE
-        })
-        return base_info

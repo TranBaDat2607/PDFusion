@@ -20,8 +20,6 @@ import fitz  # PyMuPDF
 
 logger = logging.getLogger(__name__)
 
-
-
 class PDFScrollArea(QScrollArea):
     """Custom scroll area with zoom support."""
     
@@ -45,8 +43,6 @@ class PDFScrollArea(QScrollArea):
         else:
             # Normal scrolling without Ctrl
             super().wheelEvent(event)
-    
-
 
 class PDFViewer(QWidget):
     """PDF viewer widget with continuous vertical scrolling."""

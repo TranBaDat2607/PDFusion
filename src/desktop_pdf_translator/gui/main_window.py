@@ -11,23 +11,21 @@ from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, 
     QSplitter, QMenuBar, QStatusBar, QToolBar, QFileDialog,
     QMessageBox, QProgressBar, QLabel, QPushButton, QGroupBox,
-    QComboBox, QTextEdit, QFrame, QFrame, QSizePolicy
+    QComboBox, QLineEdit, QTextEdit, QFrame, QFrame, QSizePolicy
 )
 from PySide6.QtCore import Qt, QThread, Signal, QTimer, QSize
 from PySide6.QtGui import QAction, QIcon, QPixmap, QFont
 from PySide6.QtCore import QStandardPaths
 
-from ..config import get_settings, get_config_manager, LanguageCode, TranslationService
+from ..config import get_settings, get_config_manager, LanguageCode, TranslationService, AppSettings
 from ..processors import PDFProcessor
 from ..translators import TranslatorFactory
 from .widgets import (
     PDFViewer, ProgressPanel, 
-    SettingsDialog, AboutDialog
+    SettingsDialog, AboutDialog,
 )
 from .rag_chat_panel import RAGChatPanel
 from .worker import TranslationWorker
-
-
 logger = logging.getLogger(__name__)
 
 
@@ -53,11 +51,13 @@ class MainWindow(QMainWindow):
         
         # RAG state - read from config, default OFF
         self.rag_enabled = self.settings.rag.enabled
-        
+        self._updating_service_controls = False
+
         # UI setup
         self._setup_ui()
         self._setup_connections()
         self._apply_settings()
+        self._refresh_service_controls()
         
         # Initialize RAG state
         self._initialize_rag_state()
@@ -183,11 +183,29 @@ class MainWindow(QMainWindow):
         self.target_lang_combo.setCurrentText("Vietnamese")
         toolbar.addWidget(self.target_lang_combo)
         
-        toolbar.addWidget(QLabel("Service:"))
-        
+        self.validate_key_btn = QPushButton("Validate Key")
+        self.validate_key_btn.setStatusTip("Validate API key for selected service")
+        toolbar.addWidget(self.validate_key_btn)
+
+        self.api_key_input = QLineEdit()
+        self.api_key_input.setPlaceholderText("API key")
+        self.api_key_input.setEchoMode(QLineEdit.Password)
+        self.api_key_input.setMaximumWidth(300)
+        self.api_key_input.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+        toolbar.addWidget(self.api_key_input)
+
+        self.service_label = QLabel("Service:")
+        toolbar.addWidget(self.service_label)
+
         self.service_combo = QComboBox()
         self.service_combo.addItems(["OpenAI", "Gemini"])
         toolbar.addWidget(self.service_combo)
+
+        self.model_label = QLabel("Model:")
+        toolbar.addWidget(self.model_label)
+
+        self.model_combo = QComboBox()
+        toolbar.addWidget(self.model_combo)
         
         toolbar.addSeparator()
         
@@ -210,12 +228,12 @@ class MainWindow(QMainWindow):
         self.settings_btn.setStatusTip("Open application settings")
         self.settings_btn.clicked.connect(self.open_settings)
         toolbar.addWidget(self.settings_btn)
-        
+
         self.validate_btn = QPushButton("✅ Validate")
         self.validate_btn.setStatusTip("Check translation service configuration")
         self.validate_btn.clicked.connect(self.validate_services)
         toolbar.addWidget(self.validate_btn)
-        
+
         self.about_btn = QPushButton("ℹ️ About")
         self.about_btn.setStatusTip("About this application")
         self.about_btn.clicked.connect(self.show_about)
@@ -320,81 +338,176 @@ class MainWindow(QMainWindow):
         # Main layout
         main_layout = QVBoxLayout(central_widget)
         main_layout.addWidget(main_splitter)
+
+        self.progress_panel = ProgressPanel()
+        self.progress_panel.setVisible(False)
+        main_layout.addWidget(self.progress_panel)
+
         main_layout.setContentsMargins(0, 0, 0, 0)
-    
+
     def _setup_connections(self):
         """Setup signal-slot connections."""
-        # Progress panel connections (using the progress panel that's still needed for detailed progress)
-        # We'll create a minimal progress panel just for the detailed view
-        self.progress_panel = ProgressPanel()
-        # Hide it by default, but we'll show it when translation starts
-        self.progress_panel.setVisible(False)
-        
-        # Add progress panel to the main layout temporarily for access to its functionality
-        central_widget = self.centralWidget()
-        main_layout = central_widget.layout()
-        main_layout.addWidget(self.progress_panel)
-        
+        self.validate_key_btn.clicked.connect(self._handle_validate_api_key)
+        self.api_key_input.editingFinished.connect(self._on_api_key_changed)
+        self.service_combo.currentTextChanged.connect(self._on_service_changed)
+        self.model_combo.currentTextChanged.connect(self._on_model_changed)
         self.progress_panel.cancel_requested.connect(self.cancel_translation)
-        
-        # RAG Chat Panel connections
         self.chat_panel.pdf_navigation_requested.connect(self._handle_pdf_navigation)
         self.chat_panel.web_link_requested.connect(self._handle_web_link)
-        
+
     def _apply_settings(self):
         """Apply current settings to UI."""
-        # Set theme if supported
         if self.settings.gui.theme != "system":
-            # Apply custom theme here if implemented
             pass
-    
-    # File operations
+
     def open_file(self):
-        """Open file dialog to select PDF."""
         file_path, _ = QFileDialog.getOpenFileName(
             self,
             "Open PDF File",
             str(Path.home()),
             "PDF Files (*.pdf);;All Files (*.*)"
         )
-        
         if file_path:
             self.load_file(Path(file_path))
-    
+
     def load_file(self, file_path: Path):
-        """Load PDF file into the application (enhanced with RAG support)."""
         try:
-            # Validate file
             if not file_path.exists():
                 QMessageBox.warning(self, "File Error", f"File does not exist: {file_path}")
                 return
-            
             if file_path.suffix.lower() != '.pdf':
                 QMessageBox.warning(self, "File Error", "Please select a PDF file.")
                 return
-            
-            # Load into original PDF viewer
             if self.original_pdf_viewer.load_pdf(file_path):
                 self.current_file = file_path
                 self.file_label.setText(file_path.name)
                 self.status_label.setText(f"Loaded: {file_path.name}")
                 self.translate_btn.setEnabled(True)
-                
-                # Process document for RAG system only if RAG is enabled
                 if self.rag_enabled:
                     self.chat_panel.process_document(file_path)
                 else:
                     self.chat_panel.set_rag_disabled_message()
-                
                 logger.info(f"Loaded PDF: {file_path}")
             else:
                 QMessageBox.critical(self, "Load Error", f"Failed to load PDF: {file_path}")
-                
         except Exception as e:
             logger.exception(f"Error loading file: {e}")
             QMessageBox.critical(self, "Load Error", f"Error loading file: {e}")
+
+    def _on_service_changed(self, text: str):
+        if self._updating_service_controls:
+            return
+        service = self._text_to_service(text)
+        if service is None:
+            return
+        if self.settings.translation.preferred_service != service:
+            self.settings.translation.preferred_service = service
+            self._persist_settings()
+        self._refresh_service_controls()
+        self.check_service_status()
+
+    def _on_api_key_changed(self):
+        if self._updating_service_controls:
+            return
+        service = self.settings.translation.preferred_service
+        api_key = self.api_key_input.text().strip() or None
+        if service == TranslationService.OPENAI:
+            self.settings.openai.api_key = api_key
+        elif service == TranslationService.GEMINI:
+            self.settings.gemini.api_key = api_key
+        self._persist_settings()
+        self.check_service_status()
+
+    def _on_model_changed(self, model: str):
+        if self._updating_service_controls:
+            return
+        service = self.settings.translation.preferred_service
+        if service == TranslationService.OPENAI:
+            self.settings.openai.model = model
+        elif service == TranslationService.GEMINI:
+            self.settings.gemini.model = model
+        self._persist_settings()
+
+    def _handle_validate_api_key(self):
+        service = self.settings.translation.preferred_service
+        api_key = self.api_key_input.text().strip()
+        if not api_key:
+            QMessageBox.warning(self, "Missing API Key", "Please enter an API key before validating.")
+            return
+        try:
+            translator = TranslatorFactory.create_translator(
+                service=service,
+                lang_in=str(self.settings.translation.default_source_lang.value),
+                lang_out=str(self.settings.translation.default_target_lang.value),
+                api_key=api_key,
+                model=self.model_combo.currentText(),
+            )
+            ok, message = translator.validate_configuration()
+            if ok:
+                QMessageBox.information(self, "API Key Valid", message)
+            else:
+                QMessageBox.critical(self, "Validation Failed", message)
+        except Exception as exc:
+            QMessageBox.critical(self, "Validation Failed", str(exc))
+
+    def _refresh_service_controls(self):
+        self._updating_service_controls = True
+        try:
+            service = self.settings.translation.preferred_service
+            target_text = "OpenAI" if service == TranslationService.OPENAI else "Gemini"
+            if self.service_combo.currentText() != target_text:
+                self.service_combo.setCurrentText(target_text)
+
+            if service == TranslationService.OPENAI:
+                api_key = self.settings.openai.api_key or ""
+                model = self.settings.openai.model
+            else:
+                api_key = self.settings.gemini.api_key or ""
+                model = self.settings.gemini.model
+
+            if self.api_key_input.text() != api_key:
+                self.api_key_input.setText(api_key)
+
+            options = self._get_model_options(service)
+            self.model_combo.blockSignals(True)
+            self.model_combo.clear()
+            self.model_combo.addItems(options)
+            if model in options:
+                self.model_combo.setCurrentText(model)
+            elif options:
+                self.model_combo.setCurrentIndex(0)
+            self.model_combo.blockSignals(False)
+        finally:
+            self._updating_service_controls = False
+
+    def _get_model_options(self, service: TranslationService) -> list[str]:
+        if service == TranslationService.OPENAI:
+            return ["gpt-4.1"]
+        if service == TranslationService.GEMINI:
+            return ["gemini-1.5-flash"]
+        return []
+
+    def _text_to_service(self, text: str) -> Optional[TranslationService]:
+        normalized = text.strip().lower()
+        if normalized == "openai":
+            return TranslationService.OPENAI
+        if normalized == "gemini":
+            return TranslationService.GEMINI
+        return None
+
+    def _persist_settings(self):
+        self.config_manager.save_settings(self.settings)
+        self.config_manager._settings = self.settings
+
+    def _check_translation_cancellation(self):
+        """Check if translation has been cancelled and clean up if needed."""
+        if self.translation_worker and self.translation_worker.isRunning():
+            # Force terminate if still running after timeout
+            self.translation_worker.terminate()
+            self.translation_worker.wait(1000)  # Wait up to 1 second
+            
+        self.translation_worker = None
     
-    # Translation operations
     def start_translation(self):
         """Start PDF translation process."""
         if not self.current_file:
@@ -459,7 +572,7 @@ class MainWindow(QMainWindow):
                 **translation_config
             )
             
-            # Connect worker signals
+            # Connect worker signals to handler methods
             self.translation_worker.progress_updated.connect(self.on_translation_progress)
             self.translation_worker.translation_completed.connect(self.on_translation_completed)
             self.translation_worker.translation_failed.connect(self.on_translation_failed)
@@ -628,8 +741,7 @@ class MainWindow(QMainWindow):
             new_settings = dialog.get_settings()
             self.config_manager.save_settings(new_settings)
             self.settings = new_settings
-    
-    
+
     # Service validation
     def check_service_status(self):
         """Check translation service status."""
@@ -653,7 +765,14 @@ class MainWindow(QMainWindow):
     def validate_services(self):
         """Show service validation dialog."""
         available_services = TranslatorFactory.get_available_services()
-        
+
+        def _service_model_options(service: TranslationService) -> list[str]:
+            if service == TranslationService.OPENAI:
+                return ["gpt-4.1"]
+            if service == TranslationService.GEMINI:
+                return ["gemini-1.5-flash"]
+            return []
+
         message = "Translation Service Status:\n\n"
         
         for service in [TranslationService.OPENAI, TranslationService.GEMINI]:
@@ -663,7 +782,8 @@ class MainWindow(QMainWindow):
             else:
                 status = "❌ Not installed"
             
-            message += f"{service.value}: {status}\n"
+            model_options = _service_model_options(service)
+            message += f"{service.value}: {status} ({', '.join(model_options)})\n"
         
         QMessageBox.information(self, "Service Status", message)
     

@@ -11,6 +11,7 @@ import tomlkit
 from pydantic import ValidationError
 
 from .models import AppSettings
+from ..utils import encrypt_api_key, decrypt_api_key, is_encrypted
 
 # Try to import python-dotenv for .env file support
 try:
@@ -66,6 +67,7 @@ class ConfigManager:
                 with open(self.config_file, "r", encoding="utf-8") as f:
                     file_config = tomlkit.load(f)
                 config_data.update(dict(file_config))
+                self._decrypt_sensitive_data(config_data)
                 logger.info(f"Loaded configuration from {self.config_file}")
             except Exception as e:
                 logger.warning(f"Failed to load config file: {e}")
@@ -97,7 +99,7 @@ class ConfigManager:
             # Convert to dict and format for TOML
             config_dict = settings.dict()
             
-            # Remove sensitive data (API keys) from saved file
+            # Prepare sensitive data (API keys) for storage
             config_dict = self._remove_sensitive_data(config_dict)
             
             # Clean None values that can't be serialized to TOML
@@ -175,14 +177,37 @@ class ConfigManager:
         """Remove sensitive data like API keys from config before saving."""
         safe_config = config_dict.copy()
         
-        # Remove API keys - they should come from environment variables
         for service in ["openai", "gemini"]:
             if service in safe_config and isinstance(safe_config[service], dict):
                 safe_config[service] = safe_config[service].copy()
-                if "api_key" in safe_config[service]:
-                    safe_config[service]["api_key"] = f"${{{service.upper()}_API_KEY}}"  # Proper placeholder
-        
+                api_key = safe_config[service].get("api_key")
+                if not api_key:
+                    safe_config[service]["api_key"] = ""
+                    safe_config[service].pop("api_key_salt", None)
+                    continue
+                if isinstance(api_key, str) and api_key.startswith("${"):
+                    safe_config[service]["api_key_salt"] = ""
+                    continue
+                encrypted_key, salt = encrypt_api_key(api_key)
+                safe_config[service]["api_key"] = encrypted_key
+                if salt:
+                    safe_config[service]["api_key_salt"] = salt
+                else:
+                    safe_config[service].pop("api_key_salt", None)
+
         return safe_config
+
+    def _decrypt_sensitive_data(self, config_data: Dict[str, Any]) -> None:
+        for service in ["openai", "gemini"]:
+            if service not in config_data or not isinstance(config_data[service], dict):
+                continue
+            service_data = config_data[service]
+            encrypted_key = service_data.get("api_key")
+            salt = service_data.get("api_key_salt")
+            if isinstance(encrypted_key, str) and isinstance(salt, str) and encrypted_key and salt and is_encrypted(encrypted_key):
+                decrypted = decrypt_api_key(encrypted_key, salt)
+                service_data["api_key"] = decrypted
+            service_data.pop("api_key_salt", None)
     
     def _clean_none_values(self, config_dict: Dict[str, Any]) -> Dict[str, Any]:
         """Remove None values from config dict to prevent TOML serialization errors."""

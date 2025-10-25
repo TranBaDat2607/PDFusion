@@ -11,6 +11,7 @@ from typing import List, Dict, Any, Optional, Tuple
 import json
 import hashlib
 from datetime import datetime
+import numpy as np
 
 # Disable ChromaDB telemetry to prevent errors
 os.environ["ANONYMIZED_TELEMETRY"] = "False"
@@ -36,6 +37,13 @@ try:
         chromadb.telemetry.disable()
 except:
     pass
+
+if not hasattr(np, "float_"):
+    np.float_ = np.float64
+if not hasattr(np, "int_"):
+    np.int_ = np.int64
+if not hasattr(np, "uint"):
+    np.uint = np.uint64
 
 try:
     import chromadb

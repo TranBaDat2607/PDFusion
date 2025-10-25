@@ -28,17 +28,33 @@ class OpenAISettings(BaseModel):
     """OpenAI translation service settings."""
     
     api_key: Optional[str] = Field(None, description="OpenAI API key")
-    model: str = Field("gpt-4", description="OpenAI model to use")
+    model: str = Field("gpt-4.1", description="OpenAI model to use")
     base_url: Optional[str] = Field(None, description="Custom API base URL")
     temperature: float = Field(0.3, ge=0.0, le=2.0, description="Translation creativity")
     max_tokens: Optional[int] = Field(None, description="Maximum tokens per request")
+
+    @validator("model")
+    def validate_model(cls, v: str) -> str:
+        allowed_models = {"gpt-4.1"}
+        if v not in allowed_models:
+            raise ValueError(f"Unsupported OpenAI model: {v}")
+        return v
+
 
 class GeminiSettings(BaseModel):
     """Google Gemini translation service settings."""
     
     api_key: Optional[str] = Field(None, description="Google AI API key")
-    model: str = Field("gemini-pro", description="Gemini model to use")
+    model: str = Field("gemini-1.5-flash", description="Gemini model to use")
     temperature: float = Field(0.3, ge=0.0, le=1.0, description="Translation creativity")
+
+    @validator("model")
+    def validate_model(cls, v: str) -> str:
+        allowed_models = {"gemini-1.5-flash"}
+        if v not in allowed_models:
+            raise ValueError(f"Unsupported Gemini model: {v}")
+        return v
+
 
 class TranslationSettings(BaseModel):
     """Translation-specific settings."""

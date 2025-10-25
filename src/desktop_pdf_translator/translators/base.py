@@ -139,15 +139,6 @@ class BaseTranslator(ABC):
         # Return original text as fallback
         return text
     
-    def get_translation_info(self) -> Dict[str, Any]:
-        """Get translator information for debugging and monitoring."""
-        return {
-            "translator_class": self.__class__.__name__,
-            "lang_in": self.lang_in,
-            "lang_out": self.lang_out,
-            "translate_call_count": self.translate_call_count
-        }
-    
     def __str__(self) -> str:
         return f"{self.__class__.__name__}({self.lang_in} -> {self.lang_out})"
     

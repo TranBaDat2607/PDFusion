@@ -174,16 +174,6 @@ Translate ONLY the text content. Do not add explanations, notes, or commentary."
         
         return text
     
-    def get_supported_models(self) -> List[str]:
-        """Get list of supported OpenAI models."""
-        return [
-            "gpt-4",
-            "gpt-4-turbo", 
-            "gpt-3.5-turbo",
-            "gpt-4o",
-            "gpt-4o-mini"
-        ]
-    
     def validate_configuration(self) -> tuple[bool, str]:
         """Validate OpenAI configuration."""
         try:
@@ -205,14 +195,3 @@ Translate ONLY the text content. Do not add explanations, notes, or commentary."
                 
         except Exception as e:
             return False, f"Configuration error: {str(e)}"
-    
-    def get_translation_info(self) -> Dict[str, Any]:
-        """Get detailed translator information."""
-        base_info = super().get_translation_info()
-        base_info.update({
-            "model": self.model,
-            "temperature": self.temperature, 
-            "max_tokens": self.max_tokens,
-            "api_available": OPENAI_AVAILABLE
-        })
-        return base_info
