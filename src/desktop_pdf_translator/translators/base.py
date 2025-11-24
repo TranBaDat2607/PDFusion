@@ -91,6 +91,12 @@ class BaseTranslator(ABC):
         regex_pattern = f"{{\\s*v\\s*{placeholder_id}\\s*}}"
         return placeholder, regex_pattern
     
+    def get_rich_text_left_placeholder(self, placeholder_id: int | str):
+        return f"<b{placeholder_id}>"
+
+    def get_rich_text_right_placeholder(self, placeholder_id: int | str):
+        return f"</b{placeholder_id}>"
+    
     def restore_formular_placeholder(self, text: str, placeholder_id: int, original_formula: str) -> str:
         """
         Restore formula placeholder with original content.

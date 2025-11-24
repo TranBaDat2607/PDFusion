@@ -20,7 +20,7 @@ faiss-cpu>=1.7.4,<2.0.0
 PyMuPDF>=1.25.1,<1.26.0
 Pillow>=9.5.0,<11.0.0
 
-babeldoc>=0.4.22,<0.5.0
+babeldoc>=0.5.20,<0.6.0
 
 camelot-py>=0.11.0,<1.0.0
 pdfplumber>=0.10.0,<1.0.0

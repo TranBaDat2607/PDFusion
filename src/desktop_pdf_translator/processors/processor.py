@@ -403,15 +403,15 @@ class PDFProcessor:
             formular_char_pattern=None,
             split_short_lines=False,
             short_line_split_factor=0.8,
-            disable_rich_text_translate=False,
+            disable_rich_text_translate=True,
             dual_translate_first=False,
-            enhance_compatibility=False,
+            enhance_compatibility=True,
             use_alternating_pages_dual=False,
             # Set watermark mode to NoWatermark to avoid bounding boxes
             watermark_output_mode=BabelDOCWatermarkMode.NoWatermark if BabelDOCWatermarkMode else None,
             min_text_length=translation_settings.min_text_length,
             report_interval=0.1,
-            skip_clean=False,
+            skip_clean=True,
             split_strategy=None,
             table_model=None,
             skip_scanned_detection=False,
@@ -431,7 +431,7 @@ class PDFProcessor:
         return config
     
     def _find_translated_file(self, output_dir: Path, original_stem: str) -> Optional[Path]:
-        """Find the translated output file."""
+        """Find translated PDF file in output directory."""
         # Common patterns for translated files - prioritize mono version
         patterns = [
             f"{original_stem}_mono.pdf",  # Monolingual version (translated only)
