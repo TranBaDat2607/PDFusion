@@ -45,8 +45,8 @@ class PDFScrollArea(QScrollArea):
             super().wheelEvent(event)
 
 class PDFViewer(QWidget):
-    """PDF viewer widget with continuous vertical scrolling."""
-    
+    """PDF viewer widget with continuous vertical scrolling and lazy loading."""
+
     def __init__(self):
         super().__init__()
         self._setup_ui()
@@ -56,27 +56,35 @@ class PDFViewer(QWidget):
         self.base_dpi = 150.0
         self.page_widgets = []  # Store page widgets
         self.is_rendering = False
+
+        # Lazy loading properties
+        self.rendered_pages = set()  # Track which pages have been rendered
+        self.page_heights = []  # Cache of page heights for placeholder sizing
+        self.render_buffer = 3  # Number of pages to render ahead/behind visible area
     
     def _setup_ui(self):
         """Setup PDF viewer UI with continuous scrolling."""
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
-        
+
         # Create scroll area for continuous viewing with zoom support
         self.scroll_area = PDFScrollArea(self)
         self.scroll_area.setWidgetResizable(True)
         self.scroll_area.setAlignment(Qt.AlignCenter)
         self.scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
         self.scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
-        
+
         # Container widget for all pages
         self.pages_container = QWidget()
         self.pages_layout = QVBoxLayout(self.pages_container)
         self.pages_layout.setContentsMargins(10, 10, 10, 10)
         self.pages_layout.setSpacing(10)  # Space between pages
-        
+
         self.scroll_area.setWidget(self.pages_container)
         layout.addWidget(self.scroll_area)
+
+        # Connect scroll event for lazy loading
+        self.scroll_area.verticalScrollBar().valueChanged.connect(self._on_scroll)
         
         # Control buttons (simplified)
         button_layout = QHBoxLayout()
@@ -102,155 +110,198 @@ class PDFViewer(QWidget):
         layout.addLayout(button_layout)
     
     def load_pdf(self, file_path: Path) -> bool:
-        """Load PDF file for viewing."""
+        """Load PDF file for viewing with lazy loading."""
         try:
             if not file_path.exists():
                 return False
-            
+
             # Close previous document if open
             if self.doc:
                 self.doc.close()
-            
+
             # Clear previous pages
             self.clear_pages()
-            
+            self.rendered_pages.clear()
+            self.page_heights.clear()
+
             self.current_file = file_path
             self.doc = fitz.open(file_path)
             self.zoom_factor = 1.0
-            
-            # Render all pages
-            self.render_all_pages()
-            
+
+            # Calculate and cache page heights for placeholders
+            self._calculate_page_dimensions()
+
+            # Create placeholder widgets for all pages (very fast)
+            self._create_page_placeholders()
+
             # Update page label
             self.page_label.setText(f"PDF loaded: {len(self.doc)} pages")
-            
+
+            # Auto fit to width - this will trigger rendering via _update_all_pages
+            QTimer.singleShot(200, self.fit_width)
+
             return True
-            
+
         except Exception as e:
             logger.exception(f"Error loading PDF: {e}")
             # Show error in placeholder
             self.show_error(f"Error loading PDF: {e}")
             return False
-    
-    def render_all_pages(self):
-        """Render all pages for continuous viewing."""
-        if not self.doc or self.is_rendering:
+
+    def _calculate_page_dimensions(self):
+        """Calculate dimensions for all pages (fast, no rendering)."""
+        if not self.doc:
             return
-        
-        self.is_rendering = True
-        
-        # Disable updates during rendering to reduce flicker
+
+        render_dpi = self.base_dpi * self.zoom_factor
+
+        for page_num in range(len(self.doc)):
+            page = self.doc[page_num]
+            page_rect = page.rect
+
+            # Calculate rendered dimensions
+            width = int(page_rect.width * render_dpi / 72.0)
+            height = int(page_rect.height * render_dpi / 72.0)
+
+            self.page_heights.append((width, height))
+
+    def _create_page_placeholders(self):
+        """Create placeholder labels for all pages (very fast)."""
+        if not self.doc:
+            return
+
         self.pages_container.setUpdatesEnabled(False)
-        
+
         try:
-            # Calculate DPI based on zoom factor
-            render_dpi = self.base_dpi * self.zoom_factor
-            
             for page_num in range(len(self.doc)):
-                # Get page
-                page = self.doc[page_num]
-                
-                # Render page to pixmap with appropriate DPI
-                mat = fitz.Matrix(render_dpi / 72.0, render_dpi / 72.0)
-                pix = page.get_pixmap(matrix=mat, alpha=False)
-                
-                # Convert to QImage
-                img = QImage(pix.samples, pix.width, pix.height, pix.stride, QImage.Format_RGB888)
-                
-                # Convert to QPixmap
-                pixmap = QPixmap.fromImage(img)
-                
-                # Clean up
-                pix = None
-                
-                # Create label for this page
+                # Create placeholder label with estimated size
+                if page_num < len(self.page_heights):
+                    width, height = self.page_heights[page_num]
+                else:
+                    width, height = 600, 800  # Default size
+
                 page_label = QLabel()
-                page_label.setPixmap(pixmap)
+                page_label.setMinimumSize(width, height)
+                page_label.setMaximumSize(width, height)
                 page_label.setAlignment(Qt.AlignCenter)
-                page_label.setStyleSheet("border: 1px solid #ccc; margin: 2px;")
-                
+                page_label.setStyleSheet("""
+                    border: 1px solid #ccc;
+                    margin: 2px;
+                    background-color: #f0f0f0;
+                """)
+
+                # Show loading text
+                page_label.setText(f"Page {page_num + 1}\nLoading...")
+                page_label.setProperty("page_number", page_num)
+
                 # Add to layout
                 self.pages_layout.addWidget(page_label)
-                
+
                 # Store reference
                 self.page_widgets.append(page_label)
-                
-                # Process events to keep UI responsive
-                if page_num % 3 == 0:  # Every 3 pages
-                    QApplication.processEvents()
-            
-        except Exception as e:
-            logger.exception(f"Error rendering pages: {e}")
-            self.show_error(f"Error rendering pages: {e}")
+
         finally:
-            # Re-enable updates
             self.pages_container.setUpdatesEnabled(True)
-            self.is_rendering = False
-    
-    def _render_and_replace_pages(self, scroll_percentage):
-        """Render new pages and replace old ones smoothly."""
+
+    def _on_scroll(self):
+        """Handle scroll events to trigger lazy loading."""
+        if not self.doc:
+            return
+        QTimer.singleShot(100, self._render_visible_pages)
+
+    def _render_visible_pages(self):
+        """Render only pages that are currently visible in viewport."""
         if not self.doc or self.is_rendering:
             return
-        
+
+        # Get viewport geometry
+        viewport = self.scroll_area.viewport()
+        viewport_rect = viewport.rect()
+        scroll_y = self.scroll_area.verticalScrollBar().value()
+
+        # Find visible page range
+        visible_pages = []
+        for page_num, page_label in enumerate(self.page_widgets):
+            if page_label is None:
+                continue
+
+            # Get widget position relative to container
+            widget_pos = page_label.pos()
+            widget_height = page_label.height()
+
+            # Check if widget is in or near viewport
+            widget_top = widget_pos.y() - scroll_y
+            widget_bottom = widget_top + widget_height
+
+            # Add buffer pages around visible area
+            is_visible = (
+                widget_bottom >= -viewport_rect.height() * self.render_buffer and
+                widget_top <= viewport_rect.height() * (1 + self.render_buffer)
+            )
+
+            if is_visible and page_num not in self.rendered_pages:
+                visible_pages.append(page_num)
+
+        # Render visible pages
+        if visible_pages:
+            self._render_pages(visible_pages)
+
+    def _render_pages(self, page_numbers: list):
+        """Render specific pages by page number."""
+        if not self.doc or self.is_rendering:
+            return
+
         self.is_rendering = True
-        
+
         try:
-            # Calculate DPI based on zoom factor
             render_dpi = self.base_dpi * self.zoom_factor
-            new_widgets = []
-            
-            # Render all pages first (without adding to layout)
-            for page_num in range(len(self.doc)):
+
+            for page_num in page_numbers:
+                if page_num >= len(self.doc) or page_num in self.rendered_pages:
+                    continue
+
                 # Get page
                 page = self.doc[page_num]
-                
-                # Render page to pixmap with appropriate DPI
+
+                # Render page to pixmap
                 mat = fitz.Matrix(render_dpi / 72.0, render_dpi / 72.0)
                 pix = page.get_pixmap(matrix=mat, alpha=False)
-                
+
                 # Convert to QImage
                 img = QImage(pix.samples, pix.width, pix.height, pix.stride, QImage.Format_RGB888)
-                
+
                 # Convert to QPixmap
                 pixmap = QPixmap.fromImage(img)
-                
+
                 # Clean up
                 pix = None
-                
-                # Create label for this page (but don't add to layout yet)
-                page_label = QLabel()
-                page_label.setPixmap(pixmap)
-                page_label.setAlignment(Qt.AlignCenter)
-                page_label.setStyleSheet("border: 1px solid #ccc; margin: 2px;")
-                
-                new_widgets.append(page_label)
-                
-                # Process events to keep UI responsive
-                if page_num % 2 == 0:  # Every 2 pages
+
+                # Update the placeholder label
+                if page_num < len(self.page_widgets):
+                    page_label = self.page_widgets[page_num]
+                    page_label.setPixmap(pixmap)
+                    page_label.setText("")  # Clear loading text
+
+                    # Mark as rendered
+                    self.rendered_pages.add(page_num)
+
+                # Process events every few pages to keep UI responsive
+                if len(self.rendered_pages) % 2 == 0:
                     QApplication.processEvents()
-            
-            # Now quickly replace all widgets at once
-            self.pages_container.setUpdatesEnabled(False)
-            
-            # Clear old widgets
-            self.clear_pages()
-            
-            # Add all new widgets
-            for widget in new_widgets:
-                self.pages_layout.addWidget(widget)
-                self.page_widgets.append(widget)
-            
-            # Re-enable updates
-            self.pages_container.setUpdatesEnabled(True)
-            
-            # Restore scroll position
-            QTimer.singleShot(10, lambda: self._restore_scroll_position(scroll_percentage))
-            
+
         except Exception as e:
             logger.exception(f"Error rendering pages: {e}")
-            self.show_error(f"Error rendering pages: {e}")
         finally:
             self.is_rendering = False
+
+    def render_all_pages(self):
+        """Render all pages for continuous viewing (used for legacy compatibility)."""
+        if not self.doc:
+            return
+
+        # For backward compatibility, render all visible pages
+        # This is now lazy-loaded by default
+        self._render_visible_pages()
     
     def clear_pages(self):
         """Clear all rendered pages."""
@@ -285,19 +336,42 @@ class PDFViewer(QWidget):
         self.pages_layout.addWidget(error_label)
     
     def _update_all_pages(self):
-        """Update all pages after zoom change."""
+        """Update all pages after zoom change with lazy loading."""
         if not self.doc or self.is_rendering:
             return
-        
+
         # Save current scroll position as percentage
         scrollbar = self.scroll_area.verticalScrollBar()
         if scrollbar.maximum() > 0:
             scroll_percentage = scrollbar.value() / scrollbar.maximum()
         else:
             scroll_percentage = 0
-        
-        # Render new pages in background first, then replace
-        self._render_and_replace_pages(scroll_percentage)
+
+        # Clear rendered pages cache
+        self.rendered_pages.clear()
+
+        # Recalculate page dimensions with new zoom
+        self.page_heights.clear()
+        self._calculate_page_dimensions()
+
+        # Update placeholder sizes
+        self.pages_container.setUpdatesEnabled(False)
+        try:
+            for page_num, page_label in enumerate(self.page_widgets):
+                if page_num < len(self.page_heights):
+                    width, height = self.page_heights[page_num]
+                    page_label.setMinimumSize(width, height)
+                    page_label.setMaximumSize(width, height)
+                    page_label.clear()
+                    page_label.setText(f"Page {page_num + 1}\nLoading...")
+        finally:
+            self.pages_container.setUpdatesEnabled(True)
+
+        # Restore scroll position
+        QTimer.singleShot(10, lambda: self._restore_scroll_position(scroll_percentage))
+
+        # Re-render visible pages with new zoom
+        QTimer.singleShot(50, self._render_visible_pages)
     
     def _restore_scroll_position(self, scroll_percentage):
         """Restore scroll position after re-rendering."""
@@ -358,104 +432,162 @@ class PDFViewer(QWidget):
 
 
 class ProgressPanel(QWidget):
-    """Panel for showing translation progress."""
-    
+    """Compact collapsible panel for showing translation progress details."""
+
     cancel_requested = Signal()
-    
+
     def __init__(self):
         super().__init__()
         self._setup_ui()
         self.is_active = False
-    
+        self.is_expanded = False
+
     def _setup_ui(self):
-        """Setup progress panel UI."""
+        """Setup compact progress panel UI."""
         layout = QVBoxLayout(self)
-        
-        # Progress group
-        progress_group = QGroupBox("Translation Progress")
-        progress_layout = QVBoxLayout(progress_group)
-        
-        # Overall progress
-        self.overall_progress = QProgressBar()
-        self.overall_progress.setVisible(False)
-        progress_layout.addWidget(self.overall_progress)
-        
-        # Status text
-        self.status_text = QTextEdit()
-        self.status_text.setMaximumHeight(150)
-        self.status_text.setReadOnly(True)
-        self.status_text.setVisible(False)
-        progress_layout.addWidget(self.status_text)
-        
-        # Cancel button
-        self.cancel_btn = QPushButton("❌ Cancel Translation")
-        self.cancel_btn.setVisible(False)
+        layout.setContentsMargins(5, 0, 5, 5)
+        layout.setSpacing(5)
+
+        # Header bar with expand/collapse button
+        header_layout = QHBoxLayout()
+        header_layout.setContentsMargins(0, 0, 0, 0)
+
+        self.toggle_btn = QPushButton("▼ Show Details")
+        self.toggle_btn.setMaximumWidth(120)
+        self.toggle_btn.setStyleSheet("""
+            QPushButton {
+                padding: 4px 8px;
+                background-color: #2196F3;
+                color: white;
+                border: none;
+                border-radius: 3px;
+                font-size: 11px;
+            }
+            QPushButton:hover {
+                background-color: #1976D2;
+            }
+        """)
+        self.toggle_btn.clicked.connect(self.toggle_details)
+        header_layout.addWidget(self.toggle_btn)
+
+        header_layout.addStretch()
+
+        # Cancel button in header (compact)
+        self.cancel_btn = QPushButton("✕ Cancel")
+        self.cancel_btn.setMaximumWidth(80)
         self.cancel_btn.clicked.connect(self.cancel_requested)
         self.cancel_btn.setStyleSheet("""
             QPushButton {
-                padding: 8px 16px;
+                padding: 4px 8px;
                 background-color: #f44336;
                 color: white;
                 border: none;
-                border-radius: 4px;
+                border-radius: 3px;
+                font-size: 11px;
             }
             QPushButton:hover {
                 background-color: #da190b;
             }
         """)
-        progress_layout.addWidget(self.cancel_btn)
-        
-        layout.addWidget(progress_group)
-        layout.addStretch()
-    
+        header_layout.addWidget(self.cancel_btn)
+
+        layout.addLayout(header_layout)
+
+        # Collapsible details section
+        self.details_container = QWidget()
+        self.details_container.setVisible(False)
+        details_layout = QVBoxLayout(self.details_container)
+        details_layout.setContentsMargins(0, 5, 0, 0)
+        details_layout.setSpacing(5)
+
+        # Compact progress bar
+        self.overall_progress = QProgressBar()
+        self.overall_progress.setMaximumHeight(15)
+        self.overall_progress.setTextVisible(True)
+        details_layout.addWidget(self.overall_progress)
+
+        # Compact status text (much smaller)
+        self.status_text = QTextEdit()
+        self.status_text.setMaximumHeight(80)  # Much smaller than before
+        self.status_text.setReadOnly(True)
+        self.status_text.setStyleSheet("""
+            QTextEdit {
+                font-size: 10px;
+                background-color: #f5f5f5;
+                border: 1px solid #ddd;
+                border-radius: 3px;
+            }
+        """)
+        details_layout.addWidget(self.status_text)
+
+        layout.addWidget(self.details_container)
+
+    def toggle_details(self):
+        """Toggle visibility of progress details."""
+        self.is_expanded = not self.is_expanded
+        self.details_container.setVisible(self.is_expanded)
+
+        if self.is_expanded:
+            self.toggle_btn.setText("▲ Hide Details")
+        else:
+            self.toggle_btn.setText("▼ Show Details")
+
     def start_translation(self):
         """Start showing progress."""
         self.is_active = True
-        self.overall_progress.setVisible(True)
-        self.status_text.setVisible(True)
         self.cancel_btn.setVisible(True)
+        self.toggle_btn.setVisible(True)
         self.status_text.clear()
         self.status_text.append("Translation started...")
-    
+        self.overall_progress.setValue(0)
+
+        # Collapse by default to keep UI clean
+        self.is_expanded = False
+        self.details_container.setVisible(False)
+        self.toggle_btn.setText("▼ Show Details")
+
     def update_progress(self, event_data: Dict[str, Any]):
         """Update progress display."""
         if not self.is_active:
             return
-        
+
         # Update progress bar
         progress = event_data.get('progress_percent', 0)
         self.overall_progress.setValue(int(progress))
-        
-        # Update status text
+
+        # Update status text (only if expanded)
         message = event_data.get('message', '')
         if message:
-            self.status_text.append(f"[{progress:.1f}%] {message}")
-            
-        # Auto-scroll to bottom
-        cursor = self.status_text.textCursor()
-        cursor.movePosition(QTextCursor.End)
-        self.status_text.setTextCursor(cursor)
-    
+            # Keep messages concise
+            timestamp = time.strftime("%H:%M:%S")
+            self.status_text.append(f"[{timestamp}] {message}")
+
+            # Auto-scroll to bottom
+            cursor = self.status_text.textCursor()
+            cursor.movePosition(QTextCursor.End)
+            self.status_text.setTextCursor(cursor)
+
     def complete_translation(self):
         """Mark translation as complete."""
         self.is_active = False
         self.overall_progress.setValue(100)
-        self.status_text.append("✅ Translation completed successfully!")
-        
+        self.status_text.append("✅ Translation completed!")
+
         # Hide cancel button
         self.cancel_btn.setVisible(False)
-        
-        # Auto-hide after 5 seconds
-        QTimer.singleShot(5000, self.reset)
-    
+
+        # Auto-hide after 3 seconds
+        QTimer.singleShot(3000, self.reset)
+
     def reset(self):
         """Reset progress panel."""
         self.is_active = False
-        self.overall_progress.setVisible(False)
         self.overall_progress.setValue(0)
-        self.status_text.setVisible(False)
         self.status_text.clear()
         self.cancel_btn.setVisible(False)
+        self.toggle_btn.setVisible(False)
+        self.details_container.setVisible(False)
+        self.is_expanded = False
 
 
 class RAGChatPanel(QWidget):

@@ -277,21 +277,44 @@ class MainWindow(QMainWindow):
     def _create_status_bar(self):
         """Create status bar with progress indicator."""
         status_bar = self.statusBar()
-        
-        # Status label
-        self.status_label = QLabel("Ready - Chat panel is always visible on the right side")
-        status_bar.addWidget(self.status_label)
-        
-        # Progress bar
+
+        # Status label (with more space for progress messages)
+        self.status_label = QLabel("Ready")
+        self.status_label.setMinimumWidth(300)
+        status_bar.addWidget(self.status_label, 1)  # Stretch factor 1
+
+        # Progress percentage label (compact)
+        self.progress_percent_label = QLabel("")
+        self.progress_percent_label.setVisible(False)
+        self.progress_percent_label.setStyleSheet("color: #2196F3; font-weight: bold; padding: 0 5px;")
+        self.progress_percent_label.setMinimumWidth(50)
+        status_bar.addPermanentWidget(self.progress_percent_label)
+
+        # Progress bar (more prominent, wider)
         self.progress_bar = QProgressBar()
         self.progress_bar.setVisible(False)
-        self.progress_bar.setMaximumWidth(200)
+        self.progress_bar.setMaximumWidth(250)
+        self.progress_bar.setMinimumWidth(200)
+        self.progress_bar.setMaximumHeight(18)
+        self.progress_bar.setTextVisible(True)
+        self.progress_bar.setStyleSheet("""
+            QProgressBar {
+                border: 1px solid #bbb;
+                border-radius: 3px;
+                text-align: center;
+                background-color: #f0f0f0;
+            }
+            QProgressBar::chunk {
+                background-color: #4CAF50;
+                border-radius: 2px;
+            }
+        """)
         status_bar.addPermanentWidget(self.progress_bar)
-        
+
         # Service status
         self.service_status_label = QLabel("Checking services...")
         status_bar.addPermanentWidget(self.service_status_label)
-        
+
         # Check service status on startup
         QTimer.singleShot(1000, self.check_service_status)
     
@@ -299,51 +322,54 @@ class MainWindow(QMainWindow):
         """Create the main three-panel layout with chat on the right."""
         central_widget = QWidget()
         self.setCentralWidget(central_widget)
-        
+
         # Main horizontal splitter
         main_splitter = QSplitter(Qt.Horizontal)
-        
+
         # Left panel: Original PDF viewer
         left_panel = QGroupBox("Original PDF")
         left_layout = QVBoxLayout(left_panel)
         self.original_pdf_viewer = PDFViewer()
         left_layout.addWidget(self.original_pdf_viewer)
-        
+
         # Middle panel: Translated PDF viewer
         middle_panel = QGroupBox("Translated PDF")
         middle_layout = QVBoxLayout(middle_panel)
         self.translated_pdf_viewer = PDFViewer()
         middle_layout.addWidget(self.translated_pdf_viewer)
-        
+
         # Right panel: RAG chat panel
         right_panel = QGroupBox("Chat with PDF")
         right_layout = QVBoxLayout(right_panel)
         self.chat_panel = RAGChatPanel()
         self.chat_panel.setVisible(True)  # Always visible by default
         right_layout.addWidget(self.chat_panel)
-        
+
         # Add panels to main splitter
         main_splitter.addWidget(left_panel)
         main_splitter.addWidget(middle_panel)
         main_splitter.addWidget(right_panel)
-        
+
         # Set stretch factors for equal proportions (each panel gets equal weight)
         main_splitter.setStretchFactor(0, 1)  # Left panel
         main_splitter.setStretchFactor(1, 1)  # Middle panel
         main_splitter.setStretchFactor(2, 1)  # Right panel
-        
+
         # Store splitter reference to set sizes after show
         self.main_splitter = main_splitter
-        
+
         # Main layout
         main_layout = QVBoxLayout(central_widget)
-        main_layout.addWidget(main_splitter)
+        main_layout.addWidget(main_splitter, 1)  # Splitter takes most space
 
+        # Compact progress panel at bottom (won't push content when collapsed)
         self.progress_panel = ProgressPanel()
         self.progress_panel.setVisible(False)
-        main_layout.addWidget(self.progress_panel)
+        self.progress_panel.setMaximumHeight(120)  # Limit max height
+        main_layout.addWidget(self.progress_panel, 0)  # No stretch
 
         main_layout.setContentsMargins(0, 0, 0, 0)
+        main_layout.setSpacing(0)
 
     def _setup_connections(self):
         """Setup signal-slot connections."""
@@ -580,18 +606,22 @@ class MainWindow(QMainWindow):
             # Update UI state
             self.translate_btn.setEnabled(False)
             self.cancel_btn.setEnabled(True)
+
+            # Show status bar progress
             self.progress_bar.setVisible(True)
             self.progress_bar.setValue(0)
-            
-            # Show progress panel
+            self.progress_percent_label.setVisible(True)
+            self.progress_percent_label.setText("0%")
+
+            # Show compact progress panel
             self.progress_panel.setVisible(True)
             self.progress_panel.start_translation()
-            
+
             # Start worker
             self.translation_worker.start()
-            
-            self.status_label.setText("Translation in progress...")
-            
+
+            self.status_label.setText("⚙️ Translation in progress...")
+
             logger.info("Translation started")
             
         except Exception as e:
@@ -604,16 +634,21 @@ class MainWindow(QMainWindow):
             self.translation_worker.cancel()
             # Wait for a short time to allow graceful cancellation
             QTimer.singleShot(100, self._check_translation_cancellation)
-            
+
             # Reset UI state immediately
             self.translate_btn.setEnabled(True)
             self.cancel_btn.setEnabled(False)
+
+            # Hide status bar progress
             self.progress_bar.setVisible(False)
+            self.progress_percent_label.setVisible(False)
+
+            # Hide progress panel
             self.progress_panel.setVisible(False)
-            
-            self.status_label.setText("Translation cancelled")
             self.progress_panel.reset()
-            
+
+            self.status_label.setText("❌ Translation cancelled")
+
             logger.info("Translation cancellation requested")
     
     def _check_translation_cancellation(self):
@@ -629,28 +664,35 @@ class MainWindow(QMainWindow):
         """Handle translation progress updates."""
         progress_percent = event_data.get('progress_percent', 0)
         message = event_data.get('message', '')
-        
+        stage = event_data.get('stage', '')
+
+        # Update status bar progress
         self.progress_bar.setValue(int(progress_percent))
-        if message:
-            self.status_label.setText(message)
-        
-        # Update progress panel
+        self.progress_percent_label.setText(f"{int(progress_percent)}%")
+
+        # Update status label with stage or message
+        if stage:
+            self.status_label.setText(f"⚙️ {stage}")
+        elif message:
+            self.status_label.setText(f"⚙️ {message}")
+
+        # Update compact progress panel (for detailed view)
         self.progress_panel.update_progress(event_data)
     
     def on_translation_completed(self, result_data):
         """Handle translation completion."""
         try:
             translated_file = result_data.get('translated_file')
-            
+
             if translated_file and Path(translated_file).exists():
                 # Load translated PDF
                 self.translated_pdf_viewer.load_pdf(Path(translated_file))
-                self.status_label.setText("Translation completed successfully")
-                
+                self.status_label.setText("✅ Translation completed successfully")
+
                 # Process document for RAG only if RAG is enabled
                 if self.rag_enabled:
                     self._process_document_for_rag(Path(translated_file))
-                
+
                 # Show success message
                 QMessageBox.information(
                     self,
@@ -658,32 +700,43 @@ class MainWindow(QMainWindow):
                     f"Translation completed successfully!\nOutput: {translated_file}"
                 )
             else:
-                self.status_label.setText("Translation completed but output file not found")
-            
+                self.status_label.setText("⚠️ Translation completed but output file not found")
+
         except Exception as e:
             logger.exception(f"Error handling translation completion: {e}")
-        
+
         finally:
             # Reset UI state
             self.translate_btn.setEnabled(True)
             self.cancel_btn.setEnabled(False)
+
+            # Hide status bar progress
             self.progress_bar.setVisible(False)
-            self.progress_panel.setVisible(False)
+            self.progress_percent_label.setVisible(False)
+
+            # Complete and hide progress panel
             self.progress_panel.complete_translation()
+            # Panel will auto-hide after 3 seconds via QTimer in complete_translation()
     
     def on_translation_failed(self, error_message):
         """Handle translation failure."""
         logger.error(f"Translation failed: {error_message}")
-        
+
         QMessageBox.critical(self, "Translation Failed", f"Translation failed: {error_message}")
-        
+
         # Reset UI state
         self.translate_btn.setEnabled(True)
         self.cancel_btn.setEnabled(False)
+
+        # Hide status bar progress
         self.progress_bar.setVisible(False)
+        self.progress_percent_label.setVisible(False)
+
+        # Hide progress panel
         self.progress_panel.setVisible(False)
-        self.status_label.setText("Translation failed")
         self.progress_panel.reset()
+
+        self.status_label.setText("❌ Translation failed")
     
     # RAG Integration Methods
     def _process_document_for_rag(self, document_path: Path):
