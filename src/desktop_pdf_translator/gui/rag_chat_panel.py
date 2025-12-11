@@ -5,6 +5,7 @@ Provides comprehensive answers with PDF and web references.
 
 import logging
 import asyncio
+import time
 from pathlib import Path
 from typing import Optional, Dict, Any, List
 from datetime import datetime
@@ -27,33 +28,201 @@ from ..config import get_settings
 logger = logging.getLogger(__name__)
 
 
+class DocumentProcessorWorker(QThread):
+    """Worker thread for document processing with detailed progress tracking."""
+
+    # Signals
+    processing_completed = Signal(str, int)  # (document_id, num_chunks)
+    processing_failed = Signal(str)  # (error_message)
+    progress_updated = Signal(dict)  # (progress_data)
+
+    def __init__(self, document_path: Path, vector_store, document_id: str):
+        super().__init__()
+        self.document_path = document_path
+        self.vector_store = vector_store
+        self.document_id = document_id
+        self._cancelled = False
+        self._start_time = None
+
+    def cancel(self):
+        """Request cancellation of document processing."""
+        self._cancelled = True
+        logger.info("Document processing cancellation requested")
+
+    def run(self):
+        """Run document processing in background thread with detailed progress."""
+        try:
+            import time
+            from ..rag import ScientificPDFProcessor
+
+            self._start_time = time.time()
+
+            # Create event loop for async operations
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+
+            # Stage 1: Check if already processed (10%)
+            self._emit_progress(
+                stage="Checking database...",
+                progress=10,
+                message="Verifying if document is already processed"
+            )
+
+            if self._cancelled:
+                return
+
+            existing_chunks = loop.run_until_complete(
+                self.vector_store.search_by_document(self.document_id)
+            )
+
+            if existing_chunks:
+                self._emit_progress(
+                    stage="Already processed",
+                    progress=100,
+                    message=f"Document already in database ({len(existing_chunks)} chunks)"
+                )
+                self.processing_completed.emit(self.document_id, len(existing_chunks))
+                return
+
+            # Stage 2: Initialize processor (20%)
+            self._emit_progress(
+                stage="Initializing processor...",
+                progress=20,
+                message="Preparing PDF extraction tools"
+            )
+
+            if self._cancelled:
+                return
+
+            processor = ScientificPDFProcessor()
+
+            # Stage 3: Extract PDF content (30-60%)
+            self._emit_progress(
+                stage="Extracting PDF content...",
+                progress=30,
+                message="Reading PDF pages, tables, and figures",
+                detail="This may take 20-40 seconds for large documents"
+            )
+
+            if self._cancelled:
+                return
+
+            # Process PDF with progress updates
+            chunks = loop.run_until_complete(processor.process_pdf(self.document_path))
+
+            if not chunks:
+                raise Exception("Failed to extract content from PDF")
+
+            if self._cancelled:
+                return
+
+            # Stage 4: Chunking and embedding (60-80%)
+            self._emit_progress(
+                stage="Creating chunks...",
+                progress=60,
+                message=f"Processing {len(chunks)} text chunks",
+                detail="Generating semantic embeddings for search"
+            )
+
+            if self._cancelled:
+                return
+
+            # Stage 5: Save to vector database (80-95%)
+            self._emit_progress(
+                stage="Saving to database...",
+                progress=80,
+                message=f"Indexing {len(chunks)} chunks in vector store",
+                detail="Building search index"
+            )
+
+            if self._cancelled:
+                return
+
+            success = loop.run_until_complete(
+                self.vector_store.add_document_chunks(
+                    chunks=chunks,
+                    document_id=self.document_id,
+                    document_path=str(self.document_path)
+                )
+            )
+
+            if not success:
+                raise Exception("Failed to save document to database")
+
+            # Stage 6: Complete (100%)
+            elapsed_time = time.time() - self._start_time
+            self._emit_progress(
+                stage="Processing complete",
+                progress=100,
+                message=f"Document ready ({len(chunks)} chunks)",
+                detail=f"Completed in {elapsed_time:.1f} seconds"
+            )
+
+            self.processing_completed.emit(self.document_id, len(chunks))
+            logger.info(f"Document processed successfully in {elapsed_time:.1f}s: {self.document_path}")
+
+        except Exception as e:
+            error_msg = f"Document processing error: {str(e)}"
+            logger.error(error_msg)
+            self.processing_failed.emit(error_msg)
+        finally:
+            if 'loop' in locals():
+                loop.close()
+
+    def _emit_progress(self, stage: str, progress: int, message: str, detail: str = ""):
+        """Emit progress update with detailed information."""
+        if self._cancelled:
+            return
+
+        elapsed = time.time() - self._start_time if self._start_time else 0
+
+        # Estimate remaining time (simple linear projection)
+        if progress > 0 and progress < 100:
+            estimated_total = (elapsed / progress) * 100
+            eta = estimated_total - elapsed
+        else:
+            eta = 0
+
+        progress_data = {
+            'stage': stage,
+            'progress': progress,
+            'message': message,
+            'detail': detail,
+            'elapsed_time': elapsed,
+            'eta': eta,
+            'can_cancel': True
+        }
+
+        self.progress_updated.emit(progress_data)
+
+
 class RAGWorker(QThread):
     """Worker thread for RAG processing to avoid blocking the GUI."""
-    
+
     # Signals
     answer_ready = Signal(dict)
     error_occurred = Signal(str)
     progress_updated = Signal(str, int)
-    
-    def __init__(self, rag_chain: EnhancedRAGChain, question: str, 
+
+    def __init__(self, rag_chain: EnhancedRAGChain, question: str,
                  document_id: Optional[str] = None, include_web: bool = True):
         super().__init__()
         self.rag_chain = rag_chain
         self.question = question
         self.document_id = document_id
         self.include_web = include_web
-    
+
     def run(self):
         """Run RAG processing in background thread."""
         try:
             self.progress_updated.emit("Processing question...", 20)
-            
+
             # Create event loop for async operations
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
-            
+
             self.progress_updated.emit("Searching in PDF...", 40)
-            
+
             # Process the question
             result = loop.run_until_complete(
                 self.rag_chain.answer_question(
@@ -62,10 +231,10 @@ class RAGWorker(QThread):
                     include_web_research=self.include_web
                 )
             )
-            
+
             self.progress_updated.emit("Completed", 100)
             self.answer_ready.emit(result)
-            
+
         except Exception as e:
             logger.error(f"RAG processing failed: {e}")
             self.error_occurred.emit(str(e))
@@ -312,9 +481,10 @@ class RAGChatPanel(QWidget):
         # Current document
         self.current_document_id = None
         self.current_document_path = None
-        
-        # Worker thread
+
+        # Worker threads
         self.rag_worker = None
+        self.document_processor_worker = None
         
         self.setup_ui()
         self.initialize_rag_system()
@@ -353,18 +523,104 @@ class RAGChatPanel(QWidget):
         input_widget = self.create_input_area()
         layout.addWidget(input_widget)
         
-        # Progress bar - compact
-        self.progress_bar = QProgressBar()
-        self.progress_bar.setVisible(False)
-        self.progress_bar.setMaximumHeight(15)
-        layout.addWidget(self.progress_bar)
-        
+        # Progress section - enhanced with detailed information
+        progress_widget = self._create_progress_section()
+        layout.addWidget(progress_widget)
+
         # Status label - compact
         self.status_label = QLabel("Ready")
         self.status_label.setStyleSheet("color: #666; font-size: 8pt;")
         self.status_label.setMaximumHeight(20)
         layout.addWidget(self.status_label)
     
+    def _create_progress_section(self) -> QWidget:
+        """Create enhanced progress section with detailed information and cancel button."""
+        progress_widget = QWidget()
+        progress_layout = QVBoxLayout(progress_widget)
+        progress_layout.setContentsMargins(0, 5, 0, 5)
+        progress_layout.setSpacing(3)
+
+        # Progress container (hidden by default)
+        self.progress_container = QFrame()
+        self.progress_container.setFrameStyle(QFrame.StyledPanel)
+        self.progress_container.setStyleSheet("""
+            QFrame {
+                background-color: #f5f5f5;
+                border: 1px solid #ddd;
+                border-radius: 5px;
+                padding: 8px;
+            }
+        """)
+        self.progress_container.setVisible(False)
+
+        container_layout = QVBoxLayout(self.progress_container)
+        container_layout.setSpacing(5)
+
+        # Stage label (main activity)
+        self.stage_label = QLabel("Processing...")
+        self.stage_label.setFont(QFont("Segoe UI", 9, QFont.Bold))
+        self.stage_label.setStyleSheet("color: #2196F3;")
+        container_layout.addWidget(self.stage_label)
+
+        # Progress bar
+        self.progress_bar = QProgressBar()
+        self.progress_bar.setMaximumHeight(20)
+        self.progress_bar.setTextVisible(True)
+        self.progress_bar.setStyleSheet("""
+            QProgressBar {
+                border: 1px solid #ccc;
+                border-radius: 3px;
+                text-align: center;
+                background-color: white;
+            }
+            QProgressBar::chunk {
+                background-color: #4CAF50;
+                border-radius: 2px;
+            }
+        """)
+        container_layout.addWidget(self.progress_bar)
+
+        # Detail label (what's happening)
+        self.detail_label = QLabel("")
+        self.detail_label.setWordWrap(True)
+        self.detail_label.setStyleSheet("color: #666; font-size: 8pt;")
+        container_layout.addWidget(self.detail_label)
+
+        # Time and cancel row
+        time_cancel_layout = QHBoxLayout()
+
+        # Time info label
+        self.time_label = QLabel("Elapsed: 0s | ETA: --")
+        self.time_label.setStyleSheet("color: #666; font-size: 8pt;")
+        time_cancel_layout.addWidget(self.time_label)
+
+        time_cancel_layout.addStretch()
+
+        # Cancel button
+        self.cancel_processing_btn = QPushButton("❌ Cancel")
+        self.cancel_processing_btn.setMaximumWidth(80)
+        self.cancel_processing_btn.setMaximumHeight(25)
+        self.cancel_processing_btn.clicked.connect(self._cancel_document_processing)
+        self.cancel_processing_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #f44336;
+                color: white;
+                border: none;
+                border-radius: 3px;
+                padding: 3px 8px;
+            }
+            QPushButton:hover {
+                background-color: #d32f2f;
+            }
+        """)
+        time_cancel_layout.addWidget(self.cancel_processing_btn)
+
+        container_layout.addLayout(time_cancel_layout)
+
+        progress_layout.addWidget(self.progress_container)
+
+        return progress_widget
+
     def create_input_area(self) -> QWidget:
         """Create the input area widget - compact layout."""
         
@@ -459,8 +715,8 @@ class RAGChatPanel(QWidget):
     
     def process_document(self, document_path: Path):
         """
-        Process a document for RAG (extract and index content).
-        
+        Process a document for RAG (extract and index content) with enhanced progress tracking.
+
         Args:
             document_path: Path to the PDF document
         """
@@ -468,71 +724,132 @@ class RAGChatPanel(QWidget):
         if not self.isEnabled():
             logger.info(f"RAG is disabled, skipping document processing: {document_path}")
             return
-            
+
         if not self.vector_store:
             QMessageBox.warning(self, "Error", "RAG system not initialized")
             return
-        
-        try:
-            self.status_label.setText("Processing document...")
-            self.progress_bar.setVisible(True)
-            self.progress_bar.setRange(0, 100)
-            self.progress_bar.setValue(10)
-            
-            # Generate document ID
-            document_id = str(document_path.stem)
-            
-            # Check if document is already processed
-            existing_chunks = asyncio.run(self.vector_store.search_by_document(document_id))
-            if existing_chunks:
-                logger.info(f"Document {document_id} already processed, using existing data")
-                self.set_current_document(document_path, document_id)
-                self.progress_bar.setVisible(False)
-                self.status_label.setText(f"Document already available: {document_path.name}")
-                return
-            
-            self.progress_bar.setValue(30)
-            self.status_label.setText("Extracting PDF content...")
-            
-            # Process PDF document
-            processor = ScientificPDFProcessor()
-            chunks = asyncio.run(processor.process_pdf(document_path))
-            
-            if not chunks:
-                raise Exception("Cannot extract content from PDF")
-            
-            self.progress_bar.setValue(60)
-            self.status_label.setText("Saving to database...")
-            
-            # Add chunks to vector store
-            success = asyncio.run(self.vector_store.add_document_chunks(
-                chunks=chunks,
-                document_id=document_id,
-                document_path=str(document_path)
-            ))
-            
-            if not success:
-                raise Exception("Cannot save document to database")
-            
-            self.progress_bar.setValue(90)
-            
-            # Set as current document
-            self.set_current_document(document_path, document_id)
-            
-            self.progress_bar.setValue(100)
-            self.progress_bar.setVisible(False)
-            self.status_label.setText(f"Document processed: {document_path.name} ({len(chunks)} chunks)")
-            
-            logger.info(f"Document processed successfully: {document_path} ({len(chunks)} chunks)")
-            
-        except Exception as e:
-            error_msg = f"Document processing error: {str(e)}"
-            self.status_label.setText(error_msg)
-            self.progress_bar.setVisible(False)
-            logger.error(error_msg)
-            
-            QMessageBox.warning(self, "Processing Error", error_msg)
-    
+
+        # Cancel any existing processing
+        if self.document_processor_worker and self.document_processor_worker.isRunning():
+            self.document_processor_worker.cancel()
+            self.document_processor_worker.wait(1000)
+
+        # Generate document ID
+        document_id = str(document_path.stem)
+
+        # Show progress UI
+        self.progress_container.setVisible(True)
+        self.progress_bar.setRange(0, 100)
+        self.progress_bar.setValue(0)
+        self.stage_label.setText("Starting...")
+        self.detail_label.setText("")
+        self.time_label.setText("Elapsed: 0s | ETA: --")
+
+        # Create and start worker
+        self.document_processor_worker = DocumentProcessorWorker(
+            document_path=document_path,
+            vector_store=self.vector_store,
+            document_id=document_id
+        )
+
+        # Connect signals
+        self.document_processor_worker.progress_updated.connect(self._on_document_progress)
+        self.document_processor_worker.processing_completed.connect(self._on_document_completed)
+        self.document_processor_worker.processing_failed.connect(self._on_document_failed)
+
+        # Store document path for completion handler
+        self.current_document_path = document_path
+
+        # Start processing
+        self.document_processor_worker.start()
+
+        logger.info(f"Started document processing: {document_path}")
+
+    def _on_document_progress(self, progress_data: Dict[str, Any]):
+        """Handle document processing progress updates."""
+        stage = progress_data.get('stage', '')
+        progress = progress_data.get('progress', 0)
+        message = progress_data.get('message', '')
+        detail = progress_data.get('detail', '')
+        elapsed = progress_data.get('elapsed_time', 0)
+        eta = progress_data.get('eta', 0)
+
+        # Update UI elements
+        self.stage_label.setText(f"⚙️ {stage}")
+        self.progress_bar.setValue(int(progress))
+        self.detail_label.setText(message)
+
+        # Format time display
+        elapsed_str = f"{int(elapsed)}s"
+        eta_str = f"{int(eta)}s" if eta > 0 else "--"
+        self.time_label.setText(f"Elapsed: {elapsed_str} | ETA: {eta_str}")
+
+        # Update status label if detail is provided
+        if detail:
+            self.status_label.setText(detail)
+        else:
+            self.status_label.setText(message)
+
+    def _on_document_completed(self, document_id: str, num_chunks: int):
+        """Handle successful document processing completion."""
+        # Set current document
+        if self.current_document_path:
+            self.set_current_document(self.current_document_path, document_id)
+
+        # Hide progress UI after a short delay
+        QTimer.singleShot(2000, lambda: self.progress_container.setVisible(False))
+
+        # Update status
+        self.status_label.setText(
+            f"✅ Document ready: {self.current_document_path.name} ({num_chunks} chunks)"
+        )
+
+        logger.info(f"Document processing completed: {document_id} ({num_chunks} chunks)")
+
+    def _on_document_failed(self, error_message: str):
+        """Handle document processing failure."""
+        # Hide progress UI
+        self.progress_container.setVisible(False)
+
+        # Update status
+        self.status_label.setText(f"❌ Processing failed")
+
+        # Show error dialog
+        QMessageBox.warning(self, "Processing Error", error_message)
+
+        logger.error(f"Document processing failed: {error_message}")
+
+    def _cancel_document_processing(self):
+        """Cancel ongoing document processing."""
+        if self.document_processor_worker and self.document_processor_worker.isRunning():
+            # Request cancellation
+            self.document_processor_worker.cancel()
+
+            # Update UI
+            self.stage_label.setText("⚠️ Cancelling...")
+            self.cancel_processing_btn.setEnabled(False)
+
+            # Wait for worker to finish
+            QTimer.singleShot(1000, self._finalize_cancellation)
+
+            logger.info("Document processing cancellation requested")
+
+    def _finalize_cancellation(self):
+        """Finalize cancellation and clean up UI."""
+        if self.document_processor_worker:
+            self.document_processor_worker.wait(2000)
+
+        # Hide progress UI
+        self.progress_container.setVisible(False)
+
+        # Re-enable cancel button for next time
+        self.cancel_processing_btn.setEnabled(True)
+
+        # Update status
+        self.status_label.setText("⚠️ Processing cancelled by user")
+
+        logger.info("Document processing cancelled")
+
     def ask_question(self):
         """Process user question."""
         question = self.question_input.text().strip()
