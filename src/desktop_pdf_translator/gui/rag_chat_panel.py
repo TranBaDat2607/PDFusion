@@ -244,67 +244,224 @@ class RAGWorker(QThread):
 
 
 class ReferenceWidget(QFrame):
-    """Widget for displaying a single reference with click functionality."""
-    
+    """Widget for displaying a single reference with enhanced preview and visual indicators."""
+
     reference_clicked = Signal(str, dict)  # (type, reference_data)
-    
-    def __init__(self, ref_type: str, reference_data: Dict[str, Any], 
+
+    def __init__(self, ref_type: str, reference_data: Dict[str, Any],
                  reference_manager: ReferenceManager):
         super().__init__()
         self.ref_type = ref_type
         self.reference_data = reference_data
         self.reference_manager = reference_manager
-        
+
+        # Get confidence/reliability score for color coding
+        self.score = self._get_quality_score()
+
         self.setFrameStyle(QFrame.Box)
-        self.setStyleSheet("""
-            ReferenceWidget {
-                border: 1px solid #ddd;
+        self._apply_styling()
+
+        self.setup_ui()
+        self.setCursor(Qt.PointingHandCursor)
+
+        # Setup hover tooltip with context preview
+        self._setup_tooltip()
+
+    def _get_quality_score(self) -> float:
+        """Get quality score (confidence or reliability) for this reference."""
+        if self.ref_type == 'pdf':
+            return self.reference_data.get('confidence', 0.0)
+        elif self.ref_type == 'web':
+            return self.reference_data.get('reliability_score', 0.0)
+        return 0.0
+
+    def _apply_styling(self):
+        """Apply color-coded styling based on quality score."""
+        # Color coding based on score
+        if self.score >= 0.8:
+            # High quality - Green
+            border_color = "#4CAF50"
+            bg_color = "#f1f8f4"
+            hover_bg = "#e8f5e9"
+            indicator_color = "#4CAF50"
+        elif self.score >= 0.6:
+            # Medium quality - Blue
+            border_color = "#2196F3"
+            bg_color = "#f5f9ff"
+            hover_bg = "#e3f2fd"
+            indicator_color = "#2196F3"
+        elif self.score >= 0.4:
+            # Low-medium quality - Orange
+            border_color = "#FF9800"
+            bg_color = "#fff8f0"
+            hover_bg = "#fff3e0"
+            indicator_color = "#FF9800"
+        else:
+            # Low quality - Gray
+            border_color = "#9E9E9E"
+            bg_color = "#f9f9f9"
+            hover_bg = "#f0f0f0"
+            indicator_color = "#9E9E9E"
+
+        self.setStyleSheet(f"""
+            ReferenceWidget {{
+                border-left: 4px solid {indicator_color};
+                border-top: 1px solid {border_color};
+                border-right: 1px solid {border_color};
+                border-bottom: 1px solid {border_color};
                 border-radius: 5px;
                 padding: 5px;
                 margin: 2px;
-                background-color: #f9f9f9;
-            }
-            ReferenceWidget:hover {
-                background-color: #e9e9e9;
-                border-color: #007acc;
-            }
+                background-color: {bg_color};
+            }}
+            ReferenceWidget:hover {{
+                background-color: {hover_bg};
+                border-top: 2px solid {border_color};
+                border-right: 2px solid {border_color};
+                border-bottom: 2px solid {border_color};
+            }}
         """)
-        
-        self.setup_ui()
-        self.setCursor(Qt.PointingHandCursor)
-    
+
+    def _setup_tooltip(self):
+        """Setup rich tooltip with context preview."""
+        tooltip_parts = []
+
+        # Add type indicator
+        if self.ref_type == 'pdf':
+            tooltip_parts.append("📄 PDF Reference")
+        elif self.ref_type == 'web':
+            tooltip_parts.append("🌐 Web Reference")
+
+        # Add source information
+        if self.ref_type == 'pdf':
+            page = self.reference_data.get('page', 'N/A')
+            tooltip_parts.append(f"Page: {page}")
+
+            # Add confidence indicator
+            confidence = self.reference_data.get('confidence', 0.0)
+            quality_emoji = "🟢" if confidence >= 0.8 else "🟡" if confidence >= 0.6 else "🟠" if confidence >= 0.4 else "⚪"
+            tooltip_parts.append(f"{quality_emoji} Confidence: {confidence:.1%}")
+
+        elif self.ref_type == 'web':
+            url = self.reference_data.get('url', '')
+            if url:
+                # Show domain only
+                from urllib.parse import urlparse
+                domain = urlparse(url).netloc
+                tooltip_parts.append(f"Source: {domain}")
+
+            # Add reliability indicator
+            reliability = self.reference_data.get('reliability_score', 0.0)
+            quality_emoji = "🟢" if reliability >= 0.8 else "🟡" if reliability >= 0.6 else "🟠" if reliability >= 0.4 else "⚪"
+            tooltip_parts.append(f"{quality_emoji} Reliability: {reliability:.1%}")
+
+        # Add content preview (first 150 chars)
+        content = self.reference_data.get('content', '') or self.reference_data.get('text', '')
+        if content:
+            preview = content[:150].strip()
+            if len(content) > 150:
+                preview += "..."
+            tooltip_parts.append(f"\nPreview:\n{preview}")
+
+        # Add click instruction
+        tooltip_parts.append("\n💡 Click to view full reference")
+
+        # Set the tooltip
+        tooltip_text = "\n".join(tooltip_parts)
+        self.setToolTip(tooltip_text)
+
     def setup_ui(self):
-        """Setup the reference widget UI."""
-        layout = QVBoxLayout(self)
+        """Setup the reference widget UI with enhanced visual indicators."""
+        layout = QHBoxLayout(self)
         layout.setContentsMargins(8, 5, 8, 5)
-        
+        layout.setSpacing(8)
+
+        # Quality indicator icon
+        indicator_label = QLabel()
+        if self.score >= 0.8:
+            indicator_label.setText("🟢")
+        elif self.score >= 0.6:
+            indicator_label.setText("🔵")
+        elif self.score >= 0.4:
+            indicator_label.setText("🟠")
+        else:
+            indicator_label.setText("⚪")
+        indicator_label.setToolTip(f"Quality score: {self.score:.1%}")
+        layout.addWidget(indicator_label)
+
+        # Main content area
+        content_layout = QVBoxLayout()
+        content_layout.setSpacing(2)
+
         # Format reference text
         display_text = self.reference_manager.format_reference_for_display(
             self.ref_type, self.reference_data
         )
-        
-        # Main text
+
+        # Main text with truncation
         text_label = QLabel(display_text)
         text_label.setFont(QFont("Segoe UI", 9))
-        
-        # Additional info for PDF references
+        text_label.setWordWrap(True)
+        text_label.setMaximumHeight(40)  # Limit height
+        content_layout.addWidget(text_label)
+
+        # Score badge
+        score_layout = QHBoxLayout()
+        score_layout.setSpacing(5)
+
         if self.ref_type == 'pdf':
+            page = self.reference_data.get('page', 'N/A')
+            page_badge = QLabel(f"📄 Page {page}")
+            page_badge.setStyleSheet("color: #666; font-size: 8pt;")
+            score_layout.addWidget(page_badge)
+
             confidence = self.reference_data.get('confidence', 0.0)
             if confidence > 0:
-                confidence_label = QLabel(f"Confidence: {confidence:.1%}")
-                confidence_label.setStyleSheet("color: #666; font-size: 8pt;")
-                layout.addWidget(confidence_label)
-        
-        # Additional info for web references
+                confidence_badge = QLabel(f"{confidence:.0%}")
+                confidence_badge.setStyleSheet(f"""
+                    background-color: {'#4CAF50' if confidence >= 0.8 else '#2196F3' if confidence >= 0.6 else '#FF9800'};
+                    color: white;
+                    padding: 2px 6px;
+                    border-radius: 3px;
+                    font-size: 8pt;
+                    font-weight: bold;
+                """)
+                score_layout.addWidget(confidence_badge)
+
         elif self.ref_type == 'web':
+            source_type = self.reference_data.get('source_type', 'web')
+            source_badge = QLabel(f"🌐 {source_type.title()}")
+            source_badge.setStyleSheet("color: #666; font-size: 8pt;")
+            score_layout.addWidget(source_badge)
+
             reliability = self.reference_data.get('reliability_score', 0.0)
             if reliability > 0:
-                reliability_label = QLabel(f"Reliability: {reliability:.1%}")
-                reliability_label.setStyleSheet("color: #666; font-size: 8pt;")
-                layout.addWidget(reliability_label)
-        
-        layout.addWidget(text_label)
-    
+                reliability_badge = QLabel(f"{reliability:.0%}")
+                reliability_badge.setStyleSheet(f"""
+                    background-color: {'#4CAF50' if reliability >= 0.8 else '#2196F3' if reliability >= 0.6 else '#FF9800'};
+                    color: white;
+                    padding: 2px 6px;
+                    border-radius: 3px;
+                    font-size: 8pt;
+                    font-weight: bold;
+                """)
+                score_layout.addWidget(reliability_badge)
+
+        score_layout.addStretch()
+        content_layout.addLayout(score_layout)
+
+        layout.addLayout(content_layout, 1)  # Content takes most space
+
+        # Arrow indicator for click action
+        arrow_label = QLabel("→")
+        arrow_label.setStyleSheet("color: #999; font-size: 14pt; font-weight: bold;")
+        layout.addWidget(arrow_label)
+
+    def enterEvent(self, event):
+        """Handle mouse enter - could show preview popup."""
+        super().enterEvent(event)
+        # Future enhancement: Show preview dialog on hover
+
     def mousePressEvent(self, event):
         """Handle mouse click on reference."""
         if event.button() == Qt.LeftButton:
@@ -622,55 +779,269 @@ class RAGChatPanel(QWidget):
         return progress_widget
 
     def create_input_area(self) -> QWidget:
-        """Create the input area widget - compact layout."""
-        
+        """Create the input area widget with quick actions and keyboard shortcuts."""
+
         input_widget = QWidget()
         layout = QVBoxLayout(input_widget)
         layout.setContentsMargins(0, 5, 0, 0)
-        layout.setSpacing(3)
-        
+        layout.setSpacing(5)
+
+        # Quick Actions row
+        quick_actions_layout = QHBoxLayout()
+        quick_actions_layout.setSpacing(3)
+
+        quick_actions_label = QLabel("⚡ Quick:")
+        quick_actions_label.setStyleSheet("color: #666; font-size: 8pt;")
+        quick_actions_layout.addWidget(quick_actions_label)
+
+        # Quick action buttons
+        self.summarize_btn = QPushButton("📄 Summarize")
+        self.summarize_btn.setMaximumHeight(25)
+        self.summarize_btn.setToolTip("Summarize the entire document (Ctrl+1)")
+        self.summarize_btn.clicked.connect(lambda: self._use_quick_action("Summarize this document"))
+        quick_actions_layout.addWidget(self.summarize_btn)
+
+        self.key_points_btn = QPushButton("🎯 Key Points")
+        self.key_points_btn.setMaximumHeight(25)
+        self.key_points_btn.setToolTip("Extract key points from document (Ctrl+2)")
+        self.key_points_btn.clicked.connect(lambda: self._use_quick_action("What are the key points of this document?"))
+        quick_actions_layout.addWidget(self.key_points_btn)
+
+        self.explain_btn = QPushButton("💡 Explain")
+        self.explain_btn.setMaximumHeight(25)
+        self.explain_btn.setToolTip("Explain main concepts (Ctrl+3)")
+        self.explain_btn.clicked.connect(lambda: self._use_quick_action("Explain the main concepts in this document"))
+        quick_actions_layout.addWidget(self.explain_btn)
+
+        self.methods_btn = QPushButton("🔬 Methods")
+        self.methods_btn.setMaximumHeight(25)
+        self.methods_btn.setToolTip("Show methodology used")
+        self.methods_btn.clicked.connect(lambda: self._use_quick_action("What methodology is used in this document?"))
+        quick_actions_layout.addWidget(self.methods_btn)
+
+        self.results_btn = QPushButton("📊 Results")
+        self.results_btn.setMaximumHeight(25)
+        self.results_btn.setToolTip("Show main results")
+        self.results_btn.clicked.connect(lambda: self._use_quick_action("What are the main results and findings?"))
+        quick_actions_layout.addWidget(self.results_btn)
+
+        quick_actions_layout.addStretch()
+
+        layout.addLayout(quick_actions_layout)
+
         # Options row - compact
         options_layout = QHBoxLayout()
         options_layout.setSpacing(5)
-        
+
         # Web research checkbox
         self.web_research_cb = QCheckBox("🌐 Web")
         self.web_research_cb.setChecked(True)
         self.web_research_cb.setToolTip("Include information from internet in answers")
         options_layout.addWidget(self.web_research_cb)
-        
+
         # Clear button - compact
         clear_btn = QPushButton("🗑️ Clear")
         clear_btn.setMaximumWidth(80)
+        clear_btn.setToolTip("Clear chat history (Ctrl+L)")
         clear_btn.clicked.connect(self.clear_chat_history)
         options_layout.addWidget(clear_btn)
-        
+
         options_layout.addStretch()
-        
+
         layout.addLayout(options_layout)
-        
+
         # Question input - compact
         input_layout = QHBoxLayout()
         input_layout.setSpacing(5)
-        
+
         self.question_input = QLineEdit()
-        self.question_input.setPlaceholderText("Ask a question...")
+        self.question_input.setPlaceholderText("Ask a question... (Ctrl+Enter to ask, Ctrl+K to clear)")
         self.question_input.returnPressed.connect(self.ask_question)
         self.question_input.setMaximumHeight(30)
         input_layout.addWidget(self.question_input)
-        
+
         # Ask button - compact
         self.ask_button = QPushButton("📤 Ask")
         self.ask_button.clicked.connect(self.ask_question)
         self.ask_button.setDefault(True)
         self.ask_button.setMaximumWidth(80)
         self.ask_button.setMaximumHeight(30)
+        self.ask_button.setToolTip("Send question (Ctrl+Enter)")
         input_layout.addWidget(self.ask_button)
-        
+
         layout.addLayout(input_layout)
-        
+
+        # Suggested questions area (initially hidden)
+        self.suggested_questions_widget = self._create_suggested_questions_widget()
+        layout.addWidget(self.suggested_questions_widget)
+
+        # Setup keyboard shortcuts
+        self._setup_keyboard_shortcuts()
+
         return input_widget
-    
+
+    def _create_suggested_questions_widget(self) -> QWidget:
+        """Create widget for displaying suggested follow-up questions."""
+        suggested_widget = QFrame()
+        suggested_widget.setFrameStyle(QFrame.StyledPanel)
+        suggested_widget.setStyleSheet("""
+            QFrame {
+                background-color: #fff9e6;
+                border: 1px solid #ffe082;
+                border-radius: 5px;
+                padding: 5px;
+            }
+        """)
+        suggested_widget.setVisible(False)  # Hidden by default
+
+        layout = QVBoxLayout(suggested_widget)
+        layout.setSpacing(3)
+        layout.setContentsMargins(5, 5, 5, 5)
+
+        # Header
+        header_label = QLabel("💬 Suggested follow-up questions:")
+        header_label.setStyleSheet("color: #f57f17; font-weight: bold; font-size: 8pt;")
+        layout.addWidget(header_label)
+
+        # Container for suggestion buttons
+        self.suggestions_layout = QVBoxLayout()
+        self.suggestions_layout.setSpacing(2)
+        layout.addLayout(self.suggestions_layout)
+
+        return suggested_widget
+
+    def _setup_keyboard_shortcuts(self):
+        """Setup keyboard shortcuts for the chat panel."""
+        from PySide6.QtGui import QShortcut, QKeySequence
+
+        # Ctrl+Enter: Send question (alternative to Return)
+        shortcut_send = QShortcut(QKeySequence("Ctrl+Return"), self)
+        shortcut_send.activated.connect(self.ask_question)
+
+        # Ctrl+K: Clear input field
+        shortcut_clear_input = QShortcut(QKeySequence("Ctrl+K"), self)
+        shortcut_clear_input.activated.connect(lambda: self.question_input.clear())
+
+        # Ctrl+L: Clear chat history
+        shortcut_clear_history = QShortcut(QKeySequence("Ctrl+L"), self)
+        shortcut_clear_history.activated.connect(self.clear_chat_history)
+
+        # Ctrl+1-5: Quick actions
+        shortcut_1 = QShortcut(QKeySequence("Ctrl+1"), self)
+        shortcut_1.activated.connect(lambda: self._use_quick_action("Summarize this document"))
+
+        shortcut_2 = QShortcut(QKeySequence("Ctrl+2"), self)
+        shortcut_2.activated.connect(lambda: self._use_quick_action("What are the key points of this document?"))
+
+        shortcut_3 = QShortcut(QKeySequence("Ctrl+3"), self)
+        shortcut_3.activated.connect(lambda: self._use_quick_action("Explain the main concepts in this document"))
+
+        shortcut_4 = QShortcut(QKeySequence("Ctrl+4"), self)
+        shortcut_4.activated.connect(lambda: self._use_quick_action("What methodology is used in this document?"))
+
+        shortcut_5 = QShortcut(QKeySequence("Ctrl+5"), self)
+        shortcut_5.activated.connect(lambda: self._use_quick_action("What are the main results and findings?"))
+
+        logger.info("Keyboard shortcuts configured")
+
+    def _use_quick_action(self, question_template: str):
+        """
+        Use a quick action by populating the question input and optionally asking.
+
+        Args:
+            question_template: The question template to use
+        """
+        # Set the question in the input field
+        self.question_input.setText(question_template)
+
+        # Focus on the input field so user can see and edit if needed
+        self.question_input.setFocus()
+
+        # Optionally auto-send (let user review first by not auto-sending)
+        # Uncomment the next line to auto-send quick actions:
+        # self.ask_question()
+
+    def _generate_suggested_questions(self, answer_data: Dict[str, Any]) -> List[str]:
+        """
+        Generate suggested follow-up questions based on the answer.
+
+        Args:
+            answer_data: The answer data from RAG
+
+        Returns:
+            List of suggested questions
+        """
+        suggestions = []
+
+        # Get the question and answer text
+        answer_text = answer_data.get('answer', '')
+
+        # Simple template-based suggestions (could be enhanced with LLM in the future)
+        question_templates = [
+            "Can you explain this in more detail?",
+            "What are the implications of this?",
+            "How does this compare to other approaches?",
+            "What are the limitations or drawbacks?",
+            "Can you provide specific examples?",
+            "What are the practical applications?"
+        ]
+
+        # Check if answer mentions specific topics and create contextual suggestions
+        lower_answer = answer_text.lower()
+
+        if 'method' in lower_answer or 'approach' in lower_answer:
+            suggestions.append("What are the advantages of this method?")
+
+        if 'result' in lower_answer or 'finding' in lower_answer:
+            suggestions.append("What do these results mean in practice?")
+
+        if 'equation' in lower_answer or 'formula' in lower_answer:
+            suggestions.append("Can you explain the mathematical concepts?")
+
+        # Fill remaining slots with generic templates
+        while len(suggestions) < 3:
+            for template in question_templates:
+                if template not in suggestions and len(suggestions) < 3:
+                    suggestions.append(template)
+
+        return suggestions[:3]  # Return top 3
+
+    def _show_suggested_questions(self, suggestions: List[str]):
+        """
+        Display suggested follow-up questions in the UI.
+
+        Args:
+            suggestions: List of suggested questions
+        """
+        # Clear existing suggestions
+        while self.suggestions_layout.count():
+            child = self.suggestions_layout.takeAt(0)
+            if child.widget():
+                child.widget().deleteLater()
+
+        # Add new suggestion buttons
+        for i, suggestion in enumerate(suggestions):
+            btn = QPushButton(f"{i+1}. {suggestion}")
+            btn.setMaximumHeight(25)
+            btn.setStyleSheet("""
+                QPushButton {
+                    text-align: left;
+                    padding: 3px 8px;
+                    background-color: white;
+                    border: 1px solid #ffc107;
+                    border-radius: 3px;
+                }
+                QPushButton:hover {
+                    background-color: #fff9c4;
+                    border-color: #ffa000;
+                }
+            """)
+            btn.clicked.connect(lambda checked, q=suggestion: self._use_quick_action(q))
+            self.suggestions_layout.addWidget(btn)
+
+        # Show the suggestions widget
+        self.suggested_questions_widget.setVisible(True)
+
     def initialize_rag_system(self):
         """Initialize the RAG system components."""
         try:
@@ -855,20 +1226,23 @@ class RAGChatPanel(QWidget):
         question = self.question_input.text().strip()
         if not question:
             return
-        
+
         if not self.rag_chain:
             QMessageBox.warning(self, "Error", "RAG system not ready")
             return
-        
+
+        # Hide suggested questions when asking a new question
+        self.suggested_questions_widget.setVisible(False)
+
         # Add question to chat history
         self.chat_history.add_question(question)
-        
+
         # Clear input
         self.question_input.clear()
-        
+
         # Always use current document scope (no scope selection)
         document_id = self.current_document_id
-        
+
         # Start processing
         self._start_rag_processing(question, document_id, self.web_research_cb.isChecked())
     
@@ -892,22 +1266,27 @@ class RAGChatPanel(QWidget):
     
     def _handle_answer_ready(self, answer_data: Dict[str, Any]):
         """Handle when RAG processing is complete."""
-        
+
         # Add answer to chat history
         self.chat_history.add_answer(answer_data, self.reference_manager)
-        
+
+        # Generate and show suggested follow-up questions
+        suggestions = self._generate_suggested_questions(answer_data)
+        if suggestions:
+            self._show_suggested_questions(suggestions)
+
         # Re-enable input
         self.ask_button.setEnabled(True)
         self.question_input.setEnabled(True)
         self.progress_bar.setVisible(False)
-        
+
         # Update status
         processing_time = answer_data.get('processing_time', 0)
         sources_used = answer_data.get('sources_used', {})
         total_sources = sources_used.get('pdf_sources', 0) + sources_used.get('web_sources', 0)
-        
+
         self.status_label.setText(f"Completed in {processing_time:.1f}s - {total_sources} sources")
-        
+
         logger.info(f"Answer generated successfully in {processing_time:.1f}s")
     
     def _handle_error(self, error_message: str):
