@@ -402,7 +402,64 @@ class ChromaDBManager:
         except Exception as e:
             logger.error(f"Document search failed: {e}")
             return []
-    
+
+    async def get_document_chunks(self, document_id: str,
+                                  page_range: Optional[Tuple[int, int]] = None,
+                                  limit: Optional[int] = None) -> List[Dict[str, Any]]:
+        """
+        Get chunks from a specific document, optionally filtered by page range.
+
+        Args:
+            document_id: Document identifier
+            page_range: Optional tuple of (start_page, end_page) inclusive
+            limit: Maximum number of chunks to return
+
+        Returns:
+            List of chunks, sorted by page and chunk index
+        """
+        try:
+            # Get all chunks for the document
+            results = self.collection.get(
+                where={"document_id": document_id},
+                include=['documents', 'metadatas']
+            )
+
+            formatted_results = []
+            if results['documents']:
+                for i in range(len(results['documents'])):
+                    metadata = results['metadatas'][i]
+                    page = metadata.get('page', 0)
+
+                    # Filter by page range if specified
+                    if page_range:
+                        start_page, end_page = page_range
+                        if page < start_page or page > end_page:
+                            continue
+
+                    result = {
+                        'text': results['documents'][i],
+                        'metadata': metadata,
+                        'chunk_id': results['ids'][i],
+                        'similarity_score': 1.0  # Set default score for early chunks
+                    }
+                    formatted_results.append(result)
+
+            # Sort by page and chunk index
+            formatted_results.sort(key=lambda x: (
+                x['metadata'].get('page', 0),
+                x['metadata'].get('chunk_index', 0)
+            ))
+
+            # Apply limit if specified
+            if limit:
+                formatted_results = formatted_results[:limit]
+
+            return formatted_results
+
+        except Exception as e:
+            logger.error(f"Failed to get document chunks: {e}")
+            return []
+
     async def delete_document(self, document_id: str) -> bool:
         """
         Delete all chunks for a document.
@@ -470,29 +527,34 @@ class ChromaDBManager:
             return {'error': str(e)}
     
     async def hybrid_search(self, query: str, n_results: int = 5,
-                          alpha: float = 0.7) -> List[Dict[str, Any]]:
+                          alpha: float = 0.7,
+                          filter_metadata: Optional[Dict] = None) -> List[Dict[str, Any]]:
         """
         Perform hybrid search combining semantic and keyword matching.
-        
+
         Args:
             query: Search query
             n_results: Number of results to return
             alpha: Weight for semantic search (1-alpha for keyword search)
-            
+            filter_metadata: Optional metadata filters (e.g., {"document_id": "123"})
+
         Returns:
             List of ranked results
         """
         try:
-            # Semantic search
-            semantic_results = await self.search_similar(query, n_results * 2)
-            
+            # Semantic search with filter
+            semantic_results = await self.search_similar(query, n_results * 2, filter_metadata=filter_metadata)
+
             # Simple keyword search (can be enhanced with BM25)
             keyword_results = []
             query_words = query.lower().split()
-            
-            # Get all documents for keyword matching
-            all_results = self.collection.get(include=['documents', 'metadatas'])
-            
+
+            # Get all documents for keyword matching with filter
+            all_results = self.collection.get(
+                where=filter_metadata,
+                include=['documents', 'metadatas']
+            )
+
             if all_results['documents']:
                 for i, doc in enumerate(all_results['documents']):
                     doc_lower = doc.lower()

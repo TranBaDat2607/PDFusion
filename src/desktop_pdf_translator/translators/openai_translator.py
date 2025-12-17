@@ -118,7 +118,7 @@ class OpenAITranslator(BaseTranslator):
         
         # Create system prompt with Vietnamese optimization
         if self.lang_out == "vi":
-            system_prompt = f"""You are a professional translator specializing in Vietnamese language. 
+            system_prompt = f"""You are a professional translator specializing in Vietnamese language.
 Translate the given text from {source_lang} to {target_lang} with the following guidelines:
 
 1. Maintain natural Vietnamese syntax and grammar
@@ -131,7 +131,7 @@ Translate the given text from {source_lang} to {target_lang} with the following 
 
 Translate ONLY the text content. Do not add explanations, notes, or commentary."""
         else:
-            system_prompt = f"""You are a professional translator. 
+            system_prompt = f"""You are a professional translator.
 Translate the given text from {source_lang} to {target_lang} while:
 
 1. Maintaining the original meaning and context

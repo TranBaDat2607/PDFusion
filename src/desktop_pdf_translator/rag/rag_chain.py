@@ -62,19 +62,19 @@ class EnhancedRAGChain:
                             max_web_sources: int = 5) -> Dict[str, Any]:
         """
         Answer a question using PDF knowledge and web research.
-        
+
         Args:
             question: User's question
             document_id: Specific document to search (optional)
             include_web_research: Whether to include web research
             max_pdf_sources: Maximum PDF sources to retrieve
             max_web_sources: Maximum web sources to retrieve
-            
+
         Returns:
             Comprehensive answer with references
         """
         logger.info(f"Processing question: {question[:100]}...")
-        
+
         start_time = datetime.now()
         
         try:
@@ -92,7 +92,7 @@ class EnhancedRAGChain:
             
             # Step 3: Generate comprehensive answer
             answer = await self._generate_answer(question, pdf_sources, web_sources)
-            
+
             # Step 4: Create references
             pdf_references = self._create_pdf_references(pdf_sources)
             web_references = self._create_web_references(web_sources)
@@ -101,7 +101,7 @@ class EnhancedRAGChain:
             quality_metrics = self._calculate_quality_metrics(pdf_sources, web_sources)
             
             processing_time = (datetime.now() - start_time).total_seconds()
-            
+
             result = {
                 'answer': answer,
                 'pdf_references': pdf_references,
@@ -114,14 +114,14 @@ class EnhancedRAGChain:
                 },
                 'timestamp': datetime.now().isoformat()
             }
-            
+
             logger.info(f"Question answered successfully in {processing_time:.2f}s")
             return result
             
         except Exception as e:
             logger.error(f"Failed to answer question: {e}")
             return {
-                'answer': f"Xin lỗi, tôi không thể trả lời câu hỏi này do lỗi: {str(e)}",
+                'answer': f"Sorry, I cannot answer this question due to an error: {str(e)}",
                 'pdf_references': [],
                 'web_references': [],
                 'quality_metrics': {'confidence': 0.0, 'completeness': 0.0},
@@ -131,22 +131,50 @@ class EnhancedRAGChain:
     async def _retrieve_pdf_knowledge(self, question: str, document_id: Optional[str],
                                     max_sources: int) -> List[Dict[str, Any]]:
         """Retrieve relevant knowledge from PDF documents."""
-        
+
         try:
             if document_id:
-                # Search within specific document
                 filter_metadata = {"document_id": document_id}
             else:
-                # Search across all documents
                 filter_metadata = None
-            
-            # Use hybrid search for better results
-            results = await self.vector_store.hybrid_search(
+
+            # Stage 0: HyDE - Generate hypothetical answer
+            hypothetical_answer = await self._generate_hypothetical_answer(question)
+
+            # Stage 1: Dual retrieval
+            # Search with original question
+            results_original = await self.vector_store.hybrid_search(
                 query=question,
-                n_results=max_sources,
-                alpha=0.7  # Weight semantic search higher
+                n_results=max_sources * 2,
+                alpha=0.5,
+                filter_metadata=filter_metadata
             )
-            
+
+            # Search with hypothetical answer (often better matches!)
+            results_hyde = await self.vector_store.hybrid_search(
+                query=hypothetical_answer,
+                n_results=max_sources * 2,
+                alpha=0.7,  # Higher semantic weight for HyDE
+                filter_metadata=filter_metadata
+            )
+
+            # Combine and deduplicate results
+            candidate_results = self._merge_search_results(results_original, results_hyde, max_sources * 3)
+
+            # Stage 2: Add surrounding context to top candidates
+            enriched_results = await self._add_surrounding_context(
+                candidate_results[:max_sources * 2],
+                document_id,
+                context_window=1  # Include 1 chunk before/after
+            )
+
+            # Stage 3: Re-rank results
+            results = await self._rerank_results(
+                question,
+                enriched_results,
+                top_k=max_sources
+            )
+
             logger.info(f"Retrieved {len(results)} PDF sources")
             return results
             
@@ -154,9 +182,247 @@ class EnhancedRAGChain:
             logger.error(f"PDF knowledge retrieval failed: {e}")
             return []
     
+    async def _generate_hypothetical_answer(self, question: str) -> str:
+        """
+        Generate a hypothetical answer using LLM (HyDE technique).
+        This answer is used for retrieval - answers match documents better than questions.
+
+        Args:
+            question: User's question
+
+        Returns:
+            Hypothetical answer text
+        """
+        try:
+            if not self.translator:
+                return question  # Fallback to original question
+
+            hyde_prompt = f"""Generate a brief hypothetical answer to this question. The answer should be written as if it came from a technical document or research paper. Keep it under 100 words.
+
+Question: {question}
+
+Hypothetical answer:"""
+
+            # Use the translator's LLM
+            if hasattr(self.translator, 'client') and hasattr(self.translator.client, 'chat'):
+                response = self.translator.client.chat.completions.create(
+                    model=self.translator.model,
+                    messages=[
+                        {"role": "system", "content": "You generate hypothetical answers for document retrieval."},
+                        {"role": "user", "content": hyde_prompt}
+                    ],
+                    max_tokens=150,
+                    temperature=0.3
+                )
+                return response.choices[0].message.content.strip()
+            elif hasattr(self.translator, 'model'):
+                response = self.translator.model.generate_content(hyde_prompt)
+                return response.text.strip()
+            else:
+                return question
+
+        except Exception as e:
+            logger.error(f"HyDE generation failed: {e}")
+            return question  # Fallback to original question
+
+    def _merge_search_results(self, results1: List[Dict[str, Any]],
+                              results2: List[Dict[str, Any]],
+                              max_results: int) -> List[Dict[str, Any]]:
+        """
+        Merge and deduplicate results from multiple searches.
+
+        Args:
+            results1: First set of results
+            results2: Second set of results
+            max_results: Maximum number to return
+
+        Returns:
+            Merged and deduplicated results
+        """
+        seen_ids = set()
+        merged = []
+
+        # Add all results, deduplicating by chunk_id
+        for result in results1 + results2:
+            chunk_id = result.get('chunk_id')
+            if chunk_id and chunk_id not in seen_ids:
+                seen_ids.add(chunk_id)
+                merged.append(result)
+
+        # Sort by score (prefer higher scores)
+        merged.sort(key=lambda x: x.get('final_score', x.get('similarity_score', 0)), reverse=True)
+
+        return merged[:max_results]
+
+    async def _add_surrounding_context(self, chunks: List[Dict[str, Any]],
+                                      document_id: Optional[str],
+                                      context_window: int = 1) -> List[Dict[str, Any]]:
+        """
+        Add surrounding chunks to provide better context.
+
+        Args:
+            chunks: List of retrieved chunks
+            document_id: Document ID to search within
+            context_window: Number of chunks before/after to include
+
+        Returns:
+            Chunks with added surrounding context
+        """
+        if not document_id or not chunks:
+            return chunks
+
+        enriched_chunks = []
+
+        for chunk in chunks:
+            metadata = chunk.get('metadata', {})
+            page = metadata.get('page', 0)
+            chunk_index = metadata.get('chunk_index', 0)
+
+            # Get surrounding chunks from the same page
+            surrounding = await self.vector_store.get_document_chunks(
+                document_id=document_id,
+                page_range=(max(0, page - 1), page + 1),  # Current and nearby pages
+                limit=None
+            )
+
+            # Find chunks around the current chunk
+            context_before = []
+            context_after = []
+
+            for surr_chunk in surrounding:
+                surr_meta = surr_chunk.get('metadata', {})
+                surr_page = surr_meta.get('page', 0)
+                surr_index = surr_meta.get('chunk_index', 0)
+
+                # Same page, chunk before
+                if surr_page == page and surr_index < chunk_index and chunk_index - surr_index <= context_window:
+                    context_before.append(surr_chunk['text'])
+
+                # Same page, chunk after
+                if surr_page == page and surr_index > chunk_index and surr_index - chunk_index <= context_window:
+                    context_after.append(surr_chunk['text'])
+
+            # Build enriched text with context
+            enriched_text_parts = []
+            if context_before:
+                enriched_text_parts.append("...\n" + "\n".join(context_before) + "\n")
+            enriched_text_parts.append(chunk['text'])
+            if context_after:
+                enriched_text_parts.append("\n" + "\n".join(context_after) + "\n...")
+
+            enriched_chunk = chunk.copy()
+            enriched_chunk['text'] = "".join(enriched_text_parts)
+            enriched_chunk['original_text'] = chunk['text']  # Keep original
+            enriched_chunks.append(enriched_chunk)
+
+        return enriched_chunks
+
+    async def _rerank_results(self, question: str, chunks: List[Dict[str, Any]],
+                             top_k: int = 5) -> List[Dict[str, Any]]:
+        """
+        Re-rank results using multiple signals for better relevance.
+
+        Args:
+            question: User's question
+            chunks: Retrieved chunks to re-rank
+            top_k: Number of top results to return
+
+        Returns:
+            Re-ranked chunks
+        """
+        if not chunks:
+            return []
+
+        question_lower = question.lower()
+        question_words = set(question_lower.split())
+
+        # Detect if this is a metadata query (title, author, abstract, etc.)
+        metadata_keywords = {
+            'en': ['title', 'author', 'abstract', 'summary', 'introduction', 'conclusion'],
+            'vi': ['tiêu đề', 'tác giả', 'tóm tắt', 'giới thiệu', 'kết luận']
+        }
+        is_metadata_query = any(
+            kw in question_lower
+            for keywords in metadata_keywords.values()
+            for kw in keywords
+        )
+
+        # Calculate re-ranking score for each chunk
+        for chunk in chunks:
+            text_lower = chunk.get('original_text', chunk.get('text', '')).lower()
+            metadata = chunk.get('metadata', {})
+            page = metadata.get('page', 100)
+            # Note: stored as 'chunk_type' in ChromaDB
+            section_type = metadata.get('chunk_type', metadata.get('section_type', 'content'))
+            chunk_index = metadata.get('chunk_index', 100)
+
+            # Component scores
+            base_score = chunk.get('final_score', chunk.get('similarity_score', 0))
+
+            # Keyword density score
+            words_in_text = set(text_lower.split())
+            keyword_matches = len(question_words & words_in_text)
+            keyword_density = keyword_matches / max(len(question_words), 1)
+
+            # Page position score (earlier pages often more important)
+            page_score = 1.0 / (1.0 + page * 0.1)  # Decay with page number
+
+            # Chunk index score (earlier chunks more important)
+            index_score = 1.0 / (1.0 + chunk_index * 0.05)
+
+            # Length score (prefer moderate-length chunks)
+            text_length = len(chunk.get('text', ''))
+            length_score = min(text_length / 500, 1.0)  # Normalize to 500 chars
+
+            # Section type score (CRITICAL for metadata queries)
+            section_score = 0.0
+            if is_metadata_query:
+                if section_type == 'title':
+                    section_score = 1.0  # Maximum boost for title chunks
+                elif section_type == 'header':
+                    section_score = 0.8  # High boost for headers
+                elif section_type == 'abstract':
+                    section_score = 0.9  # Very high for abstract
+            else:
+                # For content queries, prefer content sections
+                if section_type == 'content':
+                    section_score = 0.3
+
+            # Combine scores with adaptive weights
+            if is_metadata_query:
+                # For metadata queries, heavily weight section type and position
+                rerank_score = (
+                    0.15 * base_score +          # Lower weight on semantic
+                    0.05 * keyword_density +     # Lower weight on keywords
+                    0.2 * page_score +           # Important: early pages
+                    0.2 * index_score +          # Important: early chunks
+                    0.1 * length_score +         # Some weight on length
+                    0.3 * section_score          # CRITICAL: section type gets highest weight!
+                )
+            else:
+                # For content queries, standard weighting
+                rerank_score = (
+                    0.4 * base_score +           # Original search score
+                    0.3 * keyword_density +      # Keyword matching
+                    0.15 * page_score +          # Page position
+                    0.05 * index_score +         # Chunk position
+                    0.05 * length_score +        # Content length
+                    0.05 * section_score         # Section type bonus
+                )
+
+            chunk['rerank_score'] = rerank_score
+            chunk['final_score'] = rerank_score  # Update final score
+            chunk['is_metadata_query'] = is_metadata_query
+
+        # Sort by rerank score
+        chunks.sort(key=lambda x: x.get('rerank_score', 0), reverse=True)
+
+        # Return top k
+        return chunks[:top_k]
+
     def _extract_pdf_context(self, pdf_sources: List[Dict[str, Any]]) -> str:
         """Extract context from PDF sources for web research."""
-        
+
         if not pdf_sources:
             return ""
         
@@ -172,26 +438,26 @@ class EnhancedRAGChain:
     async def _generate_answer(self, question: str, pdf_sources: List[Dict[str, Any]],
                              web_sources: List[WebSource]) -> str:
         """Generate comprehensive answer using all available sources."""
-        
+
         # Prepare context from all sources
         context_parts = []
-        
+
         # Add PDF context
         if pdf_sources:
-            context_parts.append("=== THÔNG TIN TỪ TÀI LIỆU PDF ===")
+            context_parts.append("=== INFORMATION FROM PDF DOCUMENTS ===")
             for i, source in enumerate(pdf_sources[:3]):
                 text = source.get('text', '')
                 page = source.get('metadata', {}).get('page', 'N/A')
-                context_parts.append(f"[Nguồn PDF {i+1}, Trang {page}]: {text[:300]}...")
-        
+                context_parts.append(f"[PDF Source {i+1}, Page {page}]: {text[:300]}...")
+
         # Add web context
         if web_sources:
-            context_parts.append("\n=== THÔNG TIN TỪ INTERNET ===")
+            context_parts.append("\n=== INFORMATION FROM INTERNET ===")
             for i, source in enumerate(web_sources[:3]):
-                context_parts.append(f"[Nguồn Web {i+1} - {source.source_type}]: {source.content[:300]}...")
-        
+                context_parts.append(f"[Web Source {i+1} - {source.source_type}]: {source.content[:300]}...")
+
         full_context = '\n'.join(context_parts)
-        
+
         # Create prompt for answer generation
         prompt = self._create_answer_prompt(question, full_context, pdf_sources, web_sources)
         
@@ -215,28 +481,24 @@ class EnhancedRAGChain:
         """Create a comprehensive prompt for answer generation."""
         
         prompt = f"""
-Bạn là một trợ lý AI thông minh, chuyên trả lời câu hỏi dựa trên tài liệu PDF đã dịch và thông tin từ internet.
+You are an intelligent AI assistant specialized in answering questions based on translated PDF documents and information from the internet.
 
-NHIỆM VỤ:
-- Trả lời câu hỏi một cách toàn diện và chính xác
-- Kết hợp thông tin từ cả PDF và internet
-- Ưu tiên thông tin từ PDF (nguồn chính)
-- Bổ sung thông tin từ internet để làm rõ hoặc mở rộng
-- Trả lời bằng tiếng Việt
+TASK:
+- Answer questions comprehensively and accurately
+- Combine information from both PDF and internet sources
+- Prioritize information from PDF (primary source)
+- Supplement with internet information to clarify or expand
+- Answer in Vietnamese
 
-CÂU HỎI: {question}
+QUESTION: {question}
 
-THÔNG TIN CÓ SẴN:
+AVAILABLE INFORMATION:
 {context}
 
-YÊU CẦU TRẢ LỜI:
-1. Trả lời trực tiếp câu hỏi
-2. Giải thích chi tiết dựa trên nguồn thông tin
-3. Nêu rõ khi thông tin đến từ PDF vs internet
-4. Đưa ra kết luận hoặc tóm tắt
-5. Sử dụng ngôn ngữ rõ ràng, dễ hiểu
+ANSWER REQUIREMENTS:
+Answer the question concisely, accurately, and completely. Provide only the final answer without dividing into multiple sections or detailed explanations. If information comes from the internet (not in the PDF), clearly state the source.
 
-TRẢ LỜI:
+ANSWER:
 """
         
         return prompt
@@ -254,7 +516,7 @@ TRẢ LỜI:
                     response = self.translator.client.chat.completions.create(
                         model=self.translator.model,
                         messages=[
-                            {"role": "system", "content": "Bạn là trợ lý AI thông minh, trả lời câu hỏi dựa trên tài liệu."},
+                            {"role": "system", "content": "You are an intelligent AI assistant that answers questions based on documents."},
                             {"role": "user", "content": prompt}
                         ],
                         max_tokens=1000,
@@ -268,7 +530,7 @@ TRẢ LỜI:
                     return response.text
             
             # Fallback
-            return "Không thể tạo câu trả lời với LLM."
+            return "Unable to generate answer with LLM."
             
         except Exception as e:
             logger.error(f"LLM generation failed: {e}")
@@ -281,27 +543,27 @@ TRẢ LỜI:
         answer_parts = []
         
         # Introduction
-        answer_parts.append(f"Dựa trên thông tin có sẵn, tôi sẽ trả lời câu hỏi: '{question}'")
+        answer_parts.append(f"Based on available information, I will answer the question: '{question}'")
         
         # PDF information
         if pdf_sources:
-            answer_parts.append("\n**Thông tin từ tài liệu PDF:**")
+            answer_parts.append("\n**Information from PDF documents:**")
             for i, source in enumerate(pdf_sources[:2]):
                 text = source.get('text', '')
                 page = source.get('metadata', {}).get('page', 'N/A')
-                answer_parts.append(f"- Trang {page}: {text[:200]}...")
-        
+                answer_parts.append(f"- Page {page}: {text[:200]}...")
+
         # Web information
         if web_sources:
-            answer_parts.append("\n**Thông tin bổ sung từ internet:**")
+            answer_parts.append("\n**Additional information from internet:**")
             for i, source in enumerate(web_sources[:2]):
                 answer_parts.append(f"- {source.source_type.title()}: {source.snippet}")
-        
+
         # Conclusion
         if pdf_sources or web_sources:
-            answer_parts.append("\n**Kết luận:** Thông tin trên cung cấp cái nhìn tổng quan về câu hỏi của bạn. Để có thông tin chi tiết hơn, vui lòng tham khảo các nguồn được trích dẫn.")
+            answer_parts.append("\n**Conclusion:** The above information provides an overview of your question. For more details, please refer to the cited sources.")
         else:
-            answer_parts.append("\nXin lỗi, tôi không tìm thấy thông tin liên quan để trả lời câu hỏi này.")
+            answer_parts.append("\nSorry, I could not find relevant information to answer this question.")
         
         return '\n'.join(answer_parts)
     
@@ -363,11 +625,15 @@ TRẢ LỜI:
     def _calculate_quality_metrics(self, pdf_sources: List[Dict[str, Any]],
                                  web_sources: List[WebSource]) -> Dict[str, float]:
         """Calculate quality metrics for the answer."""
-        
+
         # Confidence based on source quality and quantity
         pdf_confidence = 0.0
         if pdf_sources:
-            pdf_scores = [s.get('similarity_score', 0.0) for s in pdf_sources]
+            # Use rerank_score (if available) or final_score, fallback to similarity_score
+            pdf_scores = [
+                s.get('rerank_score', s.get('final_score', s.get('similarity_score', 0.0)))
+                for s in pdf_sources
+            ]
             pdf_confidence = sum(pdf_scores) / len(pdf_scores)
         
         web_confidence = 0.0
@@ -384,17 +650,9 @@ TRẢ LỜI:
             overall_confidence = web_confidence * 0.6  # Lower confidence for web-only
         else:
             overall_confidence = 0.0
-        
-        # Completeness based on source diversity
-        completeness = 0.0
-        if pdf_sources:
-            completeness += 0.6
-        if web_sources:
-            completeness += 0.4
-        
+
         return {
             'confidence': min(overall_confidence, 1.0),
-            'completeness': min(completeness, 1.0),
             'pdf_confidence': pdf_confidence,
             'web_confidence': web_confidence,
             'total_sources': len(pdf_sources) + len(web_sources)
@@ -408,7 +666,7 @@ TRẢ LỜI:
             chunks = await self.vector_store.search_by_document(document_id)
             
             if not chunks:
-                return {'summary': 'Không tìm thấy tài liệu.', 'error': 'Document not found'}
+                return {'summary': 'Document not found.', 'error': 'Document not found'}
             
             # Extract key information
             total_pages = max(chunk['metadata'].get('page', 0) for chunk in chunks) + 1
@@ -425,18 +683,18 @@ TRẢ LỜI:
             
             # Generate structured summary
             summary = f"""
-**Tóm tắt tài liệu:**
+**Document Summary:**
 
-**Thông tin cơ bản:**
-- Tổng số trang: {total_pages}
-- Có công thức toán học: {'Có' if has_equations else 'Không'}
-- Có bảng biểu: {'Có' if has_tables else 'Không'}
-- Có hình ảnh/đồ thị: {'Có' if has_figures else 'Không'}
+**Basic Information:**
+- Total pages: {total_pages}
+- Has mathematical formulas: {'Yes' if has_equations else 'No'}
+- Has tables: {'Yes' if has_tables else 'No'}
+- Has figures/charts: {'Yes' if has_figures else 'No'}
 
-**Nội dung chính:**
+**Main Content:**
 {summary_content[:500]}...
 
-**Các chủ đề chính:** (Được trích xuất từ nội dung tài liệu)
+**Main Topics:** (Extracted from document content)
 """
             
             return {
@@ -453,4 +711,4 @@ TRẢ LỜI:
             
         except Exception as e:
             logger.error(f"Document summarization failed: {e}")
-            return {'summary': f'Lỗi khi tóm tắt tài liệu: {str(e)}', 'error': str(e)}
+            return {'summary': f'Error summarizing document: {str(e)}', 'error': str(e)}
