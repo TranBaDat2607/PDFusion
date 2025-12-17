@@ -11,13 +11,18 @@ from typing import Optional, Dict, Any, List
 from datetime import datetime
 
 from PySide6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QTextEdit, QLineEdit, 
+    QWidget, QVBoxLayout, QHBoxLayout, QTextEdit, QLineEdit,
     QPushButton, QLabel, QScrollArea, QFrame, QSplitter,
     QGroupBox, QProgressBar, QComboBox, QCheckBox, QSpinBox,
     QMessageBox, QMenu
 )
 from PySide6.QtCore import Qt, QThread, Signal, QTimer
 from PySide6.QtGui import QFont, QTextCursor, QTextCharFormat, QColor, QPixmap, QIcon, QAction
+
+
+import qtawesome as qta
+QTAWESOME_AVAILABLE = True
+
 
 from ..rag import (
     ScientificPDFProcessor, ChromaDBManager, 
@@ -215,13 +220,15 @@ class RAGWorker(QThread):
     def run(self):
         """Run RAG processing in background thread."""
         try:
-            self.progress_updated.emit("Processing question...", 20)
+            # Stage 0: HyDE generation
+            self.progress_updated.emit("Generating search queries...", 10)
 
             # Create event loop for async operations
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
 
-            self.progress_updated.emit("Searching in PDF...", 40)
+            # Stage 1: Searching
+            self.progress_updated.emit("Searching in PDF...", 30)
 
             # Process the question
             result = loop.run_until_complete(
@@ -328,9 +335,9 @@ class ReferenceWidget(QFrame):
 
         # Add type indicator
         if self.ref_type == 'pdf':
-            tooltip_parts.append("📄 PDF Reference")
+            tooltip_parts.append("PDF Reference")
         elif self.ref_type == 'web':
-            tooltip_parts.append("🌐 Web Reference")
+            tooltip_parts.append("Web Reference")
 
         # Add source information
         if self.ref_type == 'pdf':
@@ -339,8 +346,7 @@ class ReferenceWidget(QFrame):
 
             # Add confidence indicator
             confidence = self.reference_data.get('confidence', 0.0)
-            quality_emoji = "🟢" if confidence >= 0.8 else "🟡" if confidence >= 0.6 else "🟠" if confidence >= 0.4 else "⚪"
-            tooltip_parts.append(f"{quality_emoji} Confidence: {confidence:.1%}")
+            tooltip_parts.append(f"Confidence: {confidence:.1%}")
 
         elif self.ref_type == 'web':
             url = self.reference_data.get('url', '')
@@ -352,19 +358,18 @@ class ReferenceWidget(QFrame):
 
             # Add reliability indicator
             reliability = self.reference_data.get('reliability_score', 0.0)
-            quality_emoji = "🟢" if reliability >= 0.8 else "🟡" if reliability >= 0.6 else "🟠" if reliability >= 0.4 else "⚪"
-            tooltip_parts.append(f"{quality_emoji} Reliability: {reliability:.1%}")
+            tooltip_parts.append(f"Reliability: {reliability:.1%}")
 
-        # Add content preview (first 150 chars)
+        # Add content preview (shorter - first 80 chars)
         content = self.reference_data.get('content', '') or self.reference_data.get('text', '')
         if content:
-            preview = content[:150].strip()
-            if len(content) > 150:
+            preview = content[:80].strip()
+            if len(content) > 80:
                 preview += "..."
-            tooltip_parts.append(f"\nPreview:\n{preview}")
+            tooltip_parts.append(f"\n{preview}")
 
         # Add click instruction
-        tooltip_parts.append("\n💡 Click to view full reference")
+        tooltip_parts.append("\nClick for details")
 
         # Set the tooltip
         tooltip_text = "\n".join(tooltip_parts)
@@ -376,18 +381,7 @@ class ReferenceWidget(QFrame):
         layout.setContentsMargins(8, 5, 8, 5)
         layout.setSpacing(8)
 
-        # Quality indicator icon
-        indicator_label = QLabel()
-        if self.score >= 0.8:
-            indicator_label.setText("🟢")
-        elif self.score >= 0.6:
-            indicator_label.setText("🔵")
-        elif self.score >= 0.4:
-            indicator_label.setText("🟠")
-        else:
-            indicator_label.setText("⚪")
-        indicator_label.setToolTip(f"Quality score: {self.score:.1%}")
-        layout.addWidget(indicator_label)
+        # Simplified quality indicator - removed emoji, keep just the badge below
 
         # Main content area
         content_layout = QVBoxLayout()
@@ -398,54 +392,54 @@ class ReferenceWidget(QFrame):
             self.ref_type, self.reference_data
         )
 
-        # Main text with truncation
+        # Main text with better height limit
         text_label = QLabel(display_text)
         text_label.setFont(QFont("Segoe UI", 9))
         text_label.setWordWrap(True)
-        text_label.setMaximumHeight(40)  # Limit height
+        text_label.setMaximumHeight(80)  # Increased from 40 to 80
         content_layout.addWidget(text_label)
 
-        # Score badge
+        # Simplified score badge - single combined indicator
         score_layout = QHBoxLayout()
         score_layout.setSpacing(5)
 
         if self.ref_type == 'pdf':
             page = self.reference_data.get('page', 'N/A')
-            page_badge = QLabel(f"📄 Page {page}")
-            page_badge.setStyleSheet("color: #666; font-size: 8pt;")
-            score_layout.addWidget(page_badge)
-
             confidence = self.reference_data.get('confidence', 0.0)
-            if confidence > 0:
-                confidence_badge = QLabel(f"{confidence:.0%}")
-                confidence_badge.setStyleSheet(f"""
-                    background-color: {'#4CAF50' if confidence >= 0.8 else '#2196F3' if confidence >= 0.6 else '#FF9800'};
-                    color: white;
-                    padding: 2px 6px;
-                    border-radius: 3px;
-                    font-size: 8pt;
-                    font-weight: bold;
-                """)
-                score_layout.addWidget(confidence_badge)
+
+            # Combined page + confidence badge
+            badge_text = f"Page {page} • {confidence:.0%}"
+            badge_color = '#4CAF50' if confidence >= 0.7 else '#2196F3' if confidence >= 0.5 else '#FF9800'
+
+            combined_badge = QLabel(badge_text)
+            combined_badge.setStyleSheet(f"""
+                background-color: {badge_color};
+                color: white;
+                padding: 2px 8px;
+                border-radius: 3px;
+                font-size: 8pt;
+                font-weight: bold;
+            """)
+            score_layout.addWidget(combined_badge)
 
         elif self.ref_type == 'web':
             source_type = self.reference_data.get('source_type', 'web')
-            source_badge = QLabel(f"🌐 {source_type.title()}")
-            source_badge.setStyleSheet("color: #666; font-size: 8pt;")
-            score_layout.addWidget(source_badge)
-
             reliability = self.reference_data.get('reliability_score', 0.0)
-            if reliability > 0:
-                reliability_badge = QLabel(f"{reliability:.0%}")
-                reliability_badge.setStyleSheet(f"""
-                    background-color: {'#4CAF50' if reliability >= 0.8 else '#2196F3' if reliability >= 0.6 else '#FF9800'};
-                    color: white;
-                    padding: 2px 6px;
-                    border-radius: 3px;
-                    font-size: 8pt;
-                    font-weight: bold;
-                """)
-                score_layout.addWidget(reliability_badge)
+
+            # Combined source + reliability badge
+            badge_text = f"{source_type.title()} • {reliability:.0%}"
+            badge_color = '#4CAF50' if reliability >= 0.7 else '#2196F3' if reliability >= 0.5 else '#FF9800'
+
+            combined_badge = QLabel(badge_text)
+            combined_badge.setStyleSheet(f"""
+                background-color: {badge_color};
+                color: white;
+                padding: 2px 8px;
+                border-radius: 3px;
+                font-size: 8pt;
+                font-weight: bold;
+            """)
+            score_layout.addWidget(combined_badge)
 
         score_layout.addStretch()
         content_layout.addLayout(score_layout)
@@ -489,7 +483,11 @@ class ChatHistoryWidget(QScrollArea):
     
     def add_question(self, question: str):
         """Add a user question to the chat history."""
-        
+
+        # Hide empty state when first question is added
+        if hasattr(self.parent(), 'empty_state_label'):
+            self.parent().empty_state_label.setVisible(False)
+
         question_frame = QFrame()
         question_frame.setStyleSheet("""
             QFrame {
@@ -503,8 +501,9 @@ class ChatHistoryWidget(QScrollArea):
         layout = QVBoxLayout(question_frame)
         
         # Question header
-        header = QLabel("❓ Question:")
+        header = QLabel("Question:")
         header.setFont(QFont("Segoe UI", 9, QFont.Bold))
+        header.setStyleSheet("color: #2196F3;")
         layout.addWidget(header)
         
         # Question text
@@ -535,16 +534,17 @@ class ChatHistoryWidget(QScrollArea):
         layout = QVBoxLayout(answer_frame)
         
         # Answer header
-        header = QLabel("🤖 Answer:")
+        header = QLabel("Answer:")
         header.setFont(QFont("Segoe UI", 9, QFont.Bold))
+        header.setStyleSheet("color: #4CAF50;")
         layout.addWidget(header)
         
-        # Answer text
-        answer_text = QTextEdit()
-        answer_text.setPlainText(answer_data.get('answer', ''))
-        answer_text.setReadOnly(True)
-        answer_text.setMaximumHeight(200)
+        # Answer text - using QLabel for read-only content (lighter than QTextEdit)
+        answer_text = QLabel(answer_data.get('answer', ''))
+        answer_text.setWordWrap(True)
+        answer_text.setTextInteractionFlags(Qt.TextSelectableByMouse)
         answer_text.setFont(QFont("Segoe UI", 9))
+        answer_text.setStyleSheet("padding: 5px;")
         layout.addWidget(answer_text)
         
         # References section
@@ -552,24 +552,26 @@ class ChatHistoryWidget(QScrollArea):
         web_refs = answer_data.get('web_references', [])
         
         if pdf_refs or web_refs:
-            refs_group = QGroupBox("📚 References:")
+            refs_group = QGroupBox("References:")
             refs_layout = QVBoxLayout(refs_group)
-            
+
             # PDF references
             if pdf_refs:
-                pdf_label = QLabel("📄 PDF Sources:")
+                pdf_label = QLabel("PDF Sources:")
                 pdf_label.setFont(QFont("Segoe UI", 8, QFont.Bold))
+                pdf_label.setStyleSheet("color: #2196F3;")
                 refs_layout.addWidget(pdf_label)
-                
+
                 for ref_data in pdf_refs[:3]:  # Show top 3 PDF refs
                     ref_widget = ReferenceWidget('pdf', ref_data, reference_manager)
                     ref_widget.reference_clicked.connect(self._handle_reference_click)
                     refs_layout.addWidget(ref_widget)
-            
+
             # Web references
             if web_refs:
-                web_label = QLabel("🌐 Web Sources:")
+                web_label = QLabel("Web Sources:")
                 web_label.setFont(QFont("Segoe UI", 8, QFont.Bold))
+                web_label.setStyleSheet("color: #FF9800;")
                 refs_layout.addWidget(web_label)
                 
                 for ref_data in web_refs[:3]:  # Show top 3 web refs
@@ -583,13 +585,20 @@ class ChatHistoryWidget(QScrollArea):
         quality = answer_data.get('quality_metrics', {})
         if quality:
             confidence = quality.get('confidence', 0.0)
-            completeness = quality.get('completeness', 0.0)
-            
-            metrics_label = QLabel(
-                f"📊 Quality - Confidence: {confidence:.1%}, "
-                f"Completeness: {completeness:.1%}"
-            )
-            metrics_label.setStyleSheet("color: #666; font-size: 8pt;")
+
+            # Icon-based confidence indicator
+            if confidence >= 0.7:
+                conf_icon = "✓✓✓" if not QTAWESOME_AVAILABLE else ""
+                conf_color = "#4CAF50"
+            elif confidence >= 0.5:
+                conf_icon = "✓✓" if not QTAWESOME_AVAILABLE else ""
+                conf_color = "#2196F3"
+            else:
+                conf_icon = "✓" if not QTAWESOME_AVAILABLE else ""
+                conf_color = "#FF9800"
+
+            metrics_label = QLabel(f"{conf_icon} Confidence: {confidence:.1%}")
+            metrics_label.setStyleSheet(f"color: {conf_color}; font-size: 8pt; font-weight: bold;")
             layout.addWidget(metrics_label)
         
         self.content_layout.addWidget(answer_frame)
@@ -613,6 +622,10 @@ class ChatHistoryWidget(QScrollArea):
             widget.deleteLater()
         self.chat_items.clear()
 
+        # Show empty state again
+        if hasattr(self.parent(), 'empty_state_label'):
+            self.parent().empty_state_label.setVisible(True)
+
 
 class RAGChatPanel(QWidget):
     """
@@ -628,13 +641,16 @@ class RAGChatPanel(QWidget):
         super().__init__()
         self.pdf_viewer = pdf_viewer
         self.settings = get_settings()
-        
+
+        # Initialize icons
+        self.icons = self._init_icons()
+
         # RAG components
         self.vector_store = None
         self.web_research = None
         self.rag_chain = None
         self.reference_manager = None
-        
+
         # Current document
         self.current_document_id = None
         self.current_document_path = None
@@ -642,11 +658,40 @@ class RAGChatPanel(QWidget):
         # Worker threads
         self.rag_worker = None
         self.document_processor_worker = None
-        
+
         self.setup_ui()
         self.initialize_rag_system()
-        
+
         logger.info("RAG Chat Panel initialized")
+
+    def _init_icons(self) -> Dict[str, QIcon]:
+        """Initialize QtAwesome icons for reuse throughout the panel."""
+        icons = {}
+
+        if QTAWESOME_AVAILABLE:
+            # Primary colors
+            primary_blue = '#2196F3'
+            success_green = '#4CAF50'
+            warning_orange = '#FF9800'
+            neutral_gray = '#666'
+
+            # Button icons
+            icons['pdf'] = qta.icon('fa5s.file-pdf', color=primary_blue)
+            icons['web'] = qta.icon('fa5s.globe', color=primary_blue)
+            icons['lightbulb'] = qta.icon('fa5s.lightbulb', color=warning_orange)
+            icons['bullseye'] = qta.icon('fa5s.bullseye', color=success_green)
+            icons['keyboard'] = qta.icon('fa5s.keyboard', color=neutral_gray)
+            icons['trash'] = qta.icon('fa5s.trash-alt', color='#f44336')
+            icons['send'] = qta.icon('fa5s.paper-plane', color=primary_blue)
+            icons['settings'] = qta.icon('fa5s.cog', color=neutral_gray)
+            icons['robot'] = qta.icon('fa5s.robot', color=primary_blue)
+            icons['question'] = qta.icon('fa5s.question-circle', color=primary_blue)
+            icons['book'] = qta.icon('fa5s.book', color=neutral_gray)
+            icons['check'] = qta.icon('fa5s.check-circle', color=success_green)
+            icons['error'] = qta.icon('fa5s.exclamation-circle', color='#f44336')
+            icons['cancel'] = qta.icon('fa5s.times-circle', color='#f44336')
+
+        return icons
     
     def setup_ui(self):
         """Setup the chat panel UI."""
@@ -658,15 +703,26 @@ class RAGChatPanel(QWidget):
         header_layout = QHBoxLayout()
         header_layout.setContentsMargins(0, 0, 0, 0)
         
-        title_label = QLabel("🤖 AI Chat")
+        title_label = QLabel("AI Chat")
         title_label.setFont(QFont("Segoe UI", 10, QFont.Bold))
         header_layout.addWidget(title_label)
-        
+
+        # Document indicator
+        self.doc_label = QLabel("No document loaded")
+        self.doc_label.setStyleSheet("color: #666; font-size: 8pt; font-style: italic;")
+        header_layout.addWidget(self.doc_label)
+
         header_layout.addStretch()
-        
-        # Settings button
-        settings_btn = QPushButton("⚙️")
-        settings_btn.setMaximumSize(25, 25)
+
+        # Settings button (disabled until implemented)
+        settings_btn = QPushButton()
+        if QTAWESOME_AVAILABLE:
+            settings_btn.setIcon(self.icons.get('settings'))
+        else:
+            settings_btn.setText("⚙")
+        settings_btn.setMaximumSize(28, 28)
+        settings_btn.setEnabled(False)
+        settings_btn.setToolTip("Settings (coming soon)")
         settings_btn.clicked.connect(self.show_settings)
         header_layout.addWidget(settings_btn)
         
@@ -675,12 +731,28 @@ class RAGChatPanel(QWidget):
         # Chat history area - chiếm phần lớn không gian
         self.chat_history = ChatHistoryWidget()
         layout.addWidget(self.chat_history, stretch=1)
+
+        # Empty state message (shown when no chat history)
+        self.empty_state_label = QLabel()
+        self.empty_state_label.setText(
+            "<b>Welcome to AI Chat!</b><br><br>"
+            "Load a PDF document and start asking questions.<br><br>"
+            "<i>Try quick actions below or type your own question</i>"
+        )
+        self.empty_state_label.setAlignment(Qt.AlignCenter)
+        self.empty_state_label.setStyleSheet("""
+            color: #999;
+            font-size: 10pt;
+            padding: 40px;
+        """)
+        self.empty_state_label.setTextFormat(Qt.RichText)
+        self.chat_history.content_layout.addWidget(self.empty_state_label)
         
         # Input area - compact, chiếm ít không gian
         input_widget = self.create_input_area()
         layout.addWidget(input_widget)
         
-        # Progress section - enhanced with detailed information
+        # Unified progress section - used for both document processing and Q&A
         progress_widget = self._create_progress_section()
         layout.addWidget(progress_widget)
 
@@ -754,7 +826,9 @@ class RAGChatPanel(QWidget):
         time_cancel_layout.addStretch()
 
         # Cancel button
-        self.cancel_processing_btn = QPushButton("❌ Cancel")
+        self.cancel_processing_btn = QPushButton(" Cancel")
+        if QTAWESOME_AVAILABLE:
+            self.cancel_processing_btn.setIcon(qta.icon('fa5s.times-circle', color='white'))
         self.cancel_processing_btn.setMaximumWidth(80)
         self.cancel_processing_btn.setMaximumHeight(25)
         self.cancel_processing_btn.clicked.connect(self._cancel_document_processing)
@@ -790,42 +864,55 @@ class RAGChatPanel(QWidget):
         quick_actions_layout = QHBoxLayout()
         quick_actions_layout.setSpacing(3)
 
-        quick_actions_label = QLabel("⚡ Quick:")
-        quick_actions_label.setStyleSheet("color: #666; font-size: 8pt;")
+        quick_actions_label = QLabel("Quick:")
+        quick_actions_label.setStyleSheet("color: #666; font-size: 8pt; font-weight: bold;")
         quick_actions_layout.addWidget(quick_actions_label)
 
-        # Quick action buttons
-        self.summarize_btn = QPushButton("📄 Summarize")
+        # Quick action buttons with professional icons
+        self.summarize_btn = QPushButton(" Summarize")
+        if QTAWESOME_AVAILABLE:
+            self.summarize_btn.setIcon(self.icons.get('pdf'))
         self.summarize_btn.setMaximumHeight(25)
         self.summarize_btn.setToolTip("Summarize the entire document (Ctrl+1)")
         self.summarize_btn.clicked.connect(lambda: self._use_quick_action("Summarize this document"))
         quick_actions_layout.addWidget(self.summarize_btn)
 
-        self.key_points_btn = QPushButton("🎯 Key Points")
+        self.key_points_btn = QPushButton(" Key Points")
+        if QTAWESOME_AVAILABLE:
+            self.key_points_btn.setIcon(self.icons.get('bullseye'))
         self.key_points_btn.setMaximumHeight(25)
         self.key_points_btn.setToolTip("Extract key points from document (Ctrl+2)")
         self.key_points_btn.clicked.connect(lambda: self._use_quick_action("What are the key points of this document?"))
         quick_actions_layout.addWidget(self.key_points_btn)
 
-        self.explain_btn = QPushButton("💡 Explain")
+        self.explain_btn = QPushButton(" Explain")
+        if QTAWESOME_AVAILABLE:
+            self.explain_btn.setIcon(self.icons.get('lightbulb'))
         self.explain_btn.setMaximumHeight(25)
         self.explain_btn.setToolTip("Explain main concepts (Ctrl+3)")
         self.explain_btn.clicked.connect(lambda: self._use_quick_action("Explain the main concepts in this document"))
         quick_actions_layout.addWidget(self.explain_btn)
 
-        self.methods_btn = QPushButton("🔬 Methods")
-        self.methods_btn.setMaximumHeight(25)
-        self.methods_btn.setToolTip("Show methodology used")
-        self.methods_btn.clicked.connect(lambda: self._use_quick_action("What methodology is used in this document?"))
-        quick_actions_layout.addWidget(self.methods_btn)
-
-        self.results_btn = QPushButton("📊 Results")
-        self.results_btn.setMaximumHeight(25)
-        self.results_btn.setToolTip("Show main results")
-        self.results_btn.clicked.connect(lambda: self._use_quick_action("What are the main results and findings?"))
-        quick_actions_layout.addWidget(self.results_btn)
-
         quick_actions_layout.addStretch()
+
+        # Keyboard shortcuts help button
+        shortcuts_btn = QPushButton(" Shortcuts")
+        if QTAWESOME_AVAILABLE:
+            shortcuts_btn.setIcon(self.icons.get('keyboard'))
+        shortcuts_btn.setMaximumHeight(25)
+        shortcuts_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #f5f5f5;
+                border: 1px solid #ccc;
+                border-radius: 3px;
+                padding: 3px 8px;
+            }
+            QPushButton:hover {
+                background-color: #e0e0e0;
+            }
+        """)
+        shortcuts_btn.clicked.connect(self._show_keyboard_shortcuts)
+        quick_actions_layout.addWidget(shortcuts_btn)
 
         layout.addLayout(quick_actions_layout)
 
@@ -833,14 +920,18 @@ class RAGChatPanel(QWidget):
         options_layout = QHBoxLayout()
         options_layout.setSpacing(5)
 
-        # Web research checkbox
-        self.web_research_cb = QCheckBox("🌐 Web")
-        self.web_research_cb.setChecked(True)
-        self.web_research_cb.setToolTip("Include information from internet in answers")
+        # Web research checkbox - unchecked by default (user opts in)
+        self.web_research_cb = QCheckBox(" Web Research")
+        if QTAWESOME_AVAILABLE:
+            self.web_research_cb.setIcon(self.icons.get('web'))
+        self.web_research_cb.setChecked(False)  # Default OFF - PDF only
+        self.web_research_cb.setToolTip("Enable web search to supplement PDF content (may be slower)")
         options_layout.addWidget(self.web_research_cb)
 
         # Clear button - compact
-        clear_btn = QPushButton("🗑️ Clear")
+        clear_btn = QPushButton(" Clear")
+        if QTAWESOME_AVAILABLE:
+            clear_btn.setIcon(self.icons.get('trash'))
         clear_btn.setMaximumWidth(80)
         clear_btn.setToolTip("Clear chat history (Ctrl+L)")
         clear_btn.clicked.connect(self.clear_chat_history)
@@ -855,18 +946,20 @@ class RAGChatPanel(QWidget):
         input_layout.setSpacing(5)
 
         self.question_input = QLineEdit()
-        self.question_input.setPlaceholderText("Ask a question... (Ctrl+Enter to ask, Ctrl+K to clear)")
+        self.question_input.setPlaceholderText("Ask a question about the document...")
         self.question_input.returnPressed.connect(self.ask_question)
         self.question_input.setMaximumHeight(30)
         input_layout.addWidget(self.question_input)
 
         # Ask button - compact
-        self.ask_button = QPushButton("📤 Ask")
+        self.ask_button = QPushButton(" Ask")
+        if QTAWESOME_AVAILABLE:
+            self.ask_button.setIcon(self.icons.get('send'))
         self.ask_button.clicked.connect(self.ask_question)
         self.ask_button.setDefault(True)
         self.ask_button.setMaximumWidth(80)
         self.ask_button.setMaximumHeight(30)
-        self.ask_button.setToolTip("Send question (Ctrl+Enter)")
+        self.ask_button.setToolTip("Send question (Enter or Ctrl+Enter)")
         input_layout.addWidget(self.ask_button)
 
         layout.addLayout(input_layout)
@@ -940,9 +1033,30 @@ class RAGChatPanel(QWidget):
         shortcut_4.activated.connect(lambda: self._use_quick_action("What methodology is used in this document?"))
 
         shortcut_5 = QShortcut(QKeySequence("Ctrl+5"), self)
-        shortcut_5.activated.connect(lambda: self._use_quick_action("What are the main results and findings?"))
-
         logger.info("Keyboard shortcuts configured")
+
+    def _show_keyboard_shortcuts(self):
+        """Display keyboard shortcuts help dialog."""
+        shortcuts_text = """
+<b>Keyboard Shortcuts:</b><br><br>
+
+<b>Quick Actions:</b><br>
+• <code>Ctrl+1</code> - Summarize document<br>
+• <code>Ctrl+2</code> - Extract key points<br>
+• <code>Ctrl+3</code> - Explain concepts<br><br>
+
+<b>Input Controls:</b><br>
+• <code>Enter</code> or <code>Ctrl+Enter</code> - Send question<br>
+• <code>Ctrl+K</code> - Clear input field<br>
+• <code>Ctrl+L</code> - Clear chat history<br>
+        """
+
+        msg_box = QMessageBox(self)
+        msg_box.setWindowTitle("Keyboard Shortcuts")
+        msg_box.setTextFormat(Qt.RichText)
+        msg_box.setText(shortcuts_text)
+        msg_box.setIcon(QMessageBox.Information)
+        msg_box.exec()
 
     def _use_quick_action(self, question_template: str):
         """
@@ -954,12 +1068,8 @@ class RAGChatPanel(QWidget):
         # Set the question in the input field
         self.question_input.setText(question_template)
 
-        # Focus on the input field so user can see and edit if needed
-        self.question_input.setFocus()
-
-        # Optionally auto-send (let user review first by not auto-sending)
-        # Uncomment the next line to auto-send quick actions:
-        # self.ask_question()
+        # Auto-send quick action questions
+        self.ask_question()
 
     def _generate_suggested_questions(self, answer_data: Dict[str, Any]) -> List[str]:
         """
@@ -1073,15 +1183,19 @@ class RAGChatPanel(QWidget):
     def set_current_document(self, document_path: Path, document_id: str = None):
         """
         Set the current document for RAG processing.
-        
+
         Args:
             document_path: Path to the PDF document
             document_id: Optional document ID (will be generated if not provided)
         """
         self.current_document_path = document_path
         self.current_document_id = document_id or str(document_path.stem)
-        
-        self.status_label.setText(f"Current document: {document_path.name}")
+
+        # Update document indicator in header
+        self.doc_label.setText(f"{document_path.name}")
+        self.doc_label.setStyleSheet("color: #2196F3; font-size: 8pt; font-weight: bold;")
+
+        self.status_label.setText(f"Ready to answer questions about {document_path.name}")
         logger.info(f"Current document set: {document_path}")
     
     def process_document(self, document_path: Path):
@@ -1237,9 +1351,6 @@ class RAGChatPanel(QWidget):
         # Add question to chat history
         self.chat_history.add_question(question)
 
-        # Clear input
-        self.question_input.clear()
-
         # Always use current document scope (no scope selection)
         document_id = self.current_document_id
 
@@ -1249,19 +1360,22 @@ class RAGChatPanel(QWidget):
     
     def _start_rag_processing(self, question: str, document_id: Optional[str], include_web: bool):
         """Start RAG processing in background thread."""
-        
+
         # Disable input during processing
         self.ask_button.setEnabled(False)
         self.question_input.setEnabled(False)
-        self.progress_bar.setVisible(True)
+
+        # Show unified progress container (same as doc processing)
+        self.progress_container.setVisible(True)
         self.progress_bar.setRange(0, 100)
         self.progress_bar.setValue(0)
-        
+        self.cancel_processing_btn.setVisible(False)  # No cancel for quick Q&A
+
         # Start worker thread
         self.rag_worker = RAGWorker(self.rag_chain, question, document_id, include_web)
         self.rag_worker.answer_ready.connect(self._handle_answer_ready)
         self.rag_worker.error_occurred.connect(self._handle_error)
-        self.rag_worker.progress_updated.connect(self._update_progress)
+        self.rag_worker.progress_updated.connect(self._update_qa_progress)
         self.rag_worker.start()
     
     def _handle_answer_ready(self, answer_data: Dict[str, Any]):
@@ -1270,59 +1384,93 @@ class RAGChatPanel(QWidget):
         # Add answer to chat history
         self.chat_history.add_answer(answer_data, self.reference_manager)
 
-        # Generate and show suggested follow-up questions
-        suggestions = self._generate_suggested_questions(answer_data)
-        if suggestions:
-            self._show_suggested_questions(suggestions)
+        # Clear input on success
+        self.question_input.clear()
+
+        # Check if web research was enabled but failed
+        sources_used = answer_data.get('sources_used', {})
+        web_sources = sources_used.get('web_sources', 0)
+        if self.web_research_cb.isChecked() and web_sources == 0:
+            self.status_label.setText("⚠️ Web research unavailable - using PDF only")
+        else:
+            # Update status with normal info
+            processing_time = answer_data.get('processing_time', 0)
+            total_sources = sources_used.get('pdf_sources', 0) + web_sources
+            self.status_label.setText(f"✅ Completed in {processing_time:.1f}s - {total_sources} sources")
+
+        # Suggested questions disabled by default (low quality, template-based)
+        # Users can enable in settings if needed
+        # suggestions = self._generate_suggested_questions(answer_data)
+        # if suggestions:
+        #     self._show_suggested_questions(suggestions)
 
         # Re-enable input
         self.ask_button.setEnabled(True)
         self.question_input.setEnabled(True)
-        self.progress_bar.setVisible(False)
 
-        # Update status
-        processing_time = answer_data.get('processing_time', 0)
-        sources_used = answer_data.get('sources_used', {})
-        total_sources = sources_used.get('pdf_sources', 0) + sources_used.get('web_sources', 0)
+        # Hide unified progress container
+        QTimer.singleShot(500, lambda: self.progress_container.setVisible(False))
 
-        self.status_label.setText(f"Completed in {processing_time:.1f}s - {total_sources} sources")
-
-        logger.info(f"Answer generated successfully in {processing_time:.1f}s")
+        logger.info(f"Answer generated successfully in {answer_data.get('processing_time', 0):.1f}s")
     
     def _handle_error(self, error_message: str):
-        
-        # Re-enable input
+
+        # Re-enable input (keep question for retry!)
         self.ask_button.setEnabled(True)
         self.question_input.setEnabled(True)
-        self.progress_bar.setVisible(False)
-        
-        # Show error
-        self.status_label.setText(f"Error: {error_message}")
-        QMessageBox.warning(self, "Processing Error", f"Cannot answer question:\n{error_message}")
-        
+
+        # Hide unified progress container
+        self.progress_container.setVisible(False)
+
+        # Show error with retry instruction
+        self.status_label.setText(f"❌ Error - Question kept for retry")
+        QMessageBox.warning(
+            self,
+            "Processing Error",
+            f"Cannot answer question:\n{error_message}\n\nThe question is kept in the input field. Fix the issue and try again."
+        )
+
         logger.error(f"RAG processing error: {error_message}")
     
-    def _update_progress(self, message: str, progress: int):
-        """Update progress bar and status."""
-        self.status_label.setText(message)
+    def _update_qa_progress(self, message: str, progress: int):
+        """Update progress for Q&A processing (using unified progress UI)."""
+        self.stage_label.setText(f"💬 {message}")
         self.progress_bar.setValue(progress)
+        self.detail_label.setText("Processing your question...")
+        self.time_label.setText("")  # No ETA for quick Q&A
     
     def handle_reference_click(self, ref_type: str, reference_data: Dict[str, Any]):
-        """Handle reference click from chat history."""
-        
+        """Handle reference click from chat history with visual feedback."""
+
         if ref_type == 'pdf':
+            page = reference_data.get('page', 'N/A')
+            self.status_label.setText(f"Navigating to page {page}...")
+
             pdf_ref = self.reference_manager.create_pdf_reference(reference_data)
             success = self.reference_manager.navigate_to_pdf_reference(pdf_ref)
             if success:
                 # Emit signal for PDF navigation
                 self.pdf_navigation_requested.emit(pdf_ref.page, pdf_ref.bbox)
-        
+                # Show success feedback
+                QTimer.singleShot(1000, lambda: self.status_label.setText(f"✅ Showing page {page}"))
+            else:
+                self.status_label.setText(f"Could not navigate to page {page}")
+
         elif ref_type == 'web':
+            url = reference_data.get('url', '')
+            from urllib.parse import urlparse
+            domain = urlparse(url).netloc if url else 'link'
+            self.status_label.setText(f"Opening {domain}...")
+
             web_ref = self.reference_manager.create_web_reference(reference_data)
             success = self.reference_manager.navigate_to_web_reference(web_ref)
             if success:
                 # Emit signal for web navigation
                 self.web_link_requested.emit(web_ref.url)
+                # Show success feedback
+                QTimer.singleShot(1000, lambda: self.status_label.setText(f"✅ Opened {domain}"))
+            else:
+                self.status_label.setText(f"Could not open link")
     
     def _navigate_to_pdf(self, page: int, bbox: Optional[tuple] = None):
         """Navigate to PDF page (callback for reference manager)."""
@@ -1336,11 +1484,22 @@ class RAGChatPanel(QWidget):
         webbrowser.open(url)
     
     def clear_chat_history(self):
-        """Clear the chat history."""
-        self.chat_history.clear_history()
-        if self.reference_manager:
-            self.reference_manager.clear_history()
-        self.status_label.setText("History cleared")
+        """Clear the chat history with confirmation."""
+        # Ask for confirmation
+        reply = QMessageBox.question(
+            self,
+            "Clear Chat History",
+            "Are you sure you want to clear all chat history?\n\nThis cannot be undone.",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No
+        )
+
+        if reply == QMessageBox.Yes:
+            self.chat_history.clear_history()
+            if self.reference_manager:
+                self.reference_manager.clear_history()
+            self.status_label.setText("History cleared")
+            logger.info("Chat history cleared by user")
     
     def show_settings(self):
         """Show RAG settings dialog."""
