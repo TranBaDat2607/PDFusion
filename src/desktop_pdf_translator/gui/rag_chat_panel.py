@@ -25,10 +25,13 @@ QTAWESOME_AVAILABLE = True
 
 
 from ..rag import (
-    ScientificPDFProcessor, ChromaDBManager, 
+    ScientificPDFProcessor, ChromaDBManager,
     WebResearchEngine, EnhancedRAGChain, ReferenceManager
 )
 from ..config import get_settings
+from .content_renderer import ContentRenderer
+from .animations import FadeSlideInAnimation
+from .chat_preferences import get_chat_preferences
 
 logger = logging.getLogger(__name__)
 
@@ -250,6 +253,421 @@ class RAGWorker(QThread):
                 loop.close()
 
 
+class MessageBubble(QWidget):
+    """Compact message bubble for user questions (max 65% width, right-aligned)."""
+
+    def __init__(self, question: str):
+        super().__init__()
+        self.question = question
+        self.setup_ui()
+
+    def setup_ui(self):
+        """Setup the compact user message bubble with dynamic width."""
+        from PySide6.QtWidgets import QSizePolicy
+
+        # Main layout with right alignment
+        main_layout = QHBoxLayout(self)
+        main_layout.setContentsMargins(0, 4, 0, 4)
+
+        # Add stretch to push bubble to the right
+        main_layout.addStretch()
+
+        # Bubble frame - simple minimal style with dynamic width
+        bubble_frame = QFrame()
+        bubble_frame.setObjectName("userBubble")
+        bubble_frame.setStyleSheet("""
+            QFrame#userBubble {
+                background-color: #F5F5F5;
+                border: 1px solid #E0E0E0;
+                border-radius: 8px;
+                padding: 10px 14px;
+            }
+        """)
+
+        # Set size policy - Preferred allows natural sizing
+        bubble_frame.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Preferred)
+
+        bubble_layout = QVBoxLayout(bubble_frame)
+        bubble_layout.setContentsMargins(0, 0, 0, 0)
+
+        # Question text (no header, clean bubble)
+        self.question_label = QLabel(self.question)
+        self.question_label.setWordWrap(True)
+        self.question_label.setFont(QFont("Segoe UI", 9))
+        self.question_label.setStyleSheet("color: #424242; background: transparent; border: none;")
+        self.question_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
+
+        # Don't set fixed maximum width - let it size naturally
+        # We'll constrain it in showEvent when parent size is known
+        self.question_label.setMinimumWidth(100)  # Minimum readable width
+
+        bubble_layout.addWidget(self.question_label)
+
+        main_layout.addWidget(bubble_frame)
+
+    def showEvent(self, event):
+        """Adjust maximum width when widget is shown and parent size is known."""
+        super().showEvent(event)
+
+        # Now we can safely get parent width and set reasonable maximum
+        if self.parent():
+            # Get the scroll area's viewport width
+            scroll_area = self.parent().parent()
+            if scroll_area and hasattr(scroll_area, 'viewport'):
+                available_width = scroll_area.viewport().width()
+            else:
+                available_width = self.parent().width()
+
+            # Set maximum to 65% of available width
+            max_width = int(available_width * 0.65)
+            self.question_label.setMaximumWidth(max_width)
+
+
+class MessagePanel(QFrame):
+    """Wide message panel for assistant responses (95% width, left-aligned)."""
+
+    reference_clicked = Signal(str, dict)  # (type, reference_data)
+
+    def __init__(self, answer_data: Dict[str, Any], reference_manager: ReferenceManager):
+        super().__init__()
+        self.answer_data = answer_data
+        self.reference_manager = reference_manager
+        self.content_renderer = ContentRenderer()  # Initialize content renderer
+        self.setup_ui()
+
+    def setup_ui(self):
+        """Setup the assistant message panel with dynamic width."""
+        from PySide6.QtWidgets import QSizePolicy
+
+        self.setObjectName("assistantPanel")
+        self.setStyleSheet("""
+            QFrame#assistantPanel {
+                background-color: #F5F5F5;
+                border-left: 4px solid #4CAF50;
+                border-top: 1px solid #E0E0E0;
+                border-right: 1px solid #E0E0E0;
+                border-bottom: 1px solid #E0E0E0;
+                border-radius: 8px;
+                margin: 8px 0px;
+            }
+        """)
+
+        # Set size policy for dynamic sizing - Preferred allows natural sizing
+        self.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Preferred)
+
+        # Don't set fixed maximum width here - will be set in showEvent
+        self.setMinimumWidth(200)  # Minimum readable width
+
+        # Main layout with proper margins - simplified to show only content
+        main_layout = QVBoxLayout(self)
+        main_layout.setContentsMargins(16, 16, 16, 16)
+        main_layout.setSpacing(0)
+
+        # CONTENT SECTION ONLY - no references, no metadata
+        content_container = self._create_content_section()
+        main_layout.addWidget(content_container)
+
+    def showEvent(self, event):
+        """Adjust maximum width when widget is shown and parent size is known."""
+        super().showEvent(event)
+
+        # Now we can safely get parent width and set reasonable maximum
+        if self.parent():
+            # Get the scroll area's viewport width
+            scroll_area = self.parent().parent()
+            if scroll_area and hasattr(scroll_area, 'viewport'):
+                available_width = scroll_area.viewport().width()
+            else:
+                available_width = self.parent().width()
+
+            # Set maximum to 95% of available width
+            max_width = int(available_width * 0.95)
+            self.setMaximumWidth(max_width)
+
+            # Also update content browser maximum width
+            if hasattr(self, 'content_browser'):
+                self.content_browser.setMaximumWidth(max_width - 50)  # Account for margins
+
+    def _create_separator(self) -> QFrame:
+        """Create a horizontal separator line."""
+        separator = QFrame()
+        separator.setFrameShape(QFrame.HLine)
+        separator.setFrameShadow(QFrame.Plain)
+        separator.setStyleSheet("""
+            QFrame {
+                color: #E0E0E0;
+                background-color: #E0E0E0;
+                max-height: 1px;
+                margin: 12px 0px;
+            }
+        """)
+        return separator
+
+    def _create_content_section(self) -> QWidget:
+        """Create the main content section with rendered answer."""
+        from PySide6.QtWidgets import QTextBrowser, QSizePolicy
+
+        content_widget = QWidget()
+        content_layout = QVBoxLayout(content_widget)
+        content_layout.setContentsMargins(0, 0, 0, 0)
+        content_layout.setSpacing(0)
+
+        # Content browser
+        self.content_browser = QTextBrowser()
+        self.content_browser.setReadOnly(True)
+        self.content_browser.setFrameStyle(QFrame.NoFrame)
+        self.content_browser.setOpenExternalLinks(True)
+        self.content_browser.setStyleSheet("""
+            QTextBrowser {
+                background: transparent;
+                border: none;
+            }
+        """)
+
+        # Render answer content with rich formatting
+        answer_text = self.answer_data.get('answer', '')
+        try:
+            rendered_html = self.content_renderer.render(answer_text)
+            self.content_browser.setHtml(rendered_html)
+        except Exception as e:
+            logger.error(f"Content rendering failed: {e}")
+            self.content_browser.setPlainText(answer_text)
+
+        # Set size policy - Preferred for natural sizing based on content
+        self.content_browser.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Preferred)
+
+        # Set word wrap mode to optimize for dynamic width
+        from PySide6.QtGui import QTextOption
+        self.content_browser.setWordWrapMode(QTextOption.WrapAtWordBoundaryOrAnywhere)
+
+        # Set minimum width only - maximum will be set in showEvent
+        self.content_browser.setMinimumWidth(200)  # Minimum readable width
+
+        # Disable scrollbars for clean look - content should fit naturally
+        self.content_browser.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.content_browser.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+
+        # Dynamic height adjustment - scales to content
+        self.content_browser.document().documentLayout().documentSizeChanged.connect(
+            self._adjust_content_size
+        )
+
+        # Initial height calculation
+        self._adjust_content_size()
+
+        content_layout.addWidget(self.content_browser)
+
+        return content_widget
+
+    def _adjust_content_size(self):
+        """Dynamically adjust content browser size to fit document height."""
+        if hasattr(self, 'content_browser'):
+            # Get document size
+            doc_size = self.content_browser.document().size()
+            doc_height = doc_size.height()
+
+            # Vertical: Set height to fit content exactly
+            preferred_height = int(doc_height + 10)
+            self.content_browser.setMinimumHeight(preferred_height)
+            self.content_browser.setMaximumHeight(preferred_height)
+
+            # Horizontal width is handled by showEvent - don't interfere here
+
+    def _create_references_section(self, pdf_refs: List[Dict], web_refs: List[Dict]) -> QWidget:
+        """Create collapsible references section with clean design."""
+        refs_widget = QWidget()
+        refs_layout = QVBoxLayout(refs_widget)
+        refs_layout.setContentsMargins(0, 8, 0, 8)
+        refs_layout.setSpacing(8)
+
+        # Collapsible header with clean styling
+        header_widget = QWidget()
+        header_widget.setStyleSheet("""
+            QWidget {
+                background-color: #FAFAFA;
+                border-radius: 4px;
+            }
+        """)
+        header_layout = QHBoxLayout(header_widget)
+        header_layout.setContentsMargins(12, 8, 12, 8)
+        header_layout.setSpacing(8)
+
+        total_refs = len(pdf_refs) + len(web_refs)
+        self.refs_header_label = QLabel(f"📚 References ({total_refs})")
+        self.refs_header_label.setFont(QFont("Segoe UI", 9, QFont.Bold))
+        self.refs_header_label.setStyleSheet("color: #555; background: transparent;")
+        header_layout.addWidget(self.refs_header_label)
+
+        header_layout.addStretch()
+
+        # Toggle button with minimal style
+        self.refs_toggle_btn = QPushButton("▼ Show")
+        self.refs_toggle_btn.setMaximumWidth(70)
+        self.refs_toggle_btn.setMaximumHeight(24)
+        self.refs_toggle_btn.setStyleSheet("""
+            QPushButton {
+                background-color: transparent;
+                color: #2196F3;
+                border: 1px solid #2196F3;
+                border-radius: 4px;
+                padding: 4px 10px;
+                font-size: 8pt;
+                font-weight: bold;
+            }
+            QPushButton:hover {
+                background-color: #E3F2FD;
+            }
+        """)
+        header_layout.addWidget(self.refs_toggle_btn)
+
+        refs_layout.addWidget(header_widget)
+
+        # Collapsible content container
+        self.refs_content_container = QWidget()
+        self.refs_content_container.setVisible(False)  # Collapsed by default
+
+        content_layout = QVBoxLayout(self.refs_content_container)
+        content_layout.setContentsMargins(0, 8, 0, 0)
+        content_layout.setSpacing(8)
+
+        # PDF references
+        if pdf_refs:
+            pdf_label = QLabel("📘 PDF Sources:")
+            pdf_label.setFont(QFont("Segoe UI", 8, QFont.Bold))
+            pdf_label.setStyleSheet("color: #2196F3;")
+            content_layout.addWidget(pdf_label)
+
+            for ref_data in pdf_refs:  # Show all PDF refs when expanded
+                ref_widget = ReferenceWidget('pdf', ref_data, self.reference_manager)
+                ref_widget.reference_clicked.connect(self.reference_clicked.emit)
+                content_layout.addWidget(ref_widget)
+
+        # Web references
+        if web_refs:
+            web_label = QLabel("🌐 Web Sources:")
+            web_label.setFont(QFont("Segoe UI", 8, QFont.Bold))
+            web_label.setStyleSheet("color: #FF9800;")
+            content_layout.addWidget(web_label)
+
+            for ref_data in web_refs:  # Show all web refs when expanded
+                ref_widget = ReferenceWidget('web', ref_data, self.reference_manager)
+                ref_widget.reference_clicked.connect(self.reference_clicked.emit)
+                content_layout.addWidget(ref_widget)
+
+        refs_layout.addWidget(self.refs_content_container)
+
+        # Connect toggle button
+        self.refs_toggle_btn.clicked.connect(self._toggle_references)
+
+        return refs_widget
+
+    def _toggle_references(self):
+        """Toggle references visibility."""
+        is_visible = self.refs_content_container.isVisible()
+
+        if is_visible:
+            # Collapse
+            self.refs_content_container.setVisible(False)
+            self.refs_toggle_btn.setText("▼ Show")
+        else:
+            # Expand
+            self.refs_content_container.setVisible(True)
+            self.refs_toggle_btn.setText("▲ Hide")
+
+    def _create_metadata_footer(self, quality: Dict[str, Any]) -> QWidget:
+        """Create clean metadata footer with stats and actions."""
+        footer = QWidget()
+        footer.setStyleSheet("""
+            QWidget {
+                background-color: #FAFAFA;
+                border-radius: 4px;
+            }
+        """)
+        footer_layout = QHBoxLayout(footer)
+        footer_layout.setContentsMargins(12, 8, 12, 8)
+        footer_layout.setSpacing(12)
+
+        # Stats with icons
+        processing_time = self.answer_data.get('processing_time', 0)
+        sources_used = self.answer_data.get('sources_used', {})
+        total_sources = sources_used.get('pdf_sources', 0) + sources_used.get('web_sources', 0)
+
+        stats_label = QLabel(f"⏱️ {processing_time:.1f}s  •  📊 {total_sources} sources")
+        stats_label.setStyleSheet("color: #666; font-size: 8pt; background: transparent;")
+        footer_layout.addWidget(stats_label)
+
+        footer_layout.addStretch()
+
+        # Copy button with clean minimal style
+        copy_btn = QPushButton("📋 Copy")
+        copy_btn.setMaximumWidth(80)
+        copy_btn.setMaximumHeight(28)
+        copy_btn.setStyleSheet("""
+            QPushButton {
+                background-color: transparent;
+                color: #2196F3;
+                border: 1px solid #2196F3;
+                border-radius: 4px;
+                padding: 4px 10px;
+                font-size: 8pt;
+                font-weight: bold;
+            }
+            QPushButton:hover {
+                background-color: #E3F2FD;
+            }
+        """)
+        copy_btn.clicked.connect(self._copy_answer)
+        copy_btn.setToolTip("Copy answer to clipboard")
+        footer_layout.addWidget(copy_btn)
+
+        return footer
+
+    def _copy_answer(self):
+        """Copy answer text to clipboard."""
+        from PySide6.QtWidgets import QApplication
+
+        answer_text = self.answer_data.get('answer', '')
+        clipboard = QApplication.clipboard()
+        clipboard.setText(answer_text)
+
+        # Visual feedback
+        sender_btn = self.sender()
+        if sender_btn:
+            original_text = sender_btn.text()
+            sender_btn.setText("Copied!")
+            sender_btn.setStyleSheet("""
+                QPushButton {
+                    background-color: #4CAF50;
+                    color: white;
+                    border: none;
+                    border-radius: 3px;
+                    padding: 3px 8px;
+                    font-size: 8pt;
+                }
+            """)
+
+            # Reset after 2 seconds
+            QTimer.singleShot(2000, lambda: self._reset_copy_button(sender_btn, original_text))
+
+    def _reset_copy_button(self, button: QPushButton, original_text: str):
+        """Reset copy button to original state."""
+        button.setText(original_text)
+        button.setStyleSheet("""
+            QPushButton {
+                background-color: transparent;
+                color: #2196F3;
+                border: 1px solid #2196F3;
+                border-radius: 4px;
+                padding: 4px 10px;
+                font-size: 8pt;
+                font-weight: bold;
+            }
+            QPushButton:hover {
+                background-color: #E3F2FD;
+            }
+        """)
+
+
 class ReferenceWidget(QFrame):
     """Widget for displaying a single reference with enhanced preview and visual indicators."""
 
@@ -275,40 +693,22 @@ class ReferenceWidget(QFrame):
         self._setup_tooltip()
 
     def _get_quality_score(self) -> float:
-        """Get quality score (confidence or reliability) for this reference."""
-        if self.ref_type == 'pdf':
-            return self.reference_data.get('confidence', 0.0)
-        elif self.ref_type == 'web':
-            return self.reference_data.get('reliability_score', 0.0)
-        return 0.0
+        """Get quality score for this reference (not used anymore)."""
+        return 0.5  # Default neutral score
 
     def _apply_styling(self):
-        """Apply color-coded styling based on quality score."""
-        # Color coding based on score
-        if self.score >= 0.8:
-            # High quality - Green
-            border_color = "#4CAF50"
-            bg_color = "#f1f8f4"
-            hover_bg = "#e8f5e9"
-            indicator_color = "#4CAF50"
-        elif self.score >= 0.6:
-            # Medium quality - Blue
-            border_color = "#2196F3"
+        """Apply neutral styling to reference widget."""
+        # Simplified styling without confidence-based color coding
+        if self.ref_type == 'pdf':
+            indicator_color = "#2196F3"  # Blue for PDF
             bg_color = "#f5f9ff"
             hover_bg = "#e3f2fd"
-            indicator_color = "#2196F3"
-        elif self.score >= 0.4:
-            # Low-medium quality - Orange
-            border_color = "#FF9800"
+        else:  # web
+            indicator_color = "#FF9800"  # Orange for Web
             bg_color = "#fff8f0"
             hover_bg = "#fff3e0"
-            indicator_color = "#FF9800"
-        else:
-            # Low quality - Gray
-            border_color = "#9E9E9E"
-            bg_color = "#f9f9f9"
-            hover_bg = "#f0f0f0"
-            indicator_color = "#9E9E9E"
+
+        border_color = "#E0E0E0"
 
         self.setStyleSheet(f"""
             ReferenceWidget {{
@@ -323,9 +723,9 @@ class ReferenceWidget(QFrame):
             }}
             ReferenceWidget:hover {{
                 background-color: {hover_bg};
-                border-top: 2px solid {border_color};
-                border-right: 2px solid {border_color};
-                border-bottom: 2px solid {border_color};
+                border-top: 2px solid {indicator_color};
+                border-right: 2px solid {indicator_color};
+                border-bottom: 2px solid {indicator_color};
             }}
         """)
 
@@ -344,10 +744,6 @@ class ReferenceWidget(QFrame):
             page = self.reference_data.get('page', 'N/A')
             tooltip_parts.append(f"Page: {page}")
 
-            # Add confidence indicator
-            confidence = self.reference_data.get('confidence', 0.0)
-            tooltip_parts.append(f"Confidence: {confidence:.1%}")
-
         elif self.ref_type == 'web':
             url = self.reference_data.get('url', '')
             if url:
@@ -355,10 +751,6 @@ class ReferenceWidget(QFrame):
                 from urllib.parse import urlparse
                 domain = urlparse(url).netloc
                 tooltip_parts.append(f"Source: {domain}")
-
-            # Add reliability indicator
-            reliability = self.reference_data.get('reliability_score', 0.0)
-            tooltip_parts.append(f"Reliability: {reliability:.1%}")
 
         # Add content preview (shorter - first 80 chars)
         content = self.reference_data.get('content', '') or self.reference_data.get('text', '')
@@ -399,50 +791,42 @@ class ReferenceWidget(QFrame):
         text_label.setMaximumHeight(80)  # Increased from 40 to 80
         content_layout.addWidget(text_label)
 
-        # Simplified score badge - single combined indicator
-        score_layout = QHBoxLayout()
-        score_layout.setSpacing(5)
+        # Simple badge without confidence
+        badge_layout = QHBoxLayout()
+        badge_layout.setSpacing(5)
 
         if self.ref_type == 'pdf':
             page = self.reference_data.get('page', 'N/A')
-            confidence = self.reference_data.get('confidence', 0.0)
 
-            # Combined page + confidence badge
-            badge_text = f"Page {page} • {confidence:.0%}"
-            badge_color = '#4CAF50' if confidence >= 0.7 else '#2196F3' if confidence >= 0.5 else '#FF9800'
-
-            combined_badge = QLabel(badge_text)
-            combined_badge.setStyleSheet(f"""
-                background-color: {badge_color};
+            # Page badge only
+            page_badge = QLabel(f"Page {page}")
+            page_badge.setStyleSheet("""
+                background-color: #2196F3;
                 color: white;
                 padding: 2px 8px;
                 border-radius: 3px;
                 font-size: 8pt;
                 font-weight: bold;
             """)
-            score_layout.addWidget(combined_badge)
+            badge_layout.addWidget(page_badge)
 
         elif self.ref_type == 'web':
             source_type = self.reference_data.get('source_type', 'web')
-            reliability = self.reference_data.get('reliability_score', 0.0)
 
-            # Combined source + reliability badge
-            badge_text = f"{source_type.title()} • {reliability:.0%}"
-            badge_color = '#4CAF50' if reliability >= 0.7 else '#2196F3' if reliability >= 0.5 else '#FF9800'
-
-            combined_badge = QLabel(badge_text)
-            combined_badge.setStyleSheet(f"""
-                background-color: {badge_color};
+            # Source type badge only
+            source_badge = QLabel(source_type.title())
+            source_badge.setStyleSheet("""
+                background-color: #FF9800;
                 color: white;
                 padding: 2px 8px;
                 border-radius: 3px;
                 font-size: 8pt;
                 font-weight: bold;
             """)
-            score_layout.addWidget(combined_badge)
+            badge_layout.addWidget(source_badge)
 
-        score_layout.addStretch()
-        content_layout.addLayout(score_layout)
+        badge_layout.addStretch()
+        content_layout.addLayout(badge_layout)
 
         layout.addLayout(content_layout, 1)  # Content takes most space
 
@@ -464,167 +848,124 @@ class ReferenceWidget(QFrame):
 
 
 class ChatHistoryWidget(QScrollArea):
-    """Widget for displaying chat history with references."""
-    
+    """Widget for displaying chat history with references and performance optimization."""
+
+    # Maximum messages to keep in view (for performance)
+    MAX_VISIBLE_MESSAGES = 100
+
     def __init__(self):
         super().__init__()
         self.setWidgetResizable(True)
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        
+
         # Main widget and layout
         self.content_widget = QWidget()
         self.content_layout = QVBoxLayout(self.content_widget)
         self.content_layout.setAlignment(Qt.AlignTop)
-        
+
         self.setWidget(self.content_widget)
-        
-        # Chat history
+
+        # Chat history (all messages)
         self.chat_items = []
+
+        # Performance: Track archived messages (hidden from view)
+        self.archived_items = []
+
+        # Get preferences
+        self.preferences = get_chat_preferences()
     
     def add_question(self, question: str):
-        """Add a user question to the chat history."""
+        """Add a user question to the chat history using MessageBubble with animation."""
 
         # Hide empty state when first question is added
         if hasattr(self.parent(), 'empty_state_label'):
             self.parent().empty_state_label.setVisible(False)
 
-        question_frame = QFrame()
-        question_frame.setStyleSheet("""
-            QFrame {
-                background-color: #e3f2fd;
-                border-radius: 10px;
-                padding: 10px;
-                margin: 5px;
-            }
-        """)
-        
-        layout = QVBoxLayout(question_frame)
-        
-        # Question header
-        header = QLabel("Question:")
-        header.setFont(QFont("Segoe UI", 9, QFont.Bold))
-        header.setStyleSheet("color: #2196F3;")
-        layout.addWidget(header)
-        
-        # Question text
-        question_text = QLabel(question)
-        question_text.setWordWrap(True)
-        question_text.setFont(QFont("Segoe UI", 9))
-        layout.addWidget(question_text)
-        
-        self.content_layout.addWidget(question_frame)
-        self.chat_items.append(('question', question_frame))
-        
+        # Create compact message bubble (right-aligned, max 65% width)
+        message_bubble = MessageBubble(question)
+
+        self.content_layout.addWidget(message_bubble)
+        self.chat_items.append(('question', message_bubble))
+
+        # Apply fade + slide in animation (from right for user messages)
+        if self.preferences.show_animations:
+            QTimer.singleShot(10, lambda: FadeSlideInAnimation.apply(message_bubble, direction="right", duration=250))
+
+        # Performance: Archive old messages if limit exceeded
+        self._check_and_archive_messages()
+
         # Scroll to bottom
-        QTimer.singleShot(100, self._scroll_to_bottom)
+        if self.preferences.auto_scroll:
+            QTimer.singleShot(150, self._scroll_to_bottom)
     
     def add_answer(self, answer_data: Dict[str, Any], reference_manager: ReferenceManager):
-        """Add an answer with references to the chat history."""
-        
-        answer_frame = QFrame()
-        answer_frame.setStyleSheet("""
-            QFrame {
-                background-color: #f1f8e9;
-                border-radius: 10px;
-                padding: 10px;
-                margin: 5px;
-            }
-        """)
-        
-        layout = QVBoxLayout(answer_frame)
-        
-        # Answer header
-        header = QLabel("Answer:")
-        header.setFont(QFont("Segoe UI", 9, QFont.Bold))
-        header.setStyleSheet("color: #4CAF50;")
-        layout.addWidget(header)
-        
-        # Answer text - using QLabel for read-only content (lighter than QTextEdit)
-        answer_text = QLabel(answer_data.get('answer', ''))
-        answer_text.setWordWrap(True)
-        answer_text.setTextInteractionFlags(Qt.TextSelectableByMouse)
-        answer_text.setFont(QFont("Segoe UI", 9))
-        answer_text.setStyleSheet("padding: 5px;")
-        layout.addWidget(answer_text)
-        
-        # References section
-        pdf_refs = answer_data.get('pdf_references', [])
-        web_refs = answer_data.get('web_references', [])
-        
-        if pdf_refs or web_refs:
-            refs_group = QGroupBox("References:")
-            refs_layout = QVBoxLayout(refs_group)
+        """Add an answer with references to the chat history using MessagePanel with animation."""
 
-            # PDF references
-            if pdf_refs:
-                pdf_label = QLabel("PDF Sources:")
-                pdf_label.setFont(QFont("Segoe UI", 8, QFont.Bold))
-                pdf_label.setStyleSheet("color: #2196F3;")
-                refs_layout.addWidget(pdf_label)
+        # Create wide message panel (left-aligned, 95% width)
+        message_panel = MessagePanel(answer_data, reference_manager)
+        message_panel.reference_clicked.connect(self._handle_reference_click)
 
-                for ref_data in pdf_refs[:3]:  # Show top 3 PDF refs
-                    ref_widget = ReferenceWidget('pdf', ref_data, reference_manager)
-                    ref_widget.reference_clicked.connect(self._handle_reference_click)
-                    refs_layout.addWidget(ref_widget)
+        self.content_layout.addWidget(message_panel)
+        self.chat_items.append(('answer', message_panel))
 
-            # Web references
-            if web_refs:
-                web_label = QLabel("Web Sources:")
-                web_label.setFont(QFont("Segoe UI", 8, QFont.Bold))
-                web_label.setStyleSheet("color: #FF9800;")
-                refs_layout.addWidget(web_label)
-                
-                for ref_data in web_refs[:3]:  # Show top 3 web refs
-                    ref_widget = ReferenceWidget('web', ref_data, reference_manager)
-                    ref_widget.reference_clicked.connect(self._handle_reference_click)
-                    refs_layout.addWidget(ref_widget)
-            
-            layout.addWidget(refs_group)
-        
-        # Quality metrics
-        quality = answer_data.get('quality_metrics', {})
-        if quality:
-            confidence = quality.get('confidence', 0.0)
+        # Apply fade + slide in animation (from left for assistant messages)
+        if self.preferences.show_animations:
+            QTimer.singleShot(10, lambda: FadeSlideInAnimation.apply(message_panel, direction="left", duration=300))
 
-            # Icon-based confidence indicator
-            if confidence >= 0.7:
-                conf_icon = "✓✓✓" if not QTAWESOME_AVAILABLE else ""
-                conf_color = "#4CAF50"
-            elif confidence >= 0.5:
-                conf_icon = "✓✓" if not QTAWESOME_AVAILABLE else ""
-                conf_color = "#2196F3"
-            else:
-                conf_icon = "✓" if not QTAWESOME_AVAILABLE else ""
-                conf_color = "#FF9800"
+        # Performance: Archive old messages if limit exceeded
+        self._check_and_archive_messages()
 
-            metrics_label = QLabel(f"{conf_icon} Confidence: {confidence:.1%}")
-            metrics_label.setStyleSheet(f"color: {conf_color}; font-size: 8pt; font-weight: bold;")
-            layout.addWidget(metrics_label)
-        
-        self.content_layout.addWidget(answer_frame)
-        self.chat_items.append(('answer', answer_frame))
-        
         # Scroll to bottom
-        QTimer.singleShot(100, self._scroll_to_bottom)
+        if self.preferences.auto_scroll:
+            QTimer.singleShot(350, self._scroll_to_bottom)
     
     def _handle_reference_click(self, ref_type: str, reference_data: Dict[str, Any]):
         """Handle reference click - emit signal to parent."""
         self.parent().handle_reference_click(ref_type, reference_data)
-    
+
+    def _check_and_archive_messages(self):
+        """Archive old messages if we exceed the maximum visible limit (for performance)."""
+        if len(self.chat_items) > self.MAX_VISIBLE_MESSAGES:
+            # Calculate how many to archive
+            num_to_archive = len(self.chat_items) - self.MAX_VISIBLE_MESSAGES
+
+            # Archive oldest messages
+            for i in range(num_to_archive):
+                msg_type, widget = self.chat_items[i]
+
+                # Hide widget (but keep in memory)
+                widget.setVisible(False)
+
+                # Move to archived list
+                self.archived_items.append((msg_type, widget))
+
+            # Remove from active list
+            self.chat_items = self.chat_items[num_to_archive:]
+
+            logger.info(f"Archived {num_to_archive} old messages for performance")
+
     def _scroll_to_bottom(self):
         """Scroll to the bottom of the chat history."""
         scrollbar = self.verticalScrollBar()
         scrollbar.setValue(scrollbar.maximum())
     
     def clear_history(self):
-        """Clear all chat history."""
+        """Clear all chat history including archived messages."""
+        # Clear active messages
         for _, widget in self.chat_items:
             widget.deleteLater()
         self.chat_items.clear()
 
+        # Clear archived messages
+        for _, widget in self.archived_items:
+            widget.deleteLater()
+        self.archived_items.clear()
+
         # Show empty state again
         if hasattr(self.parent(), 'empty_state_label'):
             self.parent().empty_state_label.setVisible(True)
+
+        logger.info("Chat history cleared (including archived messages)")
 
 
 class RAGChatPanel(QWidget):
@@ -732,18 +1073,34 @@ class RAGChatPanel(QWidget):
         self.chat_history = ChatHistoryWidget()
         layout.addWidget(self.chat_history, stretch=1)
 
-        # Empty state message (shown when no chat history)
+        # Enhanced empty state message (shown when no chat history)
         self.empty_state_label = QLabel()
         self.empty_state_label.setText(
-            "<b>Welcome to AI Chat!</b><br><br>"
-            "Load a PDF document and start asking questions.<br><br>"
-            "<i>Try quick actions below or type your own question</i>"
+            "<div style='text-align: center;'>"
+            "<span style='font-size: 32pt; color: #2196F3;'>💬</span><br><br>"
+            "<b style='font-size: 12pt; color: #333;'>Welcome to AI Chat!</b><br><br>"
+            "<span style='color: #666; font-size: 10pt;'>"
+            "Ask questions about your PDF documents with AI-powered assistance.<br>"
+            "Get comprehensive answers with references and citations.<br><br>"
+            "</span>"
+            "<span style='color: #2196F3; font-size: 9pt;'>"
+            "• Markdown & LaTeX support<br>"
+            "• Code highlighting<br>"
+            "• Table & formula rendering<br>"
+            "• Web research integration<br><br>"
+            "</span>"
+            "<i style='color: #999; font-size: 9pt;'>Load a PDF and start asking questions using the quick actions below</i>"
+            "</div>"
         )
         self.empty_state_label.setAlignment(Qt.AlignCenter)
         self.empty_state_label.setStyleSheet("""
-            color: #999;
-            font-size: 10pt;
-            padding: 40px;
+            QLabel {
+                padding: 60px 40px;
+                background-color: #FAFAFA;
+                border: 2px dashed #E0E0E0;
+                border-radius: 10px;
+                margin: 20px;
+            }
         """)
         self.empty_state_label.setTextFormat(Qt.RichText)
         self.chat_history.content_layout.addWidget(self.empty_state_label)

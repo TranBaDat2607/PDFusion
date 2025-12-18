@@ -626,35 +626,8 @@ ANSWER:
                                  web_sources: List[WebSource]) -> Dict[str, float]:
         """Calculate quality metrics for the answer."""
 
-        # Confidence based on source quality and quantity
-        pdf_confidence = 0.0
-        if pdf_sources:
-            # Use rerank_score (if available) or final_score, fallback to similarity_score
-            pdf_scores = [
-                s.get('rerank_score', s.get('final_score', s.get('similarity_score', 0.0)))
-                for s in pdf_sources
-            ]
-            pdf_confidence = sum(pdf_scores) / len(pdf_scores)
-        
-        web_confidence = 0.0
-        if web_sources:
-            web_scores = [s.reliability_score for s in web_sources]
-            web_confidence = sum(web_scores) / len(web_scores)
-        
-        # Overall confidence (weighted towards PDF sources)
-        if pdf_sources and web_sources:
-            overall_confidence = 0.7 * pdf_confidence + 0.3 * web_confidence
-        elif pdf_sources:
-            overall_confidence = pdf_confidence
-        elif web_sources:
-            overall_confidence = web_confidence * 0.6  # Lower confidence for web-only
-        else:
-            overall_confidence = 0.0
-
+        # Simple metrics without confidence calculation
         return {
-            'confidence': min(overall_confidence, 1.0),
-            'pdf_confidence': pdf_confidence,
-            'web_confidence': web_confidence,
             'total_sources': len(pdf_sources) + len(web_sources)
         }
     

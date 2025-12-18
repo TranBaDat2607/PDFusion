@@ -167,8 +167,8 @@ class RAGTester:
         """Get summary of processed document."""
         try:
             if not self.document_id:
-                return {'summary': 'Không có tài liệu nào được xử lý'}
-            
+                return {'summary': 'No document has been processed'}
+
             summary = await self.rag_chain.summarize_document(self.document_id)
             return summary
             
@@ -278,17 +278,17 @@ async def main():
     # ========================================
     # 🔧 CONFIGURATION VARIABLES
     # ========================================
-    
-    # TODO: Thay đổi đường dẫn PDF của bạn ở đây
+
+    # TODO: Change your PDF path here
     PDF_PATH = r"C:\Users\Admin\Downloads\CV_TranBaDat__Copy_.pdf"
-    
-    # TODO: Thay đổi câu hỏi của bạn ở đây
-    QUESTION = "Tóm tắt nội dung chính của tài liệu này"
-    
-    # Có bao gồm web research không?
+
+    # TODO: Change your question here
+    QUESTION = "Summarize the main content of this document"
+
+    # Include web research?
     INCLUDE_WEB_RESEARCH = True
-    
-    # File output cho kết quả
+
+    # Output file for results
     OUTPUT_FILE = "result.json"
     
     # ========================================
