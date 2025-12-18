@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Optional
 
 from PySide6.QtWidgets import (
-    QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, 
+    QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QSplitter, QMenuBar, QStatusBar, QToolBar, QFileDialog,
     QMessageBox, QProgressBar, QLabel, QPushButton, QGroupBox,
     QComboBox, QLineEdit, QTextEdit, QFrame, QFrame, QSizePolicy
@@ -16,6 +16,8 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt, QThread, Signal, QTimer, QSize
 from PySide6.QtGui import QAction, QIcon, QPixmap, QFont
 from PySide6.QtCore import QStandardPaths
+
+import qtawesome as qta
 
 from ..config import get_settings, get_config_manager, LanguageCode, TranslationService, AppSettings
 from ..processors import PDFProcessor
@@ -41,10 +43,13 @@ class MainWindow(QMainWindow):
     
     def __init__(self):
         super().__init__()
-        
+
         self.settings = get_settings()
         self.config_manager = get_config_manager()
-        
+
+        # Initialize icons
+        self.icons = self._init_icons()
+
         # Processing state
         self.current_file: Optional[Path] = None
         self.translation_worker: Optional[TranslationWorker] = None
@@ -66,7 +71,20 @@ class MainWindow(QMainWindow):
         QTimer.singleShot(100, self._adjust_panel_sizes)
         
         logger.info("Main window initialized")
-    
+
+    def _init_icons(self):
+        """Initialize QtAwesome icons for the main window."""
+        return {
+            'browse': qta.icon('fa5s.folder-open', color='#2196F3'),
+            'translate': qta.icon('fa5s.language', color='#4CAF50'),
+            'cancel': qta.icon('fa5s.times-circle', color='#f44336'),
+            'settings': qta.icon('fa5s.cog', color='#666'),
+            'validate': qta.icon('fa5s.check-circle', color='#4CAF50'),
+            'about': qta.icon('fa5s.info-circle', color='#2196F3'),
+            'rag_on': qta.icon('fa5s.robot', color='#4CAF50'),
+            'rag_off': qta.icon('fa5s.robot', color='#999')
+        }
+
     def _setup_ui(self):
         """Setup the main UI layout."""
         self.setWindowTitle("Desktop PDF Translator - Vietnamese Priority")
@@ -148,7 +166,8 @@ class MainWindow(QMainWindow):
         self.file_label.setStyleSheet("padding: 5px; border: 1px solid #ccc; background: #f9f9f9; min-width: 150px;")
         toolbar.addWidget(self.file_label)
         
-        self.browse_btn = QPushButton("🔍 Browse")
+        self.browse_btn = QPushButton(" Browse")
+        self.browse_btn.setIcon(self.icons['browse'])
         self.browse_btn.setStatusTip("Browse for PDF file")
         self.browse_btn.clicked.connect(self._browse_file)
         toolbar.addWidget(self.browse_btn)
@@ -210,31 +229,36 @@ class MainWindow(QMainWindow):
         toolbar.addSeparator()
         
         # Action buttons
-        self.translate_btn = QPushButton("🔄 Translate")
+        self.translate_btn = QPushButton(" Translate")
+        self.translate_btn.setIcon(self.icons['translate'])
         self.translate_btn.setStatusTip("Start translation")
         self.translate_btn.setEnabled(False)
         self.translate_btn.clicked.connect(self.start_translation)
         toolbar.addWidget(self.translate_btn)
-        
-        self.cancel_btn = QPushButton("❌ Cancel")
+
+        self.cancel_btn = QPushButton(" Cancel")
+        self.cancel_btn.setIcon(self.icons['cancel'])
         self.cancel_btn.setStatusTip("Cancel translation")
         self.cancel_btn.setEnabled(False)
         self.cancel_btn.clicked.connect(self.cancel_translation)
         toolbar.addWidget(self.cancel_btn)
-        
+
         toolbar.addSeparator()
-        
-        self.settings_btn = QPushButton("⚙️ Settings")
+
+        self.settings_btn = QPushButton(" Settings")
+        self.settings_btn.setIcon(self.icons['settings'])
         self.settings_btn.setStatusTip("Open application settings")
         self.settings_btn.clicked.connect(self.open_settings)
         toolbar.addWidget(self.settings_btn)
 
-        self.validate_btn = QPushButton("✅ Validate")
+        self.validate_btn = QPushButton(" Validate")
+        self.validate_btn.setIcon(self.icons['validate'])
         self.validate_btn.setStatusTip("Check translation service configuration")
         self.validate_btn.clicked.connect(self.validate_services)
         toolbar.addWidget(self.validate_btn)
 
-        self.about_btn = QPushButton("ℹ️ About")
+        self.about_btn = QPushButton(" About")
+        self.about_btn.setIcon(self.icons['about'])
         self.about_btn.setStatusTip("About this application")
         self.about_btn.clicked.connect(self.show_about)
         toolbar.addWidget(self.about_btn)
@@ -242,7 +266,8 @@ class MainWindow(QMainWindow):
         toolbar.addSeparator()
         
         # RAG toggle button
-        self.rag_toggle_btn = QPushButton("🤖 RAG: ON" if self.rag_enabled else "🤖 RAG: OFF")
+        self.rag_toggle_btn = QPushButton(" RAG: ON" if self.rag_enabled else " RAG: OFF")
+        self.rag_toggle_btn.setIcon(self.icons['rag_on'] if self.rag_enabled else self.icons['rag_off'])
         self.rag_toggle_btn.setStatusTip("Toggle RAG (AI Chat) functionality")
         self.rag_toggle_btn.setCheckable(True)
         self.rag_toggle_btn.setChecked(self.rag_enabled)
@@ -620,7 +645,7 @@ class MainWindow(QMainWindow):
             # Start worker
             self.translation_worker.start()
 
-            self.status_label.setText("⚙️ Translation in progress...")
+            self.status_label.setText("Translation in progress...")
 
             logger.info("Translation started")
             
@@ -647,7 +672,7 @@ class MainWindow(QMainWindow):
             self.progress_panel.setVisible(False)
             self.progress_panel.reset()
 
-            self.status_label.setText("❌ Translation cancelled")
+            self.status_label.setText("Translation cancelled")
 
             logger.info("Translation cancellation requested")
     
@@ -672,9 +697,9 @@ class MainWindow(QMainWindow):
 
         # Update status label with stage or message
         if stage:
-            self.status_label.setText(f"⚙️ {stage}")
+            self.status_label.setText(f"{stage}")
         elif message:
-            self.status_label.setText(f"⚙️ {message}")
+            self.status_label.setText(f"{message}")
 
         # Update compact progress panel (for detailed view)
         self.progress_panel.update_progress(event_data)
@@ -687,7 +712,7 @@ class MainWindow(QMainWindow):
             if translated_file and Path(translated_file).exists():
                 # Load translated PDF
                 self.translated_pdf_viewer.load_pdf(Path(translated_file))
-                self.status_label.setText("✅ Translation completed successfully")
+                self.status_label.setText("Translation completed successfully")
 
                 # Process document for RAG only if RAG is enabled
                 if self.rag_enabled:
@@ -700,7 +725,7 @@ class MainWindow(QMainWindow):
                     f"Translation completed successfully!\nOutput: {translated_file}"
                 )
             else:
-                self.status_label.setText("⚠️ Translation completed but output file not found")
+                self.status_label.setText("Translation completed but output file not found")
 
         except Exception as e:
             logger.exception(f"Error handling translation completion: {e}")
@@ -736,7 +761,7 @@ class MainWindow(QMainWindow):
         self.progress_panel.setVisible(False)
         self.progress_panel.reset()
 
-        self.status_label.setText("❌ Translation failed")
+        self.status_label.setText("Translation failed")
     
     # RAG Integration Methods
     def _process_document_for_rag(self, document_path: Path):
@@ -801,7 +826,7 @@ class MainWindow(QMainWindow):
         available_services = TranslatorFactory.get_available_services()
         
         if not available_services:
-            self.service_status_label.setText("⚠️ No services available")
+            self.service_status_label.setText("No services available")
             self.service_status_label.setStyleSheet("color: red")
         else:
             # Check configuration of preferred service
@@ -812,7 +837,7 @@ class MainWindow(QMainWindow):
                 self.service_status_label.setText(f"✓ {preferred_service.value} ready")
                 self.service_status_label.setStyleSheet("color: green")
             else:
-                self.service_status_label.setText(f"⚠️ {preferred_service.value} not configured")
+                self.service_status_label.setText(f"{preferred_service.value} not configured")
                 self.service_status_label.setStyleSheet("color: orange")
     
     def validate_services(self):
@@ -831,9 +856,9 @@ class MainWindow(QMainWindow):
         for service in [TranslationService.OPENAI, TranslationService.GEMINI]:
             if service in available_services:
                 is_valid, status_msg = TranslatorFactory.validate_service_availability(service)
-                status = "✓ Ready" if is_valid else f"⚠️ {status_msg}"
+                status = "Ready" if is_valid else f"{status_msg}"
             else:
-                status = "❌ Not installed"
+                status = "Not installed"
             
             model_options = _service_model_options(service)
             message += f"{service.value}: {status} ({', '.join(model_options)})\n"
@@ -883,7 +908,8 @@ class MainWindow(QMainWindow):
         
         # Update button appearance
         if self.rag_enabled:
-            self.rag_toggle_btn.setText("🤖 RAG: ON")
+            self.rag_toggle_btn.setText(" RAG: ON")
+            self.rag_toggle_btn.setIcon(self.icons['rag_on'])
             self.rag_toggle_btn.setChecked(True)
             self.status_label.setText("RAG enabled - AI Chat ready")
             
@@ -895,7 +921,8 @@ class MainWindow(QMainWindow):
             if self.current_file:
                 self.chat_panel.process_document(self.current_file)
         else:
-            self.rag_toggle_btn.setText("🤖 RAG: OFF")
+            self.rag_toggle_btn.setText(" RAG: OFF")
+            self.rag_toggle_btn.setIcon(self.icons['rag_off'])
             self.rag_toggle_btn.setChecked(False)
             self.status_label.setText("RAG disabled - AI Chat unavailable")
             

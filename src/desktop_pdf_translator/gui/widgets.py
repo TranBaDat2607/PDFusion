@@ -18,6 +18,8 @@ from PySide6.QtCore import Qt, Signal, QTimer, QRectF, QEvent
 from PySide6.QtGui import QPixmap, QFont, QPalette, QImage, QPainter, QTextCursor
 import fitz  # PyMuPDF
 
+import qtawesome as qta
+
 logger = logging.getLogger(__name__)
 
 class PDFScrollArea(QScrollArea):
@@ -571,7 +573,7 @@ class ProgressPanel(QWidget):
         """Mark translation as complete."""
         self.is_active = False
         self.overall_progress.setValue(100)
-        self.status_text.append("✅ Translation completed!")
+        self.status_text.append("Translation completed!")
 
         # Hide cancel button
         self.cancel_btn.setVisible(False)
@@ -607,26 +609,29 @@ class RAGChatPanel(QWidget):
         # Header with title and controls
         header_layout = QHBoxLayout()
         
-        header = QLabel("💬 Chat with PDF")
+        header = QLabel("Chat with PDF")
         header.setStyleSheet("""
             QLabel {
                 font-size: 16px;
                 font-weight: bold;
                 padding: 5px;
+                color: #2196F3;
             }
         """)
         header_layout.addWidget(header)
         header_layout.addStretch()
-        
+
         # Document context toggle button
-        self.context_toggle_btn = QPushButton("🌐 General Context")
+        self.context_toggle_btn = QPushButton(" General Context")
+        self.context_toggle_btn.setIcon(qta.icon('fa5s.globe', color='#2196F3'))
         self.context_toggle_btn.setCheckable(True)
         self.context_toggle_btn.setToolTip("Toggle between general and document-specific context")
         self.context_toggle_btn.clicked.connect(self.toggle_document_context)
         header_layout.addWidget(self.context_toggle_btn)
-        
+
         # Clear chat button
-        self.clear_btn = QPushButton("🗑️ Clear Chat")
+        self.clear_btn = QPushButton(" Clear")
+        self.clear_btn.setIcon(qta.icon('fa5s.trash-alt', color='#f44336'))
         self.clear_btn.setToolTip("Clear conversation history")
         self.clear_btn.clicked.connect(self.clear_chat)
         header_layout.addWidget(self.clear_btn)
@@ -677,11 +682,13 @@ class RAGChatPanel(QWidget):
         self.document_context_mode = not self.document_context_mode
         
         if self.document_context_mode:
-            self.context_toggle_btn.setText("📄 Document Context")
+            self.context_toggle_btn.setText(" Document Context")
+            self.context_toggle_btn.setIcon(qta.icon('fa5s.file-pdf', color='#2196F3'))
             self.context_toggle_btn.setStyleSheet("background-color: #e3f2fd;")
             self.status_bar.setText("Document-specific context mode - Questions will relate to the current PDF")
         else:
-            self.context_toggle_btn.setText("🌐 General Context")
+            self.context_toggle_btn.setText(" General Context")
+            self.context_toggle_btn.setIcon(qta.icon('fa5s.globe', color='#2196F3'))
             self.context_toggle_btn.setStyleSheet("")
             self.status_bar.setText("General context mode - Questions will be answered without PDF context")
         
@@ -720,11 +727,11 @@ class RAGChatPanel(QWidget):
         timestamp = time.strftime("%H:%M:%S")
         
         if sender == "user":
-            formatted_message = f"[{timestamp}] 👤 You: {message}"
+            formatted_message = f"[{timestamp}] You: {message}"
         elif sender == "ai":
-            formatted_message = f"[{timestamp}] 🤖 AI: {message}"
+            formatted_message = f"[{timestamp}] AI: {message}"
         else:  # system
-            formatted_message = f"[{timestamp}] ⚙️ System: {message}"
+            formatted_message = f"[{timestamp}] System: {message}"
             
         self.chat_display.append(formatted_message)
         

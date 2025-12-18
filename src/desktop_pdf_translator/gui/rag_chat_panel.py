@@ -788,7 +788,7 @@ class RAGChatPanel(QWidget):
         # Stage label (main activity)
         self.stage_label = QLabel("Processing...")
         self.stage_label.setFont(QFont("Segoe UI", 9, QFont.Bold))
-        self.stage_label.setStyleSheet("color: #2196F3;")
+        self.stage_label.setStyleSheet("color: #2196F3; font-weight: bold;")
         container_layout.addWidget(self.stage_label)
 
         # Progress bar
@@ -1286,7 +1286,7 @@ class RAGChatPanel(QWidget):
 
         # Update status
         self.status_label.setText(
-            f"✅ Document ready: {self.current_document_path.name} ({num_chunks} chunks)"
+            f"Document ready: {self.current_document_path.name} ({num_chunks} chunks)"
         )
 
         logger.info(f"Document processing completed: {document_id} ({num_chunks} chunks)")
@@ -1297,7 +1297,7 @@ class RAGChatPanel(QWidget):
         self.progress_container.setVisible(False)
 
         # Update status
-        self.status_label.setText(f"❌ Processing failed")
+        self.status_label.setText(f"Processing failed")
 
         # Show error dialog
         QMessageBox.warning(self, "Processing Error", error_message)
@@ -1311,7 +1311,7 @@ class RAGChatPanel(QWidget):
             self.document_processor_worker.cancel()
 
             # Update UI
-            self.stage_label.setText("⚠️ Cancelling...")
+            self.stage_label.setText("Cancelling...")
             self.cancel_processing_btn.setEnabled(False)
 
             # Wait for worker to finish
@@ -1331,7 +1331,7 @@ class RAGChatPanel(QWidget):
         self.cancel_processing_btn.setEnabled(True)
 
         # Update status
-        self.status_label.setText("⚠️ Processing cancelled by user")
+        self.status_label.setText("Processing cancelled by user")
 
         logger.info("Document processing cancelled")
 
@@ -1391,12 +1391,12 @@ class RAGChatPanel(QWidget):
         sources_used = answer_data.get('sources_used', {})
         web_sources = sources_used.get('web_sources', 0)
         if self.web_research_cb.isChecked() and web_sources == 0:
-            self.status_label.setText("⚠️ Web research unavailable - using PDF only")
+            self.status_label.setText("Web research unavailable - using PDF only")
         else:
             # Update status with normal info
             processing_time = answer_data.get('processing_time', 0)
             total_sources = sources_used.get('pdf_sources', 0) + web_sources
-            self.status_label.setText(f"✅ Completed in {processing_time:.1f}s - {total_sources} sources")
+            self.status_label.setText(f"Completed in {processing_time:.1f}s - {total_sources} sources")
 
         # Suggested questions disabled by default (low quality, template-based)
         # Users can enable in settings if needed
@@ -1423,7 +1423,7 @@ class RAGChatPanel(QWidget):
         self.progress_container.setVisible(False)
 
         # Show error with retry instruction
-        self.status_label.setText(f"❌ Error - Question kept for retry")
+        self.status_label.setText(f"Error - Question kept for retry")
         QMessageBox.warning(
             self,
             "Processing Error",
@@ -1434,7 +1434,7 @@ class RAGChatPanel(QWidget):
     
     def _update_qa_progress(self, message: str, progress: int):
         """Update progress for Q&A processing (using unified progress UI)."""
-        self.stage_label.setText(f"💬 {message}")
+        self.stage_label.setText(f"{message}")
         self.progress_bar.setValue(progress)
         self.detail_label.setText("Processing your question...")
         self.time_label.setText("")  # No ETA for quick Q&A
@@ -1452,7 +1452,7 @@ class RAGChatPanel(QWidget):
                 # Emit signal for PDF navigation
                 self.pdf_navigation_requested.emit(pdf_ref.page, pdf_ref.bbox)
                 # Show success feedback
-                QTimer.singleShot(1000, lambda: self.status_label.setText(f"✅ Showing page {page}"))
+                QTimer.singleShot(1000, lambda: self.status_label.setText(f"Showing page {page}"))
             else:
                 self.status_label.setText(f"Could not navigate to page {page}")
 
@@ -1468,7 +1468,7 @@ class RAGChatPanel(QWidget):
                 # Emit signal for web navigation
                 self.web_link_requested.emit(web_ref.url)
                 # Show success feedback
-                QTimer.singleShot(1000, lambda: self.status_label.setText(f"✅ Opened {domain}"))
+                QTimer.singleShot(1000, lambda: self.status_label.setText(f"Opened {domain}"))
             else:
                 self.status_label.setText(f"Could not open link")
     
