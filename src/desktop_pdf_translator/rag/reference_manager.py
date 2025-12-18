@@ -188,105 +188,19 @@ class ReferenceManager:
     
     def _add_to_history(self, ref_type: str, reference: Any):
         """Add reference to navigation history."""
-        
+        from datetime import datetime
+
         history_entry = {
             'type': ref_type,
-            'timestamp': logger.name,  # Using logger name as placeholder for timestamp
+            'timestamp': datetime.now().isoformat(),
             'reference': reference
         }
-        
+
         self.reference_history.append(history_entry)
-        
+
         # Keep only last 50 entries
         if len(self.reference_history) > 50:
             self.reference_history = self.reference_history[-50:]
-    
-    def get_reference_summary(self, pdf_refs: List[Dict[str, Any]], 
-                            web_refs: List[Dict[str, Any]]) -> Dict[str, Any]:
-        """
-        Generate a summary of references for display.
-        
-        Args:
-            pdf_refs: List of PDF reference data
-            web_refs: List of web reference data
-            
-        Returns:
-            Reference summary with formatted information
-        """
-        
-        # Process PDF references
-        pdf_summary = []
-        for ref_data in pdf_refs:
-            pdf_ref = self.create_pdf_reference(ref_data)
-            
-            summary_item = {
-                'display_text': str(pdf_ref),
-                'page': pdf_ref.page,
-                'confidence': pdf_ref.confidence,
-                'content_types': []
-            }
-            
-            # Add content type indicators
-            if pdf_ref.has_equations:
-                summary_item['content_types'].append('equations')
-            if pdf_ref.has_tables:
-                summary_item['content_types'].append('tables')
-            if pdf_ref.has_figures:
-                summary_item['content_types'].append('figures')
-            
-            pdf_summary.append(summary_item)
-        
-        # Process web references
-        web_summary = []
-        for ref_data in web_refs:
-            web_ref = self.create_web_reference(ref_data)
-            
-            summary_item = {
-                'display_text': str(web_ref),
-                'url': web_ref.url,
-                'source_type': web_ref.source_type,
-                'reliability_score': web_ref.reliability_score,
-                'title': web_ref.title
-            }
-            
-            web_summary.append(summary_item)
-        
-        return {
-            'pdf_references': pdf_summary,
-            'web_references': web_summary,
-            'total_pdf': len(pdf_summary),
-            'total_web': len(web_summary),
-            'quality_indicators': self._calculate_reference_quality(pdf_refs, web_refs)
-        }
-    
-    def _calculate_reference_quality(self, pdf_refs: List[Dict[str, Any]], 
-                                   web_refs: List[Dict[str, Any]]) -> Dict[str, Any]:
-        """Calculate quality indicators for references."""
-        
-        quality = {
-            'pdf_avg_confidence': 0.0,
-            'web_avg_reliability': 0.0,
-            'has_academic_sources': False,
-            'has_high_confidence_pdf': False,
-            'source_diversity': 0
-        }
-        
-        # PDF quality metrics
-        if pdf_refs:
-            confidences = [ref.get('confidence', 0.0) for ref in pdf_refs]
-            quality['pdf_avg_confidence'] = sum(confidences) / len(confidences)
-            quality['has_high_confidence_pdf'] = any(c > 0.8 for c in confidences)
-        
-        # Web quality metrics
-        if web_refs:
-            reliabilities = [ref.get('reliability_score', 0.0) for ref in web_refs]
-            quality['web_avg_reliability'] = sum(reliabilities) / len(reliabilities)
-            
-            source_types = set(ref.get('source_type', 'web') for ref in web_refs)
-            quality['has_academic_sources'] = 'academic' in source_types
-            quality['source_diversity'] = len(source_types)
-        
-        return quality
     
     def format_reference_for_display(self, ref_type: str, reference_data: Dict[str, Any]) -> str:
         """
@@ -334,76 +248,3 @@ class ReferenceManager:
         self.reference_history.clear()
         logger.info("Reference history cleared")
     
-    def export_references(self, pdf_refs: List[Dict[str, Any]], 
-                         web_refs: List[Dict[str, Any]], 
-                         format_type: str = 'markdown') -> str:
-        """
-        Export references to a formatted string.
-        
-        Args:
-            pdf_refs: List of PDF references
-            web_refs: List of web references
-            format_type: Export format ('markdown', 'text', 'json')
-            
-        Returns:
-            Formatted reference string
-        """
-        
-        if format_type == 'markdown':
-            return self._export_markdown(pdf_refs, web_refs)
-        elif format_type == 'text':
-            return self._export_text(pdf_refs, web_refs)
-        elif format_type == 'json':
-            import json
-            return json.dumps({
-                'pdf_references': pdf_refs,
-                'web_references': web_refs
-            }, indent=2, ensure_ascii=False)
-        else:
-            raise ValueError(f"Unsupported format: {format_type}")
-    
-    def _export_markdown(self, pdf_refs: List[Dict[str, Any]], 
-                        web_refs: List[Dict[str, Any]]) -> str:
-        """Export references in markdown format."""
-        
-        lines = ["# Tài liệu tham khảo\n"]
-        
-        if pdf_refs:
-            lines.append("## Nguồn từ PDF\n")
-            for i, ref in enumerate(pdf_refs, 1):
-                pdf_ref = self.create_pdf_reference(ref)
-                lines.append(f"{i}. **Trang {pdf_ref.page}** (Độ tin cậy: {pdf_ref.confidence:.1%})")
-                lines.append(f"   {pdf_ref.text}\n")
-        
-        if web_refs:
-            lines.append("## Nguồn từ Internet\n")
-            for i, ref in enumerate(web_refs, 1):
-                web_ref = self.create_web_reference(ref)
-                lines.append(f"{i}. **{web_ref.title}** ({web_ref.source_type})")
-                lines.append(f"   URL: {web_ref.url}")
-                lines.append(f"   {web_ref.snippet}\n")
-        
-        return '\n'.join(lines)
-    
-    def _export_text(self, pdf_refs: List[Dict[str, Any]], 
-                    web_refs: List[Dict[str, Any]]) -> str:
-        """Export references in plain text format."""
-        
-        lines = ["TÀI LIỆU THAM KHẢO\n" + "="*50 + "\n"]
-        
-        if pdf_refs:
-            lines.append("NGUỒN TỪ PDF:")
-            for i, ref in enumerate(pdf_refs, 1):
-                pdf_ref = self.create_pdf_reference(ref)
-                lines.append(f"{i}. Trang {pdf_ref.page} - {pdf_ref.text}")
-            lines.append("")
-        
-        if web_refs:
-            lines.append("NGUỒN TỪ INTERNET:")
-            for i, ref in enumerate(web_refs, 1):
-                web_ref = self.create_web_reference(ref)
-                lines.append(f"{i}. {web_ref.title} ({web_ref.url})")
-                lines.append(f"   {web_ref.snippet}")
-            lines.append("")
-        
-        return '\n'.join(lines)

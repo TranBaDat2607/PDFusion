@@ -4,14 +4,10 @@ Integrates Google Search, Scholar, and other sources to supplement PDF knowledge
 """
 
 import logging
-import asyncio
-import aiohttp
-from pathlib import Path
-from typing import List, Dict, Any, Optional, Tuple
-import json
+from typing import List, Dict, Any, Tuple, Optional
 import re
 from datetime import datetime, timedelta
-from urllib.parse import quote_plus, urljoin, urlparse
+from urllib.parse import urlparse
 import hashlib
 
 try:
@@ -415,76 +411,3 @@ class WebResearchEngine:
         
         return unique_sources
     
-    async def validate_information(self, claim: str, sources: List[WebSource]) -> Dict[str, Any]:
-        """
-        Validate information across multiple sources.
-        
-        Args:
-            claim: Information claim to validate
-            sources: List of web sources
-            
-        Returns:
-            Validation result with confidence score
-        """
-        
-        # Simple validation based on source agreement
-        supporting_sources = []
-        contradicting_sources = []
-        
-        claim_lower = claim.lower()
-        
-        for source in sources:
-            content_lower = source.content.lower()
-            
-            # Simple keyword matching (can be enhanced with NLP)
-            claim_words = set(claim_lower.split())
-            content_words = set(content_lower.split())
-            
-            overlap = len(claim_words.intersection(content_words))
-            overlap_ratio = overlap / len(claim_words) if claim_words else 0
-            
-            if overlap_ratio > 0.3:  # Threshold for support
-                supporting_sources.append(source)
-            elif overlap_ratio < 0.1:  # Threshold for contradiction
-                contradicting_sources.append(source)
-        
-        # Calculate confidence based on source reliability and agreement
-        total_support_weight = sum(s.reliability_score for s in supporting_sources)
-        total_contradiction_weight = sum(s.reliability_score for s in contradicting_sources)
-        
-        if total_support_weight + total_contradiction_weight > 0:
-            confidence = total_support_weight / (total_support_weight + total_contradiction_weight)
-        else:
-            confidence = 0.5  # Neutral if no clear evidence
-        
-        return {
-            'confidence': confidence,
-            'supporting_sources': len(supporting_sources),
-            'contradicting_sources': len(contradicting_sources),
-            'validation_summary': f"Supported by {len(supporting_sources)} sources, contradicted by {len(contradicting_sources)} sources"
-        }
-    
-    def get_research_summary(self, sources: List[WebSource]) -> Dict[str, Any]:
-        """Generate a summary of research results."""
-        
-        if not sources:
-            return {'total_sources': 0, 'message': 'No sources found'}
-        
-        # Analyze sources
-        source_types = {}
-        total_reliability = 0
-        
-        for source in sources:
-            source_type = source.source_type
-            source_types[source_type] = source_types.get(source_type, 0) + 1
-            total_reliability += source.reliability_score
-        
-        avg_reliability = total_reliability / len(sources)
-        
-        return {
-            'total_sources': len(sources),
-            'source_types': source_types,
-            'average_reliability': avg_reliability,
-            'top_sources': [s.to_dict() for s in sources[:3]],
-            'research_quality': 'High' if avg_reliability > 0.7 else 'Medium' if avg_reliability > 0.5 else 'Low'
-        }

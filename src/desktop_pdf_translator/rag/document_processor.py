@@ -7,14 +7,8 @@ import logging
 import asyncio
 from pathlib import Path
 from typing import List, Dict, Any, Optional, Tuple
-import base64
-import io
-import json
 
 import fitz  # PyMuPDF
-import pandas as pd
-from PIL import Image
-import numpy as np
 
 try:
     import camelot

@@ -9,13 +9,12 @@ from typing import Optional
 
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
-    QSplitter, QMenuBar, QStatusBar, QToolBar, QFileDialog,
-    QMessageBox, QProgressBar, QLabel, QPushButton, QGroupBox,
-    QComboBox, QLineEdit, QTextEdit, QFrame, QFrame, QSizePolicy
+    QSplitter, QFileDialog,
+    QMessageBox, QLabel, QPushButton,
+    QComboBox, QLineEdit, QFrame, QSizePolicy
 )
-from PySide6.QtCore import Qt, QThread, Signal, QTimer, QSize
-from PySide6.QtGui import QAction, QIcon, QPixmap, QFont
-from PySide6.QtCore import QStandardPaths
+from PySide6.QtCore import Qt, Signal, QTimer
+from PySide6.QtGui import QAction
 
 import qtawesome as qta
 

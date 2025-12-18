@@ -12,12 +12,12 @@ from datetime import datetime
 
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QTextEdit, QLineEdit,
-    QPushButton, QLabel, QScrollArea, QFrame, QSplitter,
-    QGroupBox, QProgressBar, QComboBox, QCheckBox, QSpinBox,
-    QMessageBox, QMenu
+    QPushButton, QLabel, QScrollArea, QFrame,
+    QGroupBox, QProgressBar, QCheckBox,
+    QMessageBox
 )
 from PySide6.QtCore import Qt, QThread, Signal, QTimer
-from PySide6.QtGui import QFont, QTextCursor, QTextCharFormat, QColor, QPixmap, QIcon, QAction
+from PySide6.QtGui import QFont, QTextCursor, QTextCharFormat, QColor
 
 
 import qtawesome as qta
@@ -388,20 +388,6 @@ class MessagePanel(QFrame):
             if hasattr(self, 'content_browser'):
                 self.content_browser.setMaximumWidth(max_width - 50)  # Account for margins
 
-    def _create_separator(self) -> QFrame:
-        """Create a horizontal separator line."""
-        separator = QFrame()
-        separator.setFrameShape(QFrame.HLine)
-        separator.setFrameShadow(QFrame.Plain)
-        separator.setStyleSheet("""
-            QFrame {
-                color: #E0E0E0;
-                background-color: #E0E0E0;
-                max-height: 1px;
-                margin: 12px 0px;
-            }
-        """)
-        return separator
 
     def _create_content_section(self) -> QWidget:
         """Create the main content section with rendered answer."""
@@ -473,199 +459,6 @@ class MessagePanel(QFrame):
 
             # Horizontal width is handled by showEvent - don't interfere here
 
-    def _create_references_section(self, pdf_refs: List[Dict], web_refs: List[Dict]) -> QWidget:
-        """Create collapsible references section with clean design."""
-        refs_widget = QWidget()
-        refs_layout = QVBoxLayout(refs_widget)
-        refs_layout.setContentsMargins(0, 8, 0, 8)
-        refs_layout.setSpacing(8)
-
-        # Collapsible header with clean styling
-        header_widget = QWidget()
-        header_widget.setStyleSheet("""
-            QWidget {
-                background-color: #FAFAFA;
-                border-radius: 4px;
-            }
-        """)
-        header_layout = QHBoxLayout(header_widget)
-        header_layout.setContentsMargins(12, 8, 12, 8)
-        header_layout.setSpacing(8)
-
-        total_refs = len(pdf_refs) + len(web_refs)
-        self.refs_header_label = QLabel(f"📚 References ({total_refs})")
-        self.refs_header_label.setFont(QFont("Segoe UI", 9, QFont.Bold))
-        self.refs_header_label.setStyleSheet("color: #555; background: transparent;")
-        header_layout.addWidget(self.refs_header_label)
-
-        header_layout.addStretch()
-
-        # Toggle button with minimal style
-        self.refs_toggle_btn = QPushButton("▼ Show")
-        self.refs_toggle_btn.setMaximumWidth(70)
-        self.refs_toggle_btn.setMaximumHeight(24)
-        self.refs_toggle_btn.setStyleSheet("""
-            QPushButton {
-                background-color: transparent;
-                color: #2196F3;
-                border: 1px solid #2196F3;
-                border-radius: 4px;
-                padding: 4px 10px;
-                font-size: 8pt;
-                font-weight: bold;
-            }
-            QPushButton:hover {
-                background-color: #E3F2FD;
-            }
-        """)
-        header_layout.addWidget(self.refs_toggle_btn)
-
-        refs_layout.addWidget(header_widget)
-
-        # Collapsible content container
-        self.refs_content_container = QWidget()
-        self.refs_content_container.setVisible(False)  # Collapsed by default
-
-        content_layout = QVBoxLayout(self.refs_content_container)
-        content_layout.setContentsMargins(0, 8, 0, 0)
-        content_layout.setSpacing(8)
-
-        # PDF references
-        if pdf_refs:
-            pdf_label = QLabel("📘 PDF Sources:")
-            pdf_label.setFont(QFont("Segoe UI", 8, QFont.Bold))
-            pdf_label.setStyleSheet("color: #2196F3;")
-            content_layout.addWidget(pdf_label)
-
-            for ref_data in pdf_refs:  # Show all PDF refs when expanded
-                ref_widget = ReferenceWidget('pdf', ref_data, self.reference_manager)
-                ref_widget.reference_clicked.connect(self.reference_clicked.emit)
-                content_layout.addWidget(ref_widget)
-
-        # Web references
-        if web_refs:
-            web_label = QLabel("🌐 Web Sources:")
-            web_label.setFont(QFont("Segoe UI", 8, QFont.Bold))
-            web_label.setStyleSheet("color: #FF9800;")
-            content_layout.addWidget(web_label)
-
-            for ref_data in web_refs:  # Show all web refs when expanded
-                ref_widget = ReferenceWidget('web', ref_data, self.reference_manager)
-                ref_widget.reference_clicked.connect(self.reference_clicked.emit)
-                content_layout.addWidget(ref_widget)
-
-        refs_layout.addWidget(self.refs_content_container)
-
-        # Connect toggle button
-        self.refs_toggle_btn.clicked.connect(self._toggle_references)
-
-        return refs_widget
-
-    def _toggle_references(self):
-        """Toggle references visibility."""
-        is_visible = self.refs_content_container.isVisible()
-
-        if is_visible:
-            # Collapse
-            self.refs_content_container.setVisible(False)
-            self.refs_toggle_btn.setText("▼ Show")
-        else:
-            # Expand
-            self.refs_content_container.setVisible(True)
-            self.refs_toggle_btn.setText("▲ Hide")
-
-    def _create_metadata_footer(self, quality: Dict[str, Any]) -> QWidget:
-        """Create clean metadata footer with stats and actions."""
-        footer = QWidget()
-        footer.setStyleSheet("""
-            QWidget {
-                background-color: #FAFAFA;
-                border-radius: 4px;
-            }
-        """)
-        footer_layout = QHBoxLayout(footer)
-        footer_layout.setContentsMargins(12, 8, 12, 8)
-        footer_layout.setSpacing(12)
-
-        # Stats with icons
-        processing_time = self.answer_data.get('processing_time', 0)
-        sources_used = self.answer_data.get('sources_used', {})
-        total_sources = sources_used.get('pdf_sources', 0) + sources_used.get('web_sources', 0)
-
-        stats_label = QLabel(f"⏱️ {processing_time:.1f}s  •  📊 {total_sources} sources")
-        stats_label.setStyleSheet("color: #666; font-size: 8pt; background: transparent;")
-        footer_layout.addWidget(stats_label)
-
-        footer_layout.addStretch()
-
-        # Copy button with clean minimal style
-        copy_btn = QPushButton("📋 Copy")
-        copy_btn.setMaximumWidth(80)
-        copy_btn.setMaximumHeight(28)
-        copy_btn.setStyleSheet("""
-            QPushButton {
-                background-color: transparent;
-                color: #2196F3;
-                border: 1px solid #2196F3;
-                border-radius: 4px;
-                padding: 4px 10px;
-                font-size: 8pt;
-                font-weight: bold;
-            }
-            QPushButton:hover {
-                background-color: #E3F2FD;
-            }
-        """)
-        copy_btn.clicked.connect(self._copy_answer)
-        copy_btn.setToolTip("Copy answer to clipboard")
-        footer_layout.addWidget(copy_btn)
-
-        return footer
-
-    def _copy_answer(self):
-        """Copy answer text to clipboard."""
-        from PySide6.QtWidgets import QApplication
-
-        answer_text = self.answer_data.get('answer', '')
-        clipboard = QApplication.clipboard()
-        clipboard.setText(answer_text)
-
-        # Visual feedback
-        sender_btn = self.sender()
-        if sender_btn:
-            original_text = sender_btn.text()
-            sender_btn.setText("Copied!")
-            sender_btn.setStyleSheet("""
-                QPushButton {
-                    background-color: #4CAF50;
-                    color: white;
-                    border: none;
-                    border-radius: 3px;
-                    padding: 3px 8px;
-                    font-size: 8pt;
-                }
-            """)
-
-            # Reset after 2 seconds
-            QTimer.singleShot(2000, lambda: self._reset_copy_button(sender_btn, original_text))
-
-    def _reset_copy_button(self, button: QPushButton, original_text: str):
-        """Reset copy button to original state."""
-        button.setText(original_text)
-        button.setStyleSheet("""
-            QPushButton {
-                background-color: transparent;
-                color: #2196F3;
-                border: 1px solid #2196F3;
-                border-radius: 4px;
-                padding: 4px 10px;
-                font-size: 8pt;
-                font-weight: bold;
-            }
-            QPushButton:hover {
-                background-color: #E3F2FD;
-            }
-        """)
 
 
 class ReferenceWidget(QFrame):
@@ -1321,44 +1114,10 @@ class RAGChatPanel(QWidget):
 
         layout.addLayout(input_layout)
 
-        # Suggested questions area (initially hidden)
-        self.suggested_questions_widget = self._create_suggested_questions_widget()
-        layout.addWidget(self.suggested_questions_widget)
-
         # Setup keyboard shortcuts
         self._setup_keyboard_shortcuts()
 
         return input_widget
-
-    def _create_suggested_questions_widget(self) -> QWidget:
-        """Create widget for displaying suggested follow-up questions."""
-        suggested_widget = QFrame()
-        suggested_widget.setFrameStyle(QFrame.StyledPanel)
-        suggested_widget.setStyleSheet("""
-            QFrame {
-                background-color: #fff9e6;
-                border: 1px solid #ffe082;
-                border-radius: 5px;
-                padding: 5px;
-            }
-        """)
-        suggested_widget.setVisible(False)  # Hidden by default
-
-        layout = QVBoxLayout(suggested_widget)
-        layout.setSpacing(3)
-        layout.setContentsMargins(5, 5, 5, 5)
-
-        # Header
-        header_label = QLabel("💬 Suggested follow-up questions:")
-        header_label.setStyleSheet("color: #f57f17; font-weight: bold; font-size: 8pt;")
-        layout.addWidget(header_label)
-
-        # Container for suggestion buttons
-        self.suggestions_layout = QVBoxLayout()
-        self.suggestions_layout.setSpacing(2)
-        layout.addLayout(self.suggestions_layout)
-
-        return suggested_widget
 
     def _setup_keyboard_shortcuts(self):
         """Setup keyboard shortcuts for the chat panel."""
@@ -1386,10 +1145,6 @@ class RAGChatPanel(QWidget):
         shortcut_3 = QShortcut(QKeySequence("Ctrl+3"), self)
         shortcut_3.activated.connect(lambda: self._use_quick_action("Explain the main concepts in this document"))
 
-        shortcut_4 = QShortcut(QKeySequence("Ctrl+4"), self)
-        shortcut_4.activated.connect(lambda: self._use_quick_action("What methodology is used in this document?"))
-
-        shortcut_5 = QShortcut(QKeySequence("Ctrl+5"), self)
         logger.info("Keyboard shortcuts configured")
 
     def _show_keyboard_shortcuts(self):
@@ -1428,86 +1183,6 @@ class RAGChatPanel(QWidget):
         # Auto-send quick action questions
         self.ask_question()
 
-    def _generate_suggested_questions(self, answer_data: Dict[str, Any]) -> List[str]:
-        """
-        Generate suggested follow-up questions based on the answer.
-
-        Args:
-            answer_data: The answer data from RAG
-
-        Returns:
-            List of suggested questions
-        """
-        suggestions = []
-
-        # Get the question and answer text
-        answer_text = answer_data.get('answer', '')
-
-        # Simple template-based suggestions (could be enhanced with LLM in the future)
-        question_templates = [
-            "Can you explain this in more detail?",
-            "What are the implications of this?",
-            "How does this compare to other approaches?",
-            "What are the limitations or drawbacks?",
-            "Can you provide specific examples?",
-            "What are the practical applications?"
-        ]
-
-        # Check if answer mentions specific topics and create contextual suggestions
-        lower_answer = answer_text.lower()
-
-        if 'method' in lower_answer or 'approach' in lower_answer:
-            suggestions.append("What are the advantages of this method?")
-
-        if 'result' in lower_answer or 'finding' in lower_answer:
-            suggestions.append("What do these results mean in practice?")
-
-        if 'equation' in lower_answer or 'formula' in lower_answer:
-            suggestions.append("Can you explain the mathematical concepts?")
-
-        # Fill remaining slots with generic templates
-        while len(suggestions) < 3:
-            for template in question_templates:
-                if template not in suggestions and len(suggestions) < 3:
-                    suggestions.append(template)
-
-        return suggestions[:3]  # Return top 3
-
-    def _show_suggested_questions(self, suggestions: List[str]):
-        """
-        Display suggested follow-up questions in the UI.
-
-        Args:
-            suggestions: List of suggested questions
-        """
-        # Clear existing suggestions
-        while self.suggestions_layout.count():
-            child = self.suggestions_layout.takeAt(0)
-            if child.widget():
-                child.widget().deleteLater()
-
-        # Add new suggestion buttons
-        for i, suggestion in enumerate(suggestions):
-            btn = QPushButton(f"{i+1}. {suggestion}")
-            btn.setMaximumHeight(25)
-            btn.setStyleSheet("""
-                QPushButton {
-                    text-align: left;
-                    padding: 3px 8px;
-                    background-color: white;
-                    border: 1px solid #ffc107;
-                    border-radius: 3px;
-                }
-                QPushButton:hover {
-                    background-color: #fff9c4;
-                    border-color: #ffa000;
-                }
-            """)
-            btn.clicked.connect(lambda checked, q=suggestion: self._use_quick_action(q))
-            self.suggestions_layout.addWidget(btn)
-
-        # Show the suggestions widget
-        self.suggested_questions_widget.setVisible(True)
 
     def initialize_rag_system(self):
         """Initialize the RAG system components."""
@@ -1702,9 +1377,6 @@ class RAGChatPanel(QWidget):
             QMessageBox.warning(self, "Error", "RAG system not ready")
             return
 
-        # Hide suggested questions when asking a new question
-        self.suggested_questions_widget.setVisible(False)
-
         # Add question to chat history
         self.chat_history.add_question(question)
 
@@ -1754,12 +1426,6 @@ class RAGChatPanel(QWidget):
             processing_time = answer_data.get('processing_time', 0)
             total_sources = sources_used.get('pdf_sources', 0) + web_sources
             self.status_label.setText(f"Completed in {processing_time:.1f}s - {total_sources} sources")
-
-        # Suggested questions disabled by default (low quality, template-based)
-        # Users can enable in settings if needed
-        # suggestions = self._generate_suggested_questions(answer_data)
-        # if suggestions:
-        #     self._show_suggested_questions(suggestions)
 
         # Re-enable input
         self.ask_button.setEnabled(True)
@@ -1857,41 +1523,18 @@ class RAGChatPanel(QWidget):
                 self.reference_manager.clear_history()
             self.status_label.setText("History cleared")
             logger.info("Chat history cleared by user")
-    
-    def show_settings(self):
-        """Show RAG settings dialog."""
-        # Placeholder for settings dialog
-        QMessageBox.information(self, "Settings", "RAG settings will be added in future version")
-    
-    def get_rag_stats(self) -> Dict[str, Any]:
-        """Get RAG system statistics."""
-        stats = {}
-        
-        if self.vector_store:
-            stats.update(self.vector_store.get_collection_stats())
-        
-        if self.reference_manager:
-            history = self.reference_manager.get_navigation_history()
-            stats['navigation_history'] = len(history)
-        
-        stats['current_document'] = self.current_document_path.name if self.current_document_path else None
-        
-        return stats
-    
+
     def set_rag_disabled_message(self):
         """Display message when RAG is disabled."""
-        # Disable input controls
         self.question_input.setEnabled(False)
         self.ask_button.setEnabled(False)
         self.web_research_cb.setEnabled(False)
-        
         self.status_label.setText("RAG disabled")
-    
+
     def set_rag_enabled_message(self):
         """Display message when RAG is re-enabled."""
-        # Re-enable input controls
         self.question_input.setEnabled(True)
         self.ask_button.setEnabled(True)
         self.web_research_cb.setEnabled(True)
-        
         self.status_label.setText("RAG ready")
+

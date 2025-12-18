@@ -4,12 +4,9 @@ Handles embeddings, indexing, and retrieval for RAG system.
 """
 
 import logging
-import asyncio
 import os
 from pathlib import Path
 from typing import List, Dict, Any, Optional, Tuple
-import json
-import hashlib
 from datetime import datetime
 import numpy as np
 
@@ -111,63 +108,6 @@ class CustomEmbeddingFunction(EmbeddingFunction):
             raise
 
 
-class EmbeddingManager:
-    """Manages different types of embeddings for multi-modal content."""
-    
-    def __init__(self, model_name: str = "paraphrase-multilingual-MiniLM-L12-v2"):
-        """
-        Initialize embedding manager.
-        
-        Args:
-            model_name: Name of the sentence transformer model
-        """
-        self.model_name = model_name
-        self.model = None
-        self._load_model()
-    
-    def _load_model(self):
-        """Load the embedding model."""
-        if not SENTENCE_TRANSFORMERS_AVAILABLE:
-            raise ImportError("SentenceTransformers not available")
-        
-        try:
-            self.model = SentenceTransformer(self.model_name)
-            logger.info(f"Loaded embedding model: {self.model_name}")
-        except Exception as e:
-            logger.error(f"Failed to load embedding model: {e}")
-            # Fallback to smaller model
-            try:
-                self.model = SentenceTransformer("all-MiniLM-L6-v2")
-                logger.info("Loaded fallback embedding model: all-MiniLM-L6-v2")
-            except Exception as e2:
-                logger.error(f"Failed to load fallback model: {e2}")
-                raise
-    
-    def encode_text(self, texts: List[str]) -> List[List[float]]:
-        """
-        Encode texts into embeddings.
-        
-        Args:
-            texts: List of text strings to encode
-            
-        Returns:
-            List of embedding vectors
-        """
-        if not self.model:
-            raise RuntimeError("Embedding model not loaded")
-        
-        try:
-            embeddings = self.model.encode(texts, convert_to_numpy=True)
-            return embeddings.tolist()
-        except Exception as e:
-            logger.error(f"Text encoding failed: {e}")
-            raise
-    
-    def encode_single(self, text: str) -> List[float]:
-        """Encode single text into embedding."""
-        return self.encode_text([text])[0]
-
-
 class ChromaDBManager:
     """
     ChromaDB manager for vector storage and retrieval.
@@ -220,10 +160,7 @@ class ChromaDBManager:
         
         # Initialize embedding function for ChromaDB
         self.embedding_function = CustomEmbeddingFunction()
-        
-        # Initialize embedding manager (for backward compatibility)
-        self.embedding_manager = EmbeddingManager()
-        
+
         # Collection for PDF documents
         self.collection = None
         self._initialize_collection()
@@ -498,11 +435,11 @@ class ChromaDBManager:
             stats = {
                 'total_chunks': count,
                 'total_documents': len(set(
-                    meta.get('document_id', '') 
+                    meta.get('document_id', '')
                     for meta in sample_results.get('metadatas', [])
                 )) if sample_results.get('metadatas') else 0,
                 'persist_directory': str(self.persist_directory),
-                'embedding_model': self.embedding_manager.model_name
+                'embedding_model': self.embedding_function.model_name
             }
             
             # Analyze content types
@@ -597,16 +534,3 @@ class ChromaDBManager:
             logger.error(f"Hybrid search failed: {e}")
             return await self.search_similar(query, n_results)  # Fallback to semantic search
     
-    def reset_collection(self):
-        """Reset the collection (delete all data)."""
-        try:
-            self.client.reset()
-            self._initialize_collection()
-            logger.info("Collection reset successfully")
-        except Exception as e:
-            logger.error(f"Collection reset failed: {e}")
-    
-    def close(self):
-        """Close the database connection."""
-        # ChromaDB handles persistence automatically
-        logger.info("ChromaDB connection closed")
