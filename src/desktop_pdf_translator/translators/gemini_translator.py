@@ -6,12 +6,7 @@ import logging
 import time
 from typing import Optional, List, Dict, Any
 
-try:
-    import google.generativeai as genai
-    GEMINI_AVAILABLE = True
-except ImportError:
-    GEMINI_AVAILABLE = False
-    genai = None
+import google.generativeai as genai
 
 from .base import BaseTranslator
 
@@ -29,9 +24,6 @@ class GeminiTranslator(BaseTranslator):
     
     def __init__(self, lang_in: str, lang_out: str, **kwargs):
         """Initialize Gemini translator."""
-        if not GEMINI_AVAILABLE:
-            raise ImportError("Google AI library is not installed. Please install with: pip install google-generativeai")
-        
         super().__init__(lang_in, lang_out, **kwargs)
     
     def _setup_translator(self, **kwargs):

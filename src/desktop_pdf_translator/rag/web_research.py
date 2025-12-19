@@ -10,26 +10,11 @@ from datetime import datetime, timedelta
 from urllib.parse import urlparse
 import hashlib
 
-try:
-    from googlesearch import search as google_search
-    GOOGLE_SEARCH_AVAILABLE = True
-except ImportError:
-    GOOGLE_SEARCH_AVAILABLE = False
-    logging.warning("googlesearch-python not available - install with: pip install googlesearch-python")
+from googlesearch import search as google_search
 
-try:
-    from bs4 import BeautifulSoup
-    BS4_AVAILABLE = True
-except ImportError:
-    BS4_AVAILABLE = False
-    logging.error("BeautifulSoup4 not available - install with: pip install beautifulsoup4")
+from bs4 import BeautifulSoup
 
-try:
-    import requests
-    REQUESTS_AVAILABLE = True
-except ImportError:
-    REQUESTS_AVAILABLE = False
-    logging.error("Requests not available - install with: pip install requests")
+import requests
 
 logger = logging.getLogger(__name__)
 
@@ -79,10 +64,6 @@ class ContentScraper:
         Returns:
             WebSource object with scraped content
         """
-        if not BS4_AVAILABLE or not REQUESTS_AVAILABLE:
-            logger.error("Required libraries not available for scraping")
-            return None
-        
         try:
             # Use requests for now (can be upgraded to aiohttp later)
             response = requests.get(url, headers=self.headers, timeout=timeout)
@@ -202,10 +183,6 @@ class SearchEngine:
         Returns:
             List of URLs
         """
-        if not GOOGLE_SEARCH_AVAILABLE:
-            logger.warning("Google search not available")
-            return []
-        
         try:
             # Check cache first
             cache_key = f"google_{hashlib.md5(query.encode()).hexdigest()}"

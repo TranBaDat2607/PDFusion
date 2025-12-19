@@ -17,11 +17,10 @@ from PySide6.QtWidgets import (
     QMessageBox
 )
 from PySide6.QtCore import Qt, QThread, Signal, QTimer
-from PySide6.QtGui import QFont, QTextCursor, QTextCharFormat, QColor
+from PySide6.QtGui import QFont, QTextCursor, QTextCharFormat, QColor, QIcon
 
 
 import qtawesome as qta
-QTAWESOME_AVAILABLE = True
 
 
 from ..rag import (
@@ -802,28 +801,27 @@ class RAGChatPanel(QWidget):
         """Initialize QtAwesome icons for reuse throughout the panel."""
         icons = {}
 
-        if QTAWESOME_AVAILABLE:
-            # Primary colors
-            primary_blue = '#2196F3'
-            success_green = '#4CAF50'
-            warning_orange = '#FF9800'
-            neutral_gray = '#666'
+        # Primary colors
+        primary_blue = '#2196F3'
+        success_green = '#4CAF50'
+        warning_orange = '#FF9800'
+        neutral_gray = '#666'
 
-            # Button icons
-            icons['pdf'] = qta.icon('fa5s.file-pdf', color=primary_blue)
-            icons['web'] = qta.icon('fa5s.globe', color=primary_blue)
-            icons['lightbulb'] = qta.icon('fa5s.lightbulb', color=warning_orange)
-            icons['bullseye'] = qta.icon('fa5s.bullseye', color=success_green)
-            icons['keyboard'] = qta.icon('fa5s.keyboard', color=neutral_gray)
-            icons['trash'] = qta.icon('fa5s.trash-alt', color='#f44336')
-            icons['send'] = qta.icon('fa5s.paper-plane', color=primary_blue)
-            icons['settings'] = qta.icon('fa5s.cog', color=neutral_gray)
-            icons['robot'] = qta.icon('fa5s.robot', color=primary_blue)
-            icons['question'] = qta.icon('fa5s.question-circle', color=primary_blue)
-            icons['book'] = qta.icon('fa5s.book', color=neutral_gray)
-            icons['check'] = qta.icon('fa5s.check-circle', color=success_green)
-            icons['error'] = qta.icon('fa5s.exclamation-circle', color='#f44336')
-            icons['cancel'] = qta.icon('fa5s.times-circle', color='#f44336')
+        # Button icons
+        icons['pdf'] = qta.icon('fa5s.file-pdf', color=primary_blue)
+        icons['web'] = qta.icon('fa5s.globe', color=primary_blue)
+        icons['lightbulb'] = qta.icon('fa5s.lightbulb', color=warning_orange)
+        icons['bullseye'] = qta.icon('fa5s.bullseye', color=success_green)
+        icons['keyboard'] = qta.icon('fa5s.keyboard', color=neutral_gray)
+        icons['trash'] = qta.icon('fa5s.trash-alt', color='#f44336')
+        icons['send'] = qta.icon('fa5s.paper-plane', color=primary_blue)
+        icons['settings'] = qta.icon('fa5s.cog', color=neutral_gray)
+        icons['robot'] = qta.icon('fa5s.robot', color=primary_blue)
+        icons['question'] = qta.icon('fa5s.question-circle', color=primary_blue)
+        icons['book'] = qta.icon('fa5s.book', color=neutral_gray)
+        icons['check'] = qta.icon('fa5s.check-circle', color=success_green)
+        icons['error'] = qta.icon('fa5s.exclamation-circle', color='#f44336')
+        icons['cancel'] = qta.icon('fa5s.times-circle', color='#f44336')
 
         return icons
     
@@ -850,14 +848,10 @@ class RAGChatPanel(QWidget):
 
         # Settings button (disabled until implemented)
         settings_btn = QPushButton()
-        if QTAWESOME_AVAILABLE:
-            settings_btn.setIcon(self.icons.get('settings'))
-        else:
-            settings_btn.setText("⚙")
+        settings_btn.setIcon(self.icons.get('settings'))
         settings_btn.setMaximumSize(28, 28)
         settings_btn.setEnabled(False)
         settings_btn.setToolTip("Settings (coming soon)")
-        settings_btn.clicked.connect(self.show_settings)
         header_layout.addWidget(settings_btn)
         
         layout.addLayout(header_layout)
@@ -977,8 +971,7 @@ class RAGChatPanel(QWidget):
 
         # Cancel button
         self.cancel_processing_btn = QPushButton(" Cancel")
-        if QTAWESOME_AVAILABLE:
-            self.cancel_processing_btn.setIcon(qta.icon('fa5s.times-circle', color='white'))
+        self.cancel_processing_btn.setIcon(qta.icon('fa5s.times-circle', color='white'))
         self.cancel_processing_btn.setMaximumWidth(80)
         self.cancel_processing_btn.setMaximumHeight(25)
         self.cancel_processing_btn.clicked.connect(self._cancel_document_processing)
@@ -1020,24 +1013,21 @@ class RAGChatPanel(QWidget):
 
         # Quick action buttons with professional icons
         self.summarize_btn = QPushButton(" Summarize")
-        if QTAWESOME_AVAILABLE:
-            self.summarize_btn.setIcon(self.icons.get('pdf'))
+        self.summarize_btn.setIcon(self.icons.get('pdf'))
         self.summarize_btn.setMaximumHeight(25)
         self.summarize_btn.setToolTip("Summarize the entire document (Ctrl+1)")
         self.summarize_btn.clicked.connect(lambda: self._use_quick_action("Summarize this document"))
         quick_actions_layout.addWidget(self.summarize_btn)
 
         self.key_points_btn = QPushButton(" Key Points")
-        if QTAWESOME_AVAILABLE:
-            self.key_points_btn.setIcon(self.icons.get('bullseye'))
+        self.key_points_btn.setIcon(self.icons.get('bullseye'))
         self.key_points_btn.setMaximumHeight(25)
         self.key_points_btn.setToolTip("Extract key points from document (Ctrl+2)")
         self.key_points_btn.clicked.connect(lambda: self._use_quick_action("What are the key points of this document?"))
         quick_actions_layout.addWidget(self.key_points_btn)
 
         self.explain_btn = QPushButton(" Explain")
-        if QTAWESOME_AVAILABLE:
-            self.explain_btn.setIcon(self.icons.get('lightbulb'))
+        self.explain_btn.setIcon(self.icons.get('lightbulb'))
         self.explain_btn.setMaximumHeight(25)
         self.explain_btn.setToolTip("Explain main concepts (Ctrl+3)")
         self.explain_btn.clicked.connect(lambda: self._use_quick_action("Explain the main concepts in this document"))
@@ -1047,8 +1037,7 @@ class RAGChatPanel(QWidget):
 
         # Keyboard shortcuts help button
         shortcuts_btn = QPushButton(" Shortcuts")
-        if QTAWESOME_AVAILABLE:
-            shortcuts_btn.setIcon(self.icons.get('keyboard'))
+        shortcuts_btn.setIcon(self.icons.get('keyboard'))
         shortcuts_btn.setMaximumHeight(25)
         shortcuts_btn.setStyleSheet("""
             QPushButton {
@@ -1072,16 +1061,14 @@ class RAGChatPanel(QWidget):
 
         # Web research checkbox - unchecked by default (user opts in)
         self.web_research_cb = QCheckBox(" Web Research")
-        if QTAWESOME_AVAILABLE:
-            self.web_research_cb.setIcon(self.icons.get('web'))
+        self.web_research_cb.setIcon(self.icons.get('web'))
         self.web_research_cb.setChecked(False)  # Default OFF - PDF only
         self.web_research_cb.setToolTip("Enable web search to supplement PDF content (may be slower)")
         options_layout.addWidget(self.web_research_cb)
 
         # Clear button - compact
         clear_btn = QPushButton(" Clear")
-        if QTAWESOME_AVAILABLE:
-            clear_btn.setIcon(self.icons.get('trash'))
+        clear_btn.setIcon(self.icons.get('trash'))
         clear_btn.setMaximumWidth(80)
         clear_btn.setToolTip("Clear chat history (Ctrl+L)")
         clear_btn.clicked.connect(self.clear_chat_history)
@@ -1103,8 +1090,7 @@ class RAGChatPanel(QWidget):
 
         # Ask button - compact
         self.ask_button = QPushButton(" Ask")
-        if QTAWESOME_AVAILABLE:
-            self.ask_button.setIcon(self.icons.get('send'))
+        self.ask_button.setIcon(self.icons.get('send'))
         self.ask_button.clicked.connect(self.ask_question)
         self.ask_button.setDefault(True)
         self.ask_button.setMaximumWidth(80)

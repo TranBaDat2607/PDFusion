@@ -11,18 +11,9 @@ from typing import AsyncGenerator, Optional, Dict, Any
 
 import fitz  # PyMuPDF
 
-try:
-    from babeldoc.format.pdf.high_level import async_translate as babeldoc_translate
-    from babeldoc.format.pdf.translation_config import TranslationConfig as BabelDOCConfig
-    from babeldoc.format.pdf.translation_config import WatermarkOutputMode as BabelDOCWatermarkMode
-    BABELDOC_AVAILABLE = True
-    logging.info("BabelDOC successfully imported")
-except ImportError as e:
-    BABELDOC_AVAILABLE = False
-    babeldoc_translate = None
-    BabelDOCConfig = None
-    BabelDOCWatermarkMode = None
-    logging.warning(f"BabelDOC import failed: {e}")
+from babeldoc.format.pdf.high_level import async_translate as babeldoc_translate
+from babeldoc.format.pdf.translation_config import TranslationConfig as BabelDOCConfig
+from babeldoc.format.pdf.translation_config import WatermarkOutputMode as BabelDOCWatermarkMode
 
 from ..config import get_settings, FileMetadata, LanguageCode, TranslationService
 from ..translators import TranslatorFactory
@@ -46,9 +37,6 @@ class PDFProcessor:
         self.settings = get_settings()
         self.session_id = None
         self._current_task = None
-        
-        if not BABELDOC_AVAILABLE:
-            logger.warning("BabelDOC is not available. Some features may be limited.")
     
     async def process_pdf(
         self, 
@@ -150,19 +138,11 @@ class PDFProcessor:
             )
             
             # Step 3: BabelDOC processing
-            if BABELDOC_AVAILABLE:
-                logger.info("BABELDOC_AVAILABLE is True, using BabelDOC processing")
-                async for event in self._process_with_babeldoc(
-                    file_path, translator, output_dir, file_metadata
-                ):
-                    yield event
-            else:
-                logger.warning(f"BABELDOC_AVAILABLE is False ({BABELDOC_AVAILABLE}), using fallback processing")
-                # Fallback processing without BabelDOC
-                async for event in self._process_without_babeldoc(
-                    file_path, translator, output_dir, file_metadata
-                ):
-                    yield event
+            logger.info("Using BabelDOC processing")
+            async for event in self._process_with_babeldoc(
+                file_path, translator, output_dir, file_metadata
+            ):
+                yield event
             
             # Step 4: Completion
             processing_time = time.time() - start_time
@@ -368,9 +348,6 @@ class PDFProcessor:
     
     def _create_babeldoc_config(self, file_path: Path, translator, output_dir: Path):
         """Create BabelDOC configuration."""
-        if not BABELDOC_AVAILABLE or not BabelDOCConfig:
-            raise ConfigurationError("BabelDOC is not available")
-        
         # Get settings for additional parameters
         translation_settings = self.settings.translation
         processing_settings = self.settings.processing
@@ -469,6 +446,5 @@ class PDFProcessor:
         """Get information about current processing session."""
         return {
             "session_id": self.session_id,
-            "babeldoc_available": BABELDOC_AVAILABLE,
             "settings": self.settings.dict()
         }

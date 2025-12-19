@@ -5,6 +5,7 @@ Handles embeddings, indexing, and retrieval for RAG system.
 
 import logging
 import os
+import json
 from pathlib import Path
 from typing import List, Dict, Any, Optional, Tuple
 from datetime import datetime
@@ -20,21 +21,7 @@ os.environ["CHROMA_CLIENT_AUTH_CREDENTIALS"] = ""
 os.environ["CHROMA_TELEMETRY_DISABLED"] = "True"
 os.environ["CHROMA_TELEMETRY"] = "False"
 
-# Disable posthog specifically
-try:
-    import posthog
-    posthog.disabled = True
-except:
-    pass
-
-# Additional telemetry disabling
-try:
-    import chromadb
-    if hasattr(chromadb, 'telemetry'):
-        chromadb.telemetry.disable()
-except:
-    pass
-
+# Fix NumPy 2.0 compatibility BEFORE importing chromadb
 if not hasattr(np, "float_"):
     np.float_ = np.float64
 if not hasattr(np, "int_"):
@@ -42,21 +29,17 @@ if not hasattr(np, "int_"):
 if not hasattr(np, "uint"):
     np.uint = np.uint64
 
-try:
-    import chromadb
-    from chromadb.config import Settings
-    from chromadb import EmbeddingFunction, Embeddings
-    CHROMADB_AVAILABLE = True
-except ImportError:
-    CHROMADB_AVAILABLE = False
-    logging.error("ChromaDB not available - install with: pip install chromadb")
+# Disable posthog specifically
+import posthog
+posthog.disabled = True
 
-try:
-    from sentence_transformers import SentenceTransformer
-    SENTENCE_TRANSFORMERS_AVAILABLE = True
-except ImportError:
-    SENTENCE_TRANSFORMERS_AVAILABLE = False
-    logging.error("SentenceTransformers not available - install with: pip install sentence-transformers")
+# Import chromadb (telemetry already disabled via environment variables)
+import chromadb
+
+from chromadb.config import Settings
+from chromadb import EmbeddingFunction, Embeddings
+
+from sentence_transformers import SentenceTransformer
 
 logger = logging.getLogger(__name__)
 
@@ -71,9 +54,6 @@ class CustomEmbeddingFunction(EmbeddingFunction):
     
     def _load_model(self):
         """Load the embedding model."""
-        if not SENTENCE_TRANSFORMERS_AVAILABLE:
-            raise ImportError("SentenceTransformers not available")
-        
         try:
             self.model = SentenceTransformer(self.model_name)
             logger.info(f"Loaded embedding model: {self.model_name}")
@@ -117,13 +97,10 @@ class ChromaDBManager:
     def __init__(self, persist_directory: Optional[Path] = None):
         """
         Initialize ChromaDB manager.
-        
+
         Args:
             persist_directory: Directory to persist the database
         """
-        if not CHROMADB_AVAILABLE:
-            raise ImportError("ChromaDB not available")
-        
         # Set default persist directory
         if persist_directory is None:
             persist_directory = Path.home() / "AppData" / "Local" / "PDFusion" / "chroma_db"

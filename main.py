@@ -17,15 +17,9 @@ src_path = Path(__file__).parent / "src"
 if src_path.exists():
     sys.path.insert(0, str(src_path))
 
-try:
-    from desktop_pdf_translator.gui.main_window import main as gui_main
-    from desktop_pdf_translator.config import get_config_manager
-    from desktop_pdf_translator.translators import TranslatorFactory
-except ImportError as e:
-    print(f"Import error: {e}")
-    print("Make sure you have installed all dependencies:")
-    print("pip install -r requirements.txt")
-    sys.exit(1)
+from desktop_pdf_translator.gui.main_window import main as gui_main
+from desktop_pdf_translator.config import get_config_manager
+from desktop_pdf_translator.translators import TranslatorFactory
 
 
 def setup_logging(debug_mode: bool = False):

@@ -6,12 +6,7 @@ import logging
 import time
 from typing import Optional, List, Dict, Any
 
-try:
-    from openai import OpenAI
-    OPENAI_AVAILABLE = True
-except ImportError:
-    OPENAI_AVAILABLE = False
-    OpenAI = None
+from openai import OpenAI
 
 from .base import BaseTranslator
 
@@ -29,9 +24,6 @@ class OpenAITranslator(BaseTranslator):
     
     def __init__(self, lang_in: str, lang_out: str, **kwargs):
         """Initialize OpenAI translator."""
-        if not OPENAI_AVAILABLE:
-            raise ImportError("OpenAI library is not installed. Please install with: pip install openai")
-        
         super().__init__(lang_in, lang_out, **kwargs)
     
     def _setup_translator(self, **kwargs):

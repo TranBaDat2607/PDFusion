@@ -14,12 +14,7 @@ from .models import AppSettings
 from ..utils import encrypt_api_key, decrypt_api_key, is_encrypted
 
 # Try to import python-dotenv for .env file support
-try:
-    from dotenv import load_dotenv
-    DOTENV_AVAILABLE = True
-except ImportError:
-    DOTENV_AVAILABLE = False
-    load_dotenv = None
+from dotenv import load_dotenv
 
 
 logger = logging.getLogger(__name__)
@@ -155,9 +150,6 @@ class ConfigManager:
     
     def _load_dotenv(self) -> None:
         """Load environment variables from .env file if available."""
-        if not DOTENV_AVAILABLE:
-            return
-        
         # Look for .env file in project root and config directory
         env_files = [
             Path.cwd() / ".env",

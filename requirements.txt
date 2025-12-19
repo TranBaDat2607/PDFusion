@@ -15,6 +15,10 @@ pandas>=2.1.0,<3.0.0
 matplotlib>=3.8.0,<4.0.0
 sympy>=1.12,<2.0.0
 
+# Content rendering dependencies
+markdown>=3.4.0,<4.0.0
+pygments>=2.15.0,<3.0.0
+
 faiss-cpu>=1.7.4,<2.0.0
 
 PyMuPDF>=1.25.1,<1.26.0

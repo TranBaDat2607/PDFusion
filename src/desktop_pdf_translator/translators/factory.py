@@ -7,8 +7,8 @@ from typing import Dict, Type, Optional, List
 
 from ..config import TranslationService, get_settings
 from .base import BaseTranslator
-from .openai_translator import OpenAITranslator, OPENAI_AVAILABLE
-from .gemini_translator import GeminiTranslator, GEMINI_AVAILABLE
+from .openai_translator import OpenAITranslator
+from .gemini_translator import GeminiTranslator
 
 
 logger = logging.getLogger(__name__)
@@ -62,20 +62,7 @@ class TranslatorFactory:
         if service not in self._translators:
             available_services = list(self._translators.keys())
             raise ValueError(f"Unsupported service: {service}. Available: {available_services}")
-        
-        # Check if service dependencies are available
-        availability_map = {
-            TranslationService.OPENAI: OPENAI_AVAILABLE,
-            TranslationService.GEMINI: GEMINI_AVAILABLE
-        }
-        
-        if not availability_map.get(service, False):
-            service_names = {
-                TranslationService.OPENAI: "OpenAI (pip install openai)",
-                TranslationService.GEMINI: "Google AI (pip install google-generativeai)"
-            }
-            raise ImportError(f"Dependencies for {service_names[service]} are not installed")
-        
+
         # Get service-specific configuration
         service_config = self._get_service_config(service, settings)
         service_config.update(kwargs)
@@ -114,28 +101,13 @@ class TranslatorFactory:
     @classmethod
     def get_available_services(cls) -> List[TranslationService]:
         """Get list of available translation services."""
-        available = []
-        
-        if OPENAI_AVAILABLE:
-            available.append(TranslationService.OPENAI)
-        if GEMINI_AVAILABLE:
-            available.append(TranslationService.GEMINI)
-            
-        return available
+        # Return all registered services since dependencies are expected to be installed
+        return list(cls._translators.keys())
     
     @classmethod
     def validate_service_availability(cls, service: TranslationService) -> tuple[bool, str]:
         """Validate if a service is available and properly configured."""
         try:
-            # Check dependencies
-            availability_map = {
-                TranslationService.OPENAI: OPENAI_AVAILABLE,
-                TranslationService.GEMINI: GEMINI_AVAILABLE
-            }
-            
-            if not availability_map.get(service, False):
-                return False, f"Dependencies for {service} are not installed"
-            
             # Check configuration
             settings = get_settings()
             

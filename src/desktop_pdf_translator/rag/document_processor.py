@@ -10,19 +10,9 @@ from typing import List, Dict, Any, Optional, Tuple
 
 import fitz  # PyMuPDF
 
-try:
-    import camelot
-    CAMELOT_AVAILABLE = True
-except ImportError:
-    CAMELOT_AVAILABLE = False
-    logging.warning("Camelot not available - table extraction will be limited")
+import camelot
 
-try:
-    import pdfplumber
-    PDFPLUMBER_AVAILABLE = True
-except ImportError:
-    PDFPLUMBER_AVAILABLE = False
-    logging.warning("PDFPlumber not available - alternative table extraction disabled")
+import pdfplumber
 
 logger = logging.getLogger(__name__)
 
@@ -96,32 +86,30 @@ class TableElement(DocumentElement):
     def extract_table_data(self, pdf_path: Path, page_num: int):
         """Extract structured data from table."""
         try:
-            if CAMELOT_AVAILABLE:
-                # Use Camelot for table extraction (requires Ghostscript)
-                try:
-                    tables = camelot.read_pdf(str(pdf_path), pages=str(page_num + 1))
-                    if tables and len(tables) > 0:
-                        self.dataframe = tables[0].df
-                        self.headers = self.dataframe.columns.tolist()
-                        self.rows = self.dataframe.values.tolist()
+            # Use Camelot for table extraction (requires Ghostscript)
+            try:
+                tables = camelot.read_pdf(str(pdf_path), pages=str(page_num + 1))
+                if tables and len(tables) > 0:
+                    self.dataframe = tables[0].df
+                    self.headers = self.dataframe.columns.tolist()
+                    self.rows = self.dataframe.values.tolist()
+                    return
+            except Exception as camelot_error:
+                logger.warning(f"Camelot table extraction failed (Ghostscript may not be installed): {camelot_error}")
+
+            # Fallback to pdfplumber
+            try:
+                with pdfplumber.open(pdf_path) as pdf:
+                    page = pdf.pages[page_num]
+                    tables = page.extract_tables()
+                    if tables:
+                        table_data = tables[0]
+                        self.headers = table_data[0] if table_data else []
+                        self.rows = table_data[1:] if len(table_data) > 1 else []
                         return
-                except Exception as camelot_error:
-                    logger.warning(f"Camelot table extraction failed (Ghostscript may not be installed): {camelot_error}")
-                    
-            if PDFPLUMBER_AVAILABLE:
-                # Fallback to pdfplumber
-                try:
-                    with pdfplumber.open(pdf_path) as pdf:
-                        page = pdf.pages[page_num]
-                        tables = page.extract_tables()
-                        if tables:
-                            table_data = tables[0]
-                            self.headers = table_data[0] if table_data else []
-                            self.rows = table_data[1:] if len(table_data) > 1 else []
-                            return
-                except Exception as pdfplumber_error:
-                    logger.warning(f"PDFPlumber table extraction failed: {pdfplumber_error}")
-            
+            except Exception as pdfplumber_error:
+                logger.warning(f"PDFPlumber table extraction failed: {pdfplumber_error}")
+
             # If both methods fail, create a simple placeholder
             logger.info(f"Table extraction not available for page {page_num}, using placeholder")
             self.headers = ["Column 1", "Column 2"]

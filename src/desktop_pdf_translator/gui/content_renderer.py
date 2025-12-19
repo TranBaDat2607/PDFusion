@@ -11,34 +11,19 @@ from pathlib import Path
 logger = logging.getLogger(__name__)
 
 # Check for optional dependencies
-try:
-    import markdown
-    from markdown.extensions import fenced_code, tables, nl2br, sane_lists
-    MARKDOWN_AVAILABLE = True
-except ImportError:
-    MARKDOWN_AVAILABLE = False
-    logger.warning("markdown library not available - markdown rendering disabled")
+import markdown
+from markdown.extensions import fenced_code, tables, nl2br, sane_lists
 
-try:
-    from pygments import highlight
-    from pygments.lexers import get_lexer_by_name, guess_lexer
-    from pygments.formatters import HtmlFormatter
-    PYGMENTS_AVAILABLE = True
-except ImportError:
-    PYGMENTS_AVAILABLE = False
-    logger.warning("pygments library not available - code highlighting disabled")
+from pygments import highlight
+from pygments.lexers import get_lexer_by_name, guess_lexer
+from pygments.formatters import HtmlFormatter
 
-try:
-    import matplotlib
-    matplotlib.use('Agg')  # Use non-interactive backend
-    import matplotlib.pyplot as plt
-    from matplotlib import mathtext
-    import io
-    import base64
-    MATPLOTLIB_AVAILABLE = True
-except ImportError:
-    MATPLOTLIB_AVAILABLE = False
-    logger.warning("matplotlib not available - LaTeX formula rendering disabled")
+import matplotlib
+matplotlib.use('Agg')  # Use non-interactive backend
+import matplotlib.pyplot as plt
+from matplotlib import mathtext
+import io
+import base64
 
 
 class ContentDetector:
@@ -88,18 +73,15 @@ class MarkdownRenderer:
 
     def __init__(self):
         """Initialize markdown renderer."""
-        self.markdown_available = MARKDOWN_AVAILABLE
-
-        if MARKDOWN_AVAILABLE:
-            # Configure markdown with extensions
-            self.md = markdown.Markdown(
-                extensions=[
-                    'fenced_code',
-                    'tables',
-                    'nl2br',
-                    'sane_lists',
-                ]
-            )
+        # Configure markdown with extensions
+        self.md = markdown.Markdown(
+            extensions=[
+                'fenced_code',
+                'tables',
+                'nl2br',
+                'sane_lists',
+            ]
+        )
 
     def render(self, text: str) -> str:
         """
@@ -111,12 +93,6 @@ class MarkdownRenderer:
         Returns:
             HTML string
         """
-        if not self.markdown_available:
-            # Fallback: basic HTML escaping and line breaks
-            html = text.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
-            html = html.replace('\n', '<br>')
-            return f'<div style="white-space: pre-wrap;">{html}</div>'
-
         try:
             # Convert markdown to HTML
             html = self.md.convert(text)
@@ -138,7 +114,7 @@ class FormulaRenderer:
 
     def __init__(self):
         """Initialize formula renderer."""
-        self.matplotlib_available = MATPLOTLIB_AVAILABLE
+        pass
 
     def render(self, text: str) -> str:
         """
@@ -150,10 +126,6 @@ class FormulaRenderer:
         Returns:
             HTML with formulas replaced by images
         """
-        if not self.matplotlib_available:
-            # Fallback: just show the LaTeX code
-            return text
-
         try:
             # Find all formulas
             # Display formulas: $$...$$
@@ -315,7 +287,7 @@ class CodeBlockRenderer:
 
     def __init__(self):
         """Initialize code block renderer."""
-        self.pygments_available = PYGMENTS_AVAILABLE
+        pass
 
     def render(self, text: str) -> str:
         """
@@ -327,10 +299,6 @@ class CodeBlockRenderer:
         Returns:
             HTML with highlighted code
         """
-        if not self.pygments_available:
-            # Fallback: basic code blocks
-            return text
-
         try:
             # Find all code blocks
             pattern = r'```(\w+)?\n([\s\S]*?)```'
