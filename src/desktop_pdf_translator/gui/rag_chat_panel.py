@@ -212,32 +212,56 @@ class RAGWorker(QThread):
     progress_updated = Signal(str, int)
 
     def __init__(self, rag_chain: EnhancedRAGChain, question: str,
-                 document_id: Optional[str] = None, include_web: bool = True):
+                 document_id: Optional[str] = None, include_web: bool = True,
+                 use_deep_search: bool = False):
         super().__init__()
         self.rag_chain = rag_chain
         self.question = question
         self.document_id = document_id
         self.include_web = include_web
+        self.use_deep_search = use_deep_search
 
     def run(self):
         """Run RAG processing in background thread."""
         try:
-            # Stage 0: HyDE generation
-            self.progress_updated.emit("Generating search queries...", 10)
-
             # Create event loop for async operations
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
 
-            # Stage 1: Searching
-            self.progress_updated.emit("Searching in PDF...", 30)
+            # Progress callback for deep search
+            def progress_callback(data):
+                if self.use_deep_search:
+                    hop = data.get('hop', 0)
+                    stage = data.get('hop_stage', '')
+                    progress = data.get('progress', 0)
+
+                    if stage == 'local_search':
+                        self.progress_updated.emit("Searching local knowledge base...", 5)
+                    elif stage == 'searching':
+                        self.progress_updated.emit(f"Hop {hop}: Querying academic databases...", progress)
+                    elif stage == 'fetching':
+                        self.progress_updated.emit(f"Hop {hop}: Fetching paper details...", progress)
+                    elif stage == 'analyzing':
+                        self.progress_updated.emit(f"Hop {hop}: Analyzing papers...", progress)
+                    elif stage == 'synthesizing':
+                        self.progress_updated.emit("Synthesizing comprehensive answer...", progress)
+                    else:
+                        self.progress_updated.emit(f"Hop {hop}: Processing...", progress)
+
+            if self.use_deep_search:
+                self.progress_updated.emit("🔍 Starting Deep Search...", 5)
+            else:
+                self.progress_updated.emit("Generating search queries...", 10)
+                self.progress_updated.emit("Searching in PDF...", 30)
 
             # Process the question
             result = loop.run_until_complete(
                 self.rag_chain.answer_question(
                     question=self.question,
                     document_id=self.document_id,
-                    include_web_research=self.include_web
+                    include_web_research=self.include_web,
+                    use_deep_search=self.use_deep_search,
+                    progress_callback=progress_callback if self.use_deep_search else None
                 )
             )
 
@@ -1066,6 +1090,32 @@ class RAGChatPanel(QWidget):
         self.web_research_cb.setToolTip("Enable web search to supplement PDF content (may be slower)")
         options_layout.addWidget(self.web_research_cb)
 
+        # Deep Search button - prominent purple styling
+        self.deep_search_btn = QPushButton(" Deep Search")
+        try:
+            import qtawesome as qta
+            self.deep_search_btn.setIcon(qta.icon('fa5s.search-plus', color='#9C27B0'))
+        except:
+            pass  # Fall back to no icon if qtawesome not available
+        self.deep_search_btn.setMaximumHeight(25)
+        self.deep_search_btn.setToolTip("Deep search across academic databases (Ctrl+D)")
+        self.deep_search_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #E1BEE7;
+                border: 2px solid #9C27B0;
+                border-radius: 4px;
+                padding: 3px 10px;
+                font-weight: bold;
+            }
+            QPushButton:hover {
+                background-color: #CE93D8;
+            }
+        """)
+        self.deep_search_btn.setCheckable(True)  # Toggle button
+        self.deep_search_btn.setChecked(False)  # Default OFF
+        self.deep_search_btn.clicked.connect(self._toggle_deep_search_mode)
+        options_layout.addWidget(self.deep_search_btn)
+
         # Clear button - compact
         clear_btn = QPushButton(" Clear")
         clear_btn.setIcon(self.icons.get('trash'))
@@ -1121,6 +1171,11 @@ class RAGChatPanel(QWidget):
         shortcut_clear_history = QShortcut(QKeySequence("Ctrl+L"), self)
         shortcut_clear_history.activated.connect(self.clear_chat_history)
 
+        # Ctrl+D: Toggle Deep Search
+        shortcut_deep_search = QShortcut(QKeySequence("Ctrl+D"), self)
+        shortcut_deep_search.activated.connect(lambda: self.deep_search_btn.setChecked(not self.deep_search_btn.isChecked()))
+        shortcut_deep_search.activated.connect(self._toggle_deep_search_mode)
+
         # Ctrl+1-5: Quick actions
         shortcut_1 = QShortcut(QKeySequence("Ctrl+1"), self)
         shortcut_1.activated.connect(lambda: self._use_quick_action("Summarize this document"))
@@ -1168,6 +1223,48 @@ class RAGChatPanel(QWidget):
 
         # Auto-send quick action questions
         self.ask_question()
+
+    def _toggle_deep_search_mode(self):
+        """Toggle deep search mode on/off."""
+        is_enabled = self.deep_search_btn.isChecked()
+
+        if is_enabled:
+            # Enable deep search mode - active purple styling
+            self.deep_search_btn.setStyleSheet("""
+                QPushButton {
+                    background-color: #9C27B0;
+                    color: white;
+                    border: 2px solid #7B1FA2;
+                    border-radius: 4px;
+                    padding: 3px 10px;
+                    font-weight: bold;
+                }
+                QPushButton:hover {
+                    background-color: #8E24AA;
+                }
+            """)
+            self.question_input.setPlaceholderText(
+                "Ask a research question - Deep Search will explore academic papers..."
+            )
+            self.status_label.setText("🔍 Deep Search mode enabled - searches across multiple papers")
+            logger.info("Deep Search mode enabled")
+        else:
+            # Disable deep search mode - light purple styling
+            self.deep_search_btn.setStyleSheet("""
+                QPushButton {
+                    background-color: #E1BEE7;
+                    border: 2px solid #9C27B0;
+                    border-radius: 4px;
+                    padding: 3px 10px;
+                    font-weight: bold;
+                }
+                QPushButton:hover {
+                    background-color: #CE93D8;
+                }
+            """)
+            self.question_input.setPlaceholderText("Ask a question about the document...")
+            self.status_label.setText("Deep Search mode disabled")
+            logger.info("Deep Search mode disabled")
 
 
     def initialize_rag_system(self):
@@ -1369,11 +1466,15 @@ class RAGChatPanel(QWidget):
         # Always use current document scope (no scope selection)
         document_id = self.current_document_id
 
+        # Check if deep search is enabled
+        use_deep_search = self.deep_search_btn.isChecked()
+
         # Start processing
-        self._start_rag_processing(question, document_id, self.web_research_cb.isChecked())
+        self._start_rag_processing(question, document_id, self.web_research_cb.isChecked(), use_deep_search)
     
     
-    def _start_rag_processing(self, question: str, document_id: Optional[str], include_web: bool):
+    def _start_rag_processing(self, question: str, document_id: Optional[str],
+                             include_web: bool, use_deep_search: bool = False):
         """Start RAG processing in background thread."""
 
         # Disable input during processing
@@ -1387,7 +1488,7 @@ class RAGChatPanel(QWidget):
         self.cancel_processing_btn.setVisible(False)  # No cancel for quick Q&A
 
         # Start worker thread
-        self.rag_worker = RAGWorker(self.rag_chain, question, document_id, include_web)
+        self.rag_worker = RAGWorker(self.rag_chain, question, document_id, include_web, use_deep_search)
         self.rag_worker.answer_ready.connect(self._handle_answer_ready)
         self.rag_worker.error_occurred.connect(self._handle_error)
         self.rag_worker.progress_updated.connect(self._update_qa_progress)
@@ -1402,16 +1503,25 @@ class RAGChatPanel(QWidget):
         # Clear input on success
         self.question_input.clear()
 
-        # Check if web research was enabled but failed
+        # Check search type and update status
+        search_type = answer_data.get('search_type', 'standard')
         sources_used = answer_data.get('sources_used', {})
-        web_sources = sources_used.get('web_sources', 0)
-        if self.web_research_cb.isChecked() and web_sources == 0:
-            self.status_label.setText("Web research unavailable - using PDF only")
+        processing_time = answer_data.get('processing_time', 0)
+
+        if search_type == 'deep_search':
+            # Deep search completed
+            quality_metrics = answer_data.get('quality_metrics', {})
+            total_papers = quality_metrics.get('total_papers', 0)
+            total_hops = quality_metrics.get('total_hops', 0)
+            self.status_label.setText(f"🔍 Deep Search completed: {total_papers} papers, {total_hops} hops, {processing_time:.1f}s")
         else:
-            # Update status with normal info
-            processing_time = answer_data.get('processing_time', 0)
-            total_sources = sources_used.get('pdf_sources', 0) + web_sources
-            self.status_label.setText(f"Completed in {processing_time:.1f}s - {total_sources} sources")
+            # Standard RAG
+            web_sources = sources_used.get('web_sources', 0)
+            if self.web_research_cb.isChecked() and web_sources == 0:
+                self.status_label.setText("Web research unavailable - using PDF only")
+            else:
+                total_sources = sources_used.get('pdf_sources', 0) + web_sources
+                self.status_label.setText(f"Completed in {processing_time:.1f}s - {total_sources} sources")
 
         # Re-enable input
         self.ask_button.setEnabled(True)

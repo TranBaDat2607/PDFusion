@@ -97,10 +97,48 @@ class ProcessingSettings(BaseModel):
 
 class RAGSettings(BaseModel):
     """RAG (Retrieval-Augmented Generation) settings."""
-    
+
     enabled: bool = Field(False, description="Enable RAG functionality")
     auto_process_documents: bool = Field(True, description="Auto-process documents for RAG")
     web_research_enabled: bool = Field(True, description="Enable web research integration")
+
+
+class DeepSearchSettings(BaseModel):
+    """Deep search configuration for academic paper research."""
+
+    enabled: bool = Field(True, description="Enable deep search feature")
+
+    # Search parameters
+    max_hops: int = Field(3, ge=1, le=5, description="Maximum citation hops")
+    max_papers_per_hop: int = Field(5, ge=1, le=10, description="Papers analyzed per hop")
+    max_total_papers: int = Field(20, ge=5, le=50, description="Maximum total papers")
+
+    # Search strategy
+    follow_citations: bool = Field(True, description="Follow backward citations")
+    follow_cited_by: bool = Field(True, description="Follow forward citations (cited-by)")
+    recent_papers_only: bool = Field(False, description="Limit to recent papers (3 years)")
+    recent_years_threshold: int = Field(3, ge=1, le=10, description="Years for recency filter")
+
+    # API keys (optional)
+    pubmed_api_key: Optional[str] = Field(None, description="PubMed NCBI API key (optional)")
+    core_api_key: Optional[str] = Field(None, description="CORE API key (required for CORE)")
+
+    # Paper selection
+    diversity_weight: float = Field(0.3, ge=0.0, le=1.0, description="Weight for source diversity")
+    relevance_weight: float = Field(0.7, ge=0.0, le=1.0, description="Weight for relevance")
+
+    # Caching
+    cache_papers: bool = Field(True, description="Cache fetched paper metadata")
+    cache_ttl_days: int = Field(7, ge=1, le=30, description="Cache TTL in days")
+    cache_dir: str = Field("data/paper_cache", description="Cache directory")
+
+    # Performance
+    concurrent_api_calls: int = Field(3, ge=1, le=10, description="Concurrent API requests")
+    request_timeout_seconds: int = Field(30, ge=10, le=120, description="API timeout")
+
+    # LLM settings for synthesis
+    synthesis_model: str = Field("auto", description="Model for synthesis (auto uses RAG model)")
+    synthesis_max_tokens: int = Field(1500, ge=500, le=4000, description="Max tokens for synthesis")
 
 
 class AppSettings(BaseModel):
@@ -115,6 +153,7 @@ class AppSettings(BaseModel):
     gui: GUISettings = Field(default_factory=GUISettings)
     processing: ProcessingSettings = Field(default_factory=ProcessingSettings)
     rag: RAGSettings = Field(default_factory=RAGSettings)
+    deep_search: DeepSearchSettings = Field(default_factory=DeepSearchSettings)
     
     # Application metadata
     version: str = Field("1.0.0", description="Application version")

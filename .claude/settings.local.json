@@ -1,7 +1,9 @@
 {
   "permissions": {
     "allow": [
-      "Bash(grep:*)"
+      "Bash(grep:*)",
+      "Bash(dir \"C:\\\\Users\\\\Admin\\\\AppData\\\\Local\\\\PDFusion\\\\chroma_db\")",
+      "Bash(git log:*)"
     ]
   }
 }

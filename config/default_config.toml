@@ -44,6 +44,42 @@ enabled = false
 auto_process_documents = true
 web_research_enabled = true
 
+[deep_search]
+# Deep Search for academic papers
+enabled = true
+
+# Search parameters
+max_hops = 3
+max_papers_per_hop = 5
+max_total_papers = 20
+
+# Search strategy
+follow_citations = true
+follow_cited_by = true
+recent_papers_only = false
+recent_years_threshold = 3
+
+# API keys (optional - set via environment or GUI)
+pubmed_api_key = ""
+core_api_key = ""
+
+# Paper selection weights
+diversity_weight = 0.3
+relevance_weight = 0.7
+
+# Caching
+cache_papers = true
+cache_ttl_days = 7
+cache_dir = "data/paper_cache"
+
+# Performance
+concurrent_api_calls = 3
+request_timeout_seconds = 30
+
+# LLM synthesis
+synthesis_model = "auto"
+synthesis_max_tokens = 1500
+
 # Application metadata
 version = "1.0.0"
 debug_mode = false

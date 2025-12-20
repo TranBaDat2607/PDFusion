@@ -14,6 +14,9 @@ from ..translators import TranslatorFactory
 from .vector_store import ChromaDBManager
 from .web_research import WebResearchEngine, WebSource
 from .reference_manager import ReferenceManager
+from .deep_search import DeepSearchEngine, DeepSearchResult
+from .academic_apis import AcademicAPIManager
+from .paper_cache import PaperCache
 
 logger = logging.getLogger(__name__)
 
@@ -27,7 +30,7 @@ class EnhancedRAGChain:
     def __init__(self, vector_store: ChromaDBManager, web_research: WebResearchEngine):
         """
         Initialize the RAG chain.
-        
+
         Args:
             vector_store: ChromaDB manager for document retrieval
             web_research: Web research engine for external knowledge
@@ -36,11 +39,16 @@ class EnhancedRAGChain:
         self.web_research = web_research
         self.reference_manager = ReferenceManager()
         self.settings = get_settings()
-        
+
         # Initialize translator for answer generation
         self.translator = None
         self._initialize_translator()
-        
+
+        # Initialize Deep Search components
+        self.deep_search_engine = None
+        if self.settings.deep_search.enabled:
+            self._initialize_deep_search()
+
         logger.info("Enhanced RAG chain initialized")
     
     def _initialize_translator(self):
@@ -55,11 +63,42 @@ class EnhancedRAGChain:
             logger.info(f"Translator initialized: {preferred_service}")
         except Exception as e:
             logger.error(f"Failed to initialize translator: {e}")
+
+    def _initialize_deep_search(self):
+        """Initialize Deep Search components."""
+        try:
+            # Initialize paper cache
+            cache = PaperCache(
+                cache_dir=self.settings.deep_search.cache_dir,
+                ttl_days=self.settings.deep_search.cache_ttl_days
+            )
+
+            # Initialize academic API manager
+            api_manager = AcademicAPIManager(
+                pubmed_api_key=self.settings.deep_search.pubmed_api_key,
+                core_api_key=self.settings.deep_search.core_api_key
+            )
+
+            # Initialize Deep Search Engine
+            self.deep_search_engine = DeepSearchEngine(
+                academic_api_manager=api_manager,
+                vector_store_manager=self.vector_store,
+                paper_cache=cache,
+                llm_client=self.translator,
+                settings=self.settings.deep_search
+            )
+
+            logger.info("Deep Search engine initialized")
+        except Exception as e:
+            logger.error(f"Failed to initialize Deep Search: {e}")
+            self.deep_search_engine = None
     
     async def answer_question(self, question: str, document_id: Optional[str] = None,
                             include_web_research: bool = True,
                             max_pdf_sources: int = 5,
-                            max_web_sources: int = 5) -> Dict[str, Any]:
+                            max_web_sources: int = 5,
+                            use_deep_search: bool = False,
+                            progress_callback: Optional[callable] = None) -> Dict[str, Any]:
         """
         Answer a question using PDF knowledge and web research.
 
@@ -69,15 +108,24 @@ class EnhancedRAGChain:
             include_web_research: Whether to include web research
             max_pdf_sources: Maximum PDF sources to retrieve
             max_web_sources: Maximum web sources to retrieve
+            use_deep_search: Whether to use Deep Search (multi-hop academic search)
+            progress_callback: Optional callback for progress updates
 
         Returns:
             Comprehensive answer with references
         """
-        logger.info(f"Processing question: {question[:100]}...")
+        logger.info(f"Processing question: {question[:100]}... (Deep Search: {use_deep_search})")
 
         start_time = datetime.now()
-        
+
         try:
+            # If Deep Search is enabled and available, use it
+            if use_deep_search and self.deep_search_engine:
+                return await self._answer_with_deep_search(
+                    question, document_id, progress_callback
+                )
+
+            # Otherwise, use standard RAG
             # Step 1: Retrieve relevant PDF content
             pdf_sources = await self._retrieve_pdf_knowledge(
                 question, document_id, max_pdf_sources
@@ -434,7 +482,98 @@ Hypothetical answer:"""
                 context_parts.append(text[:200])  # Limit length
         
         return ' '.join(context_parts)
-    
+
+    async def _answer_with_deep_search(
+        self,
+        question: str,
+        document_id: Optional[str],
+        progress_callback: Optional[callable]
+    ) -> Dict[str, Any]:
+        """
+        Answer question using Deep Search (multi-hop academic search).
+
+        Args:
+            question: User's question
+            document_id: Specific document ID (optional)
+            progress_callback: Progress callback for UI updates
+
+        Returns:
+            Result dict with answer and references
+        """
+        logger.info(f"Using Deep Search for: {question[:100]}")
+
+        try:
+            # Get current PDF context if document_id provided
+            current_pdf_context = ""
+            if document_id:
+                pdf_sources = await self._retrieve_pdf_knowledge(question, document_id, 3)
+                current_pdf_context = self._extract_pdf_context(pdf_sources)
+
+            # Run deep search
+            deep_result: DeepSearchResult = await self.deep_search_engine.deep_search(
+                question=question,
+                current_pdf_context=current_pdf_context,
+                progress_callback=progress_callback
+            )
+
+            # Convert deep search papers to references
+            paper_references = []
+            for paper in deep_result.papers:
+                ref = {
+                    'title': paper.title,
+                    'authors': ', '.join(paper.authors[:3]),
+                    'year': paper.year,
+                    'source': paper.source,
+                    'abstract': paper.abstract[:200] if paper.abstract else '',
+                    'url': paper.pdf_url or '',
+                    'relevance': paper.relevance_score
+                }
+                paper_references.append(ref)
+
+            # Convert local papers to references
+            local_references = []
+            for paper in deep_result.local_papers:
+                ref = {
+                    'title': paper.title,
+                    'source': 'Local ChromaDB',
+                    'relevance': paper.relevance_score
+                }
+                local_references.append(ref)
+
+            result = {
+                'answer': deep_result.answer,
+                'pdf_references': local_references,
+                'web_references': paper_references,
+                'deep_search_result': deep_result.to_dict(),
+                'quality_metrics': {
+                    'confidence': 0.9,  # High confidence from deep search
+                    'completeness': min(deep_result.total_papers / 15, 1.0),
+                    'total_papers': deep_result.total_papers,
+                    'total_hops': deep_result.total_hops
+                },
+                'processing_time': deep_result.processing_time,
+                'sources_used': {
+                    'pdf_sources': len(deep_result.local_papers),
+                    'academic_papers': len(deep_result.papers)
+                },
+                'timestamp': datetime.now().isoformat(),
+                'search_type': 'deep_search'
+            }
+
+            logger.info(f"Deep Search completed: {deep_result.total_papers} papers, "
+                       f"{deep_result.processing_time:.1f}s")
+            return result
+
+        except Exception as e:
+            logger.error(f"Deep Search failed: {e}", exc_info=True)
+            # Fallback to standard RAG
+            logger.info("Falling back to standard RAG")
+            return await self.answer_question(
+                question, document_id,
+                include_web_research=True,
+                use_deep_search=False
+            )
+
     async def _generate_answer(self, question: str, pdf_sources: List[Dict[str, Any]],
                              web_sources: List[WebSource]) -> str:
         """Generate comprehensive answer using all available sources."""
