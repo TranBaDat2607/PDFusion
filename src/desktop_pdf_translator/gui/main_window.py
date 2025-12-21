@@ -781,14 +781,14 @@ class MainWindow(QMainWindow):
     def _handle_pdf_navigation(self, page: int, bbox: object):
         """Handle PDF navigation request from chat panel."""
         try:
-            # Navigate to the specified page in translated PDF viewer
-            if hasattr(self.translated_pdf_viewer, 'goto_page'):
-                self.translated_pdf_viewer.goto_page(page)
-                
+            # Navigate to the specified page in ORIGINAL PDF viewer (where RAG PDF is loaded)
+            if hasattr(self.original_pdf_viewer, 'goto_page'):
+                self.original_pdf_viewer.goto_page(page)
+
                 # Highlight region if bbox is provided
-                if bbox and hasattr(self.translated_pdf_viewer, 'highlight_region'):
-                    self.translated_pdf_viewer.highlight_region(bbox)
-                
+                if bbox and hasattr(self.original_pdf_viewer, 'highlight_region'):
+                    self.original_pdf_viewer.highlight_region(bbox)
+
                 self.status_label.setText(f"Navigated to page {page}")
                 logger.info(f"PDF navigation: page {page}")
             else:

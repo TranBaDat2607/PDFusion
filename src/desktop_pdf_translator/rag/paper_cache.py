@@ -65,7 +65,7 @@ class PaperCache:
             conn.commit()
             logger.debug("Paper cache database initialized")
 
-    async def get(self, paper_id: str, source: str) -> Optional[Dict[str, Any]]:
+    def get(self, paper_id: str, source: str) -> Optional[Dict[str, Any]]:
         """
         Retrieve paper from cache if exists and not expired.
 
@@ -126,7 +126,7 @@ class PaperCache:
             logger.error(f"Error retrieving from cache: {e}")
             return None
 
-    async def set(self, paper_data: Dict[str, Any]) -> bool:
+    def set(self, paper_data: Dict[str, Any]) -> bool:
         """
         Store paper in cache.
 

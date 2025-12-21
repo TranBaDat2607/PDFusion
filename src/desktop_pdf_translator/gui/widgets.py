@@ -421,6 +421,59 @@ class PDFViewer(QWidget):
         except Exception as e:
             logger.exception(f"Error in fit_width: {e}")
     
+    def goto_page(self, page_number: int):
+        """
+        Navigate to a specific page in the PDF.
+
+        Args:
+            page_number: Page number (1-indexed for user display, will convert to 0-indexed)
+        """
+        if not self.doc:
+            logger.warning("Cannot navigate: No PDF loaded")
+            return
+
+        # Convert to 0-indexed
+        page_index = page_number - 1
+
+        # Validate page number
+        if page_index < 0 or page_index >= len(self.doc):
+            logger.warning(f"Invalid page number: {page_number}")
+            return
+
+        try:
+            # Ensure the page is rendered
+            if page_index not in self.rendered_pages:
+                self._render_page(page_index)
+
+            # Get the page widget
+            if page_index < len(self.page_widgets):
+                page_widget = self.page_widgets[page_index]
+
+                # Scroll to the page
+                self.scroll_area.ensureWidgetVisible(page_widget, 50, 50)
+
+                # Update page label
+                self.page_label.setText(f"Page {page_number} of {len(self.doc)}")
+
+                logger.info(f"Navigated to page {page_number}")
+            else:
+                logger.warning(f"Page widget not found for page {page_number}")
+
+        except Exception as e:
+            logger.error(f"Navigation to page {page_number} failed: {e}")
+
+    def highlight_region(self, bbox: tuple):
+        """
+        Highlight a region on the current page.
+
+        Args:
+            bbox: Bounding box (x0, y0, x1, y1) to highlight
+        """
+        # Placeholder for future implementation
+        # Would overlay a semi-transparent rectangle on the specified region
+        logger.info(f"Highlight region requested: {bbox}")
+        pass
+
     def clear(self):
         """Clear the PDF viewer."""
         self.current_file = None

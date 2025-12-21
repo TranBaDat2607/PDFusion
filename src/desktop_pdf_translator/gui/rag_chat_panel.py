@@ -28,6 +28,7 @@ from ..rag import (
     WebResearchEngine, EnhancedRAGChain, ReferenceManager
 )
 from ..config import get_settings
+from .expandable_section import ExpandableSection
 from .content_renderer import ContentRenderer
 from .animations import FadeSlideInAnimation
 from .chat_preferences import get_chat_preferences
@@ -210,6 +211,9 @@ class RAGWorker(QThread):
     answer_ready = Signal(dict)
     error_occurred = Signal(str)
     progress_updated = Signal(str, int)
+    action_started = Signal(str, str)  # (action_type, description)
+    action_completed = Signal(str)  # result
+    action_failed = Signal(str)  # error message
 
     def __init__(self, rag_chain: EnhancedRAGChain, question: str,
                  document_id: Optional[str] = None, include_web: bool = True,
@@ -228,31 +232,61 @@ class RAGWorker(QThread):
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
 
+            # Determine search type and log initial action
+            if self.use_deep_search:
+                self.action_started.emit("deep_search", "Starting Deep Search with multi-hop reasoning")
+                self.progress_updated.emit("Starting Deep Search...", 5)
+            elif self.include_web:
+                self.action_started.emit("rag", "Starting RAG with web research enabled")
+                self.progress_updated.emit("Starting RAG with web research...", 5)
+            else:
+                self.action_started.emit("rag", "Starting RAG search (PDF only)")
+                self.progress_updated.emit("Starting RAG search...", 5)
+
             # Progress callback for deep search
             def progress_callback(data):
                 if self.use_deep_search:
                     hop = data.get('hop', 0)
                     stage = data.get('hop_stage', '')
                     progress = data.get('progress', 0)
+                    papers_found = data.get('papers_found', 0)
 
                     if stage == 'local_search':
+                        self.action_started.emit("local", "Searching local ChromaDB for relevant past papers")
                         self.progress_updated.emit("Searching local knowledge base...", 5)
                     elif stage == 'searching':
+                        if hop == 0:
+                            self.action_completed.emit("Local search complete")
+                            self.action_started.emit("api", f"Hop {hop}: Querying PubMed, Semantic Scholar, CORE")
                         self.progress_updated.emit(f"Hop {hop}: Querying academic databases...", progress)
                     elif stage == 'fetching':
+                        self.action_completed.emit(f"Found {papers_found} papers")
+                        self.action_started.emit("hop", f"Hop {hop}: Fetching citations and paper details")
                         self.progress_updated.emit(f"Hop {hop}: Fetching paper details...", progress)
                     elif stage == 'analyzing':
                         self.progress_updated.emit(f"Hop {hop}: Analyzing papers...", progress)
                     elif stage == 'synthesizing':
+                        self.action_completed.emit(f"Multi-hop analysis complete")
+                        self.action_started.emit("synthesis", "Synthesizing answer from all sources")
                         self.progress_updated.emit("Synthesizing comprehensive answer...", progress)
+                    elif stage == 'completed':
+                        self.action_completed.emit(f"Synthesis complete")
                     else:
                         self.progress_updated.emit(f"Hop {hop}: Processing...", progress)
 
-            if self.use_deep_search:
-                self.progress_updated.emit("🔍 Starting Deep Search...", 5)
-            else:
+            # Log actions for standard RAG
+            if not self.use_deep_search:
+                self.action_started.emit("search", "Generating hypothetical answer (HyDE)")
                 self.progress_updated.emit("Generating search queries...", 10)
+
+                self.action_completed.emit("HyDE query generated")
+                self.action_started.emit("local", "Hybrid search: semantic + keyword matching")
                 self.progress_updated.emit("Searching in PDF...", 30)
+
+                # Log web research if enabled
+                if self.include_web:
+                    self.action_completed.emit("PDF search complete")
+                    self.action_started.emit("web", "Searching Google, Scholar, Wikipedia, arXiv")
 
             # Process the question
             result = loop.run_until_complete(
@@ -265,11 +299,23 @@ class RAGWorker(QThread):
                 )
             )
 
+            # Final completion
+            if not self.use_deep_search:
+                if self.include_web:
+                    self.action_completed.emit("Web research complete")
+                else:
+                    self.action_completed.emit("PDF search complete")
+
+                self.action_started.emit("synthesis", "Generating final answer with LLM")
+
+            self.action_completed.emit(f"Answer generated successfully")
+
             self.progress_updated.emit("Completed", 100)
             self.answer_ready.emit(result)
 
         except Exception as e:
             logger.error(f"RAG processing failed: {e}")
+            self.action_failed.emit(str(e))
             self.error_occurred.emit(str(e))
         finally:
             if 'loop' in locals():
@@ -277,7 +323,7 @@ class RAGWorker(QThread):
 
 
 class MessageBubble(QWidget):
-    """Compact message bubble for user questions (max 65% width, right-aligned)."""
+    """Compact message bubble for user questions (max 75% width, right-aligned)."""
 
     def __init__(self, question: str):
         super().__init__()
@@ -341,8 +387,8 @@ class MessageBubble(QWidget):
             else:
                 available_width = self.parent().width()
 
-            # Set maximum to 65% of available width
-            max_width = int(available_width * 0.65)
+            # Set maximum to 75% of available width
+            max_width = int(available_width * 0.75)
             self.question_label.setMaximumWidth(max_width)
 
 
@@ -419,7 +465,12 @@ class MessagePanel(QFrame):
         content_widget = QWidget()
         content_layout = QVBoxLayout(content_widget)
         content_layout.setContentsMargins(0, 0, 0, 0)
-        content_layout.setSpacing(0)
+        content_layout.setSpacing(8)
+
+        # Action summary - shows what tools were used
+        action_summary = self._create_action_summary()
+        if action_summary:
+            content_layout.addWidget(action_summary)
 
         # Content browser
         self.content_browser = QTextBrowser()
@@ -467,6 +518,83 @@ class MessagePanel(QFrame):
         content_layout.addWidget(self.content_browser)
 
         return content_widget
+
+    def _create_action_summary(self) -> Optional[QWidget]:
+        """Create expandable summary showing PDF chunks, web links, and papers used."""
+        search_type = self.answer_data.get('search_type', 'standard')
+        pdf_references = self.answer_data.get('pdf_references', [])
+        web_references = self.answer_data.get('web_references', [])
+
+        # Container widget
+        summary_widget = QWidget()
+        summary_layout = QVBoxLayout(summary_widget)
+        summary_layout.setContentsMargins(0, 0, 0, 0)
+        summary_layout.setSpacing(4)
+
+        sections_added = 0
+
+        # PDF Search section (expandable to show chunks)
+        if pdf_references and search_type != 'deep_search':
+            pdf_section = ExpandableSection(
+                title=f"PDF Search ({len(pdf_references)} chunks)",
+                items=pdf_references,
+                item_type='pdf'
+            )
+            pdf_section.item_clicked.connect(lambda t, d: self.reference_clicked.emit(t, d))
+            summary_layout.addWidget(pdf_section)
+            sections_added += 1
+
+        # Web Search section (expandable to show links)
+        if web_references and search_type != 'deep_search':
+            web_section = ExpandableSection(
+                title=f"Web Search ({len(web_references)} sources)",
+                items=web_references,
+                item_type='web'
+            )
+            web_section.item_clicked.connect(lambda t, d: self.reference_clicked.emit(t, d))
+            summary_layout.addWidget(web_section)
+            sections_added += 1
+
+        # Deep Search section (expandable to show papers)
+        if search_type == 'deep_search':
+            quality_metrics = self.answer_data.get('quality_metrics', {})
+            total_papers = quality_metrics.get('total_papers', 0)
+            total_hops = quality_metrics.get('total_hops', 0)
+
+            # Combine local papers (pdf_references) + academic papers (web_references)
+            all_papers = []
+
+            # Local papers from ChromaDB
+            if pdf_references:
+                for ref in pdf_references:
+                    all_papers.append({
+                        'type': 'local',
+                        'title': ref.get('title', 'Local Paper'),
+                        'source': ref.get('source', 'ChromaDB')
+                    })
+
+            # Academic papers from APIs
+            if web_references:
+                for ref in web_references:
+                    all_papers.append({
+                        'type': 'academic',
+                        'title': ref.get('title', 'Unknown'),
+                        'authors': ref.get('authors', ''),
+                        'year': ref.get('year', ''),
+                        'source': ref.get('source', 'unknown'),
+                        'url': ref.get('url', '')
+                    })
+
+            deep_section = ExpandableSection(
+                title=f"Deep Search ({total_papers} papers, {total_hops} hops)",
+                items=all_papers,
+                item_type='deep_search'
+            )
+            deep_section.item_clicked.connect(lambda t, d: self.reference_clicked.emit(t, d))
+            summary_layout.addWidget(deep_section)
+            sections_added += 1
+
+        return summary_widget if sections_added > 0 else None
 
     def _adjust_content_size(self):
         """Dynamically adjust content browser size to fit document height."""
@@ -919,7 +1047,7 @@ class RAGChatPanel(QWidget):
         # Input area - compact, chiếm ít không gian
         input_widget = self.create_input_area()
         layout.addWidget(input_widget)
-        
+
         # Unified progress section - used for both document processing and Q&A
         progress_widget = self._create_progress_section()
         layout.addWidget(progress_widget)
@@ -1246,7 +1374,7 @@ class RAGChatPanel(QWidget):
             self.question_input.setPlaceholderText(
                 "Ask a research question - Deep Search will explore academic papers..."
             )
-            self.status_label.setText("🔍 Deep Search mode enabled - searches across multiple papers")
+            self.status_label.setText("Deep Search mode enabled - searches across multiple papers")
             logger.info("Deep Search mode enabled")
         else:
             # Disable deep search mode - light purple styling
@@ -1492,6 +1620,10 @@ class RAGChatPanel(QWidget):
         self.rag_worker.answer_ready.connect(self._handle_answer_ready)
         self.rag_worker.error_occurred.connect(self._handle_error)
         self.rag_worker.progress_updated.connect(self._update_qa_progress)
+        # Connect action log signals
+        self.rag_worker.action_started.connect(self._handle_action_started)
+        self.rag_worker.action_completed.connect(self._handle_action_completed)
+        self.rag_worker.action_failed.connect(self._handle_action_failed)
         self.rag_worker.start()
     
     def _handle_answer_ready(self, answer_data: Dict[str, Any]):
@@ -1513,7 +1645,7 @@ class RAGChatPanel(QWidget):
             quality_metrics = answer_data.get('quality_metrics', {})
             total_papers = quality_metrics.get('total_papers', 0)
             total_hops = quality_metrics.get('total_hops', 0)
-            self.status_label.setText(f"🔍 Deep Search completed: {total_papers} papers, {total_hops} hops, {processing_time:.1f}s")
+            self.status_label.setText(f"Deep Search completed: {total_papers} papers, {total_hops} hops, {processing_time:.1f}s")
         else:
             # Standard RAG
             web_sources = sources_used.get('web_sources', 0)
@@ -1557,7 +1689,19 @@ class RAGChatPanel(QWidget):
         self.progress_bar.setValue(progress)
         self.detail_label.setText("Processing your question...")
         self.time_label.setText("")  # No ETA for quick Q&A
-    
+
+    def _handle_action_started(self, action_type: str, description: str):
+        """Handle when a new action starts (for progress display only)."""
+        pass  # Actions now shown as summary in answer bubble
+
+    def _handle_action_completed(self, result: str):
+        """Handle when an action completes (for progress display only)."""
+        pass  # Actions now shown as summary in answer bubble
+
+    def _handle_action_failed(self, error: str):
+        """Handle when an action fails (for progress display only)."""
+        pass  # Actions now shown as summary in answer bubble
+
     def handle_reference_click(self, ref_type: str, reference_data: Dict[str, Any]):
         """Handle reference click from chat history with visual feedback."""
 

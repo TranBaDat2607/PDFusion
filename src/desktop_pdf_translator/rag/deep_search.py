@@ -229,11 +229,14 @@ class DeepSearchEngine:
         try:
             # Step 0: Local Knowledge Search
             if progress_callback:
-                await progress_callback({
-                    'stage': 'local_search',
-                    'detail': 'Searching local knowledge base...',
-                    'progress': 5
-                })
+                try:
+                    await progress_callback({
+                        'stage': 'local_search',
+                        'detail': 'Searching local knowledge base...',
+                        'progress': 5
+                    })
+                except Exception as e:
+                    logger.warning(f"Progress callback failed: {e}")
 
             local_papers = await self._search_local_knowledge(question, current_pdf_context)
             search_path.add_local_papers(local_papers)
@@ -247,12 +250,15 @@ class DeepSearchEngine:
 
             # Hop 0: Initial Broad Search
             if progress_callback:
-                await progress_callback({
-                    'hop': 0,
-                    'hop_stage': 'searching',
-                    'detail': 'Querying academic databases...',
-                    'progress': 15
-                })
+                try:
+                    await progress_callback({
+                        'hop': 0,
+                        'hop_stage': 'searching',
+                        'detail': 'Querying academic databases...',
+                        'progress': 15
+                    })
+                except Exception as e:
+                    logger.warning(f"Progress callback failed: {e}")
 
             hop0_papers = await self._hop_0_initial_search(
                 question, key_concepts, max_papers_per_hop

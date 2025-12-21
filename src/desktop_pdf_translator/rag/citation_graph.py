@@ -327,7 +327,7 @@ class CitationGraph:
             logger.error(f"Error calculating authority scores: {e}")
             return []
 
-    def get_stats(self) -> Dict[str, any]:
+    def get_stats(self) -> Dict[str, Any]:
         """
         Get graph statistics.
 
