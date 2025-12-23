@@ -342,9 +342,9 @@ class MessageBubble(QWidget):
         main_layout.addStretch()
 
         # Bubble frame - simple minimal style with dynamic width
-        bubble_frame = QFrame()
-        bubble_frame.setObjectName("userBubble")
-        bubble_frame.setStyleSheet("""
+        self.bubble_frame = QFrame()
+        self.bubble_frame.setObjectName("userBubble")
+        self.bubble_frame.setStyleSheet("""
             QFrame#userBubble {
                 background-color: #F5F5F5;
                 border: 1px solid #E0E0E0;
@@ -354,9 +354,9 @@ class MessageBubble(QWidget):
         """)
 
         # Set size policy - Preferred allows natural sizing
-        bubble_frame.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Preferred)
+        self.bubble_frame.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Preferred)
 
-        bubble_layout = QVBoxLayout(bubble_frame)
+        bubble_layout = QVBoxLayout(self.bubble_frame)
         bubble_layout.setContentsMargins(0, 0, 0, 0)
 
         # Question text (no header, clean bubble)
@@ -366,13 +366,16 @@ class MessageBubble(QWidget):
         self.question_label.setStyleSheet("color: #424242; background: transparent; border: none;")
         self.question_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
 
+        # Set size policy to allow shrinking to fit content
+        self.question_label.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Minimum)
+
         # Don't set fixed maximum width - let it size naturally
         # We'll constrain it in showEvent when parent size is known
         self.question_label.setMinimumWidth(100)  # Minimum readable width
 
         bubble_layout.addWidget(self.question_label)
 
-        main_layout.addWidget(bubble_frame)
+        main_layout.addWidget(self.bubble_frame)
 
     def showEvent(self, event):
         """Adjust maximum width when widget is shown and parent size is known."""
@@ -389,7 +392,11 @@ class MessageBubble(QWidget):
 
             # Set maximum to 75% of available width
             max_width = int(available_width * 0.75)
+            # Set maximum width on both the label and the bubble frame
             self.question_label.setMaximumWidth(max_width)
+            # Find the bubble frame (it's the first child widget in main_layout after stretch)
+            if hasattr(self, 'bubble_frame'):
+                self.bubble_frame.setMaximumWidth(max_width + 30)  # Add padding for frame margins
 
 
 class MessagePanel(QFrame):
@@ -1244,6 +1251,30 @@ class RAGChatPanel(QWidget):
         self.deep_search_btn.clicked.connect(self._toggle_deep_search_mode)
         options_layout.addWidget(self.deep_search_btn)
 
+        # AI Agent Mode checkbox - NEW!
+        self.agent_mode_cb = QCheckBox(" AI Agent")
+        self.agent_mode_cb.setIcon(self.icons.get('robot'))
+        self.agent_mode_cb.setChecked(True)  # Default ON - use agent
+        self.agent_mode_cb.setToolTip(
+            "Use AI agent for intelligent tool selection (Recommended)\n"
+            "Agent automatically decides when to use web/academic search\n"
+            "Disable to use manual controls only"
+        )
+        self.agent_mode_cb.setStyleSheet("""
+            QCheckBox {
+                background-color: #E8F5E9;
+                border: 2px solid #4CAF50;
+                border-radius: 4px;
+                padding: 3px 8px;
+                font-weight: bold;
+            }
+            QCheckBox:hover {
+                background-color: #C8E6C9;
+            }
+        """)
+        self.agent_mode_cb.stateChanged.connect(self._toggle_agent_mode)
+        options_layout.addWidget(self.agent_mode_cb)
+
         # Clear button - compact
         clear_btn = QPushButton(" Clear")
         clear_btn.setIcon(self.icons.get('trash'))
@@ -1394,18 +1425,45 @@ class RAGChatPanel(QWidget):
             self.status_label.setText("Deep Search mode disabled")
             logger.info("Deep Search mode disabled")
 
+    def _toggle_agent_mode(self):
+        """Toggle AI agent mode on/off."""
+        is_enabled = self.agent_mode_cb.isChecked()
+
+        if is_enabled:
+            self.status_label.setText("AI Agent mode enabled - intelligent tool selection")
+            # When agent is on, show hint that it manages search automatically
+            self.question_input.setPlaceholderText("Ask anything - AI agent will choose the best tools...")
+            logger.info("AI Agent mode enabled")
+        else:
+            self.status_label.setText("Manual mode - you control search options")
+            self.question_input.setPlaceholderText("Ask a question about the document...")
+            logger.info("AI Agent mode disabled")
+
+        # Update RAG chain agent mode if it supports it
+        if hasattr(self.rag_chain, 'set_agent_mode'):
+            mode = 'always' if is_enabled else 'never'
+            self.rag_chain.set_agent_mode(mode)
+
 
     def initialize_rag_system(self):
-        """Initialize the RAG system components."""
+        """Initialize the RAG system components with agent support."""
         try:
             # Initialize vector store
             self.vector_store = ChromaDBManager()
-            
+
             # Initialize web research
             self.web_research = WebResearchEngine()
-            
-            # Initialize RAG chain
-            self.rag_chain = EnhancedRAGChain(self.vector_store, self.web_research)
+
+            # Initialize RAG chain with LangGraph agent (agent-only mode)
+            from ..rag.agent_rag_chain import AgentRAGChain
+
+            self.rag_chain = AgentRAGChain(
+                vector_store=self.vector_store,
+                web_research=self.web_research,
+                agent_mode='always',  # Agent-only mode
+                llm_model='gpt-4o-mini'  # Fast and cheap for agent decisions
+            )
+            logger.info("RAG system initialized with LangGraph agent")
             
             # Initialize reference manager
             self.reference_manager = ReferenceManager()
@@ -1648,11 +1706,25 @@ class RAGChatPanel(QWidget):
             self.status_label.setText(f"Deep Search completed: {total_papers} papers, {total_hops} hops, {processing_time:.1f}s")
         else:
             # Standard RAG
+            pdf_sources = sources_used.get('pdf_sources', 0)
             web_sources = sources_used.get('web_sources', 0)
-            if self.web_research_cb.isChecked() and web_sources == 0:
-                self.status_label.setText("Web research unavailable - using PDF only")
+            web_search_used = answer_data.get('web_search_used', False)
+
+            # Build status message based on what happened
+            if self.web_research_cb.isChecked():
+                if web_sources > 0:
+                    # Web search was used and returned results
+                    total_sources = pdf_sources + web_sources
+                    self.status_label.setText(f"Completed in {processing_time:.1f}s - {total_sources} sources (PDF + Web)")
+                elif web_search_used:
+                    # Web search was attempted but failed/returned 0
+                    self.status_label.setText(f"Completed in {processing_time:.1f}s - {pdf_sources} sources (PDF only, web failed)")
+                else:
+                    # Web search was automatically skipped (PDF sufficient)
+                    self.status_label.setText(f"Completed in {processing_time:.1f}s - {pdf_sources} sources (PDF sufficient)")
             else:
-                total_sources = sources_used.get('pdf_sources', 0) + web_sources
+                # Web research disabled by user
+                total_sources = pdf_sources + web_sources
                 self.status_label.setText(f"Completed in {processing_time:.1f}s - {total_sources} sources")
 
         # Re-enable input

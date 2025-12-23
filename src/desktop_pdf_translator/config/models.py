@@ -141,19 +141,44 @@ class DeepSearchSettings(BaseModel):
     synthesis_max_tokens: int = Field(1500, ge=500, le=4000, description="Max tokens for synthesis")
 
 
+class AgentSettings(BaseModel):
+    """Agent orchestration settings."""
+
+    enabled: bool = Field(True, description="Enable agent-based orchestration")
+    mode: Literal["auto", "always", "never"] = Field("auto", description="Agent mode")
+
+    # LLM settings for agent
+    llm_model: str = Field("gpt-4o-mini", description="Model for agent decisions")
+    temperature: float = Field(0.2, ge=0.0, le=1.0, description="Agent decision temperature")
+    max_tokens: int = Field(500, ge=100, le=2000, description="Max tokens for agent responses")
+
+    # Decision thresholds (agent uses these as hints)
+    min_pdf_sources: int = Field(3, ge=1, le=10, description="Minimum PDF sources for sufficiency")
+    min_relevance_score: float = Field(0.6, ge=0.0, le=1.0, description="Minimum avg score for sufficiency")
+
+    # Performance settings
+    enable_parallel_execution: bool = Field(True, description="Allow parallel tool execution")
+    max_total_execution_time: int = Field(60, ge=10, le=300, description="Max total time (seconds)")
+
+    # Logging and monitoring
+    log_decisions: bool = Field(True, description="Log all agent decisions")
+    decision_log_path: str = Field("data/agent_decisions.jsonl", description="Decision log file")
+
+
 class AppSettings(BaseModel):
     """Main application settings model."""
-    
+
     # Service configurations
     openai: OpenAISettings = Field(default_factory=OpenAISettings)
     gemini: GeminiSettings = Field(default_factory=GeminiSettings)
-    
+
     # Application settings
     translation: TranslationSettings = Field(default_factory=TranslationSettings)
     gui: GUISettings = Field(default_factory=GUISettings)
     processing: ProcessingSettings = Field(default_factory=ProcessingSettings)
     rag: RAGSettings = Field(default_factory=RAGSettings)
     deep_search: DeepSearchSettings = Field(default_factory=DeepSearchSettings)
+    agent: AgentSettings = Field(default_factory=AgentSettings)
     
     # Application metadata
     version: str = Field("1.0.0", description="Application version")

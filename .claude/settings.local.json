@@ -3,7 +3,10 @@
     "allow": [
       "Bash(grep:*)",
       "Bash(dir \"C:\\\\Users\\\\Admin\\\\AppData\\\\Local\\\\PDFusion\\\\chroma_db\")",
-      "Bash(git log:*)"
+      "Bash(git log:*)",
+      "Bash(tree:*)",
+      "Bash(cat:*)",
+      "Bash(rm:*)"
     ]
   }
 }

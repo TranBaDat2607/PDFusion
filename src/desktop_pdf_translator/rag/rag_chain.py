@@ -58,7 +58,7 @@ class EnhancedRAGChain:
             self.translator = TranslatorFactory.create_translator(
                 service=preferred_service,
                 lang_in="auto",
-                lang_out="vi"  # Vietnamese output by default
+                lang_out="en"  # English output by default
             )
             logger.info(f"Translator initialized: {preferred_service}")
         except Exception as e:
@@ -130,14 +130,14 @@ class EnhancedRAGChain:
             pdf_sources = await self._retrieve_pdf_knowledge(
                 question, document_id, max_pdf_sources
             )
-            
+
             # Step 2: Perform web research if enabled
             web_sources = []
             if include_web_research:
                 pdf_context = self._extract_pdf_context(pdf_sources)
                 web_sources = await self.web_research.research_topic(question, pdf_context)
                 web_sources = web_sources[:max_web_sources]
-            
+
             # Step 3: Generate comprehensive answer
             answer = await self._generate_answer(question, pdf_sources, web_sources)
 
@@ -160,6 +160,8 @@ class EnhancedRAGChain:
                     'pdf_sources': len(pdf_sources),
                     'web_sources': len(web_sources)
                 },
+                'search_type': 'standard',
+                'web_search_used': len(web_sources) > 0,
                 'timestamp': datetime.now().isoformat()
             }
 
@@ -473,14 +475,14 @@ Hypothetical answer:"""
 
         if not pdf_sources:
             return ""
-        
+
         # Combine text from top PDF sources
         context_parts = []
         for source in pdf_sources[:3]:  # Use top 3 sources for context
             text = source.get('text', '')
             if text:
                 context_parts.append(text[:200])  # Limit length
-        
+
         return ' '.join(context_parts)
 
     async def _answer_with_deep_search(
@@ -618,16 +620,39 @@ Hypothetical answer:"""
                             pdf_sources: List[Dict[str, Any]],
                             web_sources: List[WebSource]) -> str:
         """Create a comprehensive prompt for answer generation."""
-        
+
+        # Determine what sources are actually available
+        has_pdf = len(pdf_sources) > 0
+        has_web = len(web_sources) > 0
+
+        # Build source availability notice
+        source_notice = "AVAILABLE SOURCES:\n"
+        if has_pdf and has_web:
+            source_notice += "- PDF documents: YES\n- Internet sources: YES\n"
+        elif has_pdf:
+            source_notice += "- PDF documents: YES\n- Internet sources: NO (web search failed or was disabled)\n"
+        elif has_web:
+            source_notice += "- PDF documents: NO\n- Internet sources: YES\n"
+        else:
+            source_notice += "- PDF documents: NO\n- Internet sources: NO\n"
+
         prompt = f"""
 You are an intelligent AI assistant specialized in answering questions based on translated PDF documents and information from the internet.
 
+{source_notice}
+
+CRITICAL RULES:
+- ONLY cite sources that are actually provided in the AVAILABLE INFORMATION section below
+- DO NOT make up or hallucinate internet sources if no internet information is provided
+- If web sources are marked as "NO" above, DO NOT claim to have internet information
+- Only reference PDF sources if they are actually provided
+- Answer in English (clear, professional, academic style)
+
 TASK:
-- Answer questions comprehensively and accurately
-- Combine information from both PDF and internet sources
-- Prioritize information from PDF (primary source)
-- Supplement with internet information to clarify or expand
-- Answer in Vietnamese
+- Answer questions comprehensively and accurately using ONLY the available sources
+- Prioritize information from PDF (primary source) if available
+- Supplement with internet information ONLY if it was actually provided
+- Be honest if information is insufficient
 
 QUESTION: {question}
 
@@ -635,11 +660,11 @@ AVAILABLE INFORMATION:
 {context}
 
 ANSWER REQUIREMENTS:
-Answer the question concisely, accurately, and completely. Provide only the final answer without dividing into multiple sections or detailed explanations. If information comes from the internet (not in the PDF), clearly state the source.
+Answer the question concisely, accurately, and completely using ONLY the information provided above. DO NOT invent sources or citations that are not in the AVAILABLE INFORMATION section. If you reference internet sources, they MUST be from the "INFORMATION FROM INTERNET" section above.
 
 ANSWER:
 """
-        
+
         return prompt
     
     async def _generate_with_llm(self, prompt: str) -> str:

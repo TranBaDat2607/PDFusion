@@ -31,15 +31,24 @@ def setup_logging(debug_mode: bool = False):
     
     log_dir.mkdir(parents=True, exist_ok=True)
     
-    # Setup logging configuration
+    # Setup logging configuration with UTF-8 encoding for Vietnamese text
     logging.basicConfig(
         level=level,
         format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
         handlers=[
-            logging.FileHandler(log_dir / "app.log"),
+            logging.FileHandler(log_dir / "app.log", encoding='utf-8'),
             logging.StreamHandler(sys.stdout)
         ]
     )
+
+    # Force UTF-8 encoding for console output on Windows
+    if sys.platform == 'win32':
+        try:
+            import codecs
+            sys.stdout = codecs.getwriter('utf-8')(sys.stdout.buffer, 'strict')
+            sys.stderr = codecs.getwriter('utf-8')(sys.stderr.buffer, 'strict')
+        except Exception:
+            pass  # Fallback to default if UTF-8 reconfiguration fails
     
     # Reduce noise from some libraries
     logging.getLogger("urllib3").setLevel(logging.WARNING)

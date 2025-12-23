@@ -10,10 +10,9 @@ from datetime import datetime, timedelta
 from urllib.parse import urlparse
 import hashlib
 
-from googlesearch import search as google_search
+from duckduckgo_search import DDGS
 
 from bs4 import BeautifulSoup
-
 import requests
 
 logger = logging.getLogger(__name__)
@@ -172,70 +171,70 @@ class SearchEngine:
         self.cache = {}  # Simple in-memory cache
         self.cache_ttl = timedelta(hours=1)
     
-    async def google_search(self, query: str, num_results: int = 5) -> List[str]:
+    async def web_search(self, query: str, num_results: int = 5) -> List[str]:
         """
-        Perform Google search and return URLs.
-        
+        Perform web search using DuckDuckGo and return URLs.
+
         Args:
             query: Search query
             num_results: Number of results to return
-            
+
         Returns:
             List of URLs
         """
         try:
             # Check cache first
-            cache_key = f"google_{hashlib.md5(query.encode()).hexdigest()}"
+            cache_key = f"web_{hashlib.md5(query.encode()).hexdigest()}"
             if cache_key in self.cache:
                 cached_result, timestamp = self.cache[cache_key]
                 if datetime.now() - timestamp < self.cache_ttl:
                     return cached_result
-            
-            # Perform search
+
+            # Rate limiting: Add delay to avoid being blocked
+            import asyncio
+            await asyncio.sleep(0.5)  # 500ms delay between searches
+
+            # Perform search using DuckDuckGo
             urls = []
             try:
-                # Try new API first (without num parameter)
-                search_results = google_search(query, stop=num_results, pause=2)
-                for url in search_results:
-                    urls.append(url)
-                    if len(urls) >= num_results:
-                        break
-            except TypeError:
-                # Fallback for older API versions
-                try:
-                    search_results = google_search(query, num_results=num_results, stop=num_results, pause=2)
-                    for url in search_results:
-                        urls.append(url)
-                except Exception as fallback_error:
-                    logger.error(f"Both new and old Google search APIs failed: {fallback_error}")
-                    return []
-            
+                with DDGS() as ddgs:
+                    results = ddgs.text(query, max_results=num_results)
+                    for result in results:
+                        if 'href' in result:
+                            urls.append(result['href'])
+                        elif 'link' in result:
+                            urls.append(result['link'])
+
+                logger.info(f"Web search for '{query}' returned {len(urls)} URLs")
+
+            except Exception as search_error:
+                logger.error(f"DuckDuckGo search failed: {search_error}")
+                return []
+
             # Cache results
             self.cache[cache_key] = (urls, datetime.now())
-            
-            logger.info(f"Google search for '{query}' returned {len(urls)} URLs")
             return urls
-            
+
         except Exception as e:
-            logger.error(f"Google search failed: {e}")
+            logger.error(f"Web search failed: {e}")
             return []
     
     async def scholar_search(self, query: str, num_results: int = 3) -> List[str]:
         """
-        Search Google Scholar for academic papers.
-        
+        Search for academic papers.
+
         Args:
             query: Academic search query
             num_results: Number of results
-            
+
         Returns:
             List of URLs
         """
         try:
-            # Modify query for academic search
-            academic_query = f"site:scholar.google.com {query}"
-            return await self.google_search(academic_query, num_results)
-            
+            # Add academic keywords to improve results
+            academic_query = f"{query} research paper academic"
+            return await self.web_search(academic_query, num_results)
+
         except Exception as e:
             logger.error(f"Scholar search failed: {e}")
             return []
@@ -243,18 +242,20 @@ class SearchEngine:
     async def wikipedia_search(self, query: str) -> List[str]:
         """
         Search Wikipedia for relevant articles.
-        
+
         Args:
             query: Search query
-            
+
         Returns:
             List of Wikipedia URLs
         """
         try:
-            # Search Wikipedia specifically
-            wiki_query = f"site:wikipedia.org {query}"
-            return await self.google_search(wiki_query, 2)
-            
+            # Search for Wikipedia articles
+            wiki_query = f"{query} wikipedia"
+            results = await self.web_search(wiki_query, 3)
+            # Filter to only Wikipedia URLs
+            return [url for url in results if 'wikipedia.org' in url][:2]
+
         except Exception as e:
             logger.error(f"Wikipedia search failed: {e}")
             return []
@@ -262,17 +263,20 @@ class SearchEngine:
     async def arxiv_search(self, query: str) -> List[str]:
         """
         Search arXiv for scientific papers.
-        
+
         Args:
             query: Scientific search query
-            
+
         Returns:
             List of arXiv URLs
         """
         try:
-            arxiv_query = f"site:arxiv.org {query}"
-            return await self.google_search(arxiv_query, 2)
-            
+            # Search for arXiv papers
+            arxiv_query = f"{query} arxiv"
+            results = await self.web_search(arxiv_query, 3)
+            # Filter to only arXiv URLs
+            return [url for url in results if 'arxiv.org' in url][:2]
+
         except Exception as e:
             logger.error(f"arXiv search failed: {e}")
             return []
@@ -305,19 +309,19 @@ class WebResearchEngine:
         
         all_sources = []
         
-        # Perform different types of searches
+        # Perform different types of searches (optimized for fewer API calls)
         for search_query in search_queries:
-            # Google search
-            google_urls = await self.search_engine.google_search(search_query, 3)
-            
-            # Academic search
-            scholar_urls = await self.search_engine.scholar_search(search_query, 2)
-            
-            # Wikipedia search
+            # Web search - reduced from 3 to 2 results
+            web_urls = await self.search_engine.web_search(search_query, 2)
+
+            # Academic search - reduced from 2 to 1 result
+            scholar_urls = await self.search_engine.scholar_search(search_query, 1)
+
+            # Wikipedia search - keep at 2 (already filtered to Wikipedia URLs only)
             wiki_urls = await self.search_engine.wikipedia_search(search_query)
-            
+
             # Combine all URLs
-            all_urls = google_urls + scholar_urls + wiki_urls
+            all_urls = web_urls + scholar_urls + wiki_urls
             
             # Remove duplicates
             unique_urls = list(dict.fromkeys(all_urls))
@@ -336,34 +340,26 @@ class WebResearchEngine:
         return unique_sources[:10]  # Return top 10 sources
     
     def _generate_search_queries(self, query: str, pdf_context: str) -> List[str]:
-        """Generate multiple search queries for comprehensive research."""
-        
-        queries = [query]  # Start with original query
-        
-        # Add context-enhanced queries
+        """Generate optimized search queries (reduced to avoid rate limiting)."""
+
+        # Strategy: Use only 1-2 well-crafted queries instead of many variations
+        # This reduces API calls from 15+ to 3-6 total
+
+        queries = [query]  # Always include original query
+
+        # Optionally add ONE enhanced query with context
         if pdf_context:
-            # Extract key terms from PDF context
-            context_words = re.findall(r'\b[A-Za-z]{4,}\b', pdf_context.lower())
-            key_terms = list(set(context_words))[:5]  # Top 5 unique terms
-            
-            for term in key_terms:
-                enhanced_query = f"{query} {term}"
+            # Extract single most relevant term from PDF context
+            context_words = re.findall(r'\b[A-Za-z]{5,}\b', pdf_context.lower())
+            if context_words:
+                # Get first unique term
+                key_term = list(set(context_words))[0]
+                enhanced_query = f"{query} {key_term}"
                 queries.append(enhanced_query)
-        
-        # Add specific search variations
-        variations = [
-            f"{query} definition explanation",
-            f"{query} research paper",
-            f"{query} academic study",
-            f"what is {query}",
-            f"{query} examples applications"
-        ]
-        
-        queries.extend(variations)
-        
-        # Remove duplicates and limit
-        unique_queries = list(dict.fromkeys(queries))
-        return unique_queries[:5]  # Limit to 5 queries to avoid rate limiting
+
+        # Return maximum 2 queries to avoid rate limiting
+        # This means 2 queries * 3 search types = 6 API calls (vs 15+ before)
+        return queries[:2]
     
     def _deduplicate_sources(self, sources: List[WebSource]) -> List[WebSource]:
         """Remove duplicate sources based on URL and content similarity."""

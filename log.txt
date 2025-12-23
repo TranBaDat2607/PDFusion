@@ -1,0 +1,122 @@
+(pdffusion-py311) C:\Users\Admin\Desktop\project\PDFusion>python main.py
+============================================================
+🇻🇳 DESKTOP PDF TRANSLATOR - Vietnamese Priority
+============================================================
+
+Features:
+• Multi-panel GUI (Original PDF | Controls | Translated PDF)
+• Vietnamese language optimization
+• OpenAI & Google Gemini support
+• BabelDOC integration for layout preservation
+• Future RAG chat integration
+
+Quick Start:
+1. Set API keys: OPENAI_API_KEY or GEMINI_API_KEY
+2. Click 'Browse' to select a PDF file
+3. Choose translation settings
+4. Click 'Translate' to start
+
+Python: 3.11.14
+Platform: win32
+Checking dependencies...
+✓ BabelDOC available (version: 0.5.20)
+✓ Available translation services: OpenAI, Gemini
+
+Checking configuration...
+✓ Configuration loaded from: C:\Users\Admin\AppData\Local\PDFusion\config.toml
+✓ Preferred translation service (TranslationService.OPENAI) is ready
+
+Starting application...
+
+2025-12-22 16:47:06,648 - desktop_pdf_translator.gui.rag_chat_panel - INFO - Keyboard shortcuts configured
+2025-12-22 16:47:06,653 - chromadb.config - WARNING - chroma_server_nofile is not supported on Windows. chroma_server_nofile will not be set.
+2025-12-22 16:47:07,009 - chromadb.telemetry.product.posthog - ERROR - Failed to send telemetry event ClientStartEvent: capture() takes 1 positional argument but 3 were given
+2025-12-22 16:47:07,009 - desktop_pdf_translator.rag.vector_store - INFO - ChromaDB initialized with full settings
+2025-12-22 16:47:07,009 - sentence_transformers.SentenceTransformer - INFO - Load pretrained SentenceTransformer: paraphrase-multilingual-MiniLM-L12-v2
+2025-12-22 16:47:12,511 - sentence_transformers.SentenceTransformer - INFO - Use pytorch device_name: cpu
+2025-12-22 16:47:12,525 - desktop_pdf_translator.rag.vector_store - INFO - Loaded embedding model: paraphrase-multilingual-MiniLM-L12-v2
+2025-12-22 16:47:12,528 - desktop_pdf_translator.rag.vector_store - INFO - Loaded existing collection: pdf_documents
+2025-12-22 16:47:12,529 - desktop_pdf_translator.rag.vector_store - INFO - ChromaDB initialized at: C:\Users\Admin\AppData\Local\PDFusion\chroma_db
+2025-12-22 16:47:12,530 - desktop_pdf_translator.rag.reference_manager - INFO - Reference manager initialized
+2025-12-22 16:47:12,567 - desktop_pdf_translator.translators.openai_translator - INFO - OpenAI translator configured with model: gpt-4.1
+2025-12-22 16:47:12,567 - desktop_pdf_translator.translators.base - INFO - Initialized OpenAITranslator translator: auto -> en
+2025-12-22 16:47:12,568 - desktop_pdf_translator.translators.factory - INFO - Created translator: OpenAITranslator(auto -> en)
+2025-12-22 16:47:12,571 - desktop_pdf_translator.rag.rag_chain - INFO - Translator initialized: TranslationService.OPENAI
+2025-12-22 16:47:12,574 - desktop_pdf_translator.rag.paper_cache - INFO - Paper cache initialized at data\paper_cache with 7-day TTL
+2025-12-22 16:47:12,574 - desktop_pdf_translator.rag.academic_apis - INFO - PubMed API initialized (rate: 3 req/sec)
+2025-12-22 16:47:12,575 - desktop_pdf_translator.rag.academic_apis - INFO - Semantic Scholar API initialized
+2025-12-22 16:47:12,575 - desktop_pdf_translator.rag.academic_apis - WARNING - CORE API key not provided - CORE search will be disabled
+2025-12-22 16:47:12,575 - desktop_pdf_translator.rag.academic_apis - INFO - Academic API Manager initialized
+2025-12-22 16:47:12,575 - desktop_pdf_translator.rag.deep_search - INFO - DeepSearchEngine initialized
+2025-12-22 16:47:12,576 - desktop_pdf_translator.rag.rag_chain - INFO - Deep Search engine initialized
+2025-12-22 16:47:12,576 - desktop_pdf_translator.rag.rag_chain - INFO - Enhanced RAG chain initialized
+2025-12-22 16:47:12,576 - desktop_pdf_translator.rag.reference_manager - INFO - Reference manager initialized
+2025-12-22 16:47:12,577 - desktop_pdf_translator.rag.reference_manager - INFO - PDF viewer callback registered
+2025-12-22 16:47:12,577 - desktop_pdf_translator.rag.reference_manager - INFO - Web browser callback registered
+2025-12-22 16:47:12,577 - desktop_pdf_translator.gui.rag_chat_panel - INFO - RAG system initialized successfully
+2025-12-22 16:47:12,577 - desktop_pdf_translator.gui.rag_chat_panel - INFO - RAG Chat Panel initialized
+2025-12-22 16:47:14,593 - desktop_pdf_translator.gui.main_window - INFO - Main window initialized
+2025-12-22 16:47:15,888 - desktop_pdf_translator.translators.openai_translator - INFO - OpenAI translator configured with model: gpt-4.1
+2025-12-22 16:47:15,890 - desktop_pdf_translator.translators.base - INFO - Initialized OpenAITranslator translator: en -> vi
+2025-12-22 16:47:15,891 - desktop_pdf_translator.translators.factory - INFO - Created translator: OpenAITranslator(en -> vi)
+2025-12-22 16:47:16,474 - httpx - INFO - HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2025-12-22 16:47:16,548 - desktop_pdf_translator.gui.main_window - INFO - Adjusted panel sizes to equal widths: 640px each
+2025-12-22 16:47:30,296 - desktop_pdf_translator.rag.rag_chain - INFO - Processing question: what is the encoder layers... (Deep Search: False)
+2025-12-22 16:47:31,974 - httpx - INFO - HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+Batches: 100%|###########################################################################| 1/1 [00:00<00:00, 15.36it/s]2025-12-22 16:47:32,167 - chromadb.telemetry.product.posthog - ERROR - Failed to send telemetry event CollectionQueryEvent: capture() takes 1 positional argument but 3 were given
+2025-12-22 16:47:32,168 - desktop_pdf_translator.rag.vector_store - INFO - Found 20 similar chunks for query: what is the encoder layers...
+2025-12-22 16:47:32,244 - chromadb.telemetry.product.posthog - ERROR - Failed to send telemetry event CollectionGetEvent: capture() takes 1 positional argument but 3 were given
+
+Batches: 100%|###########################################################################| 1/1 [00:00<00:00,  7.84it/s]2025-12-22 16:47:32,399 - desktop_pdf_translator.rag.vector_store - INFO - Found 20 similar chunks for query: Encoder layers are sequential neural network compo...
+2025-12-22 16:47:32,418 - desktop_pdf_translator.rag.rag_chain - INFO - Retrieved 5 PDF sources
+2025-12-22 16:47:32,418 - desktop_pdf_translator.rag.web_research - INFO - Starting web research for: what is the encoder layers
+2025-12-22 16:47:32,730 - primp - INFO - response: https://duckduckgo.com/?q=what+is+the+encoder+layers 200
+2025-12-22 16:47:33,062 - primp - INFO - response: https://links.duckduckgo.com/d.js?q=what+is+the+encoder+layers&kl=wt-wt&l=wt-wt&p=&s=0&df=&vqd=4-324123384823109908084859460489489764459&bing_market=wt-WT&ex=-1 202
+2025-12-22 16:47:33,063 - desktop_pdf_translator.rag.web_research - ERROR - DuckDuckGo search failed: https://links.duckduckgo.com/d.js?q=what+is+the+encoder+layers&kl=wt-wt&l=wt-wt&p=&s=0&df=&vqd=4-324123384823109908084859460489489764459&bing_market=wt-WT&ex=-1 202 Ratelimit
+2025-12-22 16:47:33,331 - primp - INFO - response: https://duckduckgo.com/?q=what+is+the+encoder+layers+research+paper+academic 200
+2025-12-22 16:47:33,644 - primp - INFO - response: https://links.duckduckgo.com/d.js?q=what+is+the+encoder+layers+research+paper+academic&kl=wt-wt&l=wt-wt&p=&s=0&df=&vqd=4-55538607209765303747573127361718695307&bing_market=wt-WT&ex=-1 202
+2025-12-22 16:47:33,644 - desktop_pdf_translator.rag.web_research - ERROR - DuckDuckGo search failed: https://links.duckduckgo.com/d.js?q=what+is+the+encoder+layers+research+paper+academic&kl=wt-wt&l=wt-wt&p=&s=0&df=&vqd=4-55538607209765303747573127361718695307&bing_market=wt-WT&ex=-1 202 Ratelimit
+2025-12-22 16:47:33,889 - primp - INFO - response: https://duckduckgo.com/?q=what+is+the+encoder+layers+wikipedia 200
+2025-12-22 16:47:34,208 - primp - INFO - response: https://links.duckduckgo.com/d.js?q=what+is+the+encoder+layers+wikipedia&kl=wt-wt&l=wt-wt&p=&s=0&df=&vqd=4-252938291876989602770946248414031104345&bing_market=wt-WT&ex=-1 202
+2025-12-22 16:47:34,209 - desktop_pdf_translator.rag.web_research - ERROR - DuckDuckGo search failed: https://links.duckduckgo.com/d.js?q=what+is+the+encoder+layers+wikipedia&kl=wt-wt&l=wt-wt&p=&s=0&df=&vqd=4-252938291876989602770946248414031104345&bing_market=wt-WT&ex=-1 202 Ratelimit
+2025-12-22 16:47:34,480 - primp - INFO - response: https://duckduckgo.com/?q=what+is+the+encoder+layers+model 200
+2025-12-22 16:47:34,809 - primp - INFO - response: https://links.duckduckgo.com/d.js?q=what+is+the+encoder+layers+model&kl=wt-wt&l=wt-wt&p=&s=0&df=&vqd=4-75784535158432852329873418416914735711&bing_market=wt-WT&ex=-1 202
+2025-12-22 16:47:34,860 - desktop_pdf_translator.rag.web_research - ERROR - DuckDuckGo search failed: https://links.duckduckgo.com/d.js?q=what+is+the+encoder+layers+model&kl=wt-wt&l=wt-wt&p=&s=0&df=&vqd=4-75784535158432852329873418416914735711&bing_market=wt-WT&ex=-1 202 Ratelimit
+2025-12-22 16:47:35,129 - primp - INFO - response: https://duckduckgo.com/?q=what+is+the+encoder+layers+model+research+paper+academic 200
+2025-12-22 16:47:35,443 - primp - INFO - response: https://links.duckduckgo.com/d.js?q=what+is+the+encoder+layers+model+research+paper+academic&kl=wt-wt&l=wt-wt&p=&s=0&df=&vqd=4-66909788867964686483888635001745059378&bing_market=wt-WT&ex=-1 202
+2025-12-22 16:47:35,444 - desktop_pdf_translator.rag.web_research - ERROR - DuckDuckGo search failed: https://links.duckduckgo.com/d.js?q=what+is+the+encoder+layers+model+research+paper+academic&kl=wt-wt&l=wt-wt&p=&s=0&df=&vqd=4-66909788867964686483888635001745059378&bing_market=wt-WT&ex=-1 202 Ratelimit
+2025-12-22 16:47:35,699 - primp - INFO - response: https://duckduckgo.com/?q=what+is+the+encoder+layers+model+wikipedia 200
+2025-12-22 16:47:36,014 - primp - INFO - response: https://links.duckduckgo.com/d.js?q=what+is+the+encoder+layers+model+wikipedia&kl=wt-wt&l=wt-wt&p=&s=0&df=&vqd=4-305364538712899758934542459357721173399&bing_market=wt-WT&ex=-1 202
+2025-12-22 16:47:36,015 - desktop_pdf_translator.rag.web_research - ERROR - DuckDuckGo search failed: https://links.duckduckgo.com/d.js?q=what+is+the+encoder+layers+model+wikipedia&kl=wt-wt&l=wt-wt&p=&s=0&df=&vqd=4-305364538712899758934542459357721173399&bing_market=wt-WT&ex=-1 202 Ratelimit
+2025-12-22 16:47:36,275 - primp - INFO - response: https://duckduckgo.com/?q=what+is+the+encoder+layers+multi 200
+2025-12-22 16:47:36,616 - primp - INFO - response: https://links.duckduckgo.com/d.js?q=what+is+the+encoder+layers+multi&kl=wt-wt&l=wt-wt&p=&s=0&df=&vqd=4-289679362030332717304421897453837791814&bing_market=wt-WT&ex=-1 202
+2025-12-22 16:47:36,620 - desktop_pdf_translator.rag.web_research - ERROR - DuckDuckGo search failed: https://links.duckduckgo.com/d.js?q=what+is+the+encoder+layers+multi&kl=wt-wt&l=wt-wt&p=&s=0&df=&vqd=4-289679362030332717304421897453837791814&bing_market=wt-WT&ex=-1 202 Ratelimit
+2025-12-22 16:47:36,891 - primp - INFO - response: https://duckduckgo.com/?q=what+is+the+encoder+layers+multi+research+paper+academic 200
+2025-12-22 16:47:37,210 - primp - INFO - response: https://links.duckduckgo.com/d.js?q=what+is+the+encoder+layers+multi+research+paper+academic&kl=wt-wt&l=wt-wt&p=&s=0&df=&vqd=4-56433781032868586666613033873297545614&bing_market=wt-WT&ex=-1 202
+2025-12-22 16:47:37,211 - desktop_pdf_translator.rag.web_research - ERROR - DuckDuckGo search failed: https://links.duckduckgo.com/d.js?q=what+is+the+encoder+layers+multi+research+paper+academic&kl=wt-wt&l=wt-wt&p=&s=0&df=&vqd=4-56433781032868586666613033873297545614&bing_market=wt-WT&ex=-1 202 Ratelimit
+2025-12-22 16:47:37,470 - primp - INFO - response: https://duckduckgo.com/?q=what+is+the+encoder+layers+multi+wikipedia 200
+2025-12-22 16:47:37,789 - primp - INFO - response: https://links.duckduckgo.com/d.js?q=what+is+the+encoder+layers+multi+wikipedia&kl=wt-wt&l=wt-wt&p=&s=0&df=&vqd=4-267898811584068994274091181119437213826&bing_market=wt-WT&ex=-1 202
+2025-12-22 16:47:37,840 - desktop_pdf_translator.rag.web_research - ERROR - DuckDuckGo search failed: https://links.duckduckgo.com/d.js?q=what+is+the+encoder+layers+multi+wikipedia&kl=wt-wt&l=wt-wt&p=&s=0&df=&vqd=4-267898811584068994274091181119437213826&bing_market=wt-WT&ex=-1 202 Ratelimit
+2025-12-22 16:47:38,119 - primp - INFO - response: https://duckduckgo.com/?q=what+is+the+encoder+layers+self 200
+2025-12-22 16:47:38,447 - primp - INFO - response: https://links.duckduckgo.com/d.js?q=what+is+the+encoder+layers+self&kl=wt-wt&l=wt-wt&p=&s=0&df=&vqd=4-147543442615576276524057961428659308091&bing_market=wt-WT&ex=-1 301
+2025-12-22 16:47:38,448 - desktop_pdf_translator.rag.web_research - ERROR - DuckDuckGo search failed: https://links.duckduckgo.com/d.js?q=what+is+the+encoder+layers+self&kl=wt-wt&l=wt-wt&p=&s=0&df=&vqd=4-147543442615576276524057961428659308091&bing_market=wt-WT&ex=-1 301 Ratelimit
+2025-12-22 16:47:38,701 - primp - INFO - response: https://duckduckgo.com/?q=what+is+the+encoder+layers+self+research+paper+academic 200
+2025-12-22 16:47:38,995 - primp - INFO - response: https://links.duckduckgo.com/d.js?q=what+is+the+encoder+layers+self+research+paper+academic&kl=wt-wt&l=wt-wt&p=&s=0&df=&vqd=4-72159718881848945778550813589742001145&bing_market=wt-WT&ex=-1 301
+2025-12-22 16:47:38,995 - desktop_pdf_translator.rag.web_research - ERROR - DuckDuckGo search failed: https://links.duckduckgo.com/d.js?q=what+is+the+encoder+layers+self+research+paper+academic&kl=wt-wt&l=wt-wt&p=&s=0&df=&vqd=4-72159718881848945778550813589742001145&bing_market=wt-WT&ex=-1 301 Ratelimit
+2025-12-22 16:47:39,250 - primp - INFO - response: https://duckduckgo.com/?q=what+is+the+encoder+layers+self+wikipedia 200
+2025-12-22 16:47:39,570 - primp - INFO - response: https://links.duckduckgo.com/d.js?q=what+is+the+encoder+layers+self+wikipedia&kl=wt-wt&l=wt-wt&p=&s=0&df=&vqd=4-219653641191669088451748672486470387928&bing_market=wt-WT&ex=-1 301
+2025-12-22 16:47:39,570 - desktop_pdf_translator.rag.web_research - ERROR - DuckDuckGo search failed: https://links.duckduckgo.com/d.js?q=what+is+the+encoder+layers+self+wikipedia&kl=wt-wt&l=wt-wt&p=&s=0&df=&vqd=4-219653641191669088451748672486470387928&bing_market=wt-WT&ex=-1 301 Ratelimit
+2025-12-22 16:47:39,827 - primp - INFO - response: https://duckduckgo.com/?q=what+is+the+encoder+layers+network 200
+2025-12-22 16:47:40,168 - primp - INFO - response: https://links.duckduckgo.com/d.js?q=what+is+the+encoder+layers+network&kl=wt-wt&l=wt-wt&p=&s=0&df=&vqd=4-187930584132012779808941987617315035423&bing_market=wt-WT&ex=-1 301
+2025-12-22 16:47:40,170 - desktop_pdf_translator.rag.web_research - ERROR - DuckDuckGo search failed: https://links.duckduckgo.com/d.js?q=what+is+the+encoder+layers+network&kl=wt-wt&l=wt-wt&p=&s=0&df=&vqd=4-187930584132012779808941987617315035423&bing_market=wt-WT&ex=-1 301 Ratelimit
+2025-12-22 16:47:40,428 - primp - INFO - response: https://duckduckgo.com/?q=what+is+the+encoder+layers+network+research+paper+academic 200
+2025-12-22 16:47:40,749 - primp - INFO - response: https://links.duckduckgo.com/d.js?q=what+is+the+encoder+layers+network+research+paper+academic&kl=wt-wt&l=wt-wt&p=&s=0&df=&vqd=4-159697725313113988523693605907838022957&bing_market=wt-WT&ex=-1 301
+2025-12-22 16:47:40,750 - desktop_pdf_translator.rag.web_research - ERROR - DuckDuckGo search failed: https://links.duckduckgo.com/d.js?q=what+is+the+encoder+layers+network+research+paper+academic&kl=wt-wt&l=wt-wt&p=&s=0&df=&vqd=4-159697725313113988523693605907838022957&bing_market=wt-WT&ex=-1 301 Ratelimit
+2025-12-22 16:47:41,006 - primp - INFO - response: https://duckduckgo.com/?q=what+is+the+encoder+layers+network+wikipedia 200
+2025-12-22 16:47:41,313 - primp - INFO - response: https://links.duckduckgo.com/d.js?q=what+is+the+encoder+layers+network+wikipedia&kl=wt-wt&l=wt-wt&p=&s=0&df=&vqd=4-139571438334151527746454065404192529896&bing_market=wt-WT&ex=-1 301
+2025-12-22 16:47:41,317 - desktop_pdf_translator.rag.web_research - ERROR - DuckDuckGo search failed: https://links.duckduckgo.com/d.js?q=what+is+the+encoder+layers+network+wikipedia&kl=wt-wt&l=wt-wt&p=&s=0&df=&vqd=4-139571438334151527746454065404192529896&bing_market=wt-WT&ex=-1 301 Ratelimit
+2025-12-22 16:47:41,318 - desktop_pdf_translator.rag.web_research - INFO - Web research completed: 0 sources found
+2025-12-22 16:47:43,381 - httpx - INFO - HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2025-12-22 16:47:43,386 - desktop_pdf_translator.rag.rag_chain - INFO - Question answered successfully in 13.09s
+2025-12-22 16:47:43,496 - desktop_pdf_translator.gui.content_renderer - INFO - Detected content types: {'markdown': True, 'latex': False, 'code_blocks': False, 'tables': False, 'images': False}
+2025-12-22 16:47:43,506 -
