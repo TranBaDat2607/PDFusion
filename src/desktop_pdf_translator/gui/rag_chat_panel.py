@@ -353,35 +353,31 @@ class MessageBubble(QWidget):
             }
         """)
 
-        # Set size policy - Preferred allows natural sizing
-        self.bubble_frame.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Preferred)
+        # Set size policy - Maximum means "don't expand, shrink to content"
+        self.bubble_frame.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Preferred)
 
         bubble_layout = QVBoxLayout(self.bubble_frame)
         bubble_layout.setContentsMargins(0, 0, 0, 0)
+        bubble_layout.setSizeConstraint(QVBoxLayout.SetFixedSize)  # Shrink to content
 
         # Question text (no header, clean bubble)
         self.question_label = QLabel(self.question)
-        self.question_label.setWordWrap(True)
         self.question_label.setFont(QFont("Segoe UI", 9))
         self.question_label.setStyleSheet("color: #424242; background: transparent; border: none;")
         self.question_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
 
-        # Set size policy to allow shrinking to fit content
-        self.question_label.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Minimum)
-
-        # Don't set fixed maximum width - let it size naturally
-        # We'll constrain it in showEvent when parent size is known
-        self.question_label.setMinimumWidth(100)  # Minimum readable width
+        # Word wrap will be set dynamically in showEvent based on text length
+        # Size policy set to shrink to content
+        self.question_label.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Minimum)
 
         bubble_layout.addWidget(self.question_label)
 
         main_layout.addWidget(self.bubble_frame)
 
     def showEvent(self, event):
-        """Adjust maximum width when widget is shown and parent size is known."""
+        """Set maximum width to 75% of chat panel - dynamic sizing based on message length."""
         super().showEvent(event)
 
-        # Now we can safely get parent width and set reasonable maximum
         if self.parent():
             # Get the scroll area's viewport width
             scroll_area = self.parent().parent()
@@ -390,13 +386,25 @@ class MessageBubble(QWidget):
             else:
                 available_width = self.parent().width()
 
-            # Set maximum to 75% of available width
+            # Calculate the actual text width using font metrics
+            from PySide6.QtGui import QFontMetrics
+            font_metrics = QFontMetrics(self.question_label.font())
+            text_width = font_metrics.boundingRect(self.question).width()
+
+            # Set max width to 75% of chat panel
             max_width = int(available_width * 0.75)
-            # Set maximum width on both the label and the bubble frame
-            self.question_label.setMaximumWidth(max_width)
-            # Find the bubble frame (it's the first child widget in main_layout after stretch)
-            if hasattr(self, 'bubble_frame'):
-                self.bubble_frame.setMaximumWidth(max_width + 30)  # Add padding for frame margins
+
+            # Only enable word wrap if text is wider than max_width
+            if text_width > max_width:
+                # Long text - enable wrapping and set max width
+                self.question_label.setWordWrap(True)
+                self.question_label.setMaximumWidth(max_width)
+                self.bubble_frame.setMaximumWidth(max_width + 30)
+            else:
+                # Short text - disable wrapping, use natural width
+                self.question_label.setWordWrap(False)
+                self.question_label.setMaximumWidth(text_width + 20)
+                self.bubble_frame.setMaximumWidth(text_width + 50)
 
 
 class MessagePanel(QFrame):
@@ -1055,9 +1063,9 @@ class RAGChatPanel(QWidget):
         input_widget = self.create_input_area()
         layout.addWidget(input_widget)
 
-        # Unified progress section - used for both document processing and Q&A
-        progress_widget = self._create_progress_section()
-        layout.addWidget(progress_widget)
+        # Simple thinking indicator (replaces complex progress UI)
+        self.thinking_bubble = self._create_thinking_bubble()
+        layout.addWidget(self.thinking_bubble)
 
         # Status label - compact
         self.status_label = QLabel("Ready")
@@ -1065,94 +1073,51 @@ class RAGChatPanel(QWidget):
         self.status_label.setMaximumHeight(20)
         layout.addWidget(self.status_label)
     
-    def _create_progress_section(self) -> QWidget:
-        """Create enhanced progress section with detailed information and cancel button."""
-        progress_widget = QWidget()
-        progress_layout = QVBoxLayout(progress_widget)
-        progress_layout.setContentsMargins(0, 5, 0, 5)
-        progress_layout.setSpacing(3)
+    def _create_thinking_bubble(self) -> QWidget:
+        """Create simple thinking indicator (like modern AI chats)."""
+        thinking_widget = QWidget()
+        thinking_layout = QHBoxLayout(thinking_widget)
+        thinking_layout.setContentsMargins(10, 5, 10, 5)
 
-        # Progress container (hidden by default)
-        self.progress_container = QFrame()
-        self.progress_container.setFrameStyle(QFrame.StyledPanel)
-        self.progress_container.setStyleSheet("""
-            QFrame {
-                background-color: #f5f5f5;
-                border: 1px solid #ddd;
-                border-radius: 5px;
-                padding: 8px;
+        # Simple thinking indicator with animated dots
+        self.thinking_label = QLabel("AI is thinking")
+        self.thinking_label.setFont(QFont("Segoe UI", 9))
+        self.thinking_label.setStyleSheet("""
+            QLabel {
+                color: #2196F3;
+                font-style: italic;
+                padding: 8px 12px;
+                background-color: #E3F2FD;
+                border-radius: 15px;
             }
         """)
-        self.progress_container.setVisible(False)
+        self.thinking_label.setVisible(False)
 
-        container_layout = QVBoxLayout(self.progress_container)
-        container_layout.setSpacing(5)
+        # Animated dots
+        self.thinking_dots = 0
+        self.thinking_timer = QTimer()
+        self.thinking_timer.timeout.connect(self._update_thinking_dots)
 
-        # Stage label (main activity)
-        self.stage_label = QLabel("Processing...")
-        self.stage_label.setFont(QFont("Segoe UI", 9, QFont.Bold))
-        self.stage_label.setStyleSheet("color: #2196F3; font-weight: bold;")
-        container_layout.addWidget(self.stage_label)
+        thinking_layout.addWidget(self.thinking_label)
+        thinking_layout.addStretch()
 
-        # Progress bar
-        self.progress_bar = QProgressBar()
-        self.progress_bar.setMaximumHeight(20)
-        self.progress_bar.setTextVisible(True)
-        self.progress_bar.setStyleSheet("""
-            QProgressBar {
-                border: 1px solid #ccc;
-                border-radius: 3px;
-                text-align: center;
-                background-color: white;
-            }
-            QProgressBar::chunk {
-                background-color: #4CAF50;
-                border-radius: 2px;
-            }
-        """)
-        container_layout.addWidget(self.progress_bar)
+        return thinking_widget
 
-        # Detail label (what's happening)
-        self.detail_label = QLabel("")
-        self.detail_label.setWordWrap(True)
-        self.detail_label.setStyleSheet("color: #666; font-size: 8pt;")
-        container_layout.addWidget(self.detail_label)
+    def _update_thinking_dots(self):
+        """Animate the thinking dots."""
+        self.thinking_dots = (self.thinking_dots + 1) % 4
+        dots = "." * self.thinking_dots
+        self.thinking_label.setText(f"AI is thinking{dots}")
 
-        # Time and cancel row
-        time_cancel_layout = QHBoxLayout()
+    def _show_thinking(self):
+        """Show thinking indicator."""
+        self.thinking_label.setVisible(True)
+        self.thinking_timer.start(500)  # Update every 500ms
 
-        # Time info label
-        self.time_label = QLabel("Elapsed: 0s | ETA: --")
-        self.time_label.setStyleSheet("color: #666; font-size: 8pt;")
-        time_cancel_layout.addWidget(self.time_label)
-
-        time_cancel_layout.addStretch()
-
-        # Cancel button
-        self.cancel_processing_btn = QPushButton(" Cancel")
-        self.cancel_processing_btn.setIcon(qta.icon('fa5s.times-circle', color='white'))
-        self.cancel_processing_btn.setMaximumWidth(80)
-        self.cancel_processing_btn.setMaximumHeight(25)
-        self.cancel_processing_btn.clicked.connect(self._cancel_document_processing)
-        self.cancel_processing_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #f44336;
-                color: white;
-                border: none;
-                border-radius: 3px;
-                padding: 3px 8px;
-            }
-            QPushButton:hover {
-                background-color: #d32f2f;
-            }
-        """)
-        time_cancel_layout.addWidget(self.cancel_processing_btn)
-
-        container_layout.addLayout(time_cancel_layout)
-
-        progress_layout.addWidget(self.progress_container)
-
-        return progress_widget
+    def _hide_thinking(self):
+        """Hide thinking indicator."""
+        self.thinking_label.setVisible(False)
+        self.thinking_timer.stop()
 
     def create_input_area(self) -> QWidget:
         """Create the input area widget with quick actions and keyboard shortcuts."""
@@ -1523,13 +1488,8 @@ class RAGChatPanel(QWidget):
         # Generate document ID
         document_id = str(document_path.stem)
 
-        # Show progress UI
-        self.progress_container.setVisible(True)
-        self.progress_bar.setRange(0, 100)
-        self.progress_bar.setValue(0)
-        self.stage_label.setText("Starting...")
-        self.detail_label.setText("")
-        self.time_label.setText("Elapsed: 0s | ETA: --")
+        # Show thinking indicator
+        self._show_thinking()
 
         # Create and start worker
         self.document_processor_worker = DocumentProcessorWorker(
@@ -1553,27 +1513,9 @@ class RAGChatPanel(QWidget):
 
     def _on_document_progress(self, progress_data: Dict[str, Any]):
         """Handle document processing progress updates."""
-        stage = progress_data.get('stage', '')
-        progress = progress_data.get('progress', 0)
         message = progress_data.get('message', '')
-        detail = progress_data.get('detail', '')
-        elapsed = progress_data.get('elapsed_time', 0)
-        eta = progress_data.get('eta', 0)
-
-        # Update UI elements
-        self.stage_label.setText(f"⚙️ {stage}")
-        self.progress_bar.setValue(int(progress))
-        self.detail_label.setText(message)
-
-        # Format time display
-        elapsed_str = f"{int(elapsed)}s"
-        eta_str = f"{int(eta)}s" if eta > 0 else "--"
-        self.time_label.setText(f"Elapsed: {elapsed_str} | ETA: {eta_str}")
-
-        # Update status label if detail is provided
-        if detail:
-            self.status_label.setText(detail)
-        else:
+        # Update status label only
+        if message:
             self.status_label.setText(message)
 
     def _on_document_completed(self, document_id: str, num_chunks: int):
@@ -1582,8 +1524,8 @@ class RAGChatPanel(QWidget):
         if self.current_document_path:
             self.set_current_document(self.current_document_path, document_id)
 
-        # Hide progress UI after a short delay
-        QTimer.singleShot(2000, lambda: self.progress_container.setVisible(False))
+        # Hide thinking indicator
+        self._hide_thinking()
 
         # Update status
         self.status_label.setText(
@@ -1594,8 +1536,8 @@ class RAGChatPanel(QWidget):
 
     def _on_document_failed(self, error_message: str):
         """Handle document processing failure."""
-        # Hide progress UI
-        self.progress_container.setVisible(False)
+        # Hide thinking indicator
+        self._hide_thinking()
 
         # Update status
         self.status_label.setText(f"Processing failed")
@@ -1612,8 +1554,7 @@ class RAGChatPanel(QWidget):
             self.document_processor_worker.cancel()
 
             # Update UI
-            self.stage_label.setText("Cancelling...")
-            self.cancel_processing_btn.setEnabled(False)
+            self.status_label.setText("Cancelling...")
 
             # Wait for worker to finish
             QTimer.singleShot(1000, self._finalize_cancellation)
@@ -1625,11 +1566,8 @@ class RAGChatPanel(QWidget):
         if self.document_processor_worker:
             self.document_processor_worker.wait(2000)
 
-        # Hide progress UI
-        self.progress_container.setVisible(False)
-
-        # Re-enable cancel button for next time
-        self.cancel_processing_btn.setEnabled(True)
+        # Hide thinking indicator
+        self._hide_thinking()
 
         # Update status
         self.status_label.setText("Processing cancelled by user")
@@ -1667,11 +1605,8 @@ class RAGChatPanel(QWidget):
         self.ask_button.setEnabled(False)
         self.question_input.setEnabled(False)
 
-        # Show unified progress container (same as doc processing)
-        self.progress_container.setVisible(True)
-        self.progress_bar.setRange(0, 100)
-        self.progress_bar.setValue(0)
-        self.cancel_processing_btn.setVisible(False)  # No cancel for quick Q&A
+        # Show thinking indicator
+        self._show_thinking()
 
         # Start worker thread
         self.rag_worker = RAGWorker(self.rag_chain, question, document_id, include_web, use_deep_search)
@@ -1731,8 +1666,8 @@ class RAGChatPanel(QWidget):
         self.ask_button.setEnabled(True)
         self.question_input.setEnabled(True)
 
-        # Hide unified progress container
-        QTimer.singleShot(500, lambda: self.progress_container.setVisible(False))
+        # Hide thinking indicator
+        self._hide_thinking()
 
         logger.info(f"Answer generated successfully in {answer_data.get('processing_time', 0):.1f}s")
     
@@ -1742,8 +1677,8 @@ class RAGChatPanel(QWidget):
         self.ask_button.setEnabled(True)
         self.question_input.setEnabled(True)
 
-        # Hide unified progress container
-        self.progress_container.setVisible(False)
+        # Hide thinking indicator
+        self._hide_thinking()
 
         # Show error with retry instruction
         self.status_label.setText(f"Error - Question kept for retry")
@@ -1756,11 +1691,10 @@ class RAGChatPanel(QWidget):
         logger.error(f"RAG processing error: {error_message}")
     
     def _update_qa_progress(self, message: str, progress: int):
-        """Update progress for Q&A processing (using unified progress UI)."""
-        self.stage_label.setText(f"{message}")
-        self.progress_bar.setValue(progress)
-        self.detail_label.setText("Processing your question...")
-        self.time_label.setText("")  # No ETA for quick Q&A
+        """Update progress for Q&A processing."""
+        # Just update status label
+        if message:
+            self.status_label.setText(message)
 
     def _handle_action_started(self, action_type: str, description: str):
         """Handle when a new action starts (for progress display only)."""
