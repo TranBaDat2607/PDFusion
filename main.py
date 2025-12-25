@@ -53,6 +53,7 @@ def setup_logging(debug_mode: bool = False):
     # Reduce noise from some libraries
     logging.getLogger("urllib3").setLevel(logging.WARNING)
     logging.getLogger("requests").setLevel(logging.WARNING)
+    logging.getLogger("chromadb.telemetry").setLevel(logging.CRITICAL)  # Silence telemetry errors
 
 
 def check_dependencies():

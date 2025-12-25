@@ -11,10 +11,9 @@ from typing import Optional, Dict, Any, List
 from datetime import datetime
 
 from PySide6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QTextEdit, QLineEdit,
+    QWidget, QVBoxLayout, QHBoxLayout, QLineEdit,
     QPushButton, QLabel, QScrollArea, QFrame,
-    QGroupBox, QProgressBar, QCheckBox,
-    QMessageBox
+    QCheckBox, QMessageBox
 )
 from PySide6.QtCore import Qt, QThread, Signal, QTimer
 from PySide6.QtGui import QFont, QTextCursor, QTextCharFormat, QColor, QIcon
@@ -1547,33 +1546,6 @@ class RAGChatPanel(QWidget):
 
         logger.error(f"Document processing failed: {error_message}")
 
-    def _cancel_document_processing(self):
-        """Cancel ongoing document processing."""
-        if self.document_processor_worker and self.document_processor_worker.isRunning():
-            # Request cancellation
-            self.document_processor_worker.cancel()
-
-            # Update UI
-            self.status_label.setText("Cancelling...")
-
-            # Wait for worker to finish
-            QTimer.singleShot(1000, self._finalize_cancellation)
-
-            logger.info("Document processing cancellation requested")
-
-    def _finalize_cancellation(self):
-        """Finalize cancellation and clean up UI."""
-        if self.document_processor_worker:
-            self.document_processor_worker.wait(2000)
-
-        # Hide thinking indicator
-        self._hide_thinking()
-
-        # Update status
-        self.status_label.setText("Processing cancelled by user")
-
-        logger.info("Document processing cancelled")
-
     def ask_question(self):
         """Process user question."""
         question = self.question_input.text().strip()
@@ -1613,10 +1585,6 @@ class RAGChatPanel(QWidget):
         self.rag_worker.answer_ready.connect(self._handle_answer_ready)
         self.rag_worker.error_occurred.connect(self._handle_error)
         self.rag_worker.progress_updated.connect(self._update_qa_progress)
-        # Connect action log signals
-        self.rag_worker.action_started.connect(self._handle_action_started)
-        self.rag_worker.action_completed.connect(self._handle_action_completed)
-        self.rag_worker.action_failed.connect(self._handle_action_failed)
         self.rag_worker.start()
     
     def _handle_answer_ready(self, answer_data: Dict[str, Any]):
@@ -1695,18 +1663,6 @@ class RAGChatPanel(QWidget):
         # Just update status label
         if message:
             self.status_label.setText(message)
-
-    def _handle_action_started(self, action_type: str, description: str):
-        """Handle when a new action starts (for progress display only)."""
-        pass  # Actions now shown as summary in answer bubble
-
-    def _handle_action_completed(self, result: str):
-        """Handle when an action completes (for progress display only)."""
-        pass  # Actions now shown as summary in answer bubble
-
-    def _handle_action_failed(self, error: str):
-        """Handle when an action fails (for progress display only)."""
-        pass  # Actions now shown as summary in answer bubble
 
     def handle_reference_click(self, ref_type: str, reference_data: Dict[str, Any]):
         """Handle reference click from chat history with visual feedback."""
