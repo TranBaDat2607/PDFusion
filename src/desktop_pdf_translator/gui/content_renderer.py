@@ -5,8 +5,7 @@ Supports markdown, LaTeX formulas (via KaTeX), tables, code blocks, and images.
 
 import logging
 import re
-from typing import Dict, Any, List, Tuple, Optional
-from pathlib import Path
+from typing import Dict, Any, List, Optional
 
 logger = logging.getLogger(__name__)
 

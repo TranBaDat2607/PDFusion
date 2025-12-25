@@ -168,6 +168,7 @@ config.toml
 tmp/
 temp/
 *.tmp
+nul
 
 # Cache directories
 .cache/

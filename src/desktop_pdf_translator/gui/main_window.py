@@ -550,15 +550,6 @@ class MainWindow(QMainWindow):
         self.config_manager.save_settings(self.settings)
         self.config_manager._settings = self.settings
 
-    def _check_translation_cancellation(self):
-        """Check if translation has been cancelled and clean up if needed."""
-        if self.translation_worker and self.translation_worker.isRunning():
-            # Force terminate if still running after timeout
-            self.translation_worker.terminate()
-            self.translation_worker.wait(1000)  # Wait up to 1 second
-            
-        self.translation_worker = None
-    
     def start_translation(self):
         """Start PDF translation process."""
         if not self.current_file:

@@ -295,15 +295,6 @@ class PDFViewer(QWidget):
         finally:
             self.is_rendering = False
 
-    def render_all_pages(self):
-        """Render all pages for continuous viewing (used for legacy compatibility)."""
-        if not self.doc:
-            return
-
-        # For backward compatibility, render all visible pages
-        # This is now lazy-loaded by default
-        self._render_visible_pages()
-    
     def clear_pages(self):
         """Clear all rendered pages."""
         # Temporarily disable updates to reduce flicker
@@ -443,7 +434,7 @@ class PDFViewer(QWidget):
         try:
             # Ensure the page is rendered
             if page_index not in self.rendered_pages:
-                self._render_page(page_index)
+                self._render_pages([page_index])
 
             # Get the page widget
             if page_index < len(self.page_widgets):
@@ -681,38 +672,55 @@ class SettingsDialog(QDialog):
 
 class AboutDialog(QDialog):
     """About dialog."""
-    
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle("About Desktop PDF Translator")
-        self.setFixedSize(400, 300)
-        
+        self.setFixedSize(500, 500)
+
         layout = QVBoxLayout(self)
-        
+
         # App info
         app_info = QLabel("""
         <h2>Desktop PDF Translator</h2>
         <p><b>Version:</b> 1.0.0</p>
         <p><b>Vietnamese Language Priority</b></p>
-        
+
         <p>A desktop application for translating PDF documents while preserving formatting.</p>
-        
+
         <p><b>Supported Services:</b></p>
         <ul>
         <li>OpenAI GPT Models</li>
         <li>Google Gemini</li>
         </ul>
-        
-        <p><b>Future Features:</b></p>
+
+        <hr style="margin: 15px 0; border: none; border-top: 1px solid #E0E0E0;">
+
+        <h3 style="color: #2196F3;">AI Agent Mode</h3>
+
+        <p>The AI Agent is always active and intelligently decides which tools to use for answering your questions.</p>
+
+        <p><b>Available Tools:</b></p>
         <ul>
-        <li>RAG Chat Integration</li>
-        <li>Batch Processing</li>
-        <li>Additional Translation Services</li>
+        <li><b>PDF Search</b> (Fast ~2s) - Vector similarity + keyword search in your loaded PDF documents. Best for document-specific questions.</li>
+        <li><b>Web Research</b> (Fast ~5s) - Searches Google, Scholar, Wikipedia, and arXiv. Best for general knowledge, definitions, and context.</li>
+        <li><b>Deep Search</b> (Slow ~30s) - Multi-hop academic paper analysis using PubMed, Semantic Scholar, and CORE. Best for research questions requiring academic depth.</li>
         </ul>
+
+        <p><b>How It Works:</b></p>
+        <ol>
+        <li>Agent analyzes your question</li>
+        <li>Searches PDF first (always)</li>
+        <li>Evaluates if PDF has sufficient information</li>
+        <li>If needed, adds Web Research or Deep Search</li>
+        <li>Synthesizes comprehensive answer from all sources</li>
+        </ol>
+
+        <p style="font-size: 9pt; color: #999; font-style: italic;">Powered by LangGraph ReAct Agent with GPT-4o-mini</p>
         """)
         app_info.setWordWrap(True)
         layout.addWidget(app_info)
-        
+
         # OK button
         ok_btn = QPushButton("OK")
         ok_btn.clicked.connect(self.accept)

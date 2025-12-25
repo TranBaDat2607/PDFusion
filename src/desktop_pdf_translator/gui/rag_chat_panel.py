@@ -16,7 +16,7 @@ from PySide6.QtWidgets import (
     QCheckBox, QMessageBox
 )
 from PySide6.QtCore import Qt, QThread, Signal, QTimer
-from PySide6.QtGui import QFont, QTextCursor, QTextCharFormat, QColor, QIcon
+from PySide6.QtGui import QFont, QIcon
 
 
 import qtawesome as qta
@@ -416,8 +416,6 @@ class MessagePanel(QFrame):
         self.answer_data = answer_data
         self.reference_manager = reference_manager
         self.content_renderer = ContentRenderer()  # Initialize content renderer
-        self._last_content_height = 0  # Track last height to prevent resize loops
-        self._resize_timer = None  # Timer for debouncing resize events
         self.setup_ui()
 
     def setup_ui(self):
@@ -601,20 +599,6 @@ class MessagePanel(QFrame):
 
         return summary_widget if sections_added > 0 else None
 
-    def _adjust_content_size(self):
-        """Dynamically adjust content browser size to fit document height (legacy QTextBrowser)."""
-        if hasattr(self, 'content_browser') and hasattr(self.content_browser, 'document'):
-            # Get document size
-            doc_size = self.content_browser.document().size()
-            doc_height = doc_size.height()
-
-            # Vertical: Set height to fit content exactly
-            preferred_height = int(doc_height + 10)
-            self.content_browser.setMinimumHeight(preferred_height)
-            self.content_browser.setMaximumHeight(preferred_height)
-
-            # Horizontal width is handled by showEvent - don't interfere here
-
     def _adjust_height_once(self):
         """Adjust height once after KaTeX finishes rendering using JavaScript."""
         if not hasattr(self, 'content_browser'):
@@ -672,9 +656,6 @@ class ReferenceWidget(QFrame):
         self.reference_data = reference_data
         self.reference_manager = reference_manager
 
-        # Get confidence/reliability score for color coding
-        self.score = self._get_quality_score()
-
         self.setFrameStyle(QFrame.Box)
         self._apply_styling()
 
@@ -683,10 +664,6 @@ class ReferenceWidget(QFrame):
 
         # Setup hover tooltip with context preview
         self._setup_tooltip()
-
-    def _get_quality_score(self) -> float:
-        """Get quality score for this reference (not used anymore)."""
-        return 0.5  # Default neutral score
 
     def _apply_styling(self):
         """Apply neutral styling to reference widget."""
@@ -1008,11 +985,7 @@ class RAGChatPanel(QWidget):
         neutral_gray = '#666'
 
         # Button icons
-        icons['pdf'] = qta.icon('fa5s.file-pdf', color=primary_blue)
         icons['web'] = qta.icon('fa5s.globe', color=primary_blue)
-        icons['lightbulb'] = qta.icon('fa5s.lightbulb', color=warning_orange)
-        icons['bullseye'] = qta.icon('fa5s.bullseye', color=success_green)
-        icons['keyboard'] = qta.icon('fa5s.keyboard', color=neutral_gray)
         icons['trash'] = qta.icon('fa5s.trash-alt', color='#f44336')
         icons['send'] = qta.icon('fa5s.paper-plane', color=primary_blue)
         icons['settings'] = qta.icon('fa5s.cog', color=neutral_gray)
@@ -1053,7 +1026,7 @@ class RAGChatPanel(QWidget):
         settings_btn.setEnabled(False)
         settings_btn.setToolTip("Settings (coming soon)")
         header_layout.addWidget(settings_btn)
-        
+
         layout.addLayout(header_layout)
         
         # Chat history area - chiếm phần lớn không gian
@@ -1076,7 +1049,7 @@ class RAGChatPanel(QWidget):
             "• Table & formula rendering<br>"
             "• Web research integration<br><br>"
             "</span>"
-            "<i style='color: #999; font-size: 9pt;'>Load a PDF and start asking questions using the quick actions below</i>"
+            "<i style='color: #999; font-size: 9pt;'>Load a PDF and start asking questions</i>"
             "</div>"
         )
         self.empty_state_label.setAlignment(Qt.AlignCenter)
@@ -1160,118 +1133,10 @@ class RAGChatPanel(QWidget):
         layout.setContentsMargins(0, 5, 0, 0)
         layout.setSpacing(5)
 
-        # Quick Actions row
-        quick_actions_layout = QHBoxLayout()
-        quick_actions_layout.setSpacing(3)
-
-        quick_actions_label = QLabel("Quick:")
-        quick_actions_label.setStyleSheet("color: #666; font-size: 8pt; font-weight: bold;")
-        quick_actions_layout.addWidget(quick_actions_label)
-
-        # Quick action buttons with professional icons
-        self.summarize_btn = QPushButton(" Summarize")
-        self.summarize_btn.setIcon(self.icons.get('pdf'))
-        self.summarize_btn.setMaximumHeight(25)
-        self.summarize_btn.setToolTip("Summarize the entire document (Ctrl+1)")
-        self.summarize_btn.clicked.connect(lambda: self._use_quick_action("Summarize this document"))
-        quick_actions_layout.addWidget(self.summarize_btn)
-
-        self.key_points_btn = QPushButton(" Key Points")
-        self.key_points_btn.setIcon(self.icons.get('bullseye'))
-        self.key_points_btn.setMaximumHeight(25)
-        self.key_points_btn.setToolTip("Extract key points from document (Ctrl+2)")
-        self.key_points_btn.clicked.connect(lambda: self._use_quick_action("What are the key points of this document?"))
-        quick_actions_layout.addWidget(self.key_points_btn)
-
-        self.explain_btn = QPushButton(" Explain")
-        self.explain_btn.setIcon(self.icons.get('lightbulb'))
-        self.explain_btn.setMaximumHeight(25)
-        self.explain_btn.setToolTip("Explain main concepts (Ctrl+3)")
-        self.explain_btn.clicked.connect(lambda: self._use_quick_action("Explain the main concepts in this document"))
-        quick_actions_layout.addWidget(self.explain_btn)
-
-        quick_actions_layout.addStretch()
-
-        # Keyboard shortcuts help button
-        shortcuts_btn = QPushButton(" Shortcuts")
-        shortcuts_btn.setIcon(self.icons.get('keyboard'))
-        shortcuts_btn.setMaximumHeight(25)
-        shortcuts_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #f5f5f5;
-                border: 1px solid #ccc;
-                border-radius: 3px;
-                padding: 3px 8px;
-            }
-            QPushButton:hover {
-                background-color: #e0e0e0;
-            }
-        """)
-        shortcuts_btn.clicked.connect(self._show_keyboard_shortcuts)
-        quick_actions_layout.addWidget(shortcuts_btn)
-
-        layout.addLayout(quick_actions_layout)
 
         # Options row - compact
         options_layout = QHBoxLayout()
         options_layout.setSpacing(5)
-
-        # Web research checkbox - unchecked by default (user opts in)
-        self.web_research_cb = QCheckBox(" Web Research")
-        self.web_research_cb.setIcon(self.icons.get('web'))
-        self.web_research_cb.setChecked(False)  # Default OFF - PDF only
-        self.web_research_cb.setToolTip("Enable web search to supplement PDF content (may be slower)")
-        options_layout.addWidget(self.web_research_cb)
-
-        # Deep Search button - prominent purple styling
-        self.deep_search_btn = QPushButton(" Deep Search")
-        try:
-            import qtawesome as qta
-            self.deep_search_btn.setIcon(qta.icon('fa5s.search-plus', color='#9C27B0'))
-        except:
-            pass  # Fall back to no icon if qtawesome not available
-        self.deep_search_btn.setMaximumHeight(25)
-        self.deep_search_btn.setToolTip("Deep search across academic databases (Ctrl+D)")
-        self.deep_search_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #E1BEE7;
-                border: 2px solid #9C27B0;
-                border-radius: 4px;
-                padding: 3px 10px;
-                font-weight: bold;
-            }
-            QPushButton:hover {
-                background-color: #CE93D8;
-            }
-        """)
-        self.deep_search_btn.setCheckable(True)  # Toggle button
-        self.deep_search_btn.setChecked(False)  # Default OFF
-        self.deep_search_btn.clicked.connect(self._toggle_deep_search_mode)
-        options_layout.addWidget(self.deep_search_btn)
-
-        # AI Agent Mode checkbox - NEW!
-        self.agent_mode_cb = QCheckBox(" AI Agent")
-        self.agent_mode_cb.setIcon(self.icons.get('robot'))
-        self.agent_mode_cb.setChecked(True)  # Default ON - use agent
-        self.agent_mode_cb.setToolTip(
-            "Use AI agent for intelligent tool selection (Recommended)\n"
-            "Agent automatically decides when to use web/academic search\n"
-            "Disable to use manual controls only"
-        )
-        self.agent_mode_cb.setStyleSheet("""
-            QCheckBox {
-                background-color: #E8F5E9;
-                border: 2px solid #4CAF50;
-                border-radius: 4px;
-                padding: 3px 8px;
-                font-weight: bold;
-            }
-            QCheckBox:hover {
-                background-color: #C8E6C9;
-            }
-        """)
-        self.agent_mode_cb.stateChanged.connect(self._toggle_agent_mode)
-        options_layout.addWidget(self.agent_mode_cb)
 
         # Clear button - compact
         clear_btn = QPushButton(" Clear")
@@ -1290,7 +1155,7 @@ class RAGChatPanel(QWidget):
         input_layout.setSpacing(5)
 
         self.question_input = QLineEdit()
-        self.question_input.setPlaceholderText("Ask a question about the document...")
+        self.question_input.setPlaceholderText("Ask anything - AI agent will choose the best tools...")
         self.question_input.returnPressed.connect(self.ask_question)
         self.question_input.setMaximumHeight(30)
         input_layout.addWidget(self.question_input)
@@ -1328,120 +1193,7 @@ class RAGChatPanel(QWidget):
         shortcut_clear_history = QShortcut(QKeySequence("Ctrl+L"), self)
         shortcut_clear_history.activated.connect(self.clear_chat_history)
 
-        # Ctrl+D: Toggle Deep Search
-        shortcut_deep_search = QShortcut(QKeySequence("Ctrl+D"), self)
-        shortcut_deep_search.activated.connect(lambda: self.deep_search_btn.setChecked(not self.deep_search_btn.isChecked()))
-        shortcut_deep_search.activated.connect(self._toggle_deep_search_mode)
-
-        # Ctrl+1-5: Quick actions
-        shortcut_1 = QShortcut(QKeySequence("Ctrl+1"), self)
-        shortcut_1.activated.connect(lambda: self._use_quick_action("Summarize this document"))
-
-        shortcut_2 = QShortcut(QKeySequence("Ctrl+2"), self)
-        shortcut_2.activated.connect(lambda: self._use_quick_action("What are the key points of this document?"))
-
-        shortcut_3 = QShortcut(QKeySequence("Ctrl+3"), self)
-        shortcut_3.activated.connect(lambda: self._use_quick_action("Explain the main concepts in this document"))
-
         logger.info("Keyboard shortcuts configured")
-
-    def _show_keyboard_shortcuts(self):
-        """Display keyboard shortcuts help dialog."""
-        shortcuts_text = """
-<b>Keyboard Shortcuts:</b><br><br>
-
-<b>Quick Actions:</b><br>
-• <code>Ctrl+1</code> - Summarize document<br>
-• <code>Ctrl+2</code> - Extract key points<br>
-• <code>Ctrl+3</code> - Explain concepts<br><br>
-
-<b>Input Controls:</b><br>
-• <code>Enter</code> or <code>Ctrl+Enter</code> - Send question<br>
-• <code>Ctrl+K</code> - Clear input field<br>
-• <code>Ctrl+L</code> - Clear chat history<br>
-        """
-
-        msg_box = QMessageBox(self)
-        msg_box.setWindowTitle("Keyboard Shortcuts")
-        msg_box.setTextFormat(Qt.RichText)
-        msg_box.setText(shortcuts_text)
-        msg_box.setIcon(QMessageBox.Information)
-        msg_box.exec()
-
-    def _use_quick_action(self, question_template: str):
-        """
-        Use a quick action by populating the question input and optionally asking.
-
-        Args:
-            question_template: The question template to use
-        """
-        # Set the question in the input field
-        self.question_input.setText(question_template)
-
-        # Auto-send quick action questions
-        self.ask_question()
-
-    def _toggle_deep_search_mode(self):
-        """Toggle deep search mode on/off."""
-        is_enabled = self.deep_search_btn.isChecked()
-
-        if is_enabled:
-            # Enable deep search mode - active purple styling
-            self.deep_search_btn.setStyleSheet("""
-                QPushButton {
-                    background-color: #9C27B0;
-                    color: white;
-                    border: 2px solid #7B1FA2;
-                    border-radius: 4px;
-                    padding: 3px 10px;
-                    font-weight: bold;
-                }
-                QPushButton:hover {
-                    background-color: #8E24AA;
-                }
-            """)
-            self.question_input.setPlaceholderText(
-                "Ask a research question - Deep Search will explore academic papers..."
-            )
-            self.status_label.setText("Deep Search mode enabled - searches across multiple papers")
-            logger.info("Deep Search mode enabled")
-        else:
-            # Disable deep search mode - light purple styling
-            self.deep_search_btn.setStyleSheet("""
-                QPushButton {
-                    background-color: #E1BEE7;
-                    border: 2px solid #9C27B0;
-                    border-radius: 4px;
-                    padding: 3px 10px;
-                    font-weight: bold;
-                }
-                QPushButton:hover {
-                    background-color: #CE93D8;
-                }
-            """)
-            self.question_input.setPlaceholderText("Ask a question about the document...")
-            self.status_label.setText("Deep Search mode disabled")
-            logger.info("Deep Search mode disabled")
-
-    def _toggle_agent_mode(self):
-        """Toggle AI agent mode on/off."""
-        is_enabled = self.agent_mode_cb.isChecked()
-
-        if is_enabled:
-            self.status_label.setText("AI Agent mode enabled - intelligent tool selection")
-            # When agent is on, show hint that it manages search automatically
-            self.question_input.setPlaceholderText("Ask anything - AI agent will choose the best tools...")
-            logger.info("AI Agent mode enabled")
-        else:
-            self.status_label.setText("Manual mode - you control search options")
-            self.question_input.setPlaceholderText("Ask a question about the document...")
-            logger.info("AI Agent mode disabled")
-
-        # Update RAG chain agent mode if it supports it
-        if hasattr(self.rag_chain, 'set_agent_mode'):
-            mode = 'always' if is_enabled else 'never'
-            self.rag_chain.set_agent_mode(mode)
-
 
     def initialize_rag_system(self):
         """Initialize the RAG system components with agent support."""
@@ -1468,8 +1220,8 @@ class RAGChatPanel(QWidget):
             self.reference_manager.set_pdf_viewer_callback(self._navigate_to_pdf)
             self.reference_manager.set_web_browser_callback(self._open_web_link)
             
-            self.status_label.setText("RAG system ready")
-            logger.info("RAG system initialized successfully")
+            self.status_label.setText("AI Agent ready - all tools available")
+            logger.info("RAG system initialized successfully with AI Agent")
             
         except Exception as e:
             error_msg = f"RAG system initialization error: {str(e)}"
@@ -1596,11 +1348,13 @@ class RAGChatPanel(QWidget):
         # Always use current document scope (no scope selection)
         document_id = self.current_document_id
 
-        # Check if deep search is enabled
-        use_deep_search = self.deep_search_btn.isChecked()
+        # Agent has access to all tools - it will decide what to use
+        # Always enable web research and allow deep search if needed
+        include_web = True
+        use_deep_search = False  # Agent can trigger this internally if needed
 
         # Start processing
-        self._start_rag_processing(question, document_id, self.web_research_cb.isChecked(), use_deep_search)
+        self._start_rag_processing(question, document_id, include_web, use_deep_search)
     
     
     def _start_rag_processing(self, question: str, document_id: Optional[str],
@@ -1642,27 +1396,22 @@ class RAGChatPanel(QWidget):
             total_hops = quality_metrics.get('total_hops', 0)
             self.status_label.setText(f"Deep Search completed: {total_papers} papers, {total_hops} hops, {processing_time:.1f}s")
         else:
-            # Standard RAG
+            # Standard RAG with agent deciding which tools to use
             pdf_sources = sources_used.get('pdf_sources', 0)
             web_sources = sources_used.get('web_sources', 0)
             web_search_used = answer_data.get('web_search_used', False)
 
-            # Build status message based on what happened
-            if self.web_research_cb.isChecked():
-                if web_sources > 0:
-                    # Web search was used and returned results
-                    total_sources = pdf_sources + web_sources
-                    self.status_label.setText(f"Completed in {processing_time:.1f}s - {total_sources} sources (PDF + Web)")
-                elif web_search_used:
-                    # Web search was attempted but failed/returned 0
-                    self.status_label.setText(f"Completed in {processing_time:.1f}s - {pdf_sources} sources (PDF only, web failed)")
-                else:
-                    # Web search was automatically skipped (PDF sufficient)
-                    self.status_label.setText(f"Completed in {processing_time:.1f}s - {pdf_sources} sources (PDF sufficient)")
-            else:
-                # Web research disabled by user
+            # Build status message based on what the agent decided to use
+            if web_sources > 0:
+                # Agent used web search and got results
                 total_sources = pdf_sources + web_sources
-                self.status_label.setText(f"Completed in {processing_time:.1f}s - {total_sources} sources")
+                self.status_label.setText(f"Completed in {processing_time:.1f}s - {total_sources} sources (PDF + Web)")
+            elif web_search_used:
+                # Agent tried web search but it failed/returned 0
+                self.status_label.setText(f"Completed in {processing_time:.1f}s - {pdf_sources} sources (PDF only, web failed)")
+            else:
+                # Agent decided PDF was sufficient
+                self.status_label.setText(f"Completed in {processing_time:.1f}s - {pdf_sources} sources (PDF sufficient)")
 
         # Re-enable input
         self.ask_button.setEnabled(True)
@@ -1764,13 +1513,11 @@ class RAGChatPanel(QWidget):
         """Display message when RAG is disabled."""
         self.question_input.setEnabled(False)
         self.ask_button.setEnabled(False)
-        self.web_research_cb.setEnabled(False)
         self.status_label.setText("RAG disabled")
 
     def set_rag_enabled_message(self):
         """Display message when RAG is re-enabled."""
         self.question_input.setEnabled(True)
         self.ask_button.setEnabled(True)
-        self.web_research_cb.setEnabled(True)
-        self.status_label.setText("RAG ready")
+        self.status_label.setText("AI Agent ready - all tools available")
 
