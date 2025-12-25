@@ -6,7 +6,8 @@
       "Bash(git log:*)",
       "Bash(tree:*)",
       "Bash(cat:*)",
-      "Bash(rm:*)"
+      "Bash(rm:*)",
+      "Bash(ls:*)"
     ]
   }
 }

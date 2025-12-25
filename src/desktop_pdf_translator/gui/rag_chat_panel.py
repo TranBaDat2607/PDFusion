@@ -416,6 +416,8 @@ class MessagePanel(QFrame):
         self.answer_data = answer_data
         self.reference_manager = reference_manager
         self.content_renderer = ContentRenderer()  # Initialize content renderer
+        self._last_content_height = 0  # Track last height to prevent resize loops
+        self._resize_timer = None  # Timer for debouncing resize events
         self.setup_ui()
 
     def setup_ui(self):
@@ -474,7 +476,9 @@ class MessagePanel(QFrame):
 
     def _create_content_section(self) -> QWidget:
         """Create the main content section with rendered answer."""
-        from PySide6.QtWidgets import QTextBrowser, QSizePolicy
+        from PySide6.QtWebEngineWidgets import QWebEngineView
+        from PySide6.QtWebChannel import QWebChannel
+        from PySide6.QtWidgets import QSizePolicy
 
         content_widget = QWidget()
         content_layout = QVBoxLayout(content_widget)
@@ -486,13 +490,10 @@ class MessagePanel(QFrame):
         if action_summary:
             content_layout.addWidget(action_summary)
 
-        # Content browser
-        self.content_browser = QTextBrowser()
-        self.content_browser.setReadOnly(True)
-        self.content_browser.setFrameStyle(QFrame.NoFrame)
-        self.content_browser.setOpenExternalLinks(True)
+        # Content browser - using QWebEngineView for JavaScript support (KaTeX)
+        self.content_browser = QWebEngineView()
         self.content_browser.setStyleSheet("""
-            QTextBrowser {
+            QWebEngineView {
                 background: transparent;
                 border: none;
             }
@@ -505,29 +506,19 @@ class MessagePanel(QFrame):
             self.content_browser.setHtml(rendered_html)
         except Exception as e:
             logger.error(f"Content rendering failed: {e}")
-            self.content_browser.setPlainText(answer_text)
+            self.content_browser.setHtml(f'<pre>{answer_text}</pre>')
 
-        # Set size policy - Preferred for natural sizing based on content
-        self.content_browser.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Preferred)
-
-        # Set word wrap mode to optimize for dynamic width
-        from PySide6.QtGui import QTextOption
-        self.content_browser.setWordWrapMode(QTextOption.WrapAtWordBoundaryOrAnywhere)
+        # Set size policy - Minimum vertical to allow natural expansion
+        self.content_browser.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Minimum)
 
         # Set minimum width only - maximum will be set in showEvent
         self.content_browser.setMinimumWidth(200)  # Minimum readable width
 
-        # Disable scrollbars for clean look - content should fit naturally
-        self.content_browser.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        self.content_browser.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-
-        # Dynamic height adjustment - scales to content
-        self.content_browser.document().documentLayout().documentSizeChanged.connect(
-            self._adjust_content_size
-        )
-
-        # Initial height calculation
-        self._adjust_content_size()
+        # Don't set fixed heights - let content determine size dynamically
+        # Use JavaScript callback to adjust height once after KaTeX renders
+        # Wait longer to ensure KaTeX fully loads and renders
+        from PySide6.QtCore import QTimer
+        QTimer.singleShot(1000, self._adjust_height_once)  # Increased to 1 second
 
         content_layout.addWidget(self.content_browser)
 
@@ -611,8 +602,8 @@ class MessagePanel(QFrame):
         return summary_widget if sections_added > 0 else None
 
     def _adjust_content_size(self):
-        """Dynamically adjust content browser size to fit document height."""
-        if hasattr(self, 'content_browser'):
+        """Dynamically adjust content browser size to fit document height (legacy QTextBrowser)."""
+        if hasattr(self, 'content_browser') and hasattr(self.content_browser, 'document'):
             # Get document size
             doc_size = self.content_browser.document().size()
             doc_height = doc_size.height()
@@ -623,6 +614,49 @@ class MessagePanel(QFrame):
             self.content_browser.setMaximumHeight(preferred_height)
 
             # Horizontal width is handled by showEvent - don't interfere here
+
+    def _adjust_height_once(self):
+        """Adjust height once after KaTeX finishes rendering using JavaScript."""
+        if not hasattr(self, 'content_browser'):
+            return
+
+        # JavaScript to get actual document height after KaTeX renders
+        js_code = """
+        // Get the full height of the document content
+        var body = document.body;
+        var html = document.documentElement;
+
+        // Get the maximum height from all possible measurements
+        var height = Math.max(
+            body.scrollHeight,
+            body.offsetHeight,
+            html.scrollHeight,
+            html.offsetHeight,
+            html.clientHeight
+        );
+
+        height;  // Return the height
+        """
+
+        # Execute JavaScript and get height
+        # runJavaScript signature: runJavaScript(script, worldId, callback)
+        self.content_browser.page().runJavaScript(js_code, 0, self._set_final_height)
+
+    def _set_final_height(self, height):
+        """Set the final height based on JavaScript result."""
+        if height and isinstance(height, (int, float)) and height > 0:
+            # Add extra padding to ensure no scrollbars
+            # The height from JS includes padding, but we add more for safety
+            final_height = int(height) + 10
+
+            # Set the height to fit content - no maximum cap
+            self.content_browser.setFixedHeight(final_height)
+
+            logger.info(f"Set content height to {final_height}px")
+        else:
+            # Fallback: set a reasonable default height
+            logger.warning(f"Invalid height from JavaScript: {height}, using default")
+            self.content_browser.setFixedHeight(200)
 
 
 

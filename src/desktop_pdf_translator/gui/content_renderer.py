@@ -1,6 +1,6 @@
 """
 Content renderers for rich chat message display.
-Supports markdown, LaTeX formulas, tables, code blocks, and images.
+Supports markdown, LaTeX formulas (via KaTeX), tables, code blocks, and images.
 """
 
 import logging
@@ -17,13 +17,6 @@ from markdown.extensions import fenced_code, tables, nl2br, sane_lists
 from pygments import highlight
 from pygments.lexers import get_lexer_by_name, guess_lexer
 from pygments.formatters import HtmlFormatter
-
-import matplotlib
-matplotlib.use('Agg')  # Use non-interactive backend
-import matplotlib.pyplot as plt
-from matplotlib import mathtext
-import io
-import base64
 
 
 class ContentDetector:
@@ -45,8 +38,11 @@ class ContentDetector:
             'images': False,
         }
 
-        # Detect LaTeX formulas
-        if re.search(r'\$\$[^\$]+\$\$|\$[^\$]+\$', text):
+        # Detect LaTeX formulas - support multiple delimiter formats
+        # $...$ or $$...$$ (standard)
+        # \[...\] or \(...\) (LaTeX style)
+        # [... ] on separate lines (some markdown flavors)
+        if re.search(r'\$\$[^\$]+\$\$|\$[^\$]+\$|\\\[[\s\S]+?\\\]|\\\([\s\S]+?\\\)|^\s*\[[\s\S]+?\]\s*$', text, re.MULTILINE):
             detected['latex'] = True
 
         # Detect code blocks
@@ -77,10 +73,18 @@ class MarkdownRenderer:
         self.md = markdown.Markdown(
             extensions=[
                 'fenced_code',
+                'codehilite',  # Syntax highlighting with pygments
                 'tables',
                 'nl2br',
                 'sane_lists',
-            ]
+            ],
+            extension_configs={
+                'codehilite': {
+                    'css_class': 'highlight',
+                    'linenums': False,
+                    'guess_lang': True,
+                }
+            }
         )
 
     def render(self, text: str) -> str:
@@ -100,8 +104,8 @@ class MarkdownRenderer:
             # Reset markdown state for next conversion
             self.md.reset()
 
-            # Wrap in div with styling
-            return f'<div class="markdown-content">{html}</div>'
+            # Return HTML directly without extra wrapper
+            return html
 
         except Exception as e:
             logger.error(f"Markdown rendering failed: {e}")
@@ -110,7 +114,7 @@ class MarkdownRenderer:
 
 
 class FormulaRenderer:
-    """Renders LaTeX formulas to images using matplotlib."""
+    """Renders LaTeX formulas using KaTeX (client-side JavaScript rendering)."""
 
     def __init__(self):
         """Initialize formula renderer."""
@@ -118,103 +122,81 @@ class FormulaRenderer:
 
     def render(self, text: str) -> str:
         """
-        Render LaTeX formulas in text to embedded images.
+        Prepare LaTeX formulas for KaTeX rendering.
+        Converts various LaTeX delimiter formats to KaTeX-compatible delimiters.
 
         Args:
-            text: Text containing LaTeX formulas ($..$ or $$...$$)
+            text: Text containing LaTeX formulas (various delimiter formats)
 
         Returns:
-            HTML with formulas replaced by images
+            Text with normalized LaTeX delimiters for KaTeX
         """
         try:
-            # Find all formulas
-            # Display formulas: $$...$$
+            # Normalize all delimiter formats to KaTeX standard ($$...$$ and $...$)
+
+            # 1. Display formulas: [...] on separate lines → $$...$$
+            text = re.sub(
+                r'^\s*\[([\s\S]+?)\]\s*$',
+                lambda m: f'$${self._clean_formula(m.group(1))}$$',
+                text,
+                flags=re.MULTILINE
+            )
+
+            # 2. Display formulas: \[...\] → $$...$$
+            text = re.sub(
+                r'\\\[([\s\S]+?)\\\]',
+                lambda m: f'$${self._clean_formula(m.group(1))}$$',
+                text
+            )
+
+            # 3. Inline formulas: \(...\) → $...$
+            text = re.sub(
+                r'\\\(([\s\S]+?)\\\)',
+                lambda m: f'${self._clean_formula(m.group(1))}$',
+                text
+            )
+
+            # 4. Clean existing $$...$$ and $...$ formulas
             text = re.sub(
                 r'\$\$([^\$]+)\$\$',
-                lambda m: self._render_formula(m.group(1), display=True),
+                lambda m: f'$${self._clean_formula(m.group(1))}$$',
                 text
             )
 
-            # Inline formulas: $...$
             text = re.sub(
                 r'\$([^\$]+)\$',
-                lambda m: self._render_formula(m.group(1), display=False),
+                lambda m: f'${self._clean_formula(m.group(1))}$',
                 text
             )
 
             return text
 
         except Exception as e:
-            logger.error(f"Formula rendering failed: {e}")
+            logger.error(f"Formula normalization failed: {e}")
             return text
 
-    def _render_formula(self, formula: str, display: bool = False) -> str:
+    def _clean_formula(self, formula: str) -> str:
         """
-        Render a single LaTeX formula to an HTML img tag.
+        Clean up LaTeX formula text.
 
         Args:
-            formula: LaTeX formula code
-            display: If True, render as display formula (larger, centered)
+            formula: Raw LaTeX formula code
 
         Returns:
-            HTML img tag with base64-encoded image
+            Cleaned LaTeX formula
         """
-        try:
-            # Create figure
-            fig = plt.figure(figsize=(0.01, 0.01), dpi=100)
-            fig.patch.set_facecolor('none')
+        # Strip whitespace
+        formula = formula.strip()
 
-            # Render formula
-            if display:
-                fontsize = 14
-            else:
-                fontsize = 12
+        # Remove literal \n characters that might appear in the formula
+        formula = formula.replace('\\n', ' ')
 
-            # Parse and render LaTeX
-            renderer = fig.canvas.get_renderer()
-            t = fig.text(0, 0, f'${formula}$', fontsize=fontsize)
+        # Handle double-escaped backslashes (\\text → \text)
+        # This can happen if the text comes from JSON or is double-escaped
+        if '\\\\' in formula:
+            formula = formula.replace('\\\\', '\\')
 
-            # Get bounding box
-            bbox = t.get_window_extent(renderer=renderer)
-
-            # Adjust figure size to fit formula
-            width = bbox.width / fig.dpi
-            height = bbox.height / fig.dpi
-
-            plt.close(fig)
-
-            # Create final figure with correct size
-            fig = plt.figure(figsize=(width * 1.2, height * 1.2), dpi=100)
-            fig.patch.set_facecolor('white')
-            ax = fig.add_axes([0, 0, 1, 1])
-            ax.axis('off')
-
-            ax.text(0.5, 0.5, f'${formula}$',
-                   fontsize=fontsize,
-                   ha='center', va='center',
-                   transform=ax.transAxes)
-
-            # Save to bytes
-            buf = io.BytesIO()
-            plt.savefig(buf, format='png', bbox_inches='tight',
-                       pad_inches=0.1, transparent=False, facecolor='white')
-            plt.close(fig)
-
-            # Encode to base64
-            buf.seek(0)
-            img_base64 = base64.b64encode(buf.read()).decode('utf-8')
-
-            # Create HTML img tag
-            style = 'vertical-align: middle; margin: 0 4px;'
-            if display:
-                style += ' display: block; margin: 10px auto;'
-
-            return f'<img src="data:image/png;base64,{img_base64}" style="{style}" alt="{formula}"/>'
-
-        except Exception as e:
-            logger.error(f"Failed to render formula '{formula}': {e}")
-            # Fallback: show formula in code style
-            return f'<code>${formula}$</code>'
+        return formula
 
 
 class TableRenderer:
@@ -408,30 +390,35 @@ class ContentRenderer:
 
             # Apply renderers in order
 
-            # 1. Render LaTeX formulas first (before markdown processes them)
+            # 1. Render LaTeX formulas first (normalize delimiters for KaTeX)
             if content_types['latex']:
                 text = self.formula_renderer.render(text)
 
-            # 2. Render code blocks (before markdown to preserve them)
-            if content_types['code_blocks']:
-                text = self.code_renderer.render(text)
-
-            # 3. Render markdown (includes tables)
-            if content_types['markdown'] or content_types['tables']:
+            # 2. Render markdown (includes code blocks via fenced_code extension and tables)
+            if content_types['markdown'] or content_types['code_blocks'] or content_types['tables']:
                 text = self.markdown_renderer.render(text)
 
-            # 4. Apply table styling
+            # 3. Apply table styling to markdown-generated tables
             if content_types['tables']:
                 text = self.table_renderer.render(text)
 
-            # Wrap in styled div with CSS
+            # Note: Code blocks are handled by markdown's fenced_code extension
+            # No separate code rendering needed - markdown outputs <pre><code> which we style with CSS
+
+            # Wrap in proper HTML document with CSS and KaTeX
             css = self._get_combined_css()
 
-            full_html = f"""
-            {css}
-            <div class="message-content">
+            full_html = f"""<!DOCTYPE html>
+            <html>
+            <head>
+                <meta charset="UTF-8">
+                <meta name="viewport" content="width=device-width, initial-scale=1.0">
+                {css}
+            </head>
+            <body>
                 {text}
-            </div>
+            </body>
+            </html>
             """
 
             return full_html
@@ -442,55 +429,124 @@ class ContentRenderer:
             return f'<div style="white-space: pre-wrap;">{text}</div>'
 
     def _get_combined_css(self) -> str:
-        """Get combined CSS for all content types."""
+        """Get combined CSS for all content types including KaTeX."""
         css_parts = [
+            self._get_katex_resources(),
             TableRenderer.get_table_css(),
             CodeBlockRenderer.get_code_css(),
             """
             <style>
-            .message-content {
+            /* Body styling to match chat bubble background */
+            html, body {
                 font-family: 'Segoe UI', sans-serif;
                 font-size: 9pt;
                 color: #212121;
                 line-height: 1.6;
+                margin: 0;
+                padding: 0;  /* No padding - MessagePanel provides padding */
+                background: #F5F5F5;
+                overflow: hidden;  /* Disable scrollbars */
+                width: 100%;
+                height: auto;
             }
-            .message-content h1 { font-size: 14pt; margin: 10px 0 5px 0; color: #1565C0; }
-            .message-content h2 { font-size: 12pt; margin: 10px 0 5px 0; color: #1976D2; }
-            .message-content h3 { font-size: 10pt; margin: 10px 0 5px 0; color: #1E88E5; }
-            .message-content p { margin: 5px 0; }
-            .message-content ul, .message-content ol { margin: 5px 0; padding-left: 20px; }
-            .message-content li { margin: 2px 0; }
-            .message-content code {
+            h1 { font-size: 14pt; margin: 10px 0 5px 0; color: #1565C0; }
+            h2 { font-size: 12pt; margin: 10px 0 5px 0; color: #1976D2; }
+            h3 { font-size: 10pt; margin: 10px 0 5px 0; color: #1E88E5; }
+            p { margin: 5px 0; }
+            ul, ol { margin: 5px 0; padding-left: 20px; }
+            li { margin: 2px 0; }
+            code {
                 background-color: #f5f5f5;
                 padding: 2px 4px;
                 border-radius: 3px;
-                font-family: 'Consolas', monospace;
+                font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
                 font-size: 9pt;
             }
-            .message-content pre {
+            pre {
                 background-color: #f5f5f5;
-                padding: 10px;
+                padding: 15px;
                 border-radius: 5px;
                 overflow-x: auto;
+                border: 1px solid #e0e0e0;
             }
-            .message-content blockquote {
+            pre code {
+                background: none;
+                padding: 0;
+                font-size: 9pt;
+                line-height: 1.5;
+            }
+            /* Pygments syntax highlighting (codehilite) */
+            .highlight {
+                background: #f5f5f5;
+                border-radius: 5px;
+                padding: 15px;
+                margin: 10px 0;
+                overflow-x: auto;
+                border: 1px solid #e0e0e0;
+            }
+            .highlight pre {
+                margin: 0;
+                padding: 0;
+                background: none;
+                border: none;
+            }
+            /* Pygments token colors */
+            .highlight .k { color: #0000FF; font-weight: bold; } /* Keyword */
+            .highlight .s { color: #008000; } /* String */
+            .highlight .c { color: #808080; font-style: italic; } /* Comment */
+            .highlight .n { color: #000000; } /* Name */
+            .highlight .o { color: #666666; } /* Operator */
+            .highlight .p { color: #000000; } /* Punctuation */
+            .highlight .nf { color: #795E26; } /* Function name */
+            .highlight .nb { color: #0000FF; } /* Built-in */
+            .highlight .nc { color: #008080; font-weight: bold; } /* Class name */
+            blockquote {
                 border-left: 4px solid #2196F3;
                 padding-left: 10px;
                 margin: 10px 0;
                 color: #666;
             }
-            .message-content a {
+            a {
                 color: #2196F3;
                 text-decoration: none;
             }
-            .message-content a:hover {
+            a:hover {
                 text-decoration: underline;
             }
+            /* KaTeX formula styling */
+            .katex { font-size: 1.0em; }
+            .katex-display { margin: 10px 0; }
             </style>
             """
         ]
 
         return '\n'.join(css_parts)
+
+    def _get_katex_resources(self) -> str:
+        """Get KaTeX CSS and JavaScript resources."""
+        return """
+        <!-- KaTeX CSS -->
+        <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css"
+              integrity="sha384-n8MVd4RsNIU0tAv4ct0nTaAbDJwPJzDEaqSD1odI+WdtXRGWt2kTvGFasHpSy3SV"
+              crossorigin="anonymous">
+
+        <!-- KaTeX JavaScript -->
+        <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js"
+                integrity="sha384-XjKyOOlGwcjNTAIQHIpgOno0Hl1YQqzUOEleOLALmuqehneUG+vnGctmUb0ZY0l8"
+                crossorigin="anonymous"></script>
+
+        <!-- KaTeX auto-render extension -->
+        <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/contrib/auto-render.min.js"
+                integrity="sha384-+VBxd3r6XgURycqtZ117nYw44OOcIax56Z4dCRWbxyPt0Koah1uHoK0o4+/RRE05"
+                crossorigin="anonymous"
+                onload="renderMathInElement(document.body, {
+                    delimiters: [
+                        {left: '$$', right: '$$', display: true},
+                        {left: '$', right: '$', display: false}
+                    ],
+                    throwOnError: false
+                });"></script>
+        """
 
 
 # Convenience function for external use
