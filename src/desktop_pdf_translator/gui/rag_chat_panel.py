@@ -17,7 +17,7 @@ from PySide6.QtWidgets import (
     QMessageBox
 )
 from PySide6.QtCore import Qt, QThread, Signal, QTimer
-from PySide6.QtGui import QFont, QTextCursor, QTextCharFormat, QColor, QIcon
+from PySide6.QtGui import QFont, QFontMetrics, QTextCursor, QTextCharFormat, QColor, QIcon
 
 
 import qtawesome as qta
@@ -342,22 +342,19 @@ class MessageBubble(QWidget):
         main_layout.addStretch()
 
         # Bubble frame - simple minimal style with dynamic width
-        bubble_frame = QFrame()
-        bubble_frame.setObjectName("userBubble")
-        bubble_frame.setStyleSheet("""
+        self.bubble_frame = QFrame()
+        self.bubble_frame.setObjectName("userBubble")
+        self.bubble_frame.setStyleSheet("""
             QFrame#userBubble {
                 background-color: #F5F5F5;
                 border: 1px solid #E0E0E0;
                 border-radius: 8px;
-                padding: 10px 14px;
             }
         """)
 
-        # Set size policy - Preferred allows natural sizing
-        bubble_frame.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Preferred)
-
-        bubble_layout = QVBoxLayout(bubble_frame)
-        bubble_layout.setContentsMargins(0, 0, 0, 0)
+        self.bubble_frame.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Preferred)
+        bubble_layout = QVBoxLayout(self.bubble_frame)
+        bubble_layout.setContentsMargins(14, 10, 14, 10)
 
         # Question text (no header, clean bubble)
         self.question_label = QLabel(self.question)
@@ -365,31 +362,42 @@ class MessageBubble(QWidget):
         self.question_label.setFont(QFont("Segoe UI", 9))
         self.question_label.setStyleSheet("color: #424242; background: transparent; border: none;")
         self.question_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
-
-        # Don't set fixed maximum width - let it size naturally
-        # We'll constrain it in showEvent when parent size is known
         self.question_label.setMinimumWidth(100)  # Minimum readable width
 
         bubble_layout.addWidget(self.question_label)
 
-        main_layout.addWidget(bubble_frame)
+        main_layout.addWidget(self.bubble_frame)
 
     def showEvent(self, event):
-        """Adjust maximum width when widget is shown and parent size is known."""
+        """Adjust bubble width when widget is shown and parent size is known."""
         super().showEvent(event)
 
-        # Now we can safely get parent width and set reasonable maximum
-        if self.parent():
-            # Get the scroll area's viewport width
-            scroll_area = self.parent().parent()
-            if scroll_area and hasattr(scroll_area, 'viewport'):
-                available_width = scroll_area.viewport().width()
-            else:
-                available_width = self.parent().width()
+        if not self.parent():
+            return
 
-            # Set maximum to 75% of available width
-            max_width = int(available_width * 0.75)
-            self.question_label.setMaximumWidth(max_width)
+        scroll_area = self.parent().parent()
+        if scroll_area and hasattr(scroll_area, 'viewport'):
+            available_width = scroll_area.viewport().width()
+        else:
+            available_width = self.parent().width()
+
+        if available_width <= 0:
+            return
+
+        # 14px left + 14px right from layout margins
+        h_padding = 28
+        max_bubble_width = int(available_width * 0.75)
+
+        # Compute the natural single-line text width so the HBoxLayout+stretch
+        # cannot squeeze the frame below the text's actual needed width.
+        fm = QFontMetrics(self.question_label.font())
+        natural_width = fm.horizontalAdvance(self.question) + h_padding
+        natural_width = max(natural_width, 100 + h_padding)  # respect label's minWidth
+        natural_width = min(natural_width, max_bubble_width)  # cap at 75%
+
+        # Constrain the frame (not the label) so the layout accounts for padding
+        self.bubble_frame.setMinimumWidth(natural_width)
+        self.bubble_frame.setMaximumWidth(max_bubble_width)
 
 
 class MessagePanel(QFrame):
@@ -956,15 +964,10 @@ class RAGChatPanel(QWidget):
         # Primary colors
         primary_blue = '#2196F3'
         success_green = '#4CAF50'
-        warning_orange = '#FF9800'
         neutral_gray = '#666'
 
         # Button icons
-        icons['pdf'] = qta.icon('fa5s.file-pdf', color=primary_blue)
         icons['web'] = qta.icon('fa5s.globe', color=primary_blue)
-        icons['lightbulb'] = qta.icon('fa5s.lightbulb', color=warning_orange)
-        icons['bullseye'] = qta.icon('fa5s.bullseye', color=success_green)
-        icons['keyboard'] = qta.icon('fa5s.keyboard', color=neutral_gray)
         icons['trash'] = qta.icon('fa5s.trash-alt', color='#f44336')
         icons['send'] = qta.icon('fa5s.paper-plane', color=primary_blue)
         icons['settings'] = qta.icon('fa5s.cog', color=neutral_gray)
@@ -1155,58 +1158,6 @@ class RAGChatPanel(QWidget):
         layout.setContentsMargins(0, 5, 0, 0)
         layout.setSpacing(5)
 
-        # Quick Actions row
-        quick_actions_layout = QHBoxLayout()
-        quick_actions_layout.setSpacing(3)
-
-        quick_actions_label = QLabel("Quick:")
-        quick_actions_label.setStyleSheet("color: #666; font-size: 8pt; font-weight: bold;")
-        quick_actions_layout.addWidget(quick_actions_label)
-
-        # Quick action buttons with professional icons
-        self.summarize_btn = QPushButton(" Summarize")
-        self.summarize_btn.setIcon(self.icons.get('pdf'))
-        self.summarize_btn.setMaximumHeight(25)
-        self.summarize_btn.setToolTip("Summarize the entire document (Ctrl+1)")
-        self.summarize_btn.clicked.connect(lambda: self._use_quick_action("Summarize this document"))
-        quick_actions_layout.addWidget(self.summarize_btn)
-
-        self.key_points_btn = QPushButton(" Key Points")
-        self.key_points_btn.setIcon(self.icons.get('bullseye'))
-        self.key_points_btn.setMaximumHeight(25)
-        self.key_points_btn.setToolTip("Extract key points from document (Ctrl+2)")
-        self.key_points_btn.clicked.connect(lambda: self._use_quick_action("What are the key points of this document?"))
-        quick_actions_layout.addWidget(self.key_points_btn)
-
-        self.explain_btn = QPushButton(" Explain")
-        self.explain_btn.setIcon(self.icons.get('lightbulb'))
-        self.explain_btn.setMaximumHeight(25)
-        self.explain_btn.setToolTip("Explain main concepts (Ctrl+3)")
-        self.explain_btn.clicked.connect(lambda: self._use_quick_action("Explain the main concepts in this document"))
-        quick_actions_layout.addWidget(self.explain_btn)
-
-        quick_actions_layout.addStretch()
-
-        # Keyboard shortcuts help button
-        shortcuts_btn = QPushButton(" Shortcuts")
-        shortcuts_btn.setIcon(self.icons.get('keyboard'))
-        shortcuts_btn.setMaximumHeight(25)
-        shortcuts_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #f5f5f5;
-                border: 1px solid #ccc;
-                border-radius: 3px;
-                padding: 3px 8px;
-            }
-            QPushButton:hover {
-                background-color: #e0e0e0;
-            }
-        """)
-        shortcuts_btn.clicked.connect(self._show_keyboard_shortcuts)
-        quick_actions_layout.addWidget(shortcuts_btn)
-
-        layout.addLayout(quick_actions_layout)
-
         # Options row - compact
         options_layout = QHBoxLayout()
         options_layout.setSpacing(5)
@@ -1304,27 +1255,12 @@ class RAGChatPanel(QWidget):
         shortcut_deep_search.activated.connect(lambda: self.deep_search_btn.setChecked(not self.deep_search_btn.isChecked()))
         shortcut_deep_search.activated.connect(self._toggle_deep_search_mode)
 
-        # Ctrl+1-5: Quick actions
-        shortcut_1 = QShortcut(QKeySequence("Ctrl+1"), self)
-        shortcut_1.activated.connect(lambda: self._use_quick_action("Summarize this document"))
-
-        shortcut_2 = QShortcut(QKeySequence("Ctrl+2"), self)
-        shortcut_2.activated.connect(lambda: self._use_quick_action("What are the key points of this document?"))
-
-        shortcut_3 = QShortcut(QKeySequence("Ctrl+3"), self)
-        shortcut_3.activated.connect(lambda: self._use_quick_action("Explain the main concepts in this document"))
-
         logger.info("Keyboard shortcuts configured")
 
     def _show_keyboard_shortcuts(self):
         """Display keyboard shortcuts help dialog."""
         shortcuts_text = """
 <b>Keyboard Shortcuts:</b><br><br>
-
-<b>Quick Actions:</b><br>
-• <code>Ctrl+1</code> - Summarize document<br>
-• <code>Ctrl+2</code> - Extract key points<br>
-• <code>Ctrl+3</code> - Explain concepts<br><br>
 
 <b>Input Controls:</b><br>
 • <code>Enter</code> or <code>Ctrl+Enter</code> - Send question<br>
@@ -1338,19 +1274,6 @@ class RAGChatPanel(QWidget):
         msg_box.setText(shortcuts_text)
         msg_box.setIcon(QMessageBox.Information)
         msg_box.exec()
-
-    def _use_quick_action(self, question_template: str):
-        """
-        Use a quick action by populating the question input and optionally asking.
-
-        Args:
-            question_template: The question template to use
-        """
-        # Set the question in the input field
-        self.question_input.setText(question_template)
-
-        # Auto-send quick action questions
-        self.ask_question()
 
     def _toggle_deep_search_mode(self):
         """Toggle deep search mode on/off."""
