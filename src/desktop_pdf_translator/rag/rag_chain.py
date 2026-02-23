@@ -655,7 +655,7 @@ ANSWER:
                     response = self.translator.client.chat.completions.create(
                         model=self.translator.model,
                         messages=[
-                            {"role": "system", "content": "You are an intelligent AI assistant that answers questions based on documents."},
+                            {"role": "system", "content": "You are an intelligent AI assistant that answers questions based on documents. Always respond in Vietnamese regardless of the language of the question or source documents."},
                             {"role": "user", "content": prompt}
                         ],
                         max_tokens=1000,
