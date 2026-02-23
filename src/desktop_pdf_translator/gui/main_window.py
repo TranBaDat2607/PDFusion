@@ -435,7 +435,7 @@ class MainWindow(QMainWindow):
                 self.status_label.setText(f"Loaded: {file_path.name}")
                 self.translate_btn.setEnabled(True)
                 if self.rag_enabled:
-                    self.chat_panel.process_document(file_path)
+                    self.chat_panel.process_document(self._find_translated_pdf(file_path))
                 else:
                     self.chat_panel.set_rag_disabled_message()
                 logger.info(f"Loaded PDF: {file_path}")
@@ -764,6 +764,25 @@ class MainWindow(QMainWindow):
         self.status_label.setText("Translation failed")
     
     # RAG Integration Methods
+    def _find_translated_pdf(self, original_path: Path) -> Path:
+        """
+        Return the translated PDF for a given original, if it exists.
+        Looks in translated_pdfs/<stem>.no_watermark.*.mono.pdf.
+        Falls back to original_path if no translation found.
+        """
+        translated_dir = Path("translated_pdfs")
+        if translated_dir.exists():
+            matches = list(translated_dir.glob(
+                f"{original_path.stem}.no_watermark.*.mono.pdf"
+            ))
+            if matches:
+                # Pick the most recently modified if multiple languages exist
+                matches.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+                logger.info(f"Found translated PDF for RAG: {matches[0]}")
+                return matches[0]
+        logger.info(f"No translated PDF found, using original for RAG: {original_path}")
+        return original_path
+
     def _process_document_for_rag(self, document_path: Path):
         """Process document for RAG system after translation."""
         try:
@@ -919,7 +938,7 @@ class MainWindow(QMainWindow):
             
             # If there's a current document, process it for RAG
             if self.current_file:
-                self.chat_panel.process_document(self.current_file)
+                self.chat_panel.process_document(self._find_translated_pdf(self.current_file))
         else:
             self.rag_toggle_btn.setText(" RAG: OFF")
             self.rag_toggle_btn.setIcon(self.icons['rag_off'])

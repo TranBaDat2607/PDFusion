@@ -3,6 +3,7 @@ RAG Chat Panel for PDFusion - Enhanced Q&A interface with web research integrati
 Provides comprehensive answers with PDF and web references.
 """
 
+import hashlib
 import logging
 import asyncio
 import time
@@ -1355,7 +1356,8 @@ class RAGChatPanel(QWidget):
             document_id: Optional document ID (will be generated if not provided)
         """
         self.current_document_path = document_path
-        self.current_document_id = document_id or str(document_path.stem)
+        path_hash = hashlib.md5(str(document_path.resolve()).encode()).hexdigest()[:8]
+        self.current_document_id = document_id or f"{document_path.stem}_{path_hash}"
 
         # Update document indicator in header
         self.doc_label.setText(f"{document_path.name}")
@@ -1385,8 +1387,10 @@ class RAGChatPanel(QWidget):
             self.document_processor_worker.cancel()
             self.document_processor_worker.wait(1000)
 
-        # Generate document ID
-        document_id = str(document_path.stem)
+        # Generate document ID: stable hash of absolute path ensures uniqueness
+        # across files with the same name and persistence across app restarts
+        path_hash = hashlib.md5(str(document_path.resolve()).encode()).hexdigest()[:8]
+        document_id = f"{document_path.stem}_{path_hash}"
 
         # Show progress UI
         self.progress_container.setVisible(True)
