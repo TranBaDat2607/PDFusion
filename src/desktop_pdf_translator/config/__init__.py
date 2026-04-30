@@ -4,10 +4,11 @@ Configuration package for desktop PDF translator.
 
 from .models import (
     AppSettings,
-    LanguageCode, 
+    LanguageCode,
     TranslationService,
     OpenAISettings,
     GeminiSettings,
+    AnthropicSettings,
     TranslationSettings,
     GUISettings,
     ProcessingSettings,
@@ -19,14 +20,15 @@ __all__ = [
     # Models
     "AppSettings",
     "LanguageCode",
-    "TranslationService", 
+    "TranslationService",
     "OpenAISettings",
     "GeminiSettings",
+    "AnthropicSettings",
     "TranslationSettings",
-    "GUISettings", 
+    "GUISettings",
     "ProcessingSettings",
     "FileMetadata",
-    
+
     # Manager
     "ConfigManager",
     "get_config_manager",

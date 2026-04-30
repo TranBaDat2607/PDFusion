@@ -20,9 +20,10 @@ class LanguageCode(str, Enum):
 
 class TranslationService(str, Enum):
     """Supported translation services."""
-    
+
     OPENAI = "openai"
     GEMINI = "gemini"
+    ANTHROPIC = "anthropic"
 
 class OpenAISettings(BaseModel):
     """OpenAI translation service settings."""
@@ -53,6 +54,27 @@ class GeminiSettings(BaseModel):
         allowed_models = {"gemini-1.5-flash"}
         if v not in allowed_models:
             raise ValueError(f"Unsupported Gemini model: {v}")
+        return v
+
+
+class AnthropicSettings(BaseModel):
+    """Anthropic (Claude) translation service settings."""
+
+    api_key: Optional[str] = Field(None, description="Anthropic API key")
+    model: str = Field("claude-sonnet-4-6", description="Anthropic model to use")
+    base_url: Optional[str] = Field(None, description="Custom API base URL")
+    temperature: float = Field(0.3, ge=0.0, le=1.0, description="Translation creativity")
+    max_tokens: int = Field(4000, ge=1, description="Maximum tokens per request")
+
+    @validator("model")
+    def validate_model(cls, v: str) -> str:
+        allowed_models = {
+            "claude-opus-4-7",
+            "claude-sonnet-4-6",
+            "claude-haiku-4-5-20251001",
+        }
+        if v not in allowed_models:
+            raise ValueError(f"Unsupported Anthropic model: {v}")
         return v
 
 
@@ -147,6 +169,7 @@ class AppSettings(BaseModel):
     # Service configurations
     openai: OpenAISettings = Field(default_factory=OpenAISettings)
     gemini: GeminiSettings = Field(default_factory=GeminiSettings)
+    anthropic: AnthropicSettings = Field(default_factory=AnthropicSettings)
     
     # Application settings
     translation: TranslationSettings = Field(default_factory=TranslationSettings)
@@ -175,8 +198,13 @@ class AppSettings(BaseModel):
             }
         elif self.translation.preferred_service == TranslationService.GEMINI:
             return {
-                "service": "gemini", 
+                "service": "gemini",
                 "config": self.gemini.dict()
+            }
+        elif self.translation.preferred_service == TranslationService.ANTHROPIC:
+            return {
+                "service": "anthropic",
+                "config": self.anthropic.dict()
             }
         else:
             raise ValueError(f"Unsupported service: {self.translation.preferred_service}")

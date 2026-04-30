@@ -178,6 +178,7 @@ venv/
 env/
 .venv/
 .env/
-
+data/
+logs.md
 # Application data
 DesktopPDFTranslator/
