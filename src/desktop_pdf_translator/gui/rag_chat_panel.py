@@ -23,6 +23,15 @@ from PySide6.QtGui import QFont, QFontMetrics, QTextCursor, QTextCharFormat, QCo
 
 import qtawesome as qta
 
+from qfluentwidgets import (
+    PushButton as FPushButton,
+    PrimaryPushButton, TransparentToolButton,
+    LineEdit as FLineEdit, CheckBox as FCheckBox,
+    BodyLabel, CaptionLabel, StrongBodyLabel,
+    CardWidget, ProgressBar as FProgressBar,
+    SwitchButton, IndicatorPosition, FluentIcon,
+)
+
 
 from ..rag import (
     ScientificPDFProcessor, ChromaDBManager,
@@ -334,36 +343,23 @@ class MessageBubble(QWidget):
     def setup_ui(self):
         """Setup the compact user message bubble with dynamic width."""
         from PySide6.QtWidgets import QSizePolicy
+        from qfluentwidgets import CardWidget, BodyLabel
 
-        # Main layout with right alignment
         main_layout = QHBoxLayout(self)
         main_layout.setContentsMargins(0, 4, 0, 4)
-
-        # Add stretch to push bubble to the right
         main_layout.addStretch()
 
-        # Bubble frame - simple minimal style with dynamic width
-        self.bubble_frame = QFrame()
+        self.bubble_frame = CardWidget()
         self.bubble_frame.setObjectName("userBubble")
-        self.bubble_frame.setStyleSheet("""
-            QFrame#userBubble {
-                background-color: #F5F5F5;
-                border: 1px solid #E0E0E0;
-                border-radius: 8px;
-            }
-        """)
 
         self.bubble_frame.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Preferred)
         bubble_layout = QVBoxLayout(self.bubble_frame)
         bubble_layout.setContentsMargins(14, 10, 14, 10)
 
-        # Question text (no header, clean bubble)
-        self.question_label = QLabel(self.question)
+        self.question_label = BodyLabel(self.question)
         self.question_label.setWordWrap(True)
-        self.question_label.setFont(QFont("Segoe UI", 9))
-        self.question_label.setStyleSheet("color: #424242; background: transparent; border: none;")
         self.question_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
-        self.question_label.setMinimumWidth(100)  # Minimum readable width
+        self.question_label.setMinimumWidth(100)
 
         bubble_layout.addWidget(self.question_label)
 
@@ -418,17 +414,11 @@ class MessagePanel(QFrame):
         from PySide6.QtWidgets import QSizePolicy
 
         self.setObjectName("assistantPanel")
-        self.setStyleSheet("""
-            QFrame#assistantPanel {
-                background-color: #F5F5F5;
-                border-left: 4px solid #4CAF50;
-                border-top: 1px solid #E0E0E0;
-                border-right: 1px solid #E0E0E0;
-                border-bottom: 1px solid #E0E0E0;
-                border-radius: 8px;
-                margin: 8px 0px;
-            }
-        """)
+        # Keep a thin accent left border to mark assistant messages.
+        # Theme-cascading background; no hardcoded fills.
+        self.setStyleSheet(
+            "QFrame#assistantPanel { border-left: 3px solid #4CAF50; border-radius: 6px; margin: 8px 0px; }"
+        )
 
         # Set size policy for dynamic sizing - Preferred allows natural sizing
         self.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Preferred)
@@ -486,12 +476,7 @@ class MessagePanel(QFrame):
         self.content_browser.setReadOnly(True)
         self.content_browser.setFrameStyle(QFrame.NoFrame)
         self.content_browser.setOpenExternalLinks(True)
-        self.content_browser.setStyleSheet("""
-            QTextBrowser {
-                background: transparent;
-                border: none;
-            }
-        """)
+        self.content_browser.setStyleSheet("QTextBrowser { background: transparent; border: none; }")
 
         # Render answer content with rich formatting
         answer_text = self.answer_data.get('answer', '')
@@ -990,26 +975,22 @@ class RAGChatPanel(QWidget):
         # Header - compact
         header_layout = QHBoxLayout()
         header_layout.setContentsMargins(0, 0, 0, 0)
-        
-        title_label = QLabel("AI Chat")
-        title_label.setFont(QFont("Segoe UI", 10, QFont.Bold))
+
+        title_label = StrongBodyLabel("AI Chat")
         header_layout.addWidget(title_label)
 
         # Document indicator
-        self.doc_label = QLabel("No document loaded")
-        self.doc_label.setStyleSheet("color: #666; font-size: 8pt; font-style: italic;")
+        self.doc_label = CaptionLabel("No document loaded")
         header_layout.addWidget(self.doc_label)
 
         header_layout.addStretch()
 
         # Settings button (disabled until implemented)
-        settings_btn = QPushButton()
-        settings_btn.setIcon(self.icons.get('settings'))
-        settings_btn.setMaximumSize(28, 28)
+        settings_btn = TransparentToolButton(FluentIcon.SETTING)
         settings_btn.setEnabled(False)
         settings_btn.setToolTip("Settings (coming soon)")
         header_layout.addWidget(settings_btn)
-        
+
         layout.addLayout(header_layout)
         
         # Chat history area - chiếm phần lớn không gian
@@ -1020,31 +1001,23 @@ class RAGChatPanel(QWidget):
         self.empty_state_label = QLabel()
         self.empty_state_label.setText(
             "<div style='text-align: center;'>"
-            "<span style='font-size: 32pt; color: #2196F3;'>💬</span><br><br>"
-            "<b style='font-size: 12pt; color: #333;'>Welcome to AI Chat!</b><br><br>"
-            "<span style='color: #666; font-size: 10pt;'>"
+            "<span style='font-size: 32pt;'>💬</span><br><br>"
+            "<b style='font-size: 12pt;'>Welcome to AI Chat!</b><br><br>"
+            "<span style='font-size: 10pt;'>"
             "Ask questions about your PDF documents with AI-powered assistance.<br>"
             "Get comprehensive answers with references and citations.<br><br>"
             "</span>"
-            "<span style='color: #2196F3; font-size: 9pt;'>"
+            "<span style='font-size: 9pt;'>"
             "• Markdown & LaTeX support<br>"
             "• Code highlighting<br>"
             "• Table & formula rendering<br>"
             "• Web research integration<br><br>"
             "</span>"
-            "<i style='color: #999; font-size: 9pt;'>Load a PDF and start asking questions using the quick actions below</i>"
+            "<i style='font-size: 9pt;'>Load a PDF and start asking questions using the quick actions below</i>"
             "</div>"
         )
         self.empty_state_label.setAlignment(Qt.AlignCenter)
-        self.empty_state_label.setStyleSheet("""
-            QLabel {
-                padding: 60px 40px;
-                background-color: #FAFAFA;
-                border: 2px dashed #E0E0E0;
-                border-radius: 10px;
-                margin: 20px;
-            }
-        """)
+        self.empty_state_label.setStyleSheet("QLabel { padding: 40px 30px; margin: 16px; }")
         self.empty_state_label.setTextFormat(Qt.RichText)
         self.chat_history.content_layout.addWidget(self.empty_state_label)
         
@@ -1057,8 +1030,7 @@ class RAGChatPanel(QWidget):
         layout.addWidget(progress_widget)
 
         # Status label - compact
-        self.status_label = QLabel("Ready")
-        self.status_label.setStyleSheet("color: #666; font-size: 8pt;")
+        self.status_label = CaptionLabel("Ready")
         self.status_label.setMaximumHeight(20)
         layout.addWidget(self.status_label)
     
@@ -1069,80 +1041,39 @@ class RAGChatPanel(QWidget):
         progress_layout.setContentsMargins(0, 5, 0, 5)
         progress_layout.setSpacing(3)
 
-        # Progress container (hidden by default)
-        self.progress_container = QFrame()
-        self.progress_container.setFrameStyle(QFrame.StyledPanel)
-        self.progress_container.setStyleSheet("""
-            QFrame {
-                background-color: #f5f5f5;
-                border: 1px solid #ddd;
-                border-radius: 5px;
-                padding: 8px;
-            }
-        """)
+        # Progress container as Fluent CardWidget
+        self.progress_container = CardWidget()
         self.progress_container.setVisible(False)
 
         container_layout = QVBoxLayout(self.progress_container)
-        container_layout.setSpacing(5)
+        container_layout.setContentsMargins(10, 8, 10, 8)
+        container_layout.setSpacing(6)
 
         # Stage label (main activity)
-        self.stage_label = QLabel("Processing...")
-        self.stage_label.setFont(QFont("Segoe UI", 9, QFont.Bold))
-        self.stage_label.setStyleSheet("color: #2196F3; font-weight: bold;")
+        self.stage_label = StrongBodyLabel("Processing...")
         container_layout.addWidget(self.stage_label)
 
         # Progress bar
-        self.progress_bar = QProgressBar()
-        self.progress_bar.setMaximumHeight(20)
+        self.progress_bar = FProgressBar()
         self.progress_bar.setTextVisible(True)
-        self.progress_bar.setStyleSheet("""
-            QProgressBar {
-                border: 1px solid #ccc;
-                border-radius: 3px;
-                text-align: center;
-                background-color: white;
-            }
-            QProgressBar::chunk {
-                background-color: #4CAF50;
-                border-radius: 2px;
-            }
-        """)
         container_layout.addWidget(self.progress_bar)
 
         # Detail label (what's happening)
-        self.detail_label = QLabel("")
+        self.detail_label = CaptionLabel("")
         self.detail_label.setWordWrap(True)
-        self.detail_label.setStyleSheet("color: #666; font-size: 8pt;")
         container_layout.addWidget(self.detail_label)
 
         # Time and cancel row
         time_cancel_layout = QHBoxLayout()
 
-        # Time info label
-        self.time_label = QLabel("Elapsed: 0s | ETA: --")
-        self.time_label.setStyleSheet("color: #666; font-size: 8pt;")
+        self.time_label = CaptionLabel("Elapsed: 0s | ETA: --")
         time_cancel_layout.addWidget(self.time_label)
 
         time_cancel_layout.addStretch()
 
-        # Cancel button
-        self.cancel_processing_btn = QPushButton(" Cancel")
-        self.cancel_processing_btn.setIcon(qta.icon('fa5s.times-circle', color='white'))
-        self.cancel_processing_btn.setMaximumWidth(80)
-        self.cancel_processing_btn.setMaximumHeight(25)
+        self.cancel_processing_btn = FPushButton("Cancel", icon=FluentIcon.CLOSE)
+        self.cancel_processing_btn.setMaximumWidth(100)
         self.cancel_processing_btn.clicked.connect(self._cancel_document_processing)
-        self.cancel_processing_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #f44336;
-                color: white;
-                border: none;
-                border-radius: 3px;
-                padding: 3px 8px;
-            }
-            QPushButton:hover {
-                background-color: #d32f2f;
-            }
-        """)
         time_cancel_layout.addWidget(self.cancel_processing_btn)
 
         container_layout.addLayout(time_cancel_layout)
@@ -1161,70 +1092,45 @@ class RAGChatPanel(QWidget):
 
         # Options row - compact
         options_layout = QHBoxLayout()
-        options_layout.setSpacing(5)
+        options_layout.setSpacing(8)
 
-        # Web research checkbox - unchecked by default (user opts in)
-        self.web_research_cb = QCheckBox(" Web Research")
-        self.web_research_cb.setIcon(self.icons.get('web'))
-        self.web_research_cb.setChecked(False)  # Default OFF - PDF only
+        self.web_research_cb = FCheckBox("Web Research")
+        self.web_research_cb.setChecked(False)
         self.web_research_cb.setToolTip("Enable web search to supplement PDF content (may be slower)")
         options_layout.addWidget(self.web_research_cb)
 
-        # Deep Search button - prominent purple styling
-        self.deep_search_btn = QPushButton(" Deep Search")
-        try:
-            import qtawesome as qta
-            self.deep_search_btn.setIcon(qta.icon('fa5s.search-plus', color='#9C27B0'))
-        except:
-            pass  # Fall back to no icon if qtawesome not available
-        self.deep_search_btn.setMaximumHeight(25)
+        # Deep Search switch
+        options_layout.addWidget(BodyLabel("Deep Search:"))
+        self.deep_search_btn = SwitchButton(indicatorPos=IndicatorPosition.RIGHT)
+        self.deep_search_btn.setOnText("ON")
+        self.deep_search_btn.setOffText("OFF")
+        self.deep_search_btn.setChecked(False)
         self.deep_search_btn.setToolTip("Deep search across academic databases (Ctrl+D)")
-        self.deep_search_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #E1BEE7;
-                border: 2px solid #9C27B0;
-                border-radius: 4px;
-                padding: 3px 10px;
-                font-weight: bold;
-            }
-            QPushButton:hover {
-                background-color: #CE93D8;
-            }
-        """)
-        self.deep_search_btn.setCheckable(True)  # Toggle button
-        self.deep_search_btn.setChecked(False)  # Default OFF
-        self.deep_search_btn.clicked.connect(self._toggle_deep_search_mode)
+        self.deep_search_btn.checkedChanged.connect(self._toggle_deep_search_mode)
         options_layout.addWidget(self.deep_search_btn)
 
-        # Clear button - compact
-        clear_btn = QPushButton(" Clear")
-        clear_btn.setIcon(self.icons.get('trash'))
-        clear_btn.setMaximumWidth(80)
+        options_layout.addStretch()
+
+        clear_btn = TransparentToolButton(FluentIcon.DELETE)
         clear_btn.setToolTip("Clear chat history (Ctrl+L)")
         clear_btn.clicked.connect(self.clear_chat_history)
         options_layout.addWidget(clear_btn)
-
-        options_layout.addStretch()
 
         layout.addLayout(options_layout)
 
         # Question input - compact
         input_layout = QHBoxLayout()
-        input_layout.setSpacing(5)
+        input_layout.setSpacing(6)
 
-        self.question_input = QLineEdit()
+        self.question_input = FLineEdit()
         self.question_input.setPlaceholderText("Ask a question about the document...")
         self.question_input.returnPressed.connect(self.ask_question)
-        self.question_input.setMaximumHeight(30)
         input_layout.addWidget(self.question_input)
 
-        # Ask button - compact
-        self.ask_button = QPushButton(" Ask")
-        self.ask_button.setIcon(self.icons.get('send'))
+        self.ask_button = PrimaryPushButton("Ask", icon=FluentIcon.SEND)
         self.ask_button.clicked.connect(self.ask_question)
         self.ask_button.setDefault(True)
-        self.ask_button.setMaximumWidth(80)
-        self.ask_button.setMaximumHeight(30)
+        self.ask_button.setMaximumWidth(100)
         self.ask_button.setToolTip("Send question (Enter or Ctrl+Enter)")
         input_layout.addWidget(self.ask_button)
 
@@ -1251,10 +1157,11 @@ class RAGChatPanel(QWidget):
         shortcut_clear_history = QShortcut(QKeySequence("Ctrl+L"), self)
         shortcut_clear_history.activated.connect(self.clear_chat_history)
 
-        # Ctrl+D: Toggle Deep Search
+        # Ctrl+D: Toggle Deep Search (SwitchButton emits checkedChanged on setChecked)
         shortcut_deep_search = QShortcut(QKeySequence("Ctrl+D"), self)
-        shortcut_deep_search.activated.connect(lambda: self.deep_search_btn.setChecked(not self.deep_search_btn.isChecked()))
-        shortcut_deep_search.activated.connect(self._toggle_deep_search_mode)
+        shortcut_deep_search.activated.connect(
+            lambda: self.deep_search_btn.setChecked(not self.deep_search_btn.isChecked())
+        )
 
         logger.info("Keyboard shortcuts configured")
 
@@ -1276,44 +1183,18 @@ class RAGChatPanel(QWidget):
         msg_box.setIcon(QMessageBox.Information)
         msg_box.exec()
 
-    def _toggle_deep_search_mode(self):
-        """Toggle deep search mode on/off."""
-        is_enabled = self.deep_search_btn.isChecked()
+    def _toggle_deep_search_mode(self, checked: bool = None):
+        """Toggle deep search mode on/off. Accepts bool from SwitchButton.checkedChanged."""
+        if checked is None:
+            checked = self.deep_search_btn.isChecked()
 
-        if is_enabled:
-            # Enable deep search mode - active purple styling
-            self.deep_search_btn.setStyleSheet("""
-                QPushButton {
-                    background-color: #9C27B0;
-                    color: white;
-                    border: 2px solid #7B1FA2;
-                    border-radius: 4px;
-                    padding: 3px 10px;
-                    font-weight: bold;
-                }
-                QPushButton:hover {
-                    background-color: #8E24AA;
-                }
-            """)
+        if checked:
             self.question_input.setPlaceholderText(
                 "Ask a research question - Deep Search will explore academic papers..."
             )
             self.status_label.setText("Deep Search mode enabled - searches across multiple papers")
             logger.info("Deep Search mode enabled")
         else:
-            # Disable deep search mode - light purple styling
-            self.deep_search_btn.setStyleSheet("""
-                QPushButton {
-                    background-color: #E1BEE7;
-                    border: 2px solid #9C27B0;
-                    border-radius: 4px;
-                    padding: 3px 10px;
-                    font-weight: bold;
-                }
-                QPushButton:hover {
-                    background-color: #CE93D8;
-                }
-            """)
             self.question_input.setPlaceholderText("Ask a question about the document...")
             self.status_label.setText("Deep Search mode disabled")
             logger.info("Deep Search mode disabled")
@@ -1361,7 +1242,6 @@ class RAGChatPanel(QWidget):
 
         # Update document indicator in header
         self.doc_label.setText(f"{document_path.name}")
-        self.doc_label.setStyleSheet("color: #2196F3; font-size: 8pt; font-weight: bold;")
 
         self.status_label.setText(f"Ready to answer questions about {document_path.name}")
         logger.info(f"Current document set: {document_path}")

@@ -59,9 +59,9 @@ def check_dependencies():
     # Check BabelDOC (optional but recommended)
     try:
         import babeldoc
-        print(f"✓ BabelDOC available (version: {babeldoc.__version__})")
+        print(f" BabelDOC available (version: {babeldoc.__version__})")
     except ImportError:
-        print("⚠️  BabelDOC not available - some features will be limited")
+        print("  BabelDOC not available - some features will be limited")
         print("   Install with: pip install babeldoc")
     
     # Check translation services
@@ -71,23 +71,15 @@ def check_dependencies():
         import openai
         available_services.append("OpenAI")
     except ImportError:
-        print("⚠️  OpenAI library not available")
+        print(" OpenAI library not available")
         print("   Install with: pip install openai")
-    
-    try:
-        import google.generativeai
-        available_services.append("Gemini")
-    except ImportError:
-        print("⚠️  Google AI library not available") 
-        print("   Install with: pip install google-generativeai")
-    
     if missing_deps:
-        print(f"❌ Missing required dependencies: {', '.join(missing_deps)}")
+        print(f" Missing required dependencies: {', '.join(missing_deps)}")
         print("Install with: pip install -r requirements.txt")
         return False
     
     if not available_services:
-        print("❌ No translation services available")
+        print(" No translation services available")
         print("Install at least one: pip install openai google-generativeai")
         return False
     
@@ -126,16 +118,16 @@ def check_configuration():
             for service in available_services:
                 is_valid, _ = TranslatorFactory.validate_service_availability(service)
                 if is_valid:
-                    print(f"✓ Alternative service available: {service}")
+                    print(f"Alternative service available: {service}")
                     break
             else:
-                print("❌ No translation services are properly configured")
+                print("No translation services are properly configured")
                 return False
         
         return True
         
     except Exception as e:
-        print(f"❌ Configuration error: {e}")
+        print(f"Configuration error: {e}")
         return False
 
 
@@ -202,11 +194,11 @@ def main():
     try:
         return gui_main()
     except KeyboardInterrupt:
-        print("\n👋 Application interrupted by user")
+        print("\n Application interrupted by user")
         return 0
     except Exception as e:
         logging.exception("Fatal error starting application")
-        print(f"❌ Fatal error: {e}")
+        print(f" Fatal error: {e}")
         input("Press Enter to exit...")
         return 1
 

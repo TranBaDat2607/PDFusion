@@ -9,15 +9,22 @@ from typing import Optional
 
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
-    QSplitter, QFileDialog,
-    QMessageBox, QLabel, QPushButton,
-    QComboBox, QLineEdit, QFrame, QSizePolicy,
-    QProgressBar, QGroupBox
+    QSplitter, QFileDialog, QMessageBox, QSizePolicy,
+    QLabel, QPushButton, QComboBox, QLineEdit, QFrame,
+    QProgressBar, QGroupBox,
 )
 from PySide6.QtCore import Qt, Signal, QTimer
 from PySide6.QtGui import QAction
 
 import qtawesome as qta
+
+from qfluentwidgets import (
+    setTheme, setThemeColor, Theme, FluentIcon,
+    PushButton, PrimaryPushButton, TransparentPushButton, TransparentToolButton,
+    ComboBox, PasswordLineEdit, SwitchButton, IndicatorPosition,
+    BodyLabel, CaptionLabel, StrongBodyLabel,
+    CardWidget, ProgressBar, InfoBar, InfoBarPosition,
+)
 
 from ..config import get_settings, get_config_manager, LanguageCode, TranslationService, AppSettings
 from ..processors import PDFProcessor
@@ -73,16 +80,16 @@ class MainWindow(QMainWindow):
         logger.info("Main window initialized")
 
     def _init_icons(self):
-        """Initialize QtAwesome icons for the main window."""
+        """Initialize icons. Mix of FluentIcon (themed) and QtAwesome where no equivalent exists."""
         return {
-            'browse': qta.icon('fa5s.folder-open', color='#2196F3'),
-            'translate': qta.icon('fa5s.language', color='#4CAF50'),
-            'cancel': qta.icon('fa5s.times-circle', color='#f44336'),
-            'settings': qta.icon('fa5s.cog', color='#666'),
-            'validate': qta.icon('fa5s.check-circle', color='#4CAF50'),
-            'about': qta.icon('fa5s.info-circle', color='#2196F3'),
-            'rag_on': qta.icon('fa5s.robot', color='#4CAF50'),
-            'rag_off': qta.icon('fa5s.robot', color='#999')
+            'browse': FluentIcon.FOLDER,
+            'translate': qta.icon('fa5s.language'),
+            'cancel': FluentIcon.CLOSE,
+            'settings': FluentIcon.SETTING,
+            'validate': qta.icon('fa5s.check-circle'),
+            'about': FluentIcon.INFO,
+            'rag_on': qta.icon('fa5s.robot'),
+            'rag_off': qta.icon('fa5s.robot'),
         }
 
     def _setup_ui(self):
@@ -156,88 +163,81 @@ class MainWindow(QMainWindow):
     def _create_top_toolbar(self):
         """Create a comprehensive top toolbar with all controls."""
         toolbar = self.addToolBar("Top Toolbar")
-        toolbar.setMovable(False)  # Fixed toolbar at top
-        toolbar.setToolButtonStyle(Qt.ToolButtonTextUnderIcon)
-        
-        # File selection controls
-        toolbar.addWidget(QLabel("File:"))
-        
-        self.file_label = QLabel("No file selected")
-        self.file_label.setStyleSheet("padding: 5px; border: 1px solid #ccc; background: #f9f9f9; min-width: 150px;")
+        toolbar.setMovable(False)
+        toolbar.setToolButtonStyle(Qt.ToolButtonTextOnly)
+
+        toolbar.addWidget(BodyLabel("File:"))
+
+        self.file_label = BodyLabel("No file selected")
+        self.file_label.setMinimumWidth(160)
         toolbar.addWidget(self.file_label)
-        
-        self.browse_btn = QPushButton(" Browse")
-        self.browse_btn.setIcon(self.icons['browse'])
+
+        self.browse_btn = PushButton("Browse", icon=self.icons['browse'])
         self.browse_btn.setStatusTip("Browse for PDF file")
         self.browse_btn.clicked.connect(self._browse_file)
         toolbar.addWidget(self.browse_btn)
-        
+
         toolbar.addSeparator()
-        
-        # Translation settings
-        toolbar.addWidget(QLabel("From:"))
-        
-        self.source_lang_combo = QComboBox()
+
+        toolbar.addWidget(BodyLabel("From:"))
+
+        self.source_lang_combo = ComboBox()
         self.source_lang_combo.addItems([
             "Auto-detect",
-            "English", 
+            "English",
             "Vietnamese",
             "Japanese",
             "Chinese (Simplified)",
-            "Chinese (Traditional)"
+            "Chinese (Traditional)",
         ])
         self.source_lang_combo.setCurrentText("Auto-detect")
         toolbar.addWidget(self.source_lang_combo)
-        
-        toolbar.addWidget(QLabel("To:"))
-        
-        self.target_lang_combo = QComboBox()
+
+        toolbar.addWidget(BodyLabel("To:"))
+
+        self.target_lang_combo = ComboBox()
         self.target_lang_combo.addItems([
-            "Vietnamese",  # Default first
+            "Vietnamese",
             "English",
-            "Japanese", 
+            "Japanese",
             "Chinese (Simplified)",
-            "Chinese (Traditional)"
+            "Chinese (Traditional)",
         ])
         self.target_lang_combo.setCurrentText("Vietnamese")
         toolbar.addWidget(self.target_lang_combo)
-        
-        self.validate_key_btn = QPushButton("Validate Key")
+
+        self.validate_key_btn = PushButton("Validate Key")
         self.validate_key_btn.setStatusTip("Validate API key for selected service")
         toolbar.addWidget(self.validate_key_btn)
 
-        self.api_key_input = QLineEdit()
+        self.api_key_input = PasswordLineEdit()
         self.api_key_input.setPlaceholderText("API key")
-        self.api_key_input.setEchoMode(QLineEdit.Password)
         self.api_key_input.setMaximumWidth(300)
         self.api_key_input.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
         toolbar.addWidget(self.api_key_input)
 
-        self.service_label = QLabel("Service:")
+        self.service_label = BodyLabel("Service:")
         toolbar.addWidget(self.service_label)
 
-        self.service_combo = QComboBox()
+        self.service_combo = ComboBox()
         self.service_combo.addItems(["OpenAI", "Gemini"])
         toolbar.addWidget(self.service_combo)
 
-        self.model_label = QLabel("Model:")
+        self.model_label = BodyLabel("Model:")
         toolbar.addWidget(self.model_label)
 
-        self.model_combo = QComboBox()
+        self.model_combo = ComboBox()
         toolbar.addWidget(self.model_combo)
-        
+
         toolbar.addSeparator()
-        
-        # Action buttons
-        self.translate_btn = QPushButton(" Translate")
-        self.translate_btn.setIcon(self.icons['translate'])
+
+        self.translate_btn = PrimaryPushButton("Translate", icon=self.icons['translate'])
         self.translate_btn.setStatusTip("Start translation")
         self.translate_btn.setEnabled(False)
         self.translate_btn.clicked.connect(self.start_translation)
         toolbar.addWidget(self.translate_btn)
 
-        self.cancel_btn = QPushButton(" Cancel")
-        self.cancel_btn.setIcon(self.icons['cancel'])
+        self.cancel_btn = PushButton("Cancel", icon=self.icons['cancel'])
         self.cancel_btn.setStatusTip("Cancel translation")
         self.cancel_btn.setEnabled(False)
         self.cancel_btn.clicked.connect(self.cancel_translation)
@@ -245,47 +245,35 @@ class MainWindow(QMainWindow):
 
         toolbar.addSeparator()
 
-        self.settings_btn = QPushButton(" Settings")
-        self.settings_btn.setIcon(self.icons['settings'])
+        self.settings_btn = TransparentPushButton("Settings", icon=self.icons['settings'])
         self.settings_btn.setStatusTip("Open application settings")
         self.settings_btn.clicked.connect(self.open_settings)
         toolbar.addWidget(self.settings_btn)
 
-        self.validate_btn = QPushButton(" Validate")
-        self.validate_btn.setIcon(self.icons['validate'])
+        self.validate_btn = TransparentPushButton("Validate", icon=self.icons['validate'])
         self.validate_btn.setStatusTip("Check translation service configuration")
         self.validate_btn.clicked.connect(self.validate_services)
         toolbar.addWidget(self.validate_btn)
 
-        self.about_btn = QPushButton(" About")
-        self.about_btn.setIcon(self.icons['about'])
+        self.about_btn = TransparentPushButton("About", icon=self.icons['about'])
         self.about_btn.setStatusTip("About this application")
         self.about_btn.clicked.connect(self.show_about)
         toolbar.addWidget(self.about_btn)
-        
+
         toolbar.addSeparator()
-        
-        # RAG toggle button
-        self.rag_toggle_btn = QPushButton(" RAG: ON" if self.rag_enabled else " RAG: OFF")
-        self.rag_toggle_btn.setIcon(self.icons['rag_on'] if self.rag_enabled else self.icons['rag_off'])
-        self.rag_toggle_btn.setStatusTip("Toggle RAG (AI Chat) functionality")
-        self.rag_toggle_btn.setCheckable(True)
+
+        toolbar.addWidget(BodyLabel("RAG:"))
+        self.rag_toggle_btn = SwitchButton(indicatorPos=IndicatorPosition.RIGHT)
+        self.rag_toggle_btn.setOnText("ON")
+        self.rag_toggle_btn.setOffText("OFF")
         self.rag_toggle_btn.setChecked(self.rag_enabled)
-        self.rag_toggle_btn.clicked.connect(self.toggle_rag)
-        self.rag_toggle_btn.setStyleSheet("""
-            QPushButton:checked {
-                background-color: #4CAF50;
-                color: white;
-            }
-            QPushButton:!checked {
-                background-color: #f44336;
-                color: white;
-            }
-        """)
+        self.rag_toggle_btn.setStatusTip("Toggle RAG (AI Chat) functionality")
+        self.rag_toggle_btn.checkedChanged.connect(self.toggle_rag)
         toolbar.addWidget(self.rag_toggle_btn)
-        
-        # Add stretch to push buttons to the left
-        toolbar.addWidget(QWidget())
+
+        spacer = QWidget()
+        spacer.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+        toolbar.addWidget(spacer)
     
     def _browse_file(self):
         """Browse for PDF file."""
@@ -303,44 +291,25 @@ class MainWindow(QMainWindow):
         """Create status bar with progress indicator."""
         status_bar = self.statusBar()
 
-        # Status label (with more space for progress messages)
-        self.status_label = QLabel("Ready")
+        self.status_label = BodyLabel("Ready")
         self.status_label.setMinimumWidth(300)
-        status_bar.addWidget(self.status_label, 1)  # Stretch factor 1
+        status_bar.addWidget(self.status_label, 1)
 
-        # Progress percentage label (compact)
-        self.progress_percent_label = QLabel("")
+        self.progress_percent_label = StrongBodyLabel("")
         self.progress_percent_label.setVisible(False)
-        self.progress_percent_label.setStyleSheet("color: #2196F3; font-weight: bold; padding: 0 5px;")
         self.progress_percent_label.setMinimumWidth(50)
         status_bar.addPermanentWidget(self.progress_percent_label)
 
-        # Progress bar (more prominent, wider)
-        self.progress_bar = QProgressBar()
+        self.progress_bar = ProgressBar()
         self.progress_bar.setVisible(False)
         self.progress_bar.setMaximumWidth(250)
         self.progress_bar.setMinimumWidth(200)
-        self.progress_bar.setMaximumHeight(18)
         self.progress_bar.setTextVisible(True)
-        self.progress_bar.setStyleSheet("""
-            QProgressBar {
-                border: 1px solid #bbb;
-                border-radius: 3px;
-                text-align: center;
-                background-color: #f0f0f0;
-            }
-            QProgressBar::chunk {
-                background-color: #4CAF50;
-                border-radius: 2px;
-            }
-        """)
         status_bar.addPermanentWidget(self.progress_bar)
 
-        # Service status
-        self.service_status_label = QLabel("Checking services...")
+        self.service_status_label = CaptionLabel("Checking services...")
         status_bar.addPermanentWidget(self.service_status_label)
 
-        # Check service status on startup
         QTimer.singleShot(1000, self.check_service_status)
     
     def _create_main_layout(self):
@@ -348,29 +317,18 @@ class MainWindow(QMainWindow):
         central_widget = QWidget()
         self.setCentralWidget(central_widget)
 
-        # Main horizontal splitter
         main_splitter = QSplitter(Qt.Horizontal)
 
-        # Left panel: Original PDF viewer
-        left_panel = QGroupBox("Original PDF")
-        left_layout = QVBoxLayout(left_panel)
         self.original_pdf_viewer = PDFViewer()
-        left_layout.addWidget(self.original_pdf_viewer)
+        left_panel = self._build_panel_card("Original PDF", self.original_pdf_viewer)
 
-        # Middle panel: Translated PDF viewer
-        middle_panel = QGroupBox("Translated PDF")
-        middle_layout = QVBoxLayout(middle_panel)
         self.translated_pdf_viewer = PDFViewer()
-        middle_layout.addWidget(self.translated_pdf_viewer)
+        middle_panel = self._build_panel_card("Translated PDF", self.translated_pdf_viewer)
 
-        # Right panel: RAG chat panel
-        right_panel = QGroupBox("Chat with PDF")
-        right_layout = QVBoxLayout(right_panel)
         self.chat_panel = RAGChatPanel()
-        self.chat_panel.setVisible(True)  # Always visible by default
-        right_layout.addWidget(self.chat_panel)
+        self.chat_panel.setVisible(True)
+        right_panel = self._build_panel_card("Chat with PDF", self.chat_panel)
 
-        # Add panels to main splitter
         main_splitter.addWidget(left_panel)
         main_splitter.addWidget(middle_panel)
         main_splitter.addWidget(right_panel)
@@ -395,6 +353,16 @@ class MainWindow(QMainWindow):
 
         main_layout.setContentsMargins(0, 0, 0, 0)
         main_layout.setSpacing(0)
+
+    def _build_panel_card(self, title: str, content: QWidget) -> CardWidget:
+        """Wrap a content widget in a Fluent CardWidget with a title header."""
+        card = CardWidget()
+        layout = QVBoxLayout(card)
+        layout.setContentsMargins(12, 8, 12, 12)
+        layout.setSpacing(6)
+        layout.addWidget(StrongBodyLabel(title))
+        layout.addWidget(content, 1)
+        return card
 
     def _setup_connections(self):
         """Setup signal-slot connections."""
@@ -921,37 +889,24 @@ class MainWindow(QMainWindow):
         logger.info("Application closed")
     
     
-    def toggle_rag(self):
-        """Toggle RAG functionality on/off."""
-        self.rag_enabled = not self.rag_enabled
-        
-        # Update button appearance
+    def toggle_rag(self, checked: bool = None):
+        """Toggle RAG functionality on/off. Receives bool from SwitchButton.checkedChanged."""
+        if checked is None:
+            checked = not self.rag_enabled
+        self.rag_enabled = bool(checked)
+
         if self.rag_enabled:
-            self.rag_toggle_btn.setText(" RAG: ON")
-            self.rag_toggle_btn.setIcon(self.icons['rag_on'])
-            self.rag_toggle_btn.setChecked(True)
             self.status_label.setText("RAG enabled - AI Chat ready")
-            
-            # Re-enable chat panel
             self.chat_panel.setEnabled(True)
             self.chat_panel.set_rag_enabled_message()
-            
-            # If there's a current document, process it for RAG
             if self.current_file:
                 self.chat_panel.process_document(self._find_translated_pdf(self.current_file))
         else:
-            self.rag_toggle_btn.setText(" RAG: OFF")
-            self.rag_toggle_btn.setIcon(self.icons['rag_off'])
-            self.rag_toggle_btn.setChecked(False)
             self.status_label.setText("RAG disabled - AI Chat unavailable")
-            
-            # Disable chat panel
             self.chat_panel.setEnabled(False)
             self.chat_panel.set_rag_disabled_message()
-        
+
         logger.info(f"RAG toggled: {'enabled' if self.rag_enabled else 'disabled'}")
-        
-        # Update RAG state in memory only (don't save to avoid TOML issues)
         self.settings.rag.enabled = self.rag_enabled
     
     def _adjust_panel_sizes(self):
@@ -979,16 +934,19 @@ class MainWindow(QMainWindow):
 
 def create_app():
     """Create and configure the QApplication."""
+    QApplication.setHighDpiScaleFactorRoundingPolicy(
+        Qt.HighDpiScaleFactorRoundingPolicy.PassThrough
+    )
     app = QApplication(sys.argv)
-    
-    # Set application properties
+
+    setTheme(Theme.AUTO)
+    setThemeColor("#4CAF50")
+
     app.setApplicationName("Desktop PDF Translator")
     app.setApplicationVersion("1.0.0")
     app.setOrganizationName("PDF Translator Team")
-    
-    # Set Vietnamese locale support
     app.setProperty("Vietnamese_Support", True)
-    
+
     return app
 
 
