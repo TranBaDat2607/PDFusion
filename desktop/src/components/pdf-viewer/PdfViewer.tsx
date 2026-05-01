@@ -89,12 +89,14 @@ export function PdfViewer({
         const canvasHost = pageRefs.current[pageNum - 1];
         if (!canvasHost) return;
 
-        const viewport = page.getViewport({ scale: zoom });
+        const dpr = window.devicePixelRatio || 1;
+        const viewport = page.getViewport({ scale: zoom * dpr });
         const canvas = document.createElement("canvas");
-        canvas.width = viewport.width;
-        canvas.height = viewport.height;
-        canvas.className = "block w-full h-auto bg-white shadow-sm";
-        canvas.style.maxWidth = "100%";
+        canvas.width = Math.floor(viewport.width);
+        canvas.height = Math.floor(viewport.height);
+        canvas.style.width = `${Math.floor(viewport.width / dpr)}px`;
+        canvas.style.height = `${Math.floor(viewport.height / dpr)}px`;
+        canvas.className = "block bg-white shadow-sm";
 
         const ctx = canvas.getContext("2d");
         if (!ctx) return;
