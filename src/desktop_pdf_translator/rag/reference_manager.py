@@ -28,7 +28,7 @@ class PDFReference:
     has_figures: bool = False
     
     def __str__(self) -> str:
-        return f"📄 Trang {self.page}: {self.text[:100]}..."
+        return f"Trang {self.page}: {self.text[:100]}..."
 
 
 @dataclass
@@ -43,15 +43,7 @@ class WebReference:
     scraped_at: str
     
     def __str__(self) -> str:
-        source_emoji = {
-            'academic': '🎓',
-            'wikipedia': '📖',
-            'official': '🏛️',
-            'news': '📰',
-            'web': '🌐'
-        }
-        emoji = source_emoji.get(self.source_type, '🌐')
-        return f"{emoji} {self.source_type.title()}: {self.snippet[:100]}..."
+        return f"[{self.source_type.title()}] {self.snippet[:100]}..."
 
 
 class ReferenceManager:
@@ -220,11 +212,11 @@ class ReferenceManager:
             # Add content indicators
             indicators = []
             if pdf_ref.has_equations:
-                indicators.append("📐")
+                indicators.append("[Eq]")
             if pdf_ref.has_tables:
-                indicators.append("📊")
+                indicators.append("[Table]")
             if pdf_ref.has_figures:
-                indicators.append("📈")
+                indicators.append("[Fig]")
             
             indicator_str = " ".join(indicators)
             confidence_str = f"({pdf_ref.confidence:.1%})" if pdf_ref.confidence > 0 else ""

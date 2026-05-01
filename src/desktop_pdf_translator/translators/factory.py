@@ -9,6 +9,7 @@ from ..config import TranslationService, get_settings
 from .base import BaseTranslator
 from .openai_translator import OpenAITranslator
 from .gemini_translator import GeminiTranslator
+from .anthropic_translator import AnthropicTranslator
 
 
 logger = logging.getLogger(__name__)
@@ -16,10 +17,11 @@ logger = logging.getLogger(__name__)
 
 class TranslatorFactory:
     """Factory for creating translator instances based on configuration."""
-    
+
     _translators: Dict[TranslationService, Type[BaseTranslator]] = {
         TranslationService.OPENAI: OpenAITranslator,
-        TranslationService.GEMINI: GeminiTranslator
+        TranslationService.GEMINI: GeminiTranslator,
+        TranslationService.ANTHROPIC: AnthropicTranslator,
     }
     
     @classmethod
@@ -95,6 +97,14 @@ class TranslatorFactory:
                 "model": settings.gemini.model,
                 "temperature": settings.gemini.temperature
             }
+        elif service == TranslationService.ANTHROPIC:
+            return {
+                "api_key": settings.anthropic.api_key,
+                "model": settings.anthropic.model,
+                "temperature": settings.anthropic.temperature,
+                "max_tokens": settings.anthropic.max_tokens,
+                "base_url": settings.anthropic.base_url,
+            }
         else:
             return {}
     
@@ -117,6 +127,9 @@ class TranslatorFactory:
             elif service == TranslationService.GEMINI:
                 if not settings.gemini.api_key:
                     return False, "Gemini API key is not configured"
+            elif service == TranslationService.ANTHROPIC:
+                if not settings.anthropic.api_key:
+                    return False, "Anthropic API key is not configured"
             
             # Create test translator to validate configuration
             translator = cls.create_translator(

@@ -1,74 +1,101 @@
-# PDFusion - Vietnamese-Optimized PDF Translator
+# PDFusion
 
-PDFusion is a Windows desktop application designed for translating PDF documents while preserving formatting and layout. The application prioritizes Vietnamese language translation and integrates advanced AI-powered features including RAG (Retrieval-Augmented Generation) for intelligent document Q&A.
+Windows desktop app for translating PDFs (default target: Vietnamese) while preserving layout, plus an optional RAG chat to ask questions about the loaded document.
 
-## Table of Contents
+> **Architecture rewrite** — The UI is now built with **Tauri (Rust shell) + React + TypeScript + Tailwind + shadcn/ui**. The Python translation/RAG backend is unchanged and runs as a **FastAPI sidecar** spawned by the Tauri shell on app start.
 
-- [Installation](#installation)
+## Prerequisites
 
----
+- **Python** 3.11 (via Anaconda) — for the FastAPI sidecar
+- **Node.js** ≥ 18 + **pnpm** — for the React frontend
+- **Rust** (rustup, cargo) — for the Tauri shell
+- **Microsoft Visual C++ Build Tools 2022/2026** — required by the Rust MSVC linker on Windows
+- **WebView2 Runtime** — ships with Windows 11; install separately on Windows 10
+- **Ghostscript** — required by BabelDOC for PDF processing
+- **Tesseract OCR** — optional, only for scanned PDFs
 
-## Installation
+## Setup
 
-### Prerequisites
-
-- **Python Version**: 3.11.14 (recommended)
-- **Operating System**: Windows 10/11
-- **External Dependencies**:
-  - Ghostscript (for PDF processing)
-  - Tesseract OCR (optional, for scanned document processing)
-
-### Step 1: Clone or Download the Project
+### 1. Python sidecar (one-time)
 
 ```bash
-cd /path/to/your/projects
-git clone <repository-url>
-cd PDFusion
-```
-
-### Step 2: Create Conda Environment
-
-It is highly recommended to use a conda environment to avoid dependency conflicts.
-
-```bash
-conda create -n pdffusion python=3.11.14
-```
-
-Activate the conda environment:
-
-```bash
-conda activate pdffusion
-```
-
-### Step 3: Install Dependencies
-
-Install all required packages using the requirements.txt file:
-
-```bash
+conda create -n pdfusion python=3.11.14
+conda activate pdfusion
 pip install -r requirements.txt
+# Optional extras:
+pip install "pdfusion[rag]"        # RAG chat
+pip install "pdfusion[advanced]"   # OCR + table extraction
 ```
 
-### Step 4: Configure API Keys
+> The conda env on this machine is named `pdfusion` (single `f`). If you create
+> it under a different name, set `PDFUSION_PYTHON` to the env's `python.exe`
+> path before launching the desktop app.
 
-Create a `.env` file in the project root directory and add your API keys:
+### 2. Tauri / React frontend (one-time)
 
 ```bash
-# OpenAI Configuration
-OPENAI_API_KEY=your_openai_api_key_here
-
-# Google Gemini Configuration
-GEMINI_API_KEY=your_gemini_api_key_here
+cd desktop
+pnpm install
 ```
 
-Note: You need at least one translation service API key (OpenAI or Google Gemini) for the application to function.
+### 3. API keys
 
-### Step 5: Run the Application
+Create a `.env` file in the project root:
+
+```env
+OPENAI_API_KEY=...
+GEMINI_API_KEY=...
+ANTHROPIC_API_KEY=...     # optional
+```
+
+You can also enter and validate keys later from the in-app **Settings** sheet
+(they're encrypted before being written to disk).
+
+## Running
+
+### Full desktop app (recommended)
 
 ```bash
+cd desktop
+pnpm tauri dev
+```
+
+This builds the React UI (~10s) and the Rust shell (~5–10 min the first time;
+seconds on subsequent runs), then opens the PDFusion window. The Tauri shell
+will automatically spawn the Python sidecar from the conda env in the
+background.
+
+### Sidecar only (for debugging)
+
+```bash
+conda activate pdfusion
 python main.py
 ```
 
-The application will:
-1. Check all dependencies
-2. Validate API key configuration
-3. Launch the GUI window
+This prints `READY port=<n> token=<n>` and then serves the FastAPI app on
+`http://127.0.0.1:<n>`. OpenAPI docs are at `http://127.0.0.1:<n>/docs`.
+
+## Project layout
+
+```
+PDFusion/
+├── desktop/                          ← Tauri + React frontend
+│   ├── src/                          ← React + TypeScript
+│   │   ├── components/               ← UI components (shadcn-based)
+│   │   ├── hooks/                    ← TanStack Query + custom hooks
+│   │   └── lib/                      ← API client, SSE, Zustand store
+│   └── src-tauri/                    ← Rust shell, sidecar lifecycle
+├── src/desktop_pdf_translator/
+│   ├── api/                          ← FastAPI sidecar
+│   ├── config/                       ← TOML + .env settings
+│   ├── processors/                   ← BabelDOC translation pipeline
+│   ├── translators/                  ← OpenAI / Gemini / Anthropic
+│   ├── rag/                          ← ChromaDB + RAG chain + deep search
+│   └── utils/                        ← API key encryption
+├── main.py                           ← Standalone sidecar runner
+└── requirements.txt
+```
+
+## Logs
+
+Application logs are written to `~/AppData/Local/PDFusion/logs/app.log`.
