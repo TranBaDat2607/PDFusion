@@ -29,6 +29,10 @@ export function ChatInput({ onSubmit, disabled, busy }: ChatInputProps) {
   useEffect(() => {
     const el = ref.current;
     if (!el) return;
+    if (!text) {
+      el.style.height = "";
+      return;
+    }
     el.style.height = "auto";
     el.style.height = `${Math.min(el.scrollHeight, 120)}px`;
   }, [text]);

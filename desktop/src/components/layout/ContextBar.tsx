@@ -16,6 +16,7 @@ import {
 } from "@/components/ui/tooltip";
 import { useConfig, useOptions, useUpdateConfig } from "@/hooks/useConfig";
 import { useAppStore } from "@/lib/store";
+import { cn } from "@/lib/utils";
 
 interface ContextBarProps {
   onPickFile: () => void;
@@ -141,8 +142,22 @@ export function ContextBar({
       <div className="ml-auto flex items-center gap-2">
         <Tooltip>
           <TooltipTrigger asChild>
-            <div className="flex items-center gap-2 rounded-md border border-border px-2.5 py-1">
-              <MessageSquare className="h-3.5 w-3.5 text-muted-foreground" />
+            <div
+              className={cn(
+                "flex items-center gap-2 rounded-md border px-2.5 py-1 transition-colors",
+                ragEnabled && chatOpen
+                  ? "border-primary/50 bg-primary/5"
+                  : "border-border",
+              )}
+            >
+              <MessageSquare
+                className={cn(
+                  "h-3.5 w-3.5 transition-colors",
+                  ragEnabled && chatOpen
+                    ? "text-primary"
+                    : "text-muted-foreground",
+                )}
+              />
               <span className="text-xs">Chat</span>
               <Switch
                 checked={ragEnabled && chatOpen}
@@ -158,6 +173,8 @@ export function ContextBar({
           </TooltipTrigger>
           <TooltipContent>Enable AI chat about the document</TooltipContent>
         </Tooltip>
+
+        <div className="mx-1 h-5 w-px bg-border" />
 
         <Button
           onClick={onTranslate}

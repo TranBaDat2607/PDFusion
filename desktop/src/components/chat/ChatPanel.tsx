@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { motion, AnimatePresence } from "motion/react";
-import { MessageSquare, Sparkles, Trash2 } from "lucide-react";
+import { MessageSquare, Sparkles, Trash2, X } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -11,10 +11,13 @@ import { ChatInput } from "@/components/chat/ChatInput";
 import { UserMessage } from "@/components/chat/UserMessage";
 import { useRagAsk, type RagAnswer } from "@/hooks/useRagAsk";
 import { useRagIndex } from "@/hooks/useRagIndex";
+import { useUpdateConfig } from "@/hooks/useConfig";
+import { useAppStore } from "@/lib/store";
 
 interface ChatPanelProps {
   documentPath: string | null;
   onJumpToPage?: (page: number) => void;
+  showing?: boolean;
 }
 
 interface ChatMessage {
@@ -26,12 +29,25 @@ interface ChatMessage {
 
 let messageCounter = 0;
 
-export function ChatPanel({ documentPath, onJumpToPage }: ChatPanelProps) {
+export function ChatPanel({
+  documentPath,
+  onJumpToPage,
+  showing = true,
+}: ChatPanelProps) {
   const index = useRagIndex();
   const ask = useRagAsk();
+  const update = useUpdateConfig();
+  const setChatOpen = useAppStore((s) => s.setChatOpen);
+  const setRagEnabled = useAppStore((s) => s.setRagEnabled);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const scrollRef = useRef<HTMLDivElement>(null);
   const [pendingQuestion, setPendingQuestion] = useState<string | null>(null);
+
+  const handleClose = useCallback(() => {
+    setChatOpen(false);
+    setRagEnabled(false);
+    update.mutate({ rag_enabled: false });
+  }, [setChatOpen, setRagEnabled, update]);
 
   // Auto-index when a document is loaded
   useEffect(() => {
@@ -91,7 +107,16 @@ export function ChatPanel({ documentPath, onJumpToPage }: ChatPanelProps) {
   const inputDisabled = !documentPath || index.state.status !== "ready";
 
   return (
-    <div className="flex h-full w-full flex-col">
+    <AnimatePresence>
+      {showing && (
+        <motion.div
+          key="chat-root"
+          className="flex h-full w-full flex-col"
+          initial={{ opacity: 0, x: 24 }}
+          animate={{ opacity: 1, x: 0 }}
+          exit={{ opacity: 0, x: 24 }}
+          transition={{ duration: 0.18 }}
+        >
       <header className="flex shrink-0 items-center justify-between border-b border-border px-4 py-2">
         <div className="flex items-center gap-2">
           <MessageSquare className="h-4 w-4 text-primary" />
@@ -102,15 +127,26 @@ export function ChatPanel({ documentPath, onJumpToPage }: ChatPanelProps) {
             </Badge>
           )}
         </div>
-        <Button
-          size="sm"
-          variant="ghost"
-          onClick={() => setMessages([])}
-          disabled={messages.length === 0}
-        >
-          <Trash2 className="mr-1.5 h-3.5 w-3.5" />
-          Clear
-        </Button>
+        <div className="flex items-center gap-1">
+          <Button
+            size="sm"
+            variant="ghost"
+            onClick={() => setMessages([])}
+            disabled={messages.length === 0}
+          >
+            <Trash2 className="mr-1.5 h-3.5 w-3.5" />
+            Clear
+          </Button>
+          <Button
+            size="icon"
+            variant="ghost"
+            onClick={handleClose}
+            aria-label="Close chat"
+            className="h-8 w-8"
+          >
+            <X className="h-4 w-4" />
+          </Button>
+        </div>
       </header>
 
       {index.state.status === "indexing" && (
@@ -178,7 +214,9 @@ export function ChatPanel({ documentPath, onJumpToPage }: ChatPanelProps) {
           busy={ask.state.status === "asking"}
         />
       </div>
-    </div>
+        </motion.div>
+      )}
+    </AnimatePresence>
   );
 }
 
