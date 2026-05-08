@@ -13,12 +13,18 @@ The UI was migrated from PySide6/qfluentwidgets to **Tauri (Rust shell) + React 
 ```bash
 # Full desktop app (Tauri shell auto-spawns the sidecar):
 cd desktop
-pnpm tauri dev
+pnpm tauri dev          # dev with HMR
+pnpm tauri build        # production installer (.msi / .exe in src-tauri/target/release/bundle/)
+
+# Frontend-only (React in browser, no Rust shell, no sidecar):
+cd desktop
+pnpm dev                # vite dev server
+pnpm build              # tsc + vite build → desktop/dist/
 
 # Sidecar only (for backend debugging):
 conda activate pdfusion
-python main.py
-# → prints `READY port=<n> token=<n>`; OpenAPI docs at http://127.0.0.1:<n>/docs
+python main.py          # equivalent to: pdfusion-sidecar (console script from pyproject)
+# → prints `READY port=<n> token=<n>` on stdout; OpenAPI docs at http://127.0.0.1:<n>/docs
 ```
 
 > The local conda env is named `pdfusion` (single `f`). The Tauri shell looks
@@ -35,11 +41,19 @@ python main.py
 ```bash
 conda create -n pdfusion python=3.11.14
 conda activate pdfusion
-pip install -r requirements.txt
+pip install -r requirements.txt        # canonical install — pins all RAG + advanced deps
+# Alternative: pip install -e ".[rag,advanced]"  (extras live in pyproject.toml)
 
 cd desktop
 pnpm install
 ```
+
+> Note: `requirements.txt` and `pyproject.toml` are **not** kept in lockstep.
+> `requirements.txt` flatly installs the RAG + advanced extras (chromadb,
+> langchain, camelot, pytesseract, etc.); `pyproject.toml` puts those behind
+> `[project.optional-dependencies]` named `rag`, `advanced`, `all`. For the
+> desktop app to fully work (RAG chat especially), install everything via
+> `requirements.txt` or `pip install -e ".[all]"`.
 
 **API key configuration** — create a `.env` in the project root:
 ```
@@ -147,6 +161,22 @@ Long-running endpoints (translate, index, ask) follow the same pattern:
 
 This replaces the previous `QThread + new asyncio loop` pattern from the PySide6 GUI.
 
+### Translator plug-in interface (BabelDOC integration)
+
+BabelDOC drives chunking, layout, and PDF reassembly; it delegates the actual text translation to a translator object passed into `BabelDOCConfig(translator=...)` (see `processors/processor.py:364`). Two important facts about this seam:
+
+1. **Chunking unit = paragraph**, not page. BabelDOC's `ParagraphFinder` groups characters into `PdfParagraph` objects (one body paragraph, heading, caption, list item, etc.), then `ILTranslator.translate_paragraph` issues **one `translate()` call per paragraph** in a thread pool. A typical 10-page paper → dozens to hundreds of small calls, parallelized. Throughput is gated by `qps=4` and `pool_max_workers` in `processor.py:_create_babeldoc_config`.
+
+2. **The interface is duck-typed, not nominal.** The project's `OpenAITranslator` / `GeminiTranslator` / `AnthropicTranslator` (`translators/*.py`) inherit from the project's *own* `translators/base.py:BaseTranslator`, **not** from `babeldoc.translator.translator.BaseTranslator`. BabelDOC accepts any object that implements:
+
+   - `translate(text: str) -> str` — main entrypoint
+   - `get_formular_placeholder(id) -> (placeholder, regex)` — formula preservation
+   - `get_rich_text_left_placeholder(id)` / `get_rich_text_right_placeholder(id)` — rich-text span tags
+   - `restore_formular_placeholder(text, id, original)` — post-processing
+   - attributes `lang_in`, `lang_out`
+
+   This means a non-LLM translator (Google Translate, Argos, Helsinki opus-mt, NLLB) can be added by following the same shape as `translators/openai_translator.py` and registering it in `TranslatorFactory._translators` (`translators/factory.py:21`). The bundled BabelDOC ships only an OpenAI-compatible translator — no built-in Google/DeepL/local-NMT backend.
+
 ### React state ownership
 
 - **TanStack Query** owns all server state (`useConfig`, `useOptions`).
@@ -183,6 +213,13 @@ This replaces the previous `QThread + new asyncio loop` pattern from the PySide6
 
 Application logs are written to `~/AppData/Local/PDFusion/logs/app.log`.
 
+## Tests and code quality
+
+- **There are currently no tests in this repo** — no `tests/` directory, no `test_*.py` files. `pyproject.toml` lists `pytest` / `pytest-cov` under the `dev` extra, but nothing is wired up. Don't waste time looking for an existing test suite; if you add one, set up `tests/` from scratch.
+- **Python lint/format** tools are declared in `pyproject.toml [project.optional-dependencies].dev` (black line-length 88, isort with black profile, flake8, mypy) but the project has **no** pre-commit, no Makefile, and no CI. Run them manually if you want: `black src/ && isort src/`.
+- **TypeScript** is checked by `pnpm build` (which runs `tsc` before `vite build`). There is no separate lint step (no ESLint config).
+- **No CI**: `.github/workflows/` does not exist. All checks are local.
+
 ## Out of scope (for a later phase)
 
 - **PyInstaller bundling** of the sidecar into a single `.exe` so end users don't need conda.
@@ -193,4 +230,4 @@ Application logs are written to `~/AppData/Local/PDFusion/logs/app.log`.
 
 ## Removed (legacy)
 
-- The old PySide6 / qfluentwidgets GUI lived in `src/desktop_pdf_translator/gui/`. After verifying the Tauri UI works end-to-end, that folder will be deleted and these dependencies will leave `requirements.txt`: `PySide6`, `PySide6-Fluent-Widgets`, `QtAwesome`. They have already been removed from `requirements.txt` — pin them back temporarily if you need to run the legacy GUI.
+- The old PySide6 / qfluentwidgets GUI in `src/desktop_pdf_translator/gui/` has been deleted along with its deps (`PySide6`, `PySide6-Fluent-Widgets`, `QtAwesome`) from `requirements.txt`. If you need to resurrect the legacy GUI for any reason, pin those three packages back and recover `gui/` from git history (it lived through commit `139d977` "feat: migrate UI from PySide6 to Tauri 2 + React + FastAPI sidecar").
