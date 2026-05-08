@@ -14,7 +14,7 @@ from ...rag.rag_chain import EnhancedRAGChain
 from ...rag.vector_store import ChromaDBManager
 from ...rag.web_research import WebResearchEngine
 from ..auth import require_token
-from ..jobs import Job, get_registry
+from ..jobs import Job, get_registry, serialize_sse_event
 from ..schemas import AskRequest, IndexRequest, JobAccepted
 
 logger = logging.getLogger(__name__)
@@ -109,7 +109,7 @@ async def stream_index_events(job_id: str) -> EventSourceResponse:
 
     async def event_source():
         async for event in registry.stream(job_id):
-            yield {"event": event["type"], "data": event["data"]}
+            yield serialize_sse_event(event)
 
     return EventSourceResponse(event_source(), ping=15)
 
@@ -169,7 +169,7 @@ async def stream_ask_events(job_id: str) -> EventSourceResponse:
 
     async def event_source():
         async for event in registry.stream(job_id):
-            yield {"event": event["type"], "data": event["data"]}
+            yield serialize_sse_event(event)
 
     return EventSourceResponse(event_source(), ping=15)
 

@@ -36,6 +36,15 @@ def _mask(service_settings) -> APIKeyMaskedSettings:
     )
 
 
+def _mask_argos(argos_settings) -> APIKeyMaskedSettings:
+    # Argos has no API key — has_key is always False, model is fixed.
+    return APIKeyMaskedSettings(
+        has_key=False,
+        model=argos_settings.model,
+        extra={},
+    )
+
+
 @router.get("", response_model=ConfigResponse)
 async def get_config() -> ConfigResponse:
     s = get_settings()
@@ -43,6 +52,7 @@ async def get_config() -> ConfigResponse:
         openai=_mask(s.openai),
         gemini=_mask(s.gemini),
         anthropic=_mask(s.anthropic),
+        argos=_mask_argos(s.argos),
         translation=s.translation.dict(),
         rag=s.rag.dict(),
         deep_search=s.deep_search.dict(),
@@ -56,17 +66,46 @@ async def update_config(payload: ConfigUpdateRequest) -> ConfigResponse:
     mgr = get_config_manager()
     current = mgr.settings.dict()
 
-    for service in ("openai", "gemini", "anthropic"):
-        update = getattr(payload, service)
+    # Track which LLM services received a non-empty key in *this* PUT, so we
+    # can auto-promote the user's preferred_service from Argos to that LLM
+    # (priority: openai > anthropic > gemini if multiple keys arrive at once).
+    LLM_SERVICES = (
+        TranslationService.OPENAI,
+        TranslationService.GEMINI,
+        TranslationService.ANTHROPIC,
+    )
+    newly_keyed: list[TranslationService] = []
+
+    for service in LLM_SERVICES:
+        update = getattr(payload, service.value)
         if update is None:
             continue
         if update.api_key is not None:
-            current[service]["api_key"] = update.api_key or None
+            new_key = update.api_key or None
+            current[service.value]["api_key"] = new_key
+            if new_key:
+                newly_keyed.append(service)
         if update.model is not None:
-            current[service]["model"] = update.model
+            current[service.value]["model"] = update.model
 
     if payload.preferred_service is not None:
         current["translation"]["preferred_service"] = payload.preferred_service.value
+    elif (
+        current["translation"].get("preferred_service") == TranslationService.ARGOS.value
+        and newly_keyed
+    ):
+        priority = (
+            TranslationService.OPENAI,
+            TranslationService.ANTHROPIC,
+            TranslationService.GEMINI,
+        )
+        chosen = next((s for s in priority if s in newly_keyed), newly_keyed[0])
+        current["translation"]["preferred_service"] = chosen.value
+        logger.info(
+            "Auto-switching preferred_service argos -> %s after key save",
+            chosen.value,
+        )
+
     if payload.default_source_lang is not None:
         current["translation"]["default_source_lang"] = payload.default_source_lang.value
     if payload.default_target_lang is not None:
@@ -84,6 +123,20 @@ async def update_config(payload: ConfigUpdateRequest) -> ConfigResponse:
 @router.post("/validate", response_model=ValidateResponse)
 async def validate_credentials(payload: ValidateRequest) -> ValidateResponse:
     """Spin up a translator instance with the supplied credentials and validate."""
+    # Argos has no API key — short-circuit and report the install state.
+    if payload.service == TranslationService.ARGOS:
+        try:
+            translator = TranslatorFactory.create_translator(
+                service=TranslationService.ARGOS,
+                lang_in="en",
+                lang_out="vi",
+            )
+            is_valid, message = translator.validate_configuration()
+            return ValidateResponse(valid=is_valid, message=message)
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("Argos validation failed")
+            return ValidateResponse(valid=False, message=str(exc))
+
     try:
         kwargs = {"api_key": payload.api_key}
         if payload.model:
@@ -115,6 +168,7 @@ _LANGUAGE_LABELS = {
 }
 
 _SERVICE_MODELS = {
+    TranslationService.ARGOS: ("Argos Translate (offline)", ["argostranslate"]),
     TranslationService.OPENAI: ("OpenAI", ["gpt-4.1"]),
     TranslationService.GEMINI: ("Google Gemini", ["gemini-1.5-flash"]),
     TranslationService.ANTHROPIC: (

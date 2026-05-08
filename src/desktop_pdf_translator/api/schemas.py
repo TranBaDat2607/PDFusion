@@ -34,6 +34,7 @@ class ConfigResponse(BaseModel):
     openai: APIKeyMaskedSettings
     gemini: APIKeyMaskedSettings
     anthropic: APIKeyMaskedSettings
+    argos: APIKeyMaskedSettings
     translation: Dict[str, Any]
     rag: Dict[str, Any]
     deep_search: Dict[str, Any]

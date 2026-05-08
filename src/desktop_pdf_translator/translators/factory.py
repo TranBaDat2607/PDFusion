@@ -10,6 +10,7 @@ from .base import BaseTranslator
 from .openai_translator import OpenAITranslator
 from .gemini_translator import GeminiTranslator
 from .anthropic_translator import AnthropicTranslator
+from .argos_translator import ArgosTranslator
 
 
 logger = logging.getLogger(__name__)
@@ -22,6 +23,7 @@ class TranslatorFactory:
         TranslationService.OPENAI: OpenAITranslator,
         TranslationService.GEMINI: GeminiTranslator,
         TranslationService.ANTHROPIC: AnthropicTranslator,
+        TranslationService.ARGOS: ArgosTranslator,
     }
     
     @classmethod
@@ -105,6 +107,9 @@ class TranslatorFactory:
                 "max_tokens": settings.anthropic.max_tokens,
                 "base_url": settings.anthropic.base_url,
             }
+        elif service == TranslationService.ARGOS:
+            # Argos has no credentials and no per-call config.
+            return {"model": settings.argos.model}
         else:
             return {}
     
@@ -130,7 +135,8 @@ class TranslatorFactory:
             elif service == TranslationService.ANTHROPIC:
                 if not settings.anthropic.api_key:
                     return False, "Anthropic API key is not configured"
-            
+            # Argos has no credentials — always available.
+
             # Create test translator to validate configuration
             translator = cls.create_translator(
                 service=service,

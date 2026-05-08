@@ -4,12 +4,18 @@
 [translation]
 default_source_lang = "auto"
 default_target_lang = "vi"  # Vietnamese as default target
-preferred_service = "openai"
+# Argos is the offline default — works without an API key. The sidecar
+# auto-promotes this to the matching LLM once the user saves any LLM key.
+preferred_service = "argos"
 max_pages = 50
 max_file_size_mb = 50.0
 cache_translations = true
 preserve_formatting = true
 min_text_length = 5
+
+[argos]
+# Offline NMT engine. No API key. Pack downloads (~80 MB) on first use.
+model = "argostranslate"
 
 [gui]
 window_width = 1200

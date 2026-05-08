@@ -1,4 +1,5 @@
 import { useCallback, useRef, useState } from "react";
+import { toast } from "sonner";
 
 import { api } from "@/lib/api-client";
 import { streamEvents } from "@/lib/sse";
@@ -70,16 +71,30 @@ export function useTranslation() {
           path: `/translate/${jobId}/events`,
           signal: controller.signal,
           onEvent: ({ type, data }) => {
+            // eslint-disable-next-line no-console
+            console.log("[useTranslation] SSE event:", type, data);
             if (type === "progress") {
               const p = data as ProgressUpdate;
-              setState((s) => ({
-                ...s,
-                stage: p.stage ?? s.stage,
-                progress: p.progress_percent ?? s.progress,
-                message: p.message ?? s.message,
-              }));
+              // Sidecar emits stage="fallback" once when the requested LLM has
+              // no key and we silently switch to Argos. Surface that to the user
+              // but don't pollute the progress bar with the fallback stage label.
+              if (p.stage === "fallback" && p.message) {
+                toast.info(p.message);
+              } else {
+                setState((s) => ({
+                  ...s,
+                  stage: p.stage ?? s.stage,
+                  progress: p.progress_percent ?? s.progress,
+                  message: p.message ?? s.message,
+                }));
+              }
             } else if (type === "done") {
               const c = data as CompletionPayload;
+              // eslint-disable-next-line no-console
+              console.log(
+                "[useTranslation] done payload — translated_file:",
+                c.translated_file,
+              );
               if (c.translated_file) {
                 setTranslatedPdfPath(c.translated_file);
               }

@@ -6,6 +6,7 @@ from .base import BaseTranslator
 from .openai_translator import OpenAITranslator
 from .gemini_translator import GeminiTranslator
 from .anthropic_translator import AnthropicTranslator
+from .argos_translator import ArgosTranslator
 from .factory import TranslatorFactory
 
 __all__ = [
@@ -13,5 +14,6 @@ __all__ = [
     "OpenAITranslator",
     "GeminiTranslator",
     "AnthropicTranslator",
+    "ArgosTranslator",
     "TranslatorFactory",
 ]

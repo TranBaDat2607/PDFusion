@@ -5,6 +5,7 @@ them. A terminal event (type=`done` or `error`) closes the queue.
 """
 
 import asyncio
+import json
 import logging
 import uuid
 from dataclasses import dataclass, field
@@ -81,3 +82,17 @@ def get_registry() -> JobRegistry:
     if _REGISTRY is None:
         _REGISTRY = JobRegistry()
     return _REGISTRY
+
+
+def serialize_sse_event(event: Dict[str, Any]) -> Dict[str, str]:
+    """Convert a queued job event into the dict shape sse-starlette expects.
+
+    sse-starlette 2.4 passes `data` through `str()` instead of `json.dumps`,
+    which would emit Python repr (single quotes, `<EventType.X: 'x'>`) that
+    the JS side can't `JSON.parse`. Serialize ourselves so the wire format
+    is real JSON. `default=str` covers Path objects and other non-JSON types.
+    """
+    return {
+        "event": event["type"],
+        "data": json.dumps(event["data"], default=str),
+    }

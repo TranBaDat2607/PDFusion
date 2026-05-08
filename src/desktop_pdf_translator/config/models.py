@@ -24,6 +24,7 @@ class TranslationService(str, Enum):
     OPENAI = "openai"
     GEMINI = "gemini"
     ANTHROPIC = "anthropic"
+    ARGOS = "argos"
 
 class OpenAISettings(BaseModel):
     """OpenAI translation service settings."""
@@ -78,6 +79,16 @@ class AnthropicSettings(BaseModel):
         return v
 
 
+class ArgosSettings(BaseModel):
+    """Argos Translate (offline NMT) settings.
+
+    Argos has no API key and a single fixed "model" identifier. Kept here so the
+    frontend service-tab metadata stays uniform across all backends.
+    """
+
+    model: str = Field("argostranslate", description="Argos identifier (fixed)")
+
+
 class TranslationSettings(BaseModel):
     """Translation-specific settings."""
     
@@ -90,7 +101,7 @@ class TranslationSettings(BaseModel):
         description="Default target language (Vietnamese priority)"
     )
     preferred_service: TranslationService = Field(
-        TranslationService.OPENAI, 
+        TranslationService.ARGOS,
         description="Preferred translation service"
     )
     max_pages: int = Field(50, ge=1, le=100, description="Maximum pages per PDF")
@@ -170,6 +181,7 @@ class AppSettings(BaseModel):
     openai: OpenAISettings = Field(default_factory=OpenAISettings)
     gemini: GeminiSettings = Field(default_factory=GeminiSettings)
     anthropic: AnthropicSettings = Field(default_factory=AnthropicSettings)
+    argos: ArgosSettings = Field(default_factory=ArgosSettings)
     
     # Application settings
     translation: TranslationSettings = Field(default_factory=TranslationSettings)
@@ -206,19 +218,41 @@ class AppSettings(BaseModel):
                 "service": "anthropic",
                 "config": self.anthropic.dict()
             }
+        elif self.translation.preferred_service == TranslationService.ARGOS:
+            return {
+                "service": "argos",
+                "config": self.argos.dict()
+            }
         else:
             raise ValueError(f"Unsupported service: {self.translation.preferred_service}")
-    
+
     def validate_service_credentials(self) -> tuple[bool, str]:
         """Validate that required service credentials are available."""
         active_service = self.get_active_service_config()
         service_name = active_service["service"]
         config = active_service["config"]
-        
+
+        if service_name == "argos":
+            return True, "Argos is offline; no credentials required"
+
         if not config.get("api_key"):
             return False, f"Missing API key for {service_name}"
-        
+
         return True, "Credentials validated"
+
+    def has_api_key(self, service: TranslationService) -> bool:
+        """Whether the given service has an API key configured.
+
+        Argos has no key requirement and always returns True.
+        """
+        if service == TranslationService.ARGOS:
+            return True
+        per_service = {
+            TranslationService.OPENAI: self.openai.api_key,
+            TranslationService.GEMINI: self.gemini.api_key,
+            TranslationService.ANTHROPIC: self.anthropic.api_key,
+        }
+        return bool(per_service.get(service))
 
 class FileMetadata(BaseModel):
     """Metadata for processed PDF files."""
