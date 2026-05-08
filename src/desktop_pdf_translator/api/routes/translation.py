@@ -7,9 +7,10 @@ from pathlib import Path
 from fastapi import APIRouter, Depends, HTTPException, status
 from sse_starlette.sse import EventSourceResponse
 
+from ...processors.events import EventType
 from ...processors.processor import PDFProcessor
 from ..auth import require_token
-from ..jobs import get_registry
+from ..jobs import get_registry, serialize_sse_event
 from ..schemas import JobAccepted, TranslateRequest
 
 logger = logging.getLogger(__name__)
@@ -27,6 +28,7 @@ async def _run_translation(job_id: str, payload: TranslateRequest) -> None:
     output_dir = Path(payload.output_dir) if payload.output_dir else None
     processor = PDFProcessor()
 
+    completion_data: dict = {}
     try:
         async for event in processor.process_pdf(
             file_path=file_path,
@@ -39,8 +41,17 @@ async def _run_translation(job_id: str, payload: TranslateRequest) -> None:
                 await job.emit("cancelled", {})
                 await job.finish("cancelled", {})
                 return
-            await job.emit("progress", event.to_dict())
-        await job.finish("done", {})
+            event_dict = event.to_dict()
+            if event.type == EventType.FINISH:
+                # CompletionEvent carries the translated_file path. Carry it
+                # forward to the terminal `done` event so the React side
+                # (useTranslation.ts) can render the translated PDF.
+                completion_data = event_dict
+                logger.info("Captured completion payload: %s", completion_data)
+                continue
+            await job.emit("progress", event_dict)
+        logger.info("Emitting done event with payload: %s", completion_data)
+        await job.finish("done", completion_data)
     except asyncio.CancelledError:
         await job.finish("cancelled", {})
         raise
@@ -67,7 +78,7 @@ async def stream_translation_events(job_id: str) -> EventSourceResponse:
 
     async def event_source():
         async for event in registry.stream(job_id):
-            yield {"event": event["type"], "data": event["data"]}
+            yield serialize_sse_event(event)
 
     return EventSourceResponse(event_source(), ping=15)
 

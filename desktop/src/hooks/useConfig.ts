@@ -1,6 +1,9 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { toast } from "sonner";
 
 import { api } from "@/lib/api-client";
+
+export type ServiceCode = "openai" | "gemini" | "anthropic" | "argos";
 
 export interface ServiceConfig {
   has_key: boolean;
@@ -11,10 +14,11 @@ export interface ConfigResponse {
   openai: ServiceConfig;
   gemini: ServiceConfig;
   anthropic: ServiceConfig;
+  argos: ServiceConfig;
   translation: {
     default_source_lang: string;
     default_target_lang: string;
-    preferred_service: "openai" | "gemini" | "anthropic";
+    preferred_service: ServiceCode;
     max_pages: number;
     max_file_size_mb: number;
   };
@@ -30,7 +34,7 @@ export interface LanguageOption {
 }
 
 export interface ServiceOption {
-  code: "openai" | "gemini" | "anthropic";
+  code: ServiceCode;
   label: string;
   models: string[];
 }
@@ -44,7 +48,8 @@ export interface ConfigUpdate {
   openai?: { api_key?: string | null; model?: string };
   gemini?: { api_key?: string | null; model?: string };
   anthropic?: { api_key?: string | null; model?: string };
-  preferred_service?: "openai" | "gemini" | "anthropic";
+  // Argos has no key/model to update — intentionally absent.
+  preferred_service?: ServiceCode;
   default_source_lang?: string;
   default_target_lang?: string;
   rag_enabled?: boolean;
@@ -75,14 +80,32 @@ export function useUpdateConfig() {
   return useMutation({
     mutationFn: (update: ConfigUpdate) =>
       api.put<ConfigResponse>("/config", update),
-    onSuccess: (data) => qc.setQueryData(["config"], data),
+    onSuccess: (data) => {
+      const previous = qc.getQueryData<ConfigResponse>(["config"]);
+      qc.setQueryData(["config"], data);
+
+      // Server may auto-promote preferred_service from "argos" to an LLM
+      // when the user just saved a key. Surface that to the user.
+      if (
+        previous &&
+        previous.translation.preferred_service !==
+          data.translation.preferred_service
+      ) {
+        const options = qc.getQueryData<OptionsResponse>(["config", "options"]);
+        const label =
+          options?.services.find(
+            (s) => s.code === data.translation.preferred_service,
+          )?.label ?? data.translation.preferred_service;
+        toast.success(`Switched to ${label}`);
+      }
+    },
   });
 }
 
 export function useValidateCredentials() {
   return useMutation({
     mutationFn: (input: {
-      service: "openai" | "gemini" | "anthropic";
+      service: ServiceCode;
       api_key: string;
       model?: string;
     }) => api.post<ValidateResponse>("/config/validate", input),

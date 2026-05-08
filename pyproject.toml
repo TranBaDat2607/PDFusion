@@ -48,6 +48,9 @@ dependencies = [
     "Pillow>=9.5.0,<11.0.0",
     "babeldoc>=0.5.20,<0.6.0",
 
+    # Offline / free translation backend (default when no LLM key is configured)
+    "argostranslate>=1.9.0,<2.0.0",
+
     # API sidecar (Tauri shell consumes this over loopback HTTP)
     "fastapi>=0.115.0,<1.0.0",
     "uvicorn[standard]>=0.30.0,<1.0.0",

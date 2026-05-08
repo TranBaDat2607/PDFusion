@@ -67,7 +67,13 @@ class PDFProcessor:
             source_lang = source_lang or self.settings.translation.default_source_lang
             target_lang = target_lang or self.settings.translation.default_target_lang
             translation_service = translation_service or self.settings.translation.preferred_service
-            
+
+            # Soft-fallback: if the user picked an LLM service but didn't
+            # provide a key, silently fall back to Argos and let the UI toast.
+            requested_service = translation_service
+            translation_service = self._resolve_effective_service(translation_service)
+            fell_back = translation_service != requested_service
+
             # Log the actual languages being used
             logger.info(f"Using languages - Source: {source_lang}, Target: {target_lang}")
             
@@ -107,6 +113,22 @@ class PDFProcessor:
             )
             
             # Step 2: Create translator
+            if fell_back:
+                yield ProgressEvent(
+                    type=EventType.PROGRESS_UPDATE,
+                    timestamp=time.time(),
+                    session_id=self.session_id,
+                    data={},
+                    stage="fallback",
+                    current_step=2,
+                    total_steps=4,
+                    progress_percent=28.0,
+                    message=(
+                        f"No {requested_service.value} API key configured — "
+                        f"falling back to Argos (offline) for this run."
+                    ),
+                )
+
             yield ProgressEvent(
                 type=EventType.PROGRESS_UPDATE,
                 timestamp=time.time(),
@@ -149,7 +171,13 @@ class PDFProcessor:
             
             # Find output files
             translated_file = self._find_translated_file(output_dir, file_path.stem)
-            
+            logger.info(
+                "CompletionEvent: output_dir=%s, stem=%s, translated_file=%s",
+                output_dir,
+                file_path.stem,
+                translated_file,
+            )
+
             yield CompletionEvent(
                 type=EventType.FINISH,
                 timestamp=time.time(),
@@ -191,6 +219,22 @@ class PDFProcessor:
             )
             raise ProcessingError(f"Processing failed: {e}", details=str(e))
     
+    def _resolve_effective_service(
+        self, requested: TranslationService
+    ) -> TranslationService:
+        """Pick the service to actually use given current credentials.
+
+        Argos (offline) is always usable. For LLM services, fall back to Argos
+        when the user has no key configured. Matches the product rule:
+        "Argos is default; LLM wins when a key exists".
+        """
+        if self.settings.has_api_key(requested):
+            return requested
+        logger.info(
+            "No API key for %s — falling back to Argos for this run", requested
+        )
+        return TranslationService.ARGOS
+
     async def _validate_file(self, file_path: Path) -> FileMetadata:
         """Validate PDF file and extract metadata."""
         try:

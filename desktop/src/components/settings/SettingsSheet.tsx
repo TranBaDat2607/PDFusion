@@ -1,5 +1,12 @@
 import { useEffect, useState } from "react";
-import { CheckCircle2, Eye, EyeOff, Loader2, XCircle } from "lucide-react";
+import {
+  CheckCircle2,
+  Eye,
+  EyeOff,
+  Loader2,
+  ShieldCheck,
+  XCircle,
+} from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -26,10 +33,14 @@ import {
   useOptions,
   useUpdateConfig,
   useValidateCredentials,
+  type ServiceCode,
   type ServiceOption,
 } from "@/hooks/useConfig";
 
-type ServiceCode = "openai" | "gemini" | "anthropic";
+// LLM service codes — exclude argos (no api_key / model edits).
+type LlmServiceCode = Exclude<ServiceCode, "argos">;
+const LLM_SERVICES: LlmServiceCode[] = ["openai", "gemini", "anthropic"];
+const ALL_SERVICES: ServiceCode[] = ["argos", "openai", "gemini", "anthropic"];
 
 interface SettingsSheetProps {
   open: boolean;
@@ -42,7 +53,7 @@ interface DraftService {
   model: string;
 }
 
-type Drafts = Record<ServiceCode, DraftService>;
+type Drafts = Record<LlmServiceCode, DraftService>;
 
 const EMPTY_DRAFTS: Drafts = {
   openai: { apiKey: "", apiKeyTouched: false, model: "" },
@@ -55,7 +66,7 @@ export function SettingsSheet({ open, onOpenChange }: SettingsSheetProps) {
   const { data: options } = useOptions();
   const updateConfig = useUpdateConfig();
 
-  const [tab, setTab] = useState<ServiceCode>("openai");
+  const [tab, setTab] = useState<ServiceCode>("argos");
   const [drafts, setDrafts] = useState<Drafts>(EMPTY_DRAFTS);
 
   // Reset drafts whenever the sheet opens (or config changes)
@@ -74,7 +85,7 @@ export function SettingsSheet({ open, onOpenChange }: SettingsSheetProps) {
 
   const handleSave = async () => {
     const update: Parameters<typeof updateConfig.mutate>[0] = {};
-    (Object.entries(drafts) as Array<[ServiceCode, DraftService]>).forEach(
+    (Object.entries(drafts) as Array<[LlmServiceCode, DraftService]>).forEach(
       ([code, d]) => {
         const change: { api_key?: string | null; model?: string } = {};
         if (d.apiKeyTouched) change.api_key = d.apiKey || null;
@@ -110,15 +121,19 @@ export function SettingsSheet({ open, onOpenChange }: SettingsSheetProps) {
 
         <div className="flex-1 overflow-y-auto px-4">
           <Tabs value={tab} onValueChange={(v) => setTab(v as ServiceCode)}>
-            <TabsList className="grid w-full grid-cols-3">
-              {(["openai", "gemini", "anthropic"] as ServiceCode[]).map((c) => (
+            <TabsList className="grid w-full grid-cols-4">
+              {ALL_SERVICES.map((c) => (
                 <TabsTrigger key={c} value={c}>
                   {options?.services.find((s) => s.code === c)?.label ?? c}
                 </TabsTrigger>
               ))}
             </TabsList>
 
-            {(["openai", "gemini", "anthropic"] as ServiceCode[]).map((code) => {
+            <TabsContent value="argos" className="mt-4">
+              <ArgosTab />
+            </TabsContent>
+
+            {LLM_SERVICES.map((code) => {
               const opt = options?.services.find((s) => s.code === code);
               if (!opt) return null;
               return (
@@ -161,8 +176,86 @@ export function SettingsSheet({ open, onOpenChange }: SettingsSheetProps) {
   );
 }
 
+function ArgosTab() {
+  const validate = useValidateCredentials();
+  const [status, setStatus] = useState<{ valid: boolean; message: string } | null>(
+    null,
+  );
+
+  const handleCheck = async () => {
+    try {
+      const result = await validate.mutateAsync({
+        service: "argos",
+        api_key: "",
+      });
+      setStatus(result);
+    } catch (e) {
+      setStatus({ valid: false, message: (e as Error).message });
+    }
+  };
+
+  return (
+    <div className="space-y-4 py-2">
+      <div className="rounded-md border border-border bg-muted/40 p-4 space-y-3">
+        <div className="flex items-center gap-2">
+          <ShieldCheck className="h-4 w-4 text-primary" />
+          <span className="text-sm font-medium">Offline translation (free)</span>
+        </div>
+        <p className="text-sm text-muted-foreground leading-relaxed">
+          Argos Translate runs entirely on your machine. No API key, no usage
+          fees, no data leaves your computer. Used automatically when no LLM
+          key is configured.
+        </p>
+        <div className="flex flex-wrap items-center gap-2 text-xs">
+          <span className="rounded-md bg-background px-2 py-1 font-mono text-muted-foreground">
+            English → Vietnamese
+          </span>
+          <span className="text-muted-foreground">
+            Other source languages need an LLM key.
+          </span>
+        </div>
+        <p className="text-xs text-muted-foreground">
+          The language pack (~80 MB) downloads automatically the first time you
+          translate.
+        </p>
+      </div>
+
+      <div className="flex items-center gap-3">
+        <Button
+          onClick={handleCheck}
+          disabled={validate.isPending}
+          variant="secondary"
+        >
+          {validate.isPending ? (
+            <>
+              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+              Checking…
+            </>
+          ) : (
+            "Check status"
+          )}
+        </Button>
+        {status && (
+          <span
+            className={`flex items-center gap-1 text-sm ${
+              status.valid ? "text-primary" : "text-destructive"
+            }`}
+          >
+            {status.valid ? (
+              <CheckCircle2 className="h-4 w-4" />
+            ) : (
+              <XCircle className="h-4 w-4" />
+            )}
+            {status.message}
+          </span>
+        )}
+      </div>
+    </div>
+  );
+}
+
 interface ServiceTabProps {
-  code: ServiceCode;
+  code: LlmServiceCode;
   option: ServiceOption;
   hasExistingKey: boolean;
   draft: DraftService;
