@@ -125,7 +125,7 @@ The token is then forwarded to the webview via the `sidecar://ready` Tauri event
 | `src/desktop_pdf_translator/api/routes/*` | `config`, `translation`, `rag`, `pdf` route modules |
 | `src/desktop_pdf_translator/config/` | `ConfigManager` + Pydantic `AppSettings` (unchanged) |
 | `src/desktop_pdf_translator/processors/` | `PDFProcessor` async generator wrapping BabelDOC (unchanged) |
-| `src/desktop_pdf_translator/translators/` | `BaseTranslator`, OpenAI/Gemini/Anthropic + `TranslatorFactory` (unchanged) |
+| `src/desktop_pdf_translator/translators/` | `BaseTranslator`, OpenAI/Gemini/Anthropic/Argos + `TranslatorFactory` |
 | `src/desktop_pdf_translator/rag/` | ChromaDB + `EnhancedRAGChain` + deep search (unchanged) |
 | `src/desktop_pdf_translator/utils/` | API key encryption (unchanged) |
 
@@ -167,7 +167,7 @@ BabelDOC drives chunking, layout, and PDF reassembly; it delegates the actual te
 
 1. **Chunking unit = paragraph**, not page. BabelDOC's `ParagraphFinder` groups characters into `PdfParagraph` objects (one body paragraph, heading, caption, list item, etc.), then `ILTranslator.translate_paragraph` issues **one `translate()` call per paragraph** in a thread pool. A typical 10-page paper → dozens to hundreds of small calls, parallelized. Throughput is gated by `qps=4` and `pool_max_workers` in `processor.py:_create_babeldoc_config`.
 
-2. **The interface is duck-typed, not nominal.** The project's `OpenAITranslator` / `GeminiTranslator` / `AnthropicTranslator` (`translators/*.py`) inherit from the project's *own* `translators/base.py:BaseTranslator`, **not** from `babeldoc.translator.translator.BaseTranslator`. BabelDOC accepts any object that implements:
+2. **The interface is duck-typed, not nominal.** The project's `OpenAITranslator` / `GeminiTranslator` / `AnthropicTranslator` / `ArgosTranslator` (`translators/*.py`) inherit from the project's *own* `translators/base.py:BaseTranslator`, **not** from `babeldoc.translator.translator.BaseTranslator`. BabelDOC accepts any object that implements:
 
    - `translate(text: str) -> str` — main entrypoint
    - `get_formular_placeholder(id) -> (placeholder, regex)` — formula preservation
@@ -175,7 +175,12 @@ BabelDOC drives chunking, layout, and PDF reassembly; it delegates the actual te
    - `restore_formular_placeholder(text, id, original)` — post-processing
    - attributes `lang_in`, `lang_out`
 
-   This means a non-LLM translator (Google Translate, Argos, Helsinki opus-mt, NLLB) can be added by following the same shape as `translators/openai_translator.py` and registering it in `TranslatorFactory._translators` (`translators/factory.py:21`). The bundled BabelDOC ships only an OpenAI-compatible translator — no built-in Google/DeepL/local-NMT backend.
+   To add another backend (Google Translate, Helsinki opus-mt, NLLB, …), follow the same shape as `translators/openai_translator.py` and register it in `TranslatorFactory._translators` (`translators/factory.py:22`). The bundled BabelDOC ships only an OpenAI-compatible translator — no built-in Google/DeepL.
+
+3. **Argos is the default offline backend.** `translators/argos_translator.py` is a free, no-API-key NMT translator used when no LLM key is configured. Important quirks:
+   - **MVP supports en→vi only.** Other language pairs raise `ValueError` directing the user to switch source language or use an LLM. Update `_SUPPORTED_PAIRS` to broaden support.
+   - **Lazy install.** The `argostranslate` package is imported lazily and the ~80 MB en→vi language pack is downloaded on first `translate()` call, guarded by a `threading.Lock`. Sidecar startup is unaffected.
+   - **Process-lifetime translation cache.** A FIFO-evicted `dict` (cap 20k entries) memoizes paragraph translations across jobs in the same sidecar run, since Argos is deterministic.
 
 ### React state ownership
 
