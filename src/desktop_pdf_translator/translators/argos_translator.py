@@ -24,6 +24,15 @@ _SUPPORTED_PAIRS = {("en", "vi")}
 _install_lock = threading.Lock()
 _en_vi_ready = False
 
+# (processed_text, original_text, event, result_slot)
+_BatchEntry = tuple[str, str, threading.Event, list]
+
+
+def _preview(s: str, n: int = 60) -> str:
+    """Single-line truncated preview for log lines."""
+    s = (s or "").replace("\n", " ").replace("\r", " ").strip()
+    return (s[:n] + "…") if len(s) > n else s
+
 # In-memory translation cache shared across paragraph workers AND across
 # translate jobs in the same sidecar lifetime. Argos is deterministic, so a
 # repeat of the same source paragraph (e.g. user clicks Translate twice on the
@@ -89,6 +98,20 @@ class ArgosTranslator(BaseTranslator):
         # (empty for ARGOS) stays uniform with the LLMs.
         self.model = kwargs.get("model", "argostranslate")
 
+        # Streaming/batching: BabelDOC's worker pool calls translate() from up
+        # to `pool_max_workers` threads concurrently. Instead of each thread
+        # racing the same local CTranslate2 model, we coalesce them: enqueue,
+        # wait for the batch to fill (or for the tail-timer to fire on the
+        # last paragraphs of the document), then translate the whole batch
+        # sequentially in one thread. With BabelDOC's default 4 workers and
+        # batch_size=4, paragraphs naturally arrive in groups of 4.
+        self.batch_size = max(1, int(kwargs.get("batch_size", 4)))
+        self.batch_timeout = float(kwargs.get("batch_timeout", 2.0))
+        self._batch_lock = threading.Lock()
+        self._pending: list[_BatchEntry] = []
+        self._flush_timer: threading.Timer | None = None
+        self._batch_counter = 0
+
         # Argos has no built-in language detection. The default source in this
         # app is "auto" — without this normalization every translation against
         # Argos defaults would error out. Treat "auto" as English (the dominant
@@ -109,7 +132,8 @@ class ArgosTranslator(BaseTranslator):
                 self.lang_out,
             )
         logger.info(
-            "ArgosTranslator configured: %s -> %s", self.lang_in, self.lang_out
+            "ArgosTranslator configured: %s -> %s (batch_size=%d, batch_timeout=%.1fs)",
+            self.lang_in, self.lang_out, self.batch_size, self.batch_timeout,
         )
 
     def translate(self, text: str, **kwargs) -> str:
@@ -133,22 +157,91 @@ class ArgosTranslator(BaseTranslator):
         if cached is not None:
             return cached
 
-        try:
-            _ensure_en_vi_installed()
-            import argostranslate.translate
+        # Pay the ~80 MB language-pack download (if needed) BEFORE entering
+        # the batching path. Otherwise the first thread to flush a batch
+        # blocks inside _ensure_en_vi_installed while other threads pile
+        # additional paragraphs into the queue and the tail-timer may fire
+        # against an unfinished install.
+        _ensure_en_vi_installed()
 
-            translated = argostranslate.translate.translate(processed, "en", "vi")
-            result = self._postprocess_text(translated)
-            with _cache_lock:
-                if len(_cache) >= _CACHE_MAX_ENTRIES:
-                    # Evict oldest entry (Python dicts preserve insertion order)
-                    _cache.pop(next(iter(_cache)), None)
-                _cache[cache_key] = result
-            return result
-        except ValueError:
-            raise
-        except Exception as e:
-            return self._handle_translation_error(e, text)
+        event = threading.Event()
+        result_slot: list[str | None] = [None]
+        entry: _BatchEntry = (processed, text, event, result_slot)
+
+        batch_to_flush: list[_BatchEntry] | None = None
+        batch_id = 0
+        with self._batch_lock:
+            self._pending.append(entry)
+            self._cancel_timer_locked()
+            if len(self._pending) >= self.batch_size:
+                batch_to_flush, batch_id = self._take_batch_locked()
+            else:
+                # (Re)arm the tail-flush timer so the last <batch_size
+                # paragraphs of the document don't hang their callers.
+                t = threading.Timer(self.batch_timeout, self._timed_flush)
+                t.daemon = True
+                self._flush_timer = t
+                t.start()
+
+        if batch_to_flush is not None:
+            self._translate_batch(batch_to_flush, batch_id)
+
+        event.wait()
+        return result_slot[0]
+
+    def _cancel_timer_locked(self) -> None:
+        """Cancel any armed tail-flush timer. Caller must hold _batch_lock."""
+        if self._flush_timer is not None:
+            self._flush_timer.cancel()
+            self._flush_timer = None
+
+    def _take_batch_locked(self) -> tuple[list[_BatchEntry], int]:
+        """Snapshot+clear _pending and bump the batch counter. Caller must
+        hold _batch_lock."""
+        batch = self._pending[:]
+        self._pending.clear()
+        batch_id = self._batch_counter
+        self._batch_counter += 1
+        return batch, batch_id
+
+    def _timed_flush(self) -> None:
+        """Flush whatever is pending. Fires when the queue hasn't reached
+        `batch_size` within `batch_timeout` seconds (i.e. document tail)."""
+        with self._batch_lock:
+            self._flush_timer = None
+            if not self._pending:
+                return
+            batch_to_flush, batch_id = self._take_batch_locked()
+        self._translate_batch(batch_to_flush, batch_id)
+
+    def _translate_batch(self, batch: list[_BatchEntry], batch_id: int) -> None:
+        """Translate every entry in `batch` sequentially, set its event."""
+        import argostranslate.translate
+
+        logger.info(
+            "Argos streaming batch #%d: translating %d paragraph(s)",
+            batch_id, len(batch),
+        )
+        for idx, (processed, original, event, result_slot) in enumerate(batch):
+            try:
+                translated = argostranslate.translate.translate(processed, "en", "vi")
+                result = self._postprocess_text(translated)
+                with _cache_lock:
+                    if len(_cache) >= _CACHE_MAX_ENTRIES:
+                        _cache.pop(next(iter(_cache)), None)
+                    _cache[("en", "vi", processed)] = result
+                result_slot[0] = result
+                logger.info(
+                    "  [%d.%d] EN: %s | VI: %s",
+                    batch_id, idx, _preview(processed), _preview(result),
+                )
+            except Exception as e:
+                # Preserve the pre-streaming fail-soft behavior: a model
+                # error returns the original paragraph instead of breaking
+                # the whole PDF.
+                result_slot[0] = self._handle_translation_error(e, original)
+            finally:
+                event.set()
 
     def get_formular_placeholder(self, placeholder_id: int) -> tuple[str, str]:
         # NMT models don't follow prompt instructions, so the default {v1}-
