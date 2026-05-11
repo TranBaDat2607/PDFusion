@@ -17,6 +17,10 @@ const ANIM_MS = 220;
 export function MainLayout() {
   const originalPath = useAppStore((s) => s.originalPdfPath);
   const translatedPath = useAppStore((s) => s.translatedPdfPath);
+  const originalFirstPageSize = useAppStore((s) => s.originalFirstPageSize);
+  const setOriginalFirstPageSize = useAppStore(
+    (s) => s.setOriginalFirstPageSize,
+  );
   const chatOpen = useAppStore((s) => s.chatOpen);
   const ragEnabled = useAppStore((s) => s.ragEnabled);
   const [scrollToPage, setScrollToPage] = useState<number | undefined>();
@@ -88,6 +92,7 @@ export function MainLayout() {
           filePath={originalPath}
           label="Original"
           scrollToPage={scrollToPage}
+          onFirstPageSize={setOriginalFirstPageSize}
           emptyState={
             <div className="flex flex-col items-center gap-2 text-center">
               <div className="rounded-full bg-muted p-3">
@@ -106,6 +111,7 @@ export function MainLayout() {
         <PdfViewer
           filePath={translatedPath}
           label="Translated"
+          placeholderSize={originalPath ? originalFirstPageSize : null}
           emptyState={
             <div className="flex flex-col items-center gap-2 text-center">
               <div className="rounded-full bg-muted p-3">

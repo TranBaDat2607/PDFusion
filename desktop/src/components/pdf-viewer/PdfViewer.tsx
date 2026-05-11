@@ -19,6 +19,13 @@ interface PdfViewerProps {
   scrollToPage?: number;
   /** Compact label shown in the bottom toolbar (e.g. "Original" / "Translated"). */
   label?: string;
+  /** When set and `filePath` is null, render a single blank white page of
+   *  these dimensions (CSS points at scale=1) instead of `emptyState`. */
+  placeholderSize?: { width: number; height: number } | null;
+  /** Fired once after a document loads, with the first page's natural size
+   *  (CSS points at scale=1). Fires again with `null` when the document is
+   *  unloaded. */
+  onFirstPageSize?: (size: { width: number; height: number } | null) => void;
 }
 
 export function PdfViewer({
@@ -26,6 +33,8 @@ export function PdfViewer({
   emptyState,
   scrollToPage,
   label,
+  placeholderSize,
+  onFirstPageSize,
 }: PdfViewerProps) {
   const [doc, setDoc] = useState<PdfDoc | null>(null);
   const [pageCount, setPageCount] = useState(0);
@@ -42,6 +51,7 @@ export function PdfViewer({
       setDoc(null);
       setPageCount(0);
       renderedPages.current.clear();
+      onFirstPageSize?.(null);
       return;
     }
     let cancelled = false;
@@ -67,6 +77,18 @@ export function PdfViewer({
         setPageCount(loaded.numPages);
         renderedPages.current.clear();
         pageRefs.current = new Array(loaded.numPages).fill(null);
+
+        if (onFirstPageSize) {
+          try {
+            const firstPage = await loaded.getPage(1);
+            if (!cancelled) {
+              const v = firstPage.getViewport({ scale: 1 });
+              onFirstPageSize({ width: v.width, height: v.height });
+            }
+          } catch {
+            // best-effort; ignore size reporting failures
+          }
+        }
       } catch (e) {
         if (!cancelled) setError((e as Error).message);
       } finally {
@@ -77,6 +99,8 @@ export function PdfViewer({
     return () => {
       cancelled = true;
     };
+    // onFirstPageSize is intentionally excluded — we only want to refire on path change
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [filePath]);
 
   // Lazy-render pages as they enter the viewport
@@ -175,7 +199,20 @@ export function PdfViewer({
         ref={containerRef}
         className="flex-1 overflow-y-auto p-4"
       >
-        {!filePath && emptyState && (
+        {!filePath && placeholderSize && (
+          <div className="mx-auto flex max-w-3xl flex-col gap-4">
+            <div
+              className="relative overflow-hidden rounded-md border border-border bg-white shadow-sm"
+              style={{
+                width: Math.floor(placeholderSize.width * zoom),
+                height: Math.floor(placeholderSize.height * zoom),
+                maxWidth: "100%",
+              }}
+              aria-label="Translation placeholder page"
+            />
+          </div>
+        )}
+        {!filePath && !placeholderSize && emptyState && (
           <div className="flex h-full items-center justify-center">
             {emptyState}
           </div>
