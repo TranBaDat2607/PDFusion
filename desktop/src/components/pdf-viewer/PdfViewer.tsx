@@ -26,6 +26,10 @@ interface PdfViewerProps {
    *  (CSS points at scale=1). Fires again with `null` when the document is
    *  unloaded. */
   onFirstPageSize?: (size: { width: number; height: number } | null) => void;
+  /** Fired when the most-visible page changes (throttled ~250ms). Used by
+   *  the original viewer to feed the translation priority scheduler so the
+   *  page the user is looking at translates first. */
+  onVisiblePageChange?: (page: number) => void;
 }
 
 export function PdfViewer({
@@ -35,7 +39,27 @@ export function PdfViewer({
   label,
   placeholderSize,
   onFirstPageSize,
+  onVisiblePageChange,
 }: PdfViewerProps) {
+  // Throttle visible-page callbacks so a fast scroll doesn't spam the store
+  // (and downstream the /translate/{job_id}/reprioritize endpoint).
+  const lastReportedPage = useRef<number>(0);
+  const reportRafRef = useRef<number | null>(null);
+  const reportVisible = useCallback(
+    (page: number) => {
+      if (!onVisiblePageChange) return;
+      if (page === lastReportedPage.current) return;
+      if (reportRafRef.current !== null) return; // already pending
+      reportRafRef.current = window.requestAnimationFrame(() => {
+        reportRafRef.current = null;
+        if (page !== lastReportedPage.current) {
+          lastReportedPage.current = page;
+          onVisiblePageChange(page);
+        }
+      });
+    },
+    [onVisiblePageChange],
+  );
   const [doc, setDoc] = useState<PdfDoc | null>(null);
   const [pageCount, setPageCount] = useState(0);
   const [zoom, setZoom] = useState(1);
@@ -44,6 +68,12 @@ export function PdfViewer({
   const containerRef = useRef<HTMLDivElement>(null);
   const pageRefs = useRef<Array<HTMLDivElement | null>>([]);
   const renderedPages = useRef<Set<number>>(new Set());
+  // Streaming-render: when the rolling translated PDF is swapped (chunk_ready
+  // fires a new `_translated_v{N}.pdf` path), we want the user to stay roughly
+  // where they were reading. We capture the most-recently-visible page index
+  // before the swap and scrollIntoView it after the new doc mounts.
+  const visiblePageRef = useRef<number>(1);
+  const pendingScrollTargetRef = useRef<number | null>(null);
 
   // Load the document whenever the file path changes
   useEffect(() => {
@@ -54,6 +84,11 @@ export function PdfViewer({
       onFirstPageSize?.(null);
       return;
     }
+    // Capture scroll target BEFORE the new doc tears down the old DOM. The
+    // chunked-translate flow swaps `filePath` every chunk; without this the
+    // user would be punted back to page 1 each time a chunk lands. Initial
+    // mount has visiblePageRef=1, so the restore is a no-op there.
+    pendingScrollTargetRef.current = visiblePageRef.current;
     let cancelled = false;
     setLoading(true);
     setError(null);
@@ -121,12 +156,22 @@ export function PdfViewer({
         canvas.style.width = `${Math.floor(viewport.width / dpr)}px`;
         canvas.style.height = `${Math.floor(viewport.height / dpr)}px`;
         canvas.className = "block bg-white shadow-sm";
+        // Crossfade: start invisible, transition to visible after render
+        // completes. Avoids the hard cut between the placeholder/old canvas
+        // and the freshly-rendered page during streaming-translate hot-swaps.
+        canvas.style.opacity = "0";
+        canvas.style.transition = "opacity 180ms ease-out";
 
         const ctx = canvas.getContext("2d");
         if (!ctx) return;
 
         canvasHost.replaceChildren(canvas);
         await page.render({ canvas, canvasContext: ctx, viewport }).promise;
+        // Trigger the transition after the browser commits the opacity:0
+        // paint, so the user sees the fade rather than instant pop-in.
+        window.requestAnimationFrame(() => {
+          canvas.style.opacity = "1";
+        });
       } catch (e) {
         console.warn(`Failed to render page ${pageNum}:`, e);
         renderedPages.current.delete(pageNum);
@@ -149,7 +194,9 @@ export function PdfViewer({
     // Visible pages will be picked up by the observer below
   }, [zoom, doc]);
 
-  // Intersection observer: render whatever is near the viewport
+  // Intersection observer: render whatever is near the viewport, and track
+  // which page is currently most-visible so we can restore that scroll
+  // position when the doc reloads (chunked-translate hot-swap).
   useEffect(() => {
     if (!doc || !containerRef.current) return;
     const observer = new IntersectionObserver(
@@ -159,7 +206,11 @@ export function PdfViewer({
             const idx = Number(
               (entry.target as HTMLElement).dataset.page ?? "0",
             );
-            if (idx > 0) void renderPage(idx);
+            if (idx > 0) {
+              void renderPage(idx);
+              visiblePageRef.current = idx;
+              reportVisible(idx);
+            }
           }
         });
       },
@@ -171,7 +222,22 @@ export function PdfViewer({
     );
     pageRefs.current.forEach((host) => host && observer.observe(host));
     return () => observer.disconnect();
-  }, [doc, renderPage]);
+  }, [doc, renderPage, reportVisible]);
+
+  // Restore scroll position after a new doc loads (chunked-translate flow).
+  // We scroll to the placeholder for the previously-visible page; the
+  // observer will then trigger that page to actually render. Page heights
+  // stabilize once rendered, so the user lands close to where they were.
+  useEffect(() => {
+    if (!doc) return;
+    const target = pendingScrollTargetRef.current;
+    pendingScrollTargetRef.current = null;
+    if (!target || target <= 1 || target > pageCount) return;
+    const t = window.setTimeout(() => {
+      pageRefs.current[target - 1]?.scrollIntoView({ block: "start" });
+    }, 0);
+    return () => window.clearTimeout(t);
+  }, [doc, pageCount]);
 
   // Scroll to a specific page when requested by chat references
   useEffect(() => {

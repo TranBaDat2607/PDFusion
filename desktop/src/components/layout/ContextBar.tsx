@@ -15,8 +15,13 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { useConfig, useOptions, useUpdateConfig } from "@/hooks/useConfig";
+import { api } from "@/lib/api-client";
 import { useAppStore } from "@/lib/store";
 import { cn } from "@/lib/utils";
+
+function prewarm() {
+  void api.post("/translate/prewarm", {}).catch(() => undefined);
+}
 
 interface ContextBarProps {
   onPickFile: () => void;
@@ -80,7 +85,10 @@ export function ContextBar({
         <span className="text-xs text-muted-foreground">From</span>
         <Select
           value={sourceLang}
-          onValueChange={(v) => update.mutate({ default_source_lang: v })}
+          onValueChange={(v) => {
+            update.mutate({ default_source_lang: v });
+            prewarm();
+          }}
         >
           <SelectTrigger size="sm" className="h-8 min-w-[140px]">
             <SelectValue />
@@ -96,7 +104,10 @@ export function ContextBar({
         <ArrowRight className="h-3.5 w-3.5 text-muted-foreground" />
         <Select
           value={targetLang}
-          onValueChange={(v) => update.mutate({ default_target_lang: v })}
+          onValueChange={(v) => {
+            update.mutate({ default_target_lang: v });
+            prewarm();
+          }}
         >
           <SelectTrigger size="sm" className="h-8 min-w-[140px]">
             <SelectValue />
@@ -117,9 +128,10 @@ export function ContextBar({
 
       <Select
         value={service}
-        onValueChange={(v) =>
-          update.mutate({ preferred_service: v as typeof service })
-        }
+        onValueChange={(v) => {
+          update.mutate({ preferred_service: v as typeof service });
+          prewarm();
+        }}
       >
         <SelectTrigger size="sm" className="h-8 min-w-[150px]">
           <SelectValue />

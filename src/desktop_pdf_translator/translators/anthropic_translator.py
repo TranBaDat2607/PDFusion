@@ -8,12 +8,12 @@ placeholders), so this class plugs in the same way OpenAITranslator/GeminiTransl
 """
 
 import logging
-import time
 from typing import List, Dict
 
 import anthropic
 
-from .base import BaseTranslator
+from .base import BaseTranslator, LANGUAGE_DISPLAY_NAMES
+from .translation_cache import llm_cache_get as _llm_cache_get, llm_cache_set as _llm_cache_set
 
 
 logger = logging.getLogger(__name__)
@@ -26,6 +26,8 @@ class AnthropicTranslator(BaseTranslator):
     Uses the official `anthropic` Python SDK (Messages API). Compatible with
     Claude Opus / Sonnet / Haiku 4.x model families.
     """
+
+    min_request_interval = 1.0
 
     def __init__(self, lang_in: str, lang_out: str, **kwargs):
         super().__init__(lang_in, lang_out, **kwargs)
@@ -45,9 +47,6 @@ class AnthropicTranslator(BaseTranslator):
             client_kwargs["base_url"] = self.base_url
         self.client = anthropic.Anthropic(**client_kwargs)
 
-        self.last_request_time = 0
-        self.min_request_interval = 1.0
-
         logger.info(f"Anthropic translator configured with model: {self.model}")
 
     def translate(self, text: str, **kwargs) -> str:
@@ -57,6 +56,11 @@ class AnthropicTranslator(BaseTranslator):
             processed_text = self._preprocess_text(text)
             if not processed_text.strip():
                 return text
+
+            cached = _llm_cache_get(processed_text, self.lang_in, self.lang_out, "anthropic", self.model)
+            if cached is not None:
+                self._fire_paragraph_callback(processed_text, cached)
+                return cached
 
             self._apply_rate_limiting()
 
@@ -79,23 +83,17 @@ class AnthropicTranslator(BaseTranslator):
                 logger.warning("Anthropic response was empty")
                 return text
 
-            return self._postprocess_text(translated_text)
+            result = self._postprocess_text(translated_text)
+            _llm_cache_set(processed_text, result, self.lang_in, self.lang_out, "anthropic", self.model)
+            self._fire_paragraph_callback(processed_text, result)
+            return result
 
         except Exception as e:
             return self._handle_translation_error(e, text)
 
     def _create_translation_prompt(self, text: str) -> tuple[str, str]:
-        lang_names = {
-            "vi": "Vietnamese (Tiếng Việt)",
-            "en": "English",
-            "ja": "Japanese (日本語)",
-            "zh-cn": "Simplified Chinese (简体中文)",
-            "zh-tw": "Traditional Chinese (繁體中文)",
-            "auto": "automatically detected language",
-        }
-
-        source_lang = lang_names.get(self.lang_in, self.lang_in)
-        target_lang = lang_names.get(self.lang_out, self.lang_out)
+        source_lang = LANGUAGE_DISPLAY_NAMES.get(self.lang_in, self.lang_in)
+        target_lang = LANGUAGE_DISPLAY_NAMES.get(self.lang_out, self.lang_out)
 
         if self.lang_out == "vi":
             system_prompt = f"""You are a professional translator specializing in Vietnamese language.
@@ -124,26 +122,6 @@ Translate ONLY the text content. Do not add explanations, notes, or commentary."
 
         user_prompt = f"Translate this text:\n\n{text}"
         return system_prompt, user_prompt
-
-    def _apply_rate_limiting(self):
-        current_time = time.time()
-        time_since_last_request = current_time - self.last_request_time
-
-        if time_since_last_request < self.min_request_interval:
-            time.sleep(self.min_request_interval - time_since_last_request)
-
-        self.last_request_time = time.time()
-
-    def _postprocess_text(self, text: str) -> str:
-        text = super()._postprocess_text(text)
-
-        if self.lang_out == "vi":
-            text = text.replace("  ", " ")
-            text = text.replace(" ,", ",")
-            text = text.replace(" .", ".")
-            text = text.replace('"', '"').replace('"', '"')
-
-        return text
 
     def validate_configuration(self) -> tuple[bool, str]:
         try:

@@ -21,6 +21,7 @@ export function MainLayout() {
   const setOriginalFirstPageSize = useAppStore(
     (s) => s.setOriginalFirstPageSize,
   );
+  const setVisiblePage = useAppStore((s) => s.setVisiblePage);
   const chatOpen = useAppStore((s) => s.chatOpen);
   const ragEnabled = useAppStore((s) => s.ragEnabled);
   const [scrollToPage, setScrollToPage] = useState<number | undefined>();
@@ -93,6 +94,7 @@ export function MainLayout() {
           label="Original"
           scrollToPage={scrollToPage}
           onFirstPageSize={setOriginalFirstPageSize}
+          onVisiblePageChange={setVisiblePage}
           emptyState={
             <div className="flex flex-col items-center gap-2 text-center">
               <div className="rounded-full bg-muted p-3">

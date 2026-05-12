@@ -3,12 +3,12 @@ OpenAI translator implementation with Vietnamese optimization.
 """
 
 import logging
-import time
 from typing import Optional, List, Dict, Any
 
 from openai import OpenAI
 
-from .base import BaseTranslator
+from .base import BaseTranslator, LANGUAGE_DISPLAY_NAMES
+from .translation_cache import llm_cache_get as _llm_cache_get, llm_cache_set as _llm_cache_set
 
 
 logger = logging.getLogger(__name__)
@@ -17,96 +17,65 @@ logger = logging.getLogger(__name__)
 class OpenAITranslator(BaseTranslator):
     """
     OpenAI-based translator with Vietnamese language optimization.
-    
+
     Supports GPT-3.5, GPT-4, and other OpenAI models with special handling
     for Vietnamese language translations.
     """
-    
+
+    min_request_interval = 1.0
+
     def __init__(self, lang_in: str, lang_out: str, **kwargs):
-        """Initialize OpenAI translator."""
         super().__init__(lang_in, lang_out, **kwargs)
-    
+
     def _setup_translator(self, **kwargs):
-        """Setup OpenAI client and configuration."""
         self.api_key = kwargs.get("api_key")
         if not self.api_key:
             raise ValueError("OpenAI API key is required")
-        
+
         self.model = kwargs.get("model", "gpt-4")
         self.temperature = kwargs.get("temperature", 0.3)
         self.max_tokens = kwargs.get("max_tokens", 4000)
         self.base_url = kwargs.get("base_url")
-        
-        # Initialize OpenAI client
-        self.client = OpenAI(
-            api_key=self.api_key,
-            base_url=self.base_url
-        )
-        
-        # Rate limiting
-        self.last_request_time = 0
-        self.min_request_interval = 1.0  # Minimum 1 second between requests
-        
+
+        self.client = OpenAI(api_key=self.api_key, base_url=self.base_url)
+
         logger.info(f"OpenAI translator configured with model: {self.model}")
     
     def translate(self, text: str, **kwargs) -> str:
-        """
-        Translate text using OpenAI GPT models.
-        
-        Args:
-            text: Text to translate
-            **kwargs: Additional translation parameters
-            
-        Returns:
-            Translated text
-        """
         self.translate_call_count += 1
-        
+
         try:
-            # Preprocess text
             processed_text = self._preprocess_text(text)
             if not processed_text.strip():
                 return text
-            
-            # Rate limiting
+
+            cached = _llm_cache_get(processed_text, self.lang_in, self.lang_out, "openai", self.model)
+            if cached is not None:
+                self._fire_paragraph_callback(processed_text, cached)
+                return cached
+
             self._apply_rate_limiting()
-            
-            # Create translation prompt
-            prompt = self._create_translation_prompt(processed_text)
-            
-            # Call OpenAI API
+
             response = self.client.chat.completions.create(
                 model=self.model,
-                messages=prompt,
+                messages=self._create_translation_prompt(processed_text),
                 temperature=self.temperature,
                 max_tokens=self.max_tokens,
-                timeout=30
+                timeout=30,
             )
-            
-            # Extract translation
             translated_text = response.choices[0].message.content.strip()
-            
-            # Postprocess and return
-            return self._postprocess_text(translated_text)
-            
+            result = self._postprocess_text(translated_text)
+            _llm_cache_set(processed_text, result, self.lang_in, self.lang_out, "openai", self.model)
+            self._fire_paragraph_callback(processed_text, result)
+            return result
+
         except Exception as e:
             return self._handle_translation_error(e, text)
-    
+
     def _create_translation_prompt(self, text: str) -> List[Dict[str, str]]:
         """Create optimized translation prompt for Vietnamese."""
-        
-        # Get language names for prompt
-        lang_names = {
-            "vi": "Vietnamese (Tiếng Việt)",
-            "en": "English", 
-            "ja": "Japanese (日本語)",
-            "zh-cn": "Simplified Chinese (简体中文)",
-            "zh-tw": "Traditional Chinese (繁體中文)",
-            "auto": "automatically detected language"
-        }
-        
-        source_lang = lang_names.get(self.lang_in, self.lang_in)
-        target_lang = lang_names.get(self.lang_out, self.lang_out)
+        source_lang = LANGUAGE_DISPLAY_NAMES.get(self.lang_in, self.lang_in)
+        target_lang = LANGUAGE_DISPLAY_NAMES.get(self.lang_out, self.lang_out)
         
         # Create system prompt with Vietnamese optimization
         if self.lang_out == "vi":
@@ -138,33 +107,6 @@ Translate ONLY the text content. Do not add explanations, notes, or commentary."
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": f"Translate this text:\n\n{text}"}
         ]
-    
-    def _apply_rate_limiting(self):
-        """Apply rate limiting to avoid API quota issues."""
-        current_time = time.time()
-        time_since_last_request = current_time - self.last_request_time
-        
-        if time_since_last_request < self.min_request_interval:
-            sleep_time = self.min_request_interval - time_since_last_request
-            time.sleep(sleep_time)
-        
-        self.last_request_time = time.time()
-    
-    def _postprocess_text(self, text: str) -> str:
-        """Vietnamese-specific postprocessing."""
-        text = super()._postprocess_text(text)
-        
-        if self.lang_out == "vi":
-            # Vietnamese-specific formatting
-            # Fix common translation artifacts
-            text = text.replace("  ", " ")  # Remove double spaces
-            text = text.replace(" ,", ",")  # Fix comma spacing
-            text = text.replace(" .", ".")  # Fix period spacing
-            
-            # Handle Vietnamese quotation marks
-            text = text.replace('"', '"').replace('"', '"')  # Normalize quotes
-        
-        return text
     
     def validate_configuration(self) -> tuple[bool, str]:
         """Validate OpenAI configuration."""

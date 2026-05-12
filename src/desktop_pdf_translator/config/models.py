@@ -107,6 +107,8 @@ class TranslationSettings(BaseModel):
     max_pages: int = Field(50, ge=1, le=100, description="Maximum pages per PDF")
     max_file_size_mb: float = Field(50.0, ge=1.0, le=200.0, description="Maximum file size in MB")
     cache_translations: bool = Field(True, description="Enable translation caching")
+    cache_ttl_days: int = Field(30, ge=1, le=365, description="Days before cached translations expire")
+    cache_max_size_mb: float = Field(500.0, ge=10.0, le=5000.0, description="Soft cap for translation cache size (MB)")
     preserve_formatting: bool = Field(True, description="Preserve PDF formatting")
     min_text_length: int = Field(5, ge=0, description="Minimum text length to translate")
 
@@ -122,8 +124,12 @@ class GUISettings(BaseModel):
 
 class ProcessingSettings(BaseModel):
     """PDF processing settings."""
-    
+
     max_workers: int = Field(4, ge=1, le=8, description="Maximum parallel workers")
+    max_parallel_chunks: int = Field(
+        0, ge=0, le=16,
+        description="BabelDOC sub-jobs in flight at once. 0 = auto (cpu // 2, clamped to 2-8)",
+    )
     timeout_seconds: int = Field(300, ge=30, le=3600, description="Processing timeout")
     quality_check: bool = Field(True, description="Enable translation quality checks")
     backup_originals: bool = Field(True, description="Keep backup of original files")
