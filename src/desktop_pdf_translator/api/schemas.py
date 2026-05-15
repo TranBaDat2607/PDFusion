@@ -37,7 +37,6 @@ class ConfigResponse(BaseModel):
     argos: APIKeyMaskedSettings
     translation: Dict[str, Any]
     rag: Dict[str, Any]
-    deep_search: Dict[str, Any]
     gui: Dict[str, Any]
     processing: Dict[str, Any] = Field(default_factory=dict)
     debug_mode: bool
@@ -147,10 +146,7 @@ class IndexRequest(BaseModel):
 class AskRequest(BaseModel):
     question: str
     document_id: Optional[str] = None
-    include_web_research: bool = False
-    use_deep_search: bool = False
     max_pdf_sources: int = 5
-    max_web_sources: int = 5
 
 
 # ---------------------------------------------------------------------------

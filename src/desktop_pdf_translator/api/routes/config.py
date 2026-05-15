@@ -49,7 +49,6 @@ async def get_config() -> ConfigResponse:
         argos=_mask(s.argos),
         translation=s.translation.dict(),
         rag=s.rag.dict(),
-        deep_search=s.deep_search.dict(),
         gui=s.gui.dict(),
         processing=s.processing.dict(),
         debug_mode=s.debug_mode,

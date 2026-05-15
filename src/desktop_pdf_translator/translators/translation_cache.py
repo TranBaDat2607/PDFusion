@@ -1,7 +1,7 @@
 """Persistent on-disk translation cache (SQLite, WAL).
 
-Pattern mirrors `rag/paper_cache.py`: stdlib sqlite3, TTL via ISO8601 expires_at,
-single index on expires_at for cheap GC. WAL mode lets many readers run while a
+Stdlib sqlite3, TTL via ISO8601 expires_at, single index on expires_at for
+cheap GC. WAL mode lets many readers run while a
 single writer holds the lock — fine for translator throughput where we read
 much more than we write.
 
