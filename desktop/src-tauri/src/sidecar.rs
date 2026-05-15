@@ -1,10 +1,14 @@
 //! Spawns and supervises the Python FastAPI sidecar.
 //!
 //! Lifecycle:
-//!   1. Locate the Python interpreter (env var `PDFUSION_PYTHON`, then `python` on PATH).
-//!   2. Spawn `python -m desktop_pdf_translator.api.server` with stdout piped.
+//!   1. Locate the sidecar binary:
+//!        - production: bundled `pdfusion-sidecar-<triple>.exe` next to the app
+//!          (shipped via Tauri `externalBin`),
+//!        - development: a Python interpreter (`PDFUSION_PYTHON`, conda env, or
+//!          `python` on PATH) invoking `-m desktop_pdf_translator.api.server`.
+//!   2. Spawn the process with stdout piped.
 //!   3. Read stdout until we see `READY port=<int> token=<str>`.
-//!   4. Health-poll `http://127.0.0.1:<port>/health` until it answers OK.
+//!   4. Health-poll `http://127.0.0.1:<port>/auth/ping` until it answers OK.
 //!   5. Store the handle in a global so Tauri commands and shutdown can use it.
 
 use std::path::PathBuf;
@@ -14,6 +18,7 @@ use std::time::Duration;
 
 use once_cell::sync::OnceCell;
 use serde::Serialize;
+use tauri::{AppHandle, Manager};
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::{Child, Command};
 use tokio::time::{sleep, Instant};
@@ -33,7 +38,7 @@ impl std::fmt::Display for SidecarError {
         match self {
             Self::PythonNotFound => write!(
                 f,
-                "Python interpreter not found. Set PDFUSION_PYTHON or add 'python' to PATH."
+                "No bundled sidecar found and no Python interpreter available. Set PDFUSION_PYTHON or add 'python' to PATH."
             ),
             Self::Spawn(e) => write!(f, "Failed to spawn sidecar: {e}"),
             Self::EarlyExit => write!(f, "Sidecar exited before becoming ready"),
@@ -78,6 +83,24 @@ static SIDECAR: OnceCell<SidecarHandle> = OnceCell::new();
 
 pub fn current() -> Option<&'static SidecarHandle> {
     SIDECAR.get()
+}
+
+/// Filename of the bundled sidecar binary as written by `build-sidecar.ps1`.
+/// Tauri's `externalBin` requires the rustc host triple suffix.
+#[cfg(all(windows, target_arch = "x86_64"))]
+const BUNDLED_SIDECAR_FILENAME: &str = "pdfusion-sidecar-x86_64-pc-windows-msvc.exe";
+#[cfg(all(windows, target_arch = "aarch64"))]
+const BUNDLED_SIDECAR_FILENAME: &str = "pdfusion-sidecar-aarch64-pc-windows-msvc.exe";
+#[cfg(not(windows))]
+const BUNDLED_SIDECAR_FILENAME: &str = "pdfusion-sidecar";
+
+/// Resolve the bundled sidecar exe via Tauri's resource resolver.
+/// Returns `None` if there's no `externalBin` ship of the sidecar (i.e. dev mode).
+fn resolve_bundled_sidecar(app: &AppHandle) -> Option<PathBuf> {
+    app.path()
+        .resolve(BUNDLED_SIDECAR_FILENAME, tauri::path::BaseDirectory::Resource)
+        .ok()
+        .filter(|p| p.exists())
 }
 
 fn locate_python() -> Result<PathBuf, SidecarError> {
@@ -128,27 +151,44 @@ fn parse_ready_line(line: &str) -> Result<SidecarInfo, SidecarError> {
     Ok(SidecarInfo { port, token })
 }
 
-/// Spawn the sidecar and block until it reports `READY`. Returns once `/health`
-/// answers OK. Stores the handle in the global so other code can read it.
-pub async fn spawn() -> Result<SidecarInfo, SidecarError> {
+/// Build the spawn `Command` for the sidecar.
+///
+/// Prefers a bundled exe (production install). Falls back to a Python
+/// interpreter running the module (developer machine, `pnpm tauri dev`).
+fn build_command(app: &AppHandle) -> Result<Command, SidecarError> {
+    if let Some(bundled) = resolve_bundled_sidecar(app) {
+        log::info!("Sidecar (bundled): {}", bundled.display());
+        let mut cmd = Command::new(bundled);
+        cmd.env("PYTHONUNBUFFERED", "1")
+            .stdout(Stdio::piped())
+            .stderr(Stdio::inherit())
+            .stdin(Stdio::null());
+        return Ok(cmd);
+    }
+
     let python = locate_python()?;
     let root = project_root().ok_or(SidecarError::PythonNotFound)?;
     let src_dir = root.join("src");
 
-    log::info!("Sidecar python: {}", python.display());
-    log::info!("Sidecar PYTHONPATH: {}", src_dir.display());
+    log::info!("Sidecar (dev) python: {}", python.display());
+    log::info!("Sidecar (dev) PYTHONPATH: {}", src_dir.display());
 
-    let mut command = Command::new(&python);
-    command
-        .arg("-m")
+    let mut cmd = Command::new(python);
+    cmd.arg("-m")
         .arg("desktop_pdf_translator.api.server")
         .current_dir(&root)
         .env("PYTHONPATH", &src_dir)
-        // Force unbuffered stdout so we see READY immediately
         .env("PYTHONUNBUFFERED", "1")
         .stdout(Stdio::piped())
         .stderr(Stdio::inherit())
         .stdin(Stdio::null());
+    Ok(cmd)
+}
+
+/// Spawn the sidecar and block until it reports `READY`. Returns once `/auth/ping`
+/// answers OK. Stores the handle in the global so other code can read it.
+pub async fn spawn(app: AppHandle) -> Result<SidecarInfo, SidecarError> {
+    let mut command = build_command(&app)?;
 
     // CREATE_NO_WINDOW so no second console pops up in production builds.
     // tokio::process::Command exposes `creation_flags` natively on Windows.

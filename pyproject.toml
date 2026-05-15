@@ -72,6 +72,8 @@ dev = [
     "isort>=5.12.0",
     "flake8>=6.0.0",
     "mypy>=1.0.0",
+    # Bundle the sidecar into a standalone .exe for the desktop installer.
+    "pyinstaller>=6.10",
 ]
 
 # RAG and advanced features
@@ -104,6 +106,12 @@ pdfusion-sidecar = "desktop_pdf_translator.api.server:main"
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
+
+# Hatchling can't auto-detect the wheel contents because the project name
+# (`pdfusion`) doesn't match the Python package name (`desktop_pdf_translator`),
+# and the package lives under `src/`. Point hatch at it explicitly.
+[tool.hatch.build.targets.wheel]
+packages = ["src/desktop_pdf_translator"]
 
 [tool.black]
 line-length = 88

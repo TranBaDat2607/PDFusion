@@ -182,3 +182,19 @@ data/
 logs.md
 # Application data
 DesktopPDFTranslator/
+
+# Local Claude Code settings — per-developer, not shared via VCS.
+.claude/settings.local.json
+
+# Ruff lint cache
+.ruff_cache/
+
+# ----------------------------------------------------------------------------
+# PyInstaller sidecar bundling
+# ----------------------------------------------------------------------------
+# `build/` and `dist/` are already ignored above (PyInstaller scratch dirs).
+# `*.spec` is also ignored above — keep our checked-in spec via a negation:
+!pdfusion-sidecar.spec
+# Staged sidecar binary + PyInstaller runtime tree (rebuilt by build-sidecar.ps1):
+desktop/src-tauri/binaries/pdfusion-sidecar-*.exe
+desktop/src-tauri/binaries/_internal/

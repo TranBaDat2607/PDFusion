@@ -50,8 +50,9 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![sidecar_info])
         .setup(|app| {
             let handle = app.handle().clone();
+            let spawn_handle = handle.clone();
             tauri::async_runtime::spawn(async move {
-                match sidecar::spawn().await {
+                match sidecar::spawn(spawn_handle).await {
                     Ok(info) => {
                         log::info!("Sidecar ready on port {}", info.port);
                         let _ = handle.emit("sidecar://ready", SidecarInfoDto {

@@ -211,7 +211,55 @@ BabelDOC drives chunking, layout, and PDF reassembly; it delegates the actual te
 - **Window**: 1400×900 default, min 1024×700.
 - **CSP**: currently `null` for dev. Tighten before bundling for distribution.
 - **Sidecar lifecycle** is wired in `lib.rs::run()`'s `setup` and the `RunEvent::ExitRequested` handler kills the child process.
-- **Python discovery** order: `PDFUSION_PYTHON` env var → `~/anaconda3/envs/pdfusion/python.exe` → `~/miniconda3/envs/pdfusion/python.exe` → `python` on PATH.
+- **Sidecar discovery** order (see `desktop/src-tauri/src/sidecar.rs`):
+  1. **Bundled exe** — `pdfusion-sidecar-<triple>.exe` resolved via `BaseDirectory::Resource`. This is what end users hit (shipped via `bundle.externalBin` in `tauri.conf.json`).
+  2. **Dev fallback** — Python interpreter chain: `PDFUSION_PYTHON` env var → `~/anaconda3/envs/pdfusion/python.exe` → `~/miniconda3/envs/pdfusion/python.exe` → `python` on PATH, then `python -m desktop_pdf_translator.api.server` with `PYTHONPATH=<root>/src`.
+
+## Building the desktop installer
+
+```powershell
+# 1. Build the standalone sidecar (PyInstaller, one-dir).
+#    Output: dist/pdfusion-sidecar/{pdfusion-sidecar.exe, _internal/}
+#    Then staged into desktop/src-tauri/binaries/.
+conda activate pdfusion
+pip install -e ".[dev]"          # ensures pyinstaller is available
+./build-sidecar.ps1
+
+# 2. Build the Tauri installer.
+#    tauri.conf.json's beforeBundleCommand also re-runs build-sidecar.ps1 so
+#    step 1 is technically optional, but doing it first lets you sanity-check
+#    the bundled sidecar in isolation before the slow Tauri bundle step.
+cd desktop
+pnpm tauri build
+# → desktop/src-tauri/target/release/bundle/msi/PDFusion_0.1.0_x64_en-US.msi
+```
+
+> **Dev-mode bootstrap caveat**: Tauri's build script validates `externalBin`
+> and `resources` paths at *compile time*, so `cargo check`, `pnpm tauri dev`,
+> and `pnpm tauri build` all fail on a fresh checkout until the staged sidecar
+> exists. If you don't want to wait for the full PyInstaller build just to
+> hack on the React/Rust side, run:
+>
+> ```powershell
+> ./build-sidecar.ps1 -Stub
+> ```
+>
+> This drops empty placeholder files into `desktop/src-tauri/binaries/`. The
+> Rust shell's sidecar discovery still falls back to your local Python at
+> runtime, so `pnpm tauri dev` works exactly like before. Just don't ship the
+> stubbed installer — the bundled exe will be zero bytes.
+
+The sidecar is shipped as `externalBin` (the `.exe` next to `pdfusion.exe`)
+plus a `resources/_internal/` tree (PyInstaller runtime — Python stdlib +
+native .pyd + bundled package data). First build is slow (~10-20 min) and
+the resulting .msi is large (~500 MB-1 GB) because we bundle the full
+chromadb + sentence-transformers + babeldoc stack. ML model weights and
+the Argos en→vi pack are **not** bundled; they download lazily on first
+use to `~/.cache/huggingface` and the argostranslate user dir respectively.
+
+Hidden-import additions for chromadb / babeldoc / etc. live in
+`pdfusion-sidecar.spec`. Extend that file (then rerun `build-sidecar.ps1`)
+when the bundled exe raises `ModuleNotFoundError` at startup.
 
 ## Logs
 
@@ -226,11 +274,12 @@ Application logs are written to `~/AppData/Local/PDFusion/logs/app.log`.
 
 ## Out of scope (for a later phase)
 
-- **PyInstaller bundling** of the sidecar into a single `.exe` so end users don't need conda.
 - **Auto-update** flow.
-- **Code signing** for Windows.
-- **Cross-platform** (macOS/Linux) — Tauri supports both, but explicit testing deferred.
+- **Code signing** for Windows (SmartScreen will warn on first install of the unsigned `.msi`).
+- **CSP tightening** — `tauri.conf.json` still has `"csp": null`.
+- **Cross-platform** (macOS/Linux) — Tauri supports both, but explicit testing deferred. The PyInstaller spec is Windows-tested only.
 - **i18n of the UI strings** (the UI itself stays English; only the translation *output* is Vietnamese).
+- **Pre-bundled ML assets** (HuggingFace embedding model + Argos en→vi pack) — currently both download on first use. Bundle them later for true offline-first.
 
 ## Removed (legacy)
 
