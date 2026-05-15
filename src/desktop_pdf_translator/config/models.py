@@ -107,6 +107,8 @@ class TranslationSettings(BaseModel):
     max_pages: int = Field(50, ge=1, le=100, description="Maximum pages per PDF")
     max_file_size_mb: float = Field(50.0, ge=1.0, le=200.0, description="Maximum file size in MB")
     cache_translations: bool = Field(True, description="Enable translation caching")
+    cache_ttl_days: int = Field(30, ge=1, le=365, description="Days before cached translations expire")
+    cache_max_size_mb: float = Field(500.0, ge=10.0, le=5000.0, description="Soft cap for translation cache size (MB)")
     preserve_formatting: bool = Field(True, description="Preserve PDF formatting")
     min_text_length: int = Field(5, ge=0, description="Minimum text length to translate")
 
@@ -122,8 +124,12 @@ class GUISettings(BaseModel):
 
 class ProcessingSettings(BaseModel):
     """PDF processing settings."""
-    
+
     max_workers: int = Field(4, ge=1, le=8, description="Maximum parallel workers")
+    max_parallel_chunks: int = Field(
+        0, ge=0, le=16,
+        description="BabelDOC sub-jobs in flight at once. 0 = auto (cpu // 2, clamped to 2-8)",
+    )
     timeout_seconds: int = Field(300, ge=30, le=3600, description="Processing timeout")
     quality_check: bool = Field(True, description="Enable translation quality checks")
     backup_originals: bool = Field(True, description="Keep backup of original files")
@@ -133,45 +139,6 @@ class RAGSettings(BaseModel):
 
     enabled: bool = Field(False, description="Enable RAG functionality")
     auto_process_documents: bool = Field(True, description="Auto-process documents for RAG")
-    web_research_enabled: bool = Field(True, description="Enable web research integration")
-
-
-class DeepSearchSettings(BaseModel):
-    """Deep search configuration for academic paper research."""
-
-    enabled: bool = Field(True, description="Enable deep search feature")
-
-    # Search parameters
-    max_hops: int = Field(3, ge=1, le=5, description="Maximum citation hops")
-    max_papers_per_hop: int = Field(5, ge=1, le=10, description="Papers analyzed per hop")
-    max_total_papers: int = Field(20, ge=5, le=50, description="Maximum total papers")
-
-    # Search strategy
-    follow_citations: bool = Field(True, description="Follow backward citations")
-    follow_cited_by: bool = Field(True, description="Follow forward citations (cited-by)")
-    recent_papers_only: bool = Field(False, description="Limit to recent papers (3 years)")
-    recent_years_threshold: int = Field(3, ge=1, le=10, description="Years for recency filter")
-
-    # API keys (optional)
-    pubmed_api_key: Optional[str] = Field(None, description="PubMed NCBI API key (optional)")
-    core_api_key: Optional[str] = Field(None, description="CORE API key (required for CORE)")
-
-    # Paper selection
-    diversity_weight: float = Field(0.3, ge=0.0, le=1.0, description="Weight for source diversity")
-    relevance_weight: float = Field(0.7, ge=0.0, le=1.0, description="Weight for relevance")
-
-    # Caching
-    cache_papers: bool = Field(True, description="Cache fetched paper metadata")
-    cache_ttl_days: int = Field(7, ge=1, le=30, description="Cache TTL in days")
-    cache_dir: str = Field("data/paper_cache", description="Cache directory")
-
-    # Performance
-    concurrent_api_calls: int = Field(3, ge=1, le=10, description="Concurrent API requests")
-    request_timeout_seconds: int = Field(30, ge=10, le=120, description="API timeout")
-
-    # LLM settings for synthesis
-    synthesis_model: str = Field("auto", description="Model for synthesis (auto uses RAG model)")
-    synthesis_max_tokens: int = Field(1500, ge=500, le=4000, description="Max tokens for synthesis")
 
 
 class AppSettings(BaseModel):
@@ -188,8 +155,7 @@ class AppSettings(BaseModel):
     gui: GUISettings = Field(default_factory=GUISettings)
     processing: ProcessingSettings = Field(default_factory=ProcessingSettings)
     rag: RAGSettings = Field(default_factory=RAGSettings)
-    deep_search: DeepSearchSettings = Field(default_factory=DeepSearchSettings)
-    
+
     # Application metadata
     version: str = Field("1.0.0", description="Application version")
     debug_mode: bool = Field(False, description="Enable debug logging")

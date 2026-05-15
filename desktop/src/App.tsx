@@ -16,6 +16,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { useSidecar } from "@/hooks/useSidecar";
 import { useTranslation } from "@/hooks/useTranslation";
 import { useAppStore } from "@/lib/store";
+import { api } from "@/lib/api-client";
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -68,6 +69,11 @@ function Workspace() {
         setOriginalPath(selected);
         setTranslatedPath(null);
         translation.reset();
+        // Fire-and-forget pre-warm: by the time the user clicks Translate, the
+        // Argos pack should be installed (or the LLM client should be live).
+        // Errors are intentionally swallowed — this is a UX optimization,
+        // never a correctness gate.
+        void api.post("/translate/prewarm", {}).catch(() => undefined);
       }
     } catch (e) {
       toast.error("Could not open file picker", {

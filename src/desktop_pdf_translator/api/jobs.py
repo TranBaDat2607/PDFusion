@@ -24,6 +24,10 @@ class Job:
     cancelled: bool = False
     task: Optional[asyncio.Task] = None
     finished: bool = False
+    # Opaque handle so the API layer can call `processor.reprioritize(...)`
+    # for the priority-scheduler endpoint without taking a hard dep on the
+    # processor class here. None when the job isn't using a processor.
+    processor: Optional[Any] = None
 
     async def emit(self, event_type: str, payload: Dict[str, Any]) -> None:
         await self.queue.put({"type": event_type, "data": payload})

@@ -4,6 +4,7 @@ Base translator interface compatible with BabelDOC.
 
 import logging
 import re
+import time
 from abc import ABC, abstractmethod
 from typing import Dict, Optional, Any
 
@@ -11,6 +12,16 @@ from ..config import LanguageCode
 
 
 logger = logging.getLogger(__name__)
+
+
+LANGUAGE_DISPLAY_NAMES: Dict[str, str] = {
+    "vi": "Vietnamese (Tiếng Việt)",
+    "en": "English",
+    "ja": "Japanese (日本語)",
+    "zh-cn": "Simplified Chinese (简体中文)",
+    "zh-tw": "Traditional Chinese (繁體中文)",
+    "auto": "automatically detected language",
+}
 
 
 class BaseTranslator(ABC):
@@ -22,23 +33,51 @@ class BaseTranslator(ABC):
     - Must support formula placeholder handling
     - Must support language attributes: lang_in, lang_out
     """
-    
+
+    min_request_interval: float = 0.0
+
     def __init__(self, lang_in: str, lang_out: str, **kwargs):
         """Initialize translator with language configuration.
-        
+
         Args:
             lang_in: Source language code
-            lang_out: Target language code 
-            **kwargs: Additional translator-specific configuration
+            lang_out: Target language code
+            **kwargs: Additional translator-specific configuration. Recognized
+                across all backends:
+                  on_paragraph_translated: Optional[Callable[[str, str], None]]
+                    Fired (from whatever thread translate() runs on) after
+                    each paragraph is translated. Receives (source, target).
+                    Used by the processor to emit `paragraph_translated`
+                    SSE events for the live ticker UI.
         """
         self.lang_in = self._normalize_language_code(lang_in)
         self.lang_out = self._normalize_language_code(lang_out)
         self.translate_call_count = 0
-        
+        self._last_request_time = 0.0
+
+        # Pop the cross-cutting callback before passing the rest to the
+        # subclass setup so backends don't need to thread it through their
+        # own kwargs handling.
+        self._on_paragraph_translated = kwargs.pop(
+            "on_paragraph_translated", None
+        )
+
         # Initialize translator-specific settings
         self._setup_translator(**kwargs)
-        
+
         logger.info(f"Initialized {self.__class__.__name__} translator: {self.lang_in} -> {self.lang_out}")
+
+    def _fire_paragraph_callback(self, source: str, target: str) -> None:
+        """Best-effort: invoke the on_paragraph_translated callback if set.
+        Any exception in the callback is swallowed — we never want a UI hook
+        to break a translation."""
+        cb = self._on_paragraph_translated
+        if cb is None:
+            return
+        try:
+            cb(source, target)
+        except Exception:
+            logger.debug("on_paragraph_translated callback raised", exc_info=True)
     
     def _normalize_language_code(self, lang_code: str) -> str:
         """Normalize language code for translator compatibility."""
@@ -112,6 +151,15 @@ class BaseTranslator(ABC):
         placeholder, regex_pattern = self.get_formular_placeholder(placeholder_id)
         return re.sub(regex_pattern, original_formula, text, flags=re.IGNORECASE)
     
+    def _apply_rate_limiting(self) -> None:
+        """Sleep so consecutive requests are spaced by `min_request_interval`."""
+        if self.min_request_interval <= 0:
+            return
+        elapsed = time.time() - self._last_request_time
+        if elapsed < self.min_request_interval:
+            time.sleep(self.min_request_interval - elapsed)
+        self._last_request_time = time.time()
+
     def _preprocess_text(self, text: str) -> str:
         """Preprocess text before translation."""
         # Basic text cleaning
@@ -126,16 +174,14 @@ class BaseTranslator(ABC):
     
     def _postprocess_text(self, text: str) -> str:
         """Postprocess translated text."""
-        # Basic text cleaning
         text = text.strip()
-        
-        # Handle Vietnamese-specific postprocessing
+
         if self.lang_out == "vi":
-            # Add Vietnamese-specific text formatting here if needed
-            # For example, proper spacing around punctuation
-            text = re.sub(r'\s+([.,;:!?])', r'\1', text)  # Remove space before punctuation
-            text = re.sub(r'([.,;:!?])([^\s])', r'\1 \2', text)  # Add space after punctuation
-        
+            text = re.sub(r'\s+([.,;:!?])', r'\1', text)
+            text = re.sub(r'([.,;:!?])([^\s])', r'\1 \2', text)
+            text = text.replace("  ", " ")
+            text = text.replace('"', '"').replace('"', '"')
+
         return text
     
     def _handle_translation_error(self, error: Exception, text: str) -> str:

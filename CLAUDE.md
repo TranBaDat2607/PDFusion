@@ -32,8 +32,7 @@ python main.py          # equivalent to: pdfusion-sidecar (console script from p
 > `PDFUSION_PYTHON` environment variable if your env lives elsewhere.
 
 **External system dependencies:**
-- Ghostscript (BabelDOC PDF processing)
-- Tesseract OCR (optional, scanned PDFs)
+- Ghostscript (optional — only needed by Camelot for table extraction during RAG indexing; pdfplumber fallback runs without it)
 - WebView2 Runtime (ships with Windows 11)
 - MSVC Build Tools 2022/2026 (Rust on Windows)
 

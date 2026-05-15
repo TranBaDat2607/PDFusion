@@ -12,7 +12,6 @@ from sse_starlette.sse import EventSourceResponse
 from ...rag.document_processor import ScientificPDFProcessor
 from ...rag.rag_chain import EnhancedRAGChain
 from ...rag.vector_store import ChromaDBManager
-from ...rag.web_research import WebResearchEngine
 from ..auth import require_token
 from ..jobs import Job, get_registry, serialize_sse_event
 from ..schemas import AskRequest, IndexRequest, JobAccepted
@@ -24,18 +23,16 @@ router = APIRouter(prefix="/rag", tags=["rag"], dependencies=[Depends(require_to
 # Lazily initialized singletons. The RAG stack is heavy (loads embedding models, etc.)
 # so we only instantiate on first use.
 _vector_store: Optional[ChromaDBManager] = None
-_web_research: Optional[WebResearchEngine] = None
 _rag_chain: Optional[EnhancedRAGChain] = None
 _init_lock = asyncio.Lock()
 
 
 async def _get_chain() -> EnhancedRAGChain:
-    global _vector_store, _web_research, _rag_chain
+    global _vector_store, _rag_chain
     async with _init_lock:
         if _rag_chain is None:
             _vector_store = ChromaDBManager()
-            _web_research = WebResearchEngine()
-            _rag_chain = EnhancedRAGChain(_vector_store, _web_research)
+            _rag_chain = EnhancedRAGChain(_vector_store)
         return _rag_chain
 
 
@@ -135,10 +132,7 @@ async def _run_ask(job: Job, payload: AskRequest) -> None:
         result = await chain.answer_question(
             question=payload.question,
             document_id=payload.document_id,
-            include_web_research=payload.include_web_research,
             max_pdf_sources=payload.max_pdf_sources,
-            max_web_sources=payload.max_web_sources,
-            use_deep_search=payload.use_deep_search,
             progress_callback=progress_callback,
         )
 

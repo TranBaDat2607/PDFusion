@@ -1,10 +1,13 @@
 import { useEffect, useState } from "react";
 import {
   CheckCircle2,
+  Database,
   Eye,
   EyeOff,
   Loader2,
   ShieldCheck,
+  Sparkles,
+  Trash2,
   XCircle,
 } from "lucide-react";
 
@@ -26,8 +29,10 @@ import {
   SheetHeader,
   SheetTitle,
 } from "@/components/ui/sheet";
+import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { toast } from "sonner";
+import { api } from "@/lib/api-client";
 import {
   useConfig,
   useOptions,
@@ -41,6 +46,9 @@ import {
 type LlmServiceCode = Exclude<ServiceCode, "argos">;
 const LLM_SERVICES: LlmServiceCode[] = ["openai", "gemini", "anthropic"];
 const ALL_SERVICES: ServiceCode[] = ["argos", "openai", "gemini", "anthropic"];
+
+// Pseudo-tab value for the cache panel — not a real translation service.
+type TabValue = ServiceCode | "cache";
 
 interface SettingsSheetProps {
   open: boolean;
@@ -66,7 +74,7 @@ export function SettingsSheet({ open, onOpenChange }: SettingsSheetProps) {
   const { data: options } = useOptions();
   const updateConfig = useUpdateConfig();
 
-  const [tab, setTab] = useState<ServiceCode>("argos");
+  const [tab, setTab] = useState<TabValue>("argos");
   const [drafts, setDrafts] = useState<Drafts>(EMPTY_DRAFTS);
 
   // Reset drafts whenever the sheet opens (or config changes)
@@ -120,17 +128,25 @@ export function SettingsSheet({ open, onOpenChange }: SettingsSheetProps) {
         </SheetHeader>
 
         <div className="flex-1 overflow-y-auto px-4">
-          <Tabs value={tab} onValueChange={(v) => setTab(v as ServiceCode)}>
-            <TabsList className="grid w-full grid-cols-4">
+          <Tabs value={tab} onValueChange={(v) => setTab(v as TabValue)}>
+            <TabsList className="grid w-full grid-cols-5">
               {ALL_SERVICES.map((c) => (
                 <TabsTrigger key={c} value={c}>
                   {options?.services.find((s) => s.code === c)?.label ?? c}
                 </TabsTrigger>
               ))}
+              <TabsTrigger value="cache">Cache</TabsTrigger>
             </TabsList>
 
             <TabsContent value="argos" className="mt-4">
               <ArgosTab />
+            </TabsContent>
+
+            <TabsContent value="cache" className="mt-4">
+              <CacheTab open={open && tab === "cache"} />
+              <div className="mt-6 border-t border-border pt-6">
+                <PerformanceSection />
+              </div>
             </TabsContent>
 
             {LLM_SERVICES.map((code) => {
@@ -388,6 +404,233 @@ function ServiceTab({
             {validation.message}
           </span>
         )}
+      </div>
+    </div>
+  );
+}
+
+interface CacheStats {
+  entries: number;
+  active: number;
+  expired: number;
+  size_mb: number;
+  by_service: Record<string, number>;
+  hits: number;
+  misses: number;
+  hit_rate: number;
+  cache_dir: string;
+  ttl_days: number;
+  max_size_mb: number;
+}
+
+function CacheTab({ open }: { open: boolean }) {
+  const [stats, setStats] = useState<CacheStats | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [clearing, setClearing] = useState<"expired" | "all" | null>(null);
+
+  const refresh = async () => {
+    setLoading(true);
+    try {
+      const s = await api.get<CacheStats>("/config/cache");
+      setStats(s);
+    } catch (e) {
+      toast.error("Failed to load cache stats", { description: (e as Error).message });
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (open) refresh();
+  }, [open]);
+
+  const handleClear = async (scope: "expired" | "all") => {
+    setClearing(scope);
+    try {
+      const r = await api.delete<{ removed: number; scope: string }>(
+        `/config/cache?scope=${scope}`,
+      );
+      toast.success(`Cleared ${r.removed} ${scope} entries`);
+      await refresh();
+    } catch (e) {
+      toast.error("Failed to clear cache", { description: (e as Error).message });
+    } finally {
+      setClearing(null);
+    }
+  };
+
+  return (
+    <div className="space-y-4 py-2">
+      <div className="rounded-md border border-border bg-muted/40 p-4 space-y-3">
+        <div className="flex items-center gap-2">
+          <Database className="h-4 w-4 text-primary" />
+          <span className="text-sm font-medium">Translation cache</span>
+        </div>
+        <p className="text-sm text-muted-foreground leading-relaxed">
+          Persists every translated paragraph on disk so re-translating the same
+          PDF (or any paragraph you've seen before) is instant. Stored locally
+          and never uploaded. Keyed by source text + language pair + service + model.
+        </p>
+      </div>
+
+      {stats ? (
+        <div className="grid grid-cols-2 gap-3 text-sm">
+          <Stat label="Entries" value={stats.active.toLocaleString()} />
+          <Stat label="Size" value={`${stats.size_mb.toFixed(2)} MB`} />
+          <Stat label="Session hits" value={stats.hits.toLocaleString()} />
+          <Stat
+            label="Hit rate"
+            value={
+              stats.hits + stats.misses === 0
+                ? "—"
+                : `${(stats.hit_rate * 100).toFixed(0)}%`
+            }
+          />
+          <Stat label="Expired" value={stats.expired.toLocaleString()} />
+          <Stat label="TTL" value={`${stats.ttl_days} days`} />
+        </div>
+      ) : (
+        <div className="text-sm text-muted-foreground">
+          {loading ? "Loading…" : "No data"}
+        </div>
+      )}
+
+      {stats && Object.keys(stats.by_service).length > 0 && (
+        <div className="text-xs text-muted-foreground">
+          By service:{" "}
+          {Object.entries(stats.by_service)
+            .map(([s, n]) => `${s} (${n})`)
+            .join(" · ")}
+        </div>
+      )}
+
+      <div className="flex flex-wrap gap-2">
+        <Button
+          variant="secondary"
+          size="sm"
+          onClick={refresh}
+          disabled={loading}
+        >
+          {loading ? (
+            <>
+              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+              Refreshing…
+            </>
+          ) : (
+            "Refresh"
+          )}
+        </Button>
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={() => handleClear("expired")}
+          disabled={clearing !== null}
+        >
+          {clearing === "expired" ? (
+            <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+          ) : (
+            <Trash2 className="mr-2 h-4 w-4" />
+          )}
+          Clear expired
+        </Button>
+        <Button
+          variant="destructive"
+          size="sm"
+          onClick={() => handleClear("all")}
+          disabled={clearing !== null}
+        >
+          {clearing === "all" ? (
+            <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+          ) : (
+            <Trash2 className="mr-2 h-4 w-4" />
+          )}
+          Clear all
+        </Button>
+      </div>
+
+      {stats?.cache_dir && (
+        <p className="text-xs text-muted-foreground break-all">
+          Location: <code>{stats.cache_dir}</code>
+        </p>
+      )}
+    </div>
+  );
+}
+
+function Stat({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-md border border-border bg-background px-3 py-2">
+      <div className="text-xs text-muted-foreground">{label}</div>
+      <div className="font-mono text-sm font-medium">{value}</div>
+    </div>
+  );
+}
+
+const PARALLELISM_PRESETS: Array<{
+  value: number;
+  label: string;
+  hint: string;
+}> = [
+  { value: 0, label: "Auto", hint: "cpu // 2, clamped to 2-8" },
+  { value: 1, label: "Quality", hint: "1 chunk at a time — lowest memory" },
+  { value: 2, label: "Balanced (low)", hint: "2 chunks in flight" },
+  { value: 4, label: "Balanced", hint: "4 chunks (previous default)" },
+  { value: 6, label: "Turbo", hint: "6 chunks — needs a powerful machine" },
+  { value: 8, label: "Max", hint: "8 chunks — maximum pipeline depth" },
+];
+
+function PerformanceSection() {
+  const { data: config } = useConfig();
+  const update = useUpdateConfig();
+  const current = config?.processing?.max_parallel_chunks ?? 0;
+  const cacheEnabled = config?.translation?.cache_translations ?? true;
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center gap-2">
+        <Sparkles className="h-4 w-4 text-primary" />
+        <span className="text-sm font-medium">Performance</span>
+      </div>
+
+      <div className="space-y-2">
+        <Label htmlFor="parallel-chunks">Parallel pages</Label>
+        <Select
+          value={String(current)}
+          onValueChange={(v) =>
+            update.mutate({ max_parallel_chunks: parseInt(v, 10) })
+          }
+        >
+          <SelectTrigger id="parallel-chunks">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {PARALLELISM_PRESETS.map((p) => (
+              <SelectItem key={p.value} value={String(p.value)}>
+                {p.label} — {p.hint}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        <p className="text-xs text-muted-foreground">
+          More parallel pages = faster, but uses more RAM. Each in-flight page
+          holds ~150-300 MB of BabelDOC state.
+        </p>
+      </div>
+
+      <div className="space-y-2">
+        <Label htmlFor="cache-translations" className="flex items-center gap-2">
+          <Switch
+            id="cache-translations"
+            checked={cacheEnabled}
+            onCheckedChange={(checked) =>
+              update.mutate({ cache_translations: checked })
+            }
+          />
+          <span className="text-sm">Cache translations to disk</span>
+        </Label>
+        <p className="text-xs text-muted-foreground pl-10">
+          Re-translating a paragraph you've seen before is instant.
+        </p>
       </div>
     </div>
   );

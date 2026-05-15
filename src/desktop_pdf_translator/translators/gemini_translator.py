@@ -3,12 +3,12 @@ Google Gemini translator implementation with Vietnamese optimization.
 """
 
 import logging
-import time
 from typing import Optional, List, Dict, Any
 
 import google.generativeai as genai
 
-from .base import BaseTranslator
+from .base import BaseTranslator, LANGUAGE_DISPLAY_NAMES
+from .translation_cache import llm_cache_get as _llm_cache_get, llm_cache_set as _llm_cache_set
 
 
 logger = logging.getLogger(__name__)
@@ -17,110 +17,81 @@ logger = logging.getLogger(__name__)
 class GeminiTranslator(BaseTranslator):
     """
     Google Gemini-based translator with Vietnamese language optimization.
-    
+
     Supports Gemini Pro and other Google AI models with special handling
     for Vietnamese language translations.
     """
-    
+
+    min_request_interval = 2.0
+
     def __init__(self, lang_in: str, lang_out: str, **kwargs):
-        """Initialize Gemini translator."""
         super().__init__(lang_in, lang_out, **kwargs)
-    
+
     def _setup_translator(self, **kwargs):
-        """Setup Gemini client and configuration."""
         self.api_key = kwargs.get("api_key")
         if not self.api_key:
             raise ValueError("Gemini API key is required")
-        
+
         self.model_name = kwargs.get("model", "gemini-pro")
         self.temperature = kwargs.get("temperature", 0.3)
-        
-        # Configure Gemini
+
         genai.configure(api_key=self.api_key)
         self.model = genai.GenerativeModel(self.model_name)
-        
-        # Configure generation settings
+
         self.generation_config = genai.types.GenerationConfig(
             temperature=self.temperature,
             max_output_tokens=4000,
-            candidate_count=1
+            candidate_count=1,
         )
-        
-        # Safety settings for content filtering
+
         self.safety_settings = [
             {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_MEDIUM_AND_ABOVE"},
             {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_MEDIUM_AND_ABOVE"},
             {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_MEDIUM_AND_ABOVE"},
             {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_MEDIUM_AND_ABOVE"},
         ]
-        
-        # Rate limiting
-        self.last_request_time = 0
-        self.min_request_interval = 2.0  # Minimum 2 seconds between requests for Gemini
-        
+
         logger.info(f"Gemini translator configured with model: {self.model_name}")
     
     def translate(self, text: str, **kwargs) -> str:
-        """
-        Translate text using Google Gemini.
-        
-        Args:
-            text: Text to translate
-            **kwargs: Additional translation parameters
-            
-        Returns:
-            Translated text
-        """
         self.translate_call_count += 1
-        
+
         try:
-            # Preprocess text
             processed_text = self._preprocess_text(text)
             if not processed_text.strip():
                 return text
-            
-            # Rate limiting
+
+            cached = _llm_cache_get(processed_text, self.lang_in, self.lang_out, "gemini", self.model_name)
+            if cached is not None:
+                self._fire_paragraph_callback(processed_text, cached)
+                return cached
+
             self._apply_rate_limiting()
-            
-            # Create translation prompt
-            prompt = self._create_translation_prompt(processed_text)
-            
-            # Call Gemini API
+
             response = self.model.generate_content(
-                prompt,
+                self._create_translation_prompt(processed_text),
                 generation_config=self.generation_config,
-                safety_settings=self.safety_settings
+                safety_settings=self.safety_settings,
             )
-            
-            # Handle potential content filtering
+
             if response.candidates and response.candidates[0].content:
                 translated_text = response.text.strip()
             else:
-                # If content was filtered, return original text
                 logger.warning("Gemini response was filtered or empty")
                 return text
-            
-            # Postprocess and return
-            return self._postprocess_text(translated_text)
-            
+
+            result = self._postprocess_text(translated_text)
+            _llm_cache_set(processed_text, result, self.lang_in, self.lang_out, "gemini", self.model_name)
+            self._fire_paragraph_callback(processed_text, result)
+            return result
+
         except Exception as e:
             return self._handle_translation_error(e, text)
-    
+
     def _create_translation_prompt(self, text: str) -> str:
         """Create optimized translation prompt for Vietnamese."""
-        
-        # Get language names for prompt
-        lang_names = {
-            "vi": "Vietnamese (Tiếng Việt)",
-            "en": "English", 
-            "ja": "Japanese (日本語)",
-            "zh-cn": "Simplified Chinese (简体中文)",
-            "zh-tw": "Traditional Chinese (繁體中文)",
-            "auto": "automatically detected language"
-        }
-        
-        source_lang = lang_names.get(self.lang_in, self.lang_in)
-        target_lang = lang_names.get(self.lang_out, self.lang_out)
+        source_lang = LANGUAGE_DISPLAY_NAMES.get(self.lang_in, self.lang_in)
+        target_lang = LANGUAGE_DISPLAY_NAMES.get(self.lang_out, self.lang_out)
         
         # Create prompt with Vietnamese optimization
         if self.lang_out == "vi":
@@ -158,41 +129,13 @@ Provide only the translation:"""
         
         return prompt
     
-    def _apply_rate_limiting(self):
-        """Apply rate limiting for Gemini API."""
-        current_time = time.time()
-        time_since_last_request = current_time - self.last_request_time
-        
-        if time_since_last_request < self.min_request_interval:
-            sleep_time = self.min_request_interval - time_since_last_request
-            time.sleep(sleep_time)
-        
-        self.last_request_time = time.time()
-    
     def _postprocess_text(self, text: str) -> str:
-        """Vietnamese-specific postprocessing for Gemini."""
-        text = super()._postprocess_text(text)
-        
         if self.lang_out == "vi":
-            # Vietnamese-specific formatting for Gemini output
-            # Remove common Gemini artifacts
-            text = text.replace("**", "")  # Remove bold markdown
-            text = text.replace("*", "")   # Remove italic markdown
-            
-            # Fix Vietnamese punctuation
-            text = text.replace(" ,", ",")
-            text = text.replace(" .", ".")
-            text = text.replace(" ;", ";")
-            text = text.replace(" :", ":")
-            text = text.replace(" !", "!")
-            text = text.replace(" ?", "?")
-            
-            # Normalize Vietnamese quotes
-            text = text.replace(""", '"').replace(""", '"')
-            text = text.replace("'", "'").replace("'", "'")
-        
-        return text
-    
+            # Strip Gemini's markdown decorations before delegating to the shared
+            # punctuation/quote cleanup.
+            text = text.replace("**", "").replace("*", "")
+        return super()._postprocess_text(text)
+
     def validate_configuration(self) -> tuple[bool, str]:
         """Validate Gemini configuration."""
         try:

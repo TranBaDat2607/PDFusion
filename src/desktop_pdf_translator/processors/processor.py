@@ -4,6 +4,7 @@ Main PDF processing pipeline with BabelDOC integration and Vietnamese optimizati
 
 import asyncio
 import logging
+import os
 import time
 import uuid
 from pathlib import Path
@@ -17,8 +18,55 @@ from babeldoc.format.pdf.translation_config import WatermarkOutputMode as BabelD
 
 from ..config import get_settings, FileMetadata, LanguageCode, TranslationService
 from ..translators import TranslatorFactory
-from .events import ProcessingEvent, ProgressEvent, ErrorEvent, CompletionEvent, EventType
+from .events import (
+    ProcessingEvent,
+    ProgressEvent,
+    ErrorEvent,
+    CompletionEvent,
+    ChunkReadyEvent,
+    ParagraphTranslatedEvent,
+    EventType,
+)
 from .exceptions import ProcessingError, BabelDOCError, FileValidationError, ConfigurationError
+
+
+# Number of source pages per BabelDOC sub-job. 1 = page-by-page streaming: the
+# viewer hot-swaps every time a single page finishes its full BabelDOC pipeline
+# (translate → typeset → render → save). Combined with `_MAX_PARALLEL_CHUNKS`
+# below, this gives the user the maximum streaming feel.
+_PAGES_PER_CHUNK = 1
+
+# How many BabelDOC sub-jobs may be in flight at once. BabelDOC's pipeline is
+# monolithic (you can't externally separate translate from render), but by
+# running multiple jobs concurrently we get natural pipelining: while job N is
+# in its typeset/render/save phase, jobs N+1..N+k can be in their translate
+# phase calling Argos. The shared `ArgosTranslator` instance has a single
+# batch queue, so the 4 BabelDOC worker threads from each job naturally feed
+# one Argos batch at a time — no double-buffering needed, no contention beyond
+# Argos's own CTranslate2 serialization.
+#
+# Higher values increase memory (each BabelDOC job holds its own IR/font maps)
+# but improve pipeline depth. 4 is a reasonable default for desktop machines.
+_MAX_PARALLEL_CHUNKS = 4
+
+
+def _effective_parallel_chunks(settings) -> int:
+    """Resolve the chunk-concurrency knob.
+
+    `processing.max_parallel_chunks = 0` (default) means auto: roughly half the
+    CPU cores, clamped to [2, 8]. Each in-flight BabelDOC sub-job carries
+    ~150-300 MB of intermediate state on a typical academic paper, so we leave
+    half the cores (and roughly half the RAM headroom) to the rest of the app
+    plus the WebView2 renderer.
+    """
+    try:
+        configured = int(settings.processing.max_parallel_chunks)
+    except (AttributeError, TypeError, ValueError):
+        configured = 0
+    if configured > 0:
+        return configured
+    cpu = os.cpu_count() or 4
+    return max(2, min(8, cpu // 2))
 
 
 logger = logging.getLogger(__name__)
@@ -37,14 +85,30 @@ class PDFProcessor:
         self.settings = get_settings()
         self.session_id = None
         self._current_task = None
+        # Priority anchor for chunk scheduling — the 0-indexed page the viewer
+        # is currently showing. Workers prefer chunks whose page index is
+        # closest to this anchor. Updated live via `reprioritize()` as the
+        # user scrolls. None until process_pdf() initializes it.
+        self._priority_anchor: Optional[int] = None
+        self._priority_lock: Optional[asyncio.Lock] = None
+        # Paragraph-ticker plumbing. The translator callback fires from
+        # BabelDOC's worker threads; we bridge back to the asyncio loop with
+        # call_soon_threadsafe. The queue is intentionally bounded so a runaway
+        # translator can't blow memory; on overflow we drop oldest (the ticker
+        # only needs the *latest* paragraph anyway).
+        self._paragraph_queue: Optional[asyncio.Queue] = None
+        self._event_loop: Optional[asyncio.AbstractEventLoop] = None
+        self._paragraphs_seen: int = 0
+        self._service_name: str = "argos"
     
     async def process_pdf(
-        self, 
+        self,
         file_path: Path,
         source_lang: Optional[LanguageCode] = None,
         target_lang: Optional[LanguageCode] = None,
         translation_service: Optional[TranslationService] = None,
-        output_dir: Optional[Path] = None
+        output_dir: Optional[Path] = None,
+        visible_page: int = 1,
     ) -> AsyncGenerator[ProcessingEvent, None]:
         """
         Process PDF file with translation.
@@ -141,10 +205,18 @@ class PDFProcessor:
                 message=f"Setting up {translation_service} translator"
             )
             
+            # Paragraph-ticker plumbing — capture the loop so the
+            # translator's worker-thread callback can hop back here.
+            self._paragraph_queue = asyncio.Queue(maxsize=64)
+            self._event_loop = asyncio.get_running_loop()
+            self._paragraphs_seen = 0
+            self._service_name = translation_service.value
+
             translator = TranslatorFactory.create_translator(
                 service=translation_service,
                 lang_in=source_lang,
-                lang_out=target_lang
+                lang_out=target_lang,
+                on_paragraph_translated=self._handle_paragraph,
             )
             
             yield ProgressEvent(
@@ -159,10 +231,19 @@ class PDFProcessor:
                 message=f"Translator initialized: {translator}"
             )
             
+            # Seed the priority anchor from the page the viewer is currently
+            # showing. Workers will pick chunks whose distance from this is
+            # smallest — so the user's visible page translates first.
+            self._priority_anchor = max(0, visible_page - 1)
+            self._priority_lock = asyncio.Lock()
+
             # Step 3: BabelDOC processing
-            logger.info("Using BabelDOC processing")
+            logger.info(
+                "Using BabelDOC processing (priority anchor = page %d)",
+                visible_page,
+            )
             async for event in self._process_with_babeldoc(
-                file_path, translator, output_dir, file_metadata
+                file_path, translator, output_dir, file_metadata, start_time
             ):
                 yield event
             
@@ -284,73 +365,451 @@ class PDFProcessor:
         file_path: Path,
         translator,
         output_dir: Path,
-        file_metadata: FileMetadata
+        file_metadata: FileMetadata,
+        job_start_time: Optional[float] = None,
     ) -> AsyncGenerator[ProcessingEvent, None]:
-        """Process PDF using BabelDOC pipeline."""
+        """Process PDF using BabelDOC with 1-page chunks running in a parallel
+        render pipeline.
+
+        BabelDOC's pipeline is monolithic — every call to `babeldoc_translate()`
+        runs all 13 stages (layout → translate → typeset → render → save) and
+        there is no external hook to peel "translate" apart from "render". So
+        we get streaming + pipelining by structuring it at the orchestration
+        layer:
+
+        1. Split the input into 1-page chunks up front.
+        2. Launch up to `_MAX_PARALLEL_CHUNKS` BabelDOC sub-jobs concurrently.
+           While chunk N is in its typeset/render/save phase, chunk N+1 can be
+           in its translate phase calling Argos.
+        3. The single shared `ArgosTranslator` instance has one batch queue;
+           paragraphs from all concurrent chunks fill the same batches of 4,
+           and CTranslate2 serializes the actual NMT inference. Argos is the
+           natural rate limiter — extra parallelism doesn't make it faster,
+           but it does hide BabelDOC's per-chunk non-translate overhead.
+        4. Completed chunks are merged into a rolling versioned PDF (in
+           strict page order, even when chunks finish out of order) and a
+           `chunk_ready` SSE event is emitted so the viewer hot-swaps.
+
+        The translator instance is reused across chunks so the Argos batch
+        queue and process-lifetime translation cache (argos_translator.py)
+        persist — repeated paragraphs across chunks translate for free.
+        """
+        chunk_tasks: list[asyncio.Task] = []
+        max_parallel = _effective_parallel_chunks(self.settings)
         try:
-            logger.info("Starting BabelDOC processing")
-            
-            # Create BabelDOC configuration
-            babeldoc_config = self._create_babeldoc_config(
-                file_path, translator, output_dir
+            logger.info(
+                "Starting BabelDOC processing (parallel chunked, "
+                "pages_per_chunk=%d, max_parallel=%d)",
+                _PAGES_PER_CHUNK, max_parallel,
             )
-            
-            logger.info("BabelDOC config created, starting translation")
-            
+
+            chunk_work_dir = output_dir / f"{file_path.stem}_chunk_work"
+            chunks_in_dir = chunk_work_dir / "in"
+            chunks_out_root = chunk_work_dir / "out"
+            chunks_in_dir.mkdir(parents=True, exist_ok=True)
+            chunks_out_root.mkdir(parents=True, exist_ok=True)
+
+            chunks = self._split_input_into_chunks(
+                file_path, chunks_in_dir, pages_per_chunk=_PAGES_PER_CHUNK
+            )
+            total_chunks = len(chunks)
+            logger.info(
+                "Split %s (%d pages) into %d chunk(s) of up to %d page(s)",
+                file_path.name, file_metadata.page_count, total_chunks,
+                _PAGES_PER_CHUNK,
+            )
+
             yield ProgressEvent(
                 type=EventType.PROGRESS_UPDATE,
                 timestamp=time.time(),
                 session_id=self.session_id,
                 data={},
-                stage="Starting BabelDOC translation",
+                stage="Starting parallel BabelDOC pipeline",
                 current_step=3,
                 total_steps=4,
                 progress_percent=50.0,
-                message="Initializing BabelDOC processing"
+                message=(
+                    f"Pipelining {total_chunks} page(s), "
+                    f"up to {max_parallel} in flight"
+                ),
             )
-            
-            # Process with BabelDOC - directly iterate over the async generator
-            async for event in babeldoc_translate(babeldoc_config):
-                logger.info(f"BabelDOC event: {event}")
-                # Convert BabelDOC events to our event format
-                if event["type"] == "progress_update":
+
+            # Priority-driven scheduling. Up to `max_parallel` workers run
+            # concurrently, each picking the **pending** chunk whose page
+            # index is closest to the current `_priority_anchor` (the page
+            # the user is looking at). Reprioritization via
+            # `reprioritize()` updates the anchor and the next worker pick
+            # sees the new value.
+            chunk_results: list[Optional[Path]] = [None] * total_chunks
+            chunk_errors: list[Optional[BaseException]] = [None] * total_chunks
+            pending: set[int] = set(range(total_chunks))
+            completion_queue: asyncio.Queue[int] = asyncio.Queue()
+            assert self._priority_lock is not None  # set in process_pdf()
+            priority_lock = self._priority_lock
+
+            async def pick_next() -> Optional[int]:
+                """Pop the pending chunk closest to the priority anchor.
+                Returns None when the pool is empty."""
+                async with priority_lock:
+                    if not pending:
+                        return None
+                    anchor = self._priority_anchor or 0
+                    # Smallest absolute distance wins; ties break to the
+                    # lower index for deterministic progress on flat priors.
+                    target = min(pending, key=lambda i: (abs(i - anchor), i))
+                    pending.discard(target)
+                    return target
+
+            async def run_one_chunk(idx: int) -> None:
+                chunk_path, page_range = chunks[idx]
+                try:
+                    chunk_out_dir = chunks_out_root / f"chunk_{idx:03d}"
+                    chunk_out_dir.mkdir(parents=True, exist_ok=True)
+                    config = self._create_babeldoc_config(
+                        chunk_path, translator, chunk_out_dir
+                    )
+                    logger.info(
+                        "Chunk %d/%d (page %d): BabelDOC pipeline start",
+                        idx + 1, total_chunks, page_range[0],
+                    )
+                    async for event in babeldoc_translate(config):
+                        etype = event["type"]
+                        if etype == "error":
+                            raise BabelDOCError(
+                                message=(
+                                    f"BabelDOC chunk {idx + 1} failed: "
+                                    f"{event.get('error', 'Unknown error')}"
+                                ),
+                                details=event.get("details"),
+                            )
+                        elif etype == "finish":
+                            logger.info(
+                                "Chunk %d/%d (page %d): BabelDOC complete",
+                                idx + 1, total_chunks, page_range[0],
+                            )
+                            break
+                    translated = self._find_translated_file(
+                        chunk_out_dir, chunk_path.stem
+                    )
+                    if translated is None:
+                        raise BabelDOCError(
+                            f"Could not locate translated PDF for chunk "
+                            f"{idx + 1} in {chunk_out_dir}"
+                        )
+                    chunk_results[idx] = translated
+                except BaseException as exc:
+                    chunk_errors[idx] = exc
+                finally:
+                    await completion_queue.put(idx)
+
+            async def worker() -> None:
+                while True:
+                    nxt = await pick_next()
+                    if nxt is None:
+                        return
+                    await run_one_chunk(nxt)
+
+            chunk_tasks = [
+                asyncio.create_task(worker(), name=f"babeldoc-worker-{w:02d}")
+                for w in range(max_parallel)
+            ]
+
+            # Unified event multiplexer: chunk completions AND the
+            # paragraph-ticker tick feed into a single asyncio.Queue. The
+            # generator drains it and yields events in arrival order until
+            # the chunk-completion task signals done via `None`.
+            events_queue: asyncio.Queue = asyncio.Queue()
+            _SENTINEL = object()
+            chunk_weight = 40.0 / total_chunks
+
+            async def chunk_completion_producer() -> None:
+                completed_count_local = 0
+                try:
+                    while completed_count_local < total_chunks:
+                        idx_local = await completion_queue.get()
+                        completed_count_local += 1
+                        await events_queue.put(("chunk", idx_local, completed_count_local))
+                finally:
+                    await events_queue.put(_SENTINEL)
+
+            async def paragraph_ticker() -> None:
+                """5 Hz tick: emit only the most-recently translated paragraph.
+                We drain the queue down to its latest entry each tick — the UI
+                only ever shows one preview row so dropped intermediates are
+                invisible. Exits cleanly on CancelledError."""
+                assert self._paragraph_queue is not None
+                pq = self._paragraph_queue
+                try:
+                    while True:
+                        await asyncio.sleep(0.2)
+                        latest = None
+                        while not pq.empty():
+                            try:
+                                latest = pq.get_nowait()
+                            except asyncio.QueueEmpty:
+                                break
+                        if latest is None:
+                            continue
+                        s, t = latest
+                        await events_queue.put(("paragraph", s, t))
+                except asyncio.CancelledError:
+                    return
+
+            completion_task = asyncio.create_task(
+                chunk_completion_producer(), name="chunk-completion-producer"
+            )
+            ticker_task = asyncio.create_task(
+                paragraph_ticker(), name="paragraph-ticker"
+            )
+            chunk_tasks.append(completion_task)
+            chunk_tasks.append(ticker_task)
+
+            try:
+                while True:
+                    event = await events_queue.get()
+                    if event is _SENTINEL:
+                        break
+                    kind = event[0]
+                    if kind == "paragraph":
+                        _, s, t = event
+                        yield ParagraphTranslatedEvent(
+                            type=EventType.PARAGRAPH_TRANSLATED,
+                            timestamp=time.time(),
+                            session_id=self.session_id,
+                            data={},
+                            source_preview=s,
+                            target_preview=t,
+                            paragraphs_seen=self._paragraphs_seen,
+                            service=self._service_name,
+                        )
+                        continue
+
+                    # kind == "chunk"
+                    _, idx, completed_count = event
+                    err = chunk_errors[idx]
+                    if err is not None:
+                        if isinstance(err, BabelDOCError):
+                            raise err
+                        raise BabelDOCError(
+                            f"BabelDOC processing error in chunk {idx + 1}: {err}",
+                            original_error=err,
+                        )
+
+                    _, page_range = chunks[idx]
+                    rolling_path = (
+                        output_dir
+                        / f"{file_path.stem}_translated_v{completed_count:03d}.pdf"
+                    )
+                    self._rebuild_sparse_rolling_pdf(
+                        rolling_path,
+                        original_path=file_path,
+                        chunks=chunks,
+                        chunk_results=chunk_results,
+                    )
+
+                    global_progress = 50.0 + chunk_weight * completed_count
+
+                    # ETA: need ≥2 completed chunks for a stable rate.
+                    elapsed: Optional[float] = None
+                    pages_per_second: Optional[float] = None
+                    eta_seconds: Optional[float] = None
+                    if job_start_time is not None:
+                        elapsed = time.time() - job_start_time
+                        if completed_count >= 2 and elapsed and elapsed > 0:
+                            pages_per_second = completed_count / elapsed
+                            remaining_chunks = total_chunks - completed_count
+                            if pages_per_second > 0 and remaining_chunks > 0:
+                                eta_seconds = remaining_chunks / pages_per_second
+
+                    yield ChunkReadyEvent(
+                        type=EventType.CHUNK_READY,
+                        timestamp=time.time(),
+                        session_id=self.session_id,
+                        data={},
+                        chunk_index=idx,
+                        total_chunks=total_chunks,
+                        pages_in_chunk=(page_range[0], page_range[1]),
+                        rolling_pdf_path=rolling_path,
+                        progress_percent=global_progress,
+                        elapsed_seconds=elapsed,
+                        eta_seconds=eta_seconds,
+                        pages_per_second=pages_per_second,
+                    )
                     yield ProgressEvent(
                         type=EventType.PROGRESS_UPDATE,
                         timestamp=time.time(),
                         session_id=self.session_id,
                         data={},
-                        stage=event.get("stage", "Processing"),
+                        stage=f"Page {page_range[1]}/{file_metadata.page_count} ready",
                         current_step=3,
                         total_steps=4,
-                        progress_percent=50.0 + (event.get("overall_progress", 0) * 0.4),
-                        message=event.get("message", "")
+                        progress_percent=global_progress,
+                        message=(
+                            f"Translated page {page_range[1]} of "
+                            f"{file_metadata.page_count}"
+                        ),
                     )
-                elif event["type"] == "error":
-                    logger.error(f"BabelDOC error: {event}")
-                    raise BabelDOCError(
-                        message=f"BabelDOC processing failed: {event.get('error', 'Unknown error')}",
-                        details=event.get("details")
-                    )
-                elif event["type"] == "finish":
-                    logger.info("BabelDOC processing completed successfully")
-                    yield ProgressEvent(
-                        type=EventType.PROGRESS_UPDATE,
-                        timestamp=time.time(),
-                        session_id=self.session_id,
-                        data={},
-                        stage="BabelDOC processing complete",
-                        current_step=3,
-                        total_steps=4,
-                        progress_percent=90.0,
-                        message="Translation completed successfully"
-                    )
-                    break
-            
+            finally:
+                # Stop the ticker; completion_task is already done by sentinel.
+                ticker_task.cancel()
+
+            yield ProgressEvent(
+                type=EventType.PROGRESS_UPDATE,
+                timestamp=time.time(),
+                session_id=self.session_id,
+                data={},
+                stage="BabelDOC processing complete",
+                current_step=3,
+                total_steps=4,
+                progress_percent=90.0,
+                message="All pages translated",
+            )
+
         except BabelDOCError:
             raise
         except Exception as e:
             logger.exception(f"BabelDOC processing error: {e}")
             raise BabelDOCError(f"BabelDOC processing error: {e}", original_error=e)
+        finally:
+            # On error, cancel, or normal exit: ensure no worker task is left
+            # running. asyncio.gather with return_exceptions consumes any
+            # CancelledError so it doesn't propagate out of the cleanup.
+            unfinished_tasks = [t for t in chunk_tasks if not t.done()]
+            for t in unfinished_tasks:
+                t.cancel()
+            if unfinished_tasks:
+                await asyncio.gather(*unfinished_tasks, return_exceptions=True)
+
+    def _split_input_into_chunks(
+        self,
+        input_path: Path,
+        chunks_dir: Path,
+        pages_per_chunk: int = _PAGES_PER_CHUNK,
+    ) -> list:
+        """Split a PDF into N-page chunks on disk.
+
+        Returns a list of `(chunk_path, (first_page, last_page))` tuples,
+        where pages are 1-indexed and inclusive (UI-friendly).
+        """
+        chunks_dir.mkdir(parents=True, exist_ok=True)
+        src = fitz.open(input_path)
+        try:
+            total = src.page_count
+            chunks = []
+            for chunk_idx, start in enumerate(range(0, total, pages_per_chunk)):
+                end = min(start + pages_per_chunk, total)
+                chunk_doc = fitz.open()
+                chunk_doc.insert_pdf(src, from_page=start, to_page=end - 1)
+                chunk_path = (
+                    chunks_dir
+                    / f"{input_path.stem}_chunk{chunk_idx:03d}.pdf"
+                )
+                chunk_doc.save(chunk_path)
+                chunk_doc.close()
+                chunks.append((chunk_path, (start + 1, end)))
+            return chunks
+        finally:
+            src.close()
+
+    def _handle_paragraph(self, source: str, target: str) -> None:
+        """Thread-safe paragraph callback. Called from the translator's
+        worker thread; bridges back to the asyncio loop so the ticker
+        consumer can pull from the queue without locks. Bounded queue: drop
+        oldest on overflow — the UI only ever shows the *latest* paragraph,
+        so missing intermediate ones is fine."""
+        if self._paragraph_queue is None or self._event_loop is None:
+            return
+        # Trim previews to keep SSE payload small and the UI readable.
+        s = (source or "").replace("\n", " ").strip()[:80]
+        t = (target or "").replace("\n", " ").strip()[:80]
+        if not s or not t:
+            return
+        try:
+            self._event_loop.call_soon_threadsafe(self._enqueue_paragraph, (s, t))
+        except RuntimeError:
+            # Loop shutting down; drop silently.
+            pass
+
+    def _enqueue_paragraph(self, payload: tuple[str, str]) -> None:
+        """Runs on the asyncio loop. Drops oldest on overflow so a fast
+        translator never blocks. Increments `_paragraphs_seen` so the UI
+        can show a count."""
+        if self._paragraph_queue is None:
+            return
+        self._paragraphs_seen += 1
+        try:
+            self._paragraph_queue.put_nowait(payload)
+        except asyncio.QueueFull:
+            try:
+                self._paragraph_queue.get_nowait()
+                self._paragraph_queue.put_nowait(payload)
+            except Exception:
+                pass
+
+    async def reprioritize(self, visible_page: int) -> None:
+        """Update the priority anchor — the next worker pick will prefer
+        chunks near `visible_page`. Best-effort: chunks already in flight
+        finish; only pending chunks see the new priority.
+
+        Safe to call from any asyncio context. Called from the
+        `/translate/{job_id}/reprioritize` endpoint as the user scrolls."""
+        if self._priority_lock is None:
+            self._priority_anchor = max(0, visible_page - 1)
+            return
+        async with self._priority_lock:
+            self._priority_anchor = max(0, visible_page - 1)
+        logger.info("Priority anchor updated → page %d (0-indexed %d)",
+                    visible_page, self._priority_anchor)
+
+    def _rebuild_sparse_rolling_pdf(
+        self,
+        rolling_path: Path,
+        original_path: Path,
+        chunks: list,
+        chunk_results: list,
+    ) -> None:
+        """Build a full N-page rolling PDF where translated chunk slots are
+        filled from `chunk_results` and pending slots fall back to the
+        original PDF's pages. The viewer always sees a complete N-page
+        document, so scroll position stays stable as out-of-order chunks
+        land. PyMuPDF's `insert_pdf` is object-level (no re-render) — a
+        20-page rebuild typically takes ~50-100ms."""
+        merged = fitz.open()
+        src = fitz.open(original_path)
+        try:
+            for idx, (_, page_range) in enumerate(chunks):
+                translated = chunk_results[idx]
+                if translated is not None:
+                    with fitz.open(translated) as chunk_doc:
+                        merged.insert_pdf(chunk_doc)
+                else:
+                    # Fall back to original pages (1-indexed inclusive →
+                    # 0-indexed inclusive for PyMuPDF).
+                    start_0 = page_range[0] - 1
+                    end_0 = page_range[1] - 1
+                    merged.insert_pdf(src, from_page=start_0, to_page=end_0)
+            merged.save(rolling_path)
+        finally:
+            src.close()
+            merged.close()
+
+    def _rebuild_rolling_pdf(
+        self, rolling_path: Path, translated_chunk_paths: list
+    ) -> None:
+        """Concatenate translated chunks-so-far into a single rolling PDF.
+
+        Rebuild from scratch each time. `fitz.insert_pdf` does not re-render
+        page content (it copies the underlying objects), so this is fast
+        even for many chunks — ~tens of ms per 5 pages.
+        """
+        merged = fitz.open()
+        try:
+            for cp in translated_chunk_paths:
+                with fitz.open(cp) as chunk_doc:
+                    merged.insert_pdf(chunk_doc)
+            merged.save(rolling_path)
+        finally:
+            merged.close()
     
     async def _process_without_babeldoc(
         self,
@@ -453,6 +912,16 @@ class PDFProcessor:
     
     def _find_translated_file(self, output_dir: Path, original_stem: str) -> Optional[Path]:
         """Find translated PDF file in output directory."""
+        # Streaming-render rolling output: highest-version wins. This is the
+        # `{stem}_translated_v{N}.pdf` family written by `_rebuild_rolling_pdf`
+        # after each chunk. The largest N is the latest, most-complete output.
+        rolling = sorted(
+            output_dir.glob(f"{original_stem}_translated_v*.pdf"),
+            key=lambda p: int(p.stem.rsplit("_v", 1)[-1]) if p.stem.rsplit("_v", 1)[-1].isdigit() else -1,
+        )
+        if rolling:
+            return rolling[-1]
+
         # Common patterns for translated files - prioritize mono version
         patterns = [
             f"{original_stem}_mono.pdf",  # Monolingual version (translated only)

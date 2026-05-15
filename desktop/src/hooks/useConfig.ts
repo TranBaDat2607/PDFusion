@@ -21,10 +21,18 @@ export interface ConfigResponse {
     preferred_service: ServiceCode;
     max_pages: number;
     max_file_size_mb: number;
+    cache_translations?: boolean;
+    cache_ttl_days?: number;
+    cache_max_size_mb?: number;
   };
   rag: { enabled: boolean };
   deep_search: Record<string, unknown>;
   gui: Record<string, unknown>;
+  processing?: {
+    max_workers?: number;
+    max_parallel_chunks?: number;
+    timeout_seconds?: number;
+  };
   debug_mode: boolean;
 }
 
@@ -53,6 +61,8 @@ export interface ConfigUpdate {
   default_source_lang?: string;
   default_target_lang?: string;
   rag_enabled?: boolean;
+  max_parallel_chunks?: number;
+  cache_translations?: boolean;
 }
 
 export interface ValidateResponse {

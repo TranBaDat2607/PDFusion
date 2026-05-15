@@ -10,10 +10,12 @@ from ...config import (
     get_config_manager,
     get_settings,
 )
-from ...translators import TranslatorFactory
+from ...translators import TranslatorFactory, get_translation_cache
 from ..auth import require_token
 from ..schemas import (
     APIKeyMaskedSettings,
+    CacheClearResponse,
+    CacheStatsResponse,
     ConfigResponse,
     ConfigUpdateRequest,
     OptionsResponse,
@@ -29,18 +31,10 @@ router = APIRouter(prefix="/config", tags=["config"], dependencies=[Depends(requ
 
 
 def _mask(service_settings) -> APIKeyMaskedSettings:
+    # ArgosSettings has no api_key attribute, so getattr falls through to False.
     return APIKeyMaskedSettings(
-        has_key=bool(service_settings.api_key),
+        has_key=bool(getattr(service_settings, "api_key", None)),
         model=service_settings.model,
-        extra={},
-    )
-
-
-def _mask_argos(argos_settings) -> APIKeyMaskedSettings:
-    # Argos has no API key — has_key is always False, model is fixed.
-    return APIKeyMaskedSettings(
-        has_key=False,
-        model=argos_settings.model,
         extra={},
     )
 
@@ -52,11 +46,11 @@ async def get_config() -> ConfigResponse:
         openai=_mask(s.openai),
         gemini=_mask(s.gemini),
         anthropic=_mask(s.anthropic),
-        argos=_mask_argos(s.argos),
+        argos=_mask(s.argos),
         translation=s.translation.dict(),
         rag=s.rag.dict(),
-        deep_search=s.deep_search.dict(),
         gui=s.gui.dict(),
+        processing=s.processing.dict(),
         debug_mode=s.debug_mode,
     )
 
@@ -112,6 +106,10 @@ async def update_config(payload: ConfigUpdateRequest) -> ConfigResponse:
         current["translation"]["default_target_lang"] = payload.default_target_lang.value
     if payload.rag_enabled is not None:
         current["rag"]["enabled"] = payload.rag_enabled
+    if payload.max_parallel_chunks is not None:
+        current["processing"]["max_parallel_chunks"] = payload.max_parallel_chunks
+    if payload.cache_translations is not None:
+        current["translation"]["cache_translations"] = payload.cache_translations
 
     new_settings = AppSettings(**current)
     if not mgr.save_settings(new_settings):
@@ -187,3 +185,27 @@ async def get_options() -> OptionsResponse:
             for s in TranslationService
         ],
     )
+
+
+# ---------------------------------------------------------------------------
+# Translation cache
+# ---------------------------------------------------------------------------
+
+
+@router.get("/cache", response_model=CacheStatsResponse)
+async def get_cache_stats() -> CacheStatsResponse:
+    stats = get_translation_cache().stats()
+    return CacheStatsResponse(**stats) if stats else CacheStatsResponse()
+
+
+@router.delete("/cache", response_model=CacheClearResponse)
+async def clear_cache(scope: str = "all") -> CacheClearResponse:
+    """Clear the on-disk translation cache. `scope=expired` only reaps stale
+    entries; `scope=all` wipes everything (e.g. when the user changes models)."""
+    cache = get_translation_cache()
+    if scope == "expired":
+        removed = cache.clear_expired()
+    else:
+        scope = "all"
+        removed = cache.clear_all()
+    return CacheClearResponse(removed=removed, scope=scope)
