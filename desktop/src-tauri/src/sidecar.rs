@@ -85,12 +85,13 @@ pub fn current() -> Option<&'static SidecarHandle> {
     SIDECAR.get()
 }
 
-/// Filename of the bundled sidecar binary as written by `build-sidecar.ps1`.
-/// Tauri's `externalBin` requires the rustc host triple suffix.
-#[cfg(all(windows, target_arch = "x86_64"))]
-const BUNDLED_SIDECAR_FILENAME: &str = "pdfusion-sidecar-x86_64-pc-windows-msvc.exe";
-#[cfg(all(windows, target_arch = "aarch64"))]
-const BUNDLED_SIDECAR_FILENAME: &str = "pdfusion-sidecar-aarch64-pc-windows-msvc.exe";
+/// Filename of the bundled sidecar binary at install time.
+/// Tauri's `externalBin` requires the triple suffix on the *source* file,
+/// but renames it at bundle time to drop the suffix — so post-install
+/// (and what `BaseDirectory::Resource` resolves against) it's just the
+/// bare name.
+#[cfg(windows)]
+const BUNDLED_SIDECAR_FILENAME: &str = "pdfusion-sidecar.exe";
 #[cfg(not(windows))]
 const BUNDLED_SIDECAR_FILENAME: &str = "pdfusion-sidecar";
 
@@ -161,7 +162,7 @@ fn build_command(app: &AppHandle) -> Result<Command, SidecarError> {
         let mut cmd = Command::new(bundled);
         cmd.env("PYTHONUNBUFFERED", "1")
             .stdout(Stdio::piped())
-            .stderr(Stdio::inherit())
+            .stderr(Stdio::piped())
             .stdin(Stdio::null());
         return Ok(cmd);
     }
@@ -180,7 +181,7 @@ fn build_command(app: &AppHandle) -> Result<Command, SidecarError> {
         .env("PYTHONPATH", &src_dir)
         .env("PYTHONUNBUFFERED", "1")
         .stdout(Stdio::piped())
-        .stderr(Stdio::inherit())
+        .stderr(Stdio::piped())
         .stdin(Stdio::null());
     Ok(cmd)
 }
@@ -202,6 +203,18 @@ pub async fn spawn(app: AppHandle) -> Result<SidecarInfo, SidecarError> {
         .take()
         .ok_or_else(|| SidecarError::Health("no stdout pipe".into()))?;
     let mut reader = BufReader::new(stdout).lines();
+
+    // Drain stderr in the background so Python tracebacks / loader errors
+    // land in our log instead of vanishing (the parent has no console on a
+    // windowless build, so `Stdio::inherit()` would swallow them).
+    if let Some(stderr) = child.stderr.take() {
+        tokio::spawn(async move {
+            let mut lines = BufReader::new(stderr).lines();
+            while let Ok(Some(line)) = lines.next_line().await {
+                log::warn!("[sidecar stderr] {line}");
+            }
+        });
+    }
 
     let deadline = Instant::now() + Duration::from_secs(30);
     let info = loop {

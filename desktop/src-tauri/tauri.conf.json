@@ -33,7 +33,7 @@
     "active": true,
     "targets": "all",
     "externalBin": ["binaries/pdfusion-sidecar"],
-    "resources": ["binaries/_internal/**/*"],
+    "resources": ["_internal/**/*"],
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",

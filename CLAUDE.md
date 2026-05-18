@@ -250,8 +250,12 @@ pnpm tauri build
 > stubbed installer — the bundled exe will be zero bytes.
 
 The sidecar is shipped as `externalBin` (the `.exe` next to `pdfusion.exe`)
-plus a `resources/_internal/` tree (PyInstaller runtime — Python stdlib +
-native .pyd + bundled package data). First build is slow (~10-20 min) and
+plus a sibling `_internal/` tree (PyInstaller runtime — Python stdlib +
+native .pyd + bundled package data). The `_internal/` tree is staged at
+`desktop/src-tauri/_internal/` (not inside `binaries/`) so that Tauri's
+`resources` glob installs it at `<install>/_internal/`, sibling to the
+renamed `pdfusion-sidecar.exe` — which is what PyInstaller's onedir
+bootloader requires to find `python313.dll` et al. First build is slow (~10-20 min) and
 the resulting .msi is large (~500 MB-1 GB) because we bundle the full
 chromadb + sentence-transformers + babeldoc stack. ML model weights and
 the Argos en→vi pack are **not** bundled; they download lazily on first

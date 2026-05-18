@@ -30,12 +30,21 @@ param(
 $ErrorActionPreference = "Stop"
 $PSNativeCommandUseErrorActionPreference = $true
 
-$RepoRoot   = Split-Path -Parent $MyInvocation.MyCommand.Path
-$SpecPath   = Join-Path $RepoRoot "pdfusion-sidecar.spec"
-$DistDir    = Join-Path $RepoRoot "dist\pdfusion-sidecar"
-$StageDir   = Join-Path $RepoRoot "desktop\src-tauri\binaries"
-$StagedExe  = Join-Path $StageDir "pdfusion-sidecar-$Triple.exe"
-$StagedInternal = Join-Path $StageDir "_internal"
+$RepoRoot       = Split-Path -Parent $MyInvocation.MyCommand.Path
+$SpecPath       = Join-Path $RepoRoot "pdfusion-sidecar.spec"
+$DistDir        = Join-Path $RepoRoot "dist\pdfusion-sidecar"
+$SrcTauriDir    = Join-Path $RepoRoot "desktop\src-tauri"
+$StageDir       = Join-Path $SrcTauriDir "binaries"
+$StagedExe      = Join-Path $StageDir "pdfusion-sidecar-$Triple.exe"
+# _internal/ must install SIBLING to the renamed externalBin exe at install
+# time (PyInstaller's onedir bootloader hardcodes a sibling lookup for
+# python313.dll, base_library.zip, etc.). Tauri's `externalBin` renames the
+# exe to drop the triple and drops it at the install root, but `resources`
+# globs preserve their path from src-tauri/. So we stage _internal/ directly
+# under src-tauri/ (not under binaries/) and tauri.conf.json ships it as
+# `_internal/**/*` → installs to <install>/_internal/, next to the renamed
+# pdfusion-sidecar.exe.
+$StagedInternal = Join-Path $SrcTauriDir "_internal"
 
 if (-not (Test-Path $StageDir)) {
     New-Item -ItemType Directory -Force -Path $StageDir | Out-Null

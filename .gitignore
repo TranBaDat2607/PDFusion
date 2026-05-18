@@ -15,8 +15,10 @@ dist/
 downloads/
 eggs/
 .eggs/
-lib/
-lib64/
+# Pinned to repo root so they don't accidentally hide source dirs like
+# `desktop/src/lib/`. These rules exist for Python venvs at the repo root.
+/lib/
+/lib64/
 parts/
 sdist/
 var/
@@ -197,4 +199,4 @@ DesktopPDFTranslator/
 !pdfusion-sidecar.spec
 # Staged sidecar binary + PyInstaller runtime tree (rebuilt by build-sidecar.ps1):
 desktop/src-tauri/binaries/pdfusion-sidecar-*.exe
-desktop/src-tauri/binaries/_internal/
+desktop/src-tauri/_internal/
