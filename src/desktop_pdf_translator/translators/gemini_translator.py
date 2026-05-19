@@ -5,7 +5,8 @@ Google Gemini translator implementation with Vietnamese optimization.
 import logging
 from typing import Optional, List, Dict, Any
 
-import google.generativeai as genai
+from google import genai
+from google.genai import types as genai_types
 
 from .base import BaseTranslator, LANGUAGE_DISPLAY_NAMES
 from .translation_cache import llm_cache_get as _llm_cache_get, llm_cache_set as _llm_cache_set
@@ -35,21 +36,18 @@ class GeminiTranslator(BaseTranslator):
         self.model_name = kwargs.get("model", "gemini-pro")
         self.temperature = kwargs.get("temperature", 0.3)
 
-        genai.configure(api_key=self.api_key)
-        self.model = genai.GenerativeModel(self.model_name)
-
-        self.generation_config = genai.types.GenerationConfig(
+        self.client = genai.Client(api_key=self.api_key)
+        self.generation_config = genai_types.GenerateContentConfig(
             temperature=self.temperature,
             max_output_tokens=4000,
             candidate_count=1,
+            safety_settings=[
+                genai_types.SafetySetting(category="HARM_CATEGORY_HARASSMENT",        threshold="BLOCK_MEDIUM_AND_ABOVE"),
+                genai_types.SafetySetting(category="HARM_CATEGORY_HATE_SPEECH",       threshold="BLOCK_MEDIUM_AND_ABOVE"),
+                genai_types.SafetySetting(category="HARM_CATEGORY_SEXUALLY_EXPLICIT", threshold="BLOCK_MEDIUM_AND_ABOVE"),
+                genai_types.SafetySetting(category="HARM_CATEGORY_DANGEROUS_CONTENT", threshold="BLOCK_MEDIUM_AND_ABOVE"),
+            ],
         )
-
-        self.safety_settings = [
-            {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_MEDIUM_AND_ABOVE"},
-            {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_MEDIUM_AND_ABOVE"},
-            {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_MEDIUM_AND_ABOVE"},
-            {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_MEDIUM_AND_ABOVE"},
-        ]
 
         logger.info(f"Gemini translator configured with model: {self.model_name}")
     
@@ -68,10 +66,10 @@ class GeminiTranslator(BaseTranslator):
 
             self._apply_rate_limiting()
 
-            response = self.model.generate_content(
-                self._create_translation_prompt(processed_text),
-                generation_config=self.generation_config,
-                safety_settings=self.safety_settings,
+            response = self.client.models.generate_content(
+                model=self.model_name,
+                contents=self._create_translation_prompt(processed_text),
+                config=self.generation_config,
             )
 
             if response.candidates and response.candidates[0].content:
@@ -143,12 +141,13 @@ Provide only the translation:"""
                 return False, "API key is missing"
             
             # Test API connection with a minimal request
-            response = self.model.generate_content(
-                "Hello",
-                generation_config=genai.types.GenerationConfig(
+            response = self.client.models.generate_content(
+                model=self.model_name,
+                contents="Hello",
+                config=genai_types.GenerateContentConfig(
                     max_output_tokens=5,
-                    temperature=0
-                )
+                    temperature=0,
+                ),
             )
             
             if response.text:

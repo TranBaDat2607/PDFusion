@@ -95,10 +95,6 @@ hiddenimports += collect_submodules("huggingface_hub")
 hiddenimports += collect_submodules("sentence_transformers")
 # chromadb has dynamic plugin loading throughout.
 hiddenimports += collect_submodules("chromadb")
-# langchain pulls many internal modules; keep it generous since it is listed in
-# requirements and may be hit by indirect imports.
-hiddenimports += collect_submodules("langchain")
-hiddenimports += collect_submodules("langchain_community")
 
 
 # ---------------------------------------------------------------------------
@@ -125,7 +121,7 @@ datas += collect_data_files("tiktoken_ext")
 for pkg in (
     "openai",
     "anthropic",
-    "google-generativeai",
+    "google-genai",
     "sentence-transformers",
     "chromadb",
     "fastapi",
@@ -145,16 +141,120 @@ datas += [("config/default_config.toml", "config")]
 # ---------------------------------------------------------------------------
 # Excludes
 # ---------------------------------------------------------------------------
-# Drop heavy transitive deps we don't actually use. Cuts ~150-300 MB off the
-# bundle. If a runtime error mentions one of these, remove it from the list.
+# Drop heavy transitive deps we don't actually use. Cuts ~500 MB off the
+# unpacked bundle (~180 MB off the MSI). Each entry was verified by grepping
+# src/ — none appear in any import statement in our code. If a runtime
+# ModuleNotFoundError mentions one of these on the bundled exe, remove just
+# that single entry and rebuild.
 excludes = [
+    # --- Stdlib / generic noise ---
     "tkinter",
     "matplotlib",
     "IPython",
     "notebook",
     "jupyter",
-    "pytest",
     "scipy.misc",
+
+    # --- Old PySide6 GUI (removed in commit 139d977) ---
+    "PySide6",
+    "PySide6.QtCore",
+    "PySide6.QtGui",
+    "PySide6.QtWidgets",
+    "shiboken6",
+    "qfluentwidgets",
+    "qframelesswindow",
+    "QtAwesome",
+    "qtawesome",
+    "QtPy",
+    "qtpy",
+    "darkdetect",
+
+    # --- Deep-search / web-research feature (removed in commit 35bca2c) ---
+    "selenium",
+    "trio",
+    "trio_websocket",
+    "wsproto",
+    "outcome",
+    "scholarly",
+    "arxiv",
+    "bibtexparser",
+    "feedparser",
+    "free_proxy",
+    "googlesearch",
+    "fake_useragent",
+    "newspaper",
+    "feedfinder2",
+    "sgmllib3k",
+
+    # --- LangChain dead weight (RAG uses chromadb + sentence-transformers directly) ---
+    "langchain",
+    "langchain_community",
+    "langchain_core",
+    "langchain_text_splitters",
+    "rank_bm25",
+    "faiss",
+    "faiss_cpu",
+
+    # --- Heavy transitive NLP stacks (pulled by langchain_community integrations we don't use) ---
+    "spacy",
+    "thinc",
+    "blis",
+    "cymem",
+    "preshed",
+    "srsly",
+    "wasabi",
+    "catalogue",
+    "confection",
+    "weasel",
+    "langcodes",
+    "underthesea",
+    "underthesea_core",
+    "python_crfsuite",
+    "jieba",
+    "stanza",
+
+    # --- OCR libraries (not used by current pipeline) ---
+    "rapidocr_onnxruntime",
+    "pytesseract",
+
+    # --- Docs / dev / lint / test tooling ---
+    "sphinx",
+    "sphinx_rtd_theme",
+    "sphinxcontrib",
+    "sphinxcontrib_applehelp",
+    "sphinxcontrib_devhelp",
+    "sphinxcontrib_htmlhelp",
+    "sphinxcontrib_qthelp",
+    "sphinxcontrib_serializinghtml",
+    "sphinxcontrib_jsmath",
+    "sphinxcontrib_jquery",
+    "alabaster",
+    "docutils",
+    "snowballstemmer",
+    "roman_numerals",
+    "black",
+    "flake8",
+    "mypy",
+    "ruff",
+    "isort",
+    "pytest",
+    "pytest_cov",
+    "coverage",
+    "build",
+    "pyproject_hooks",
+
+    # --- pywin32 GUI/COM bits (sidecar only needs the core, not Pythonwin) ---
+    "win32com",
+    "Pythonwin",
+
+    # --- Old google-generativeai REST discovery stack (replaced by google-genai gRPC) ---
+    "googleapiclient",
+    "googleapiclient.discovery_cache",
+    "google_api_python_client",
+    "google_api_core.api_discovery",
+    "uritemplate",
+    "httplib2",
+    "google_auth_httplib2",
 ]
 
 
@@ -172,6 +272,7 @@ a = Analysis(
     win_private_assemblies=False,
     cipher=block_cipher,
     noarchive=False,
+    optimize=2,
 )
 
 pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
