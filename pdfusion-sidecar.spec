@@ -57,11 +57,40 @@ hiddenimports = [
     "argostranslate",
     "argostranslate.package",
     "argostranslate.translate",
+
+    # tiktoken loads encoding constructors from a *separate* top-level
+    # namespace package (`tiktoken_ext`) via `pkgutil.iter_modules` — see
+    # tiktoken/registry.py:_available_plugin_modules. PyInstaller's static
+    # analysis can't see these, so the encodings have to be force-bundled.
+    # babeldoc imports tiktoken at module load, so this is hit during startup.
+    "tiktoken",
+    "tiktoken.core",
+    "tiktoken.model",
+    "tiktoken.registry",
+    "tiktoken_ext",
+    "tiktoken_ext.openai_public",
 ]
 
 # BabelDOC has a deep submodule tree (layout parser, fonts, etc.) — pull all of
 # it in rather than tracking import errors one by one.
 hiddenimports += collect_submodules("babeldoc")
+# bitstring (transitive via babeldoc) picks a backend implementation
+# (`bitstore_bitarray` vs `bitstore_tibs`) via `importlib.import_module` at
+# package init time — PyInstaller's static analyzer can't see it.
+hiddenimports += collect_submodules("bitstring")
+# ctranslate2 (lazy-imported by argostranslate.translate) ships its inference
+# kernel as a C extension; the Python package has small dynamic loaders that
+# PyInstaller occasionally misses.
+hiddenimports += collect_submodules("ctranslate2")
+# transformers picks model-class modules at runtime based on the loaded model
+# config (e.g. `transformers.models.xlm_roberta.modeling_xlm_roberta` for the
+# default RAG embedding model). sentence-transformers triggers these on first
+# `embed()` call, so without them, RAG ask would fail at chat time.
+hiddenimports += collect_submodules("transformers")
+# huggingface_hub has a `_LazyImporter` in its package __init__ that resolves
+# attributes through `importlib.import_module` — sentence-transformers + the
+# tokenizers hub calls hit it.
+hiddenimports += collect_submodules("huggingface_hub")
 # sentence-transformers loads model backends dynamically.
 hiddenimports += collect_submodules("sentence_transformers")
 # chromadb has dynamic plugin loading throughout.
@@ -85,6 +114,11 @@ datas += collect_data_files("babeldoc")
 datas += collect_data_files("sentence_transformers")
 datas += collect_data_files("tokenizers")
 datas += collect_data_files("transformers", include_py_files=False)
+# tiktoken_ext.openai_public references encoding files that tiktoken downloads
+# on first use (cached under %LOCALAPPDATA%\tiktoken\). It still needs the
+# plugin .py files at import time, which collect_submodules handles, but bundle
+# any package data too for safety.
+datas += collect_data_files("tiktoken_ext")
 
 # Some libraries query package metadata at runtime (PEP 566). PyInstaller
 # strips dist-info by default unless asked; copy the ones we know look it up.
