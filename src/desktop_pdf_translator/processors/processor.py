@@ -18,6 +18,7 @@ from babeldoc.format.pdf.translation_config import WatermarkOutputMode as BabelD
 
 from ..config import get_settings, FileMetadata, LanguageCode, TranslationService
 from ..translators import TranslatorFactory
+from ..translators.argos_translator import ArgosTranslator
 from .events import (
     ProcessingEvent,
     ProgressEvent,
@@ -36,6 +37,22 @@ from .exceptions import ProcessingError, BabelDOCError, FileValidationError, Con
 # below, this gives the user the maximum streaming feel.
 _PAGES_PER_CHUNK = 1
 
+# Argos-only: pages per chunk when translating offline. BabelDOC reloads the
+# DocLayoutYOLO ONNX model on every chunk (~3-4s each), so 1-page chunks pay
+# that cost N times for an N-page PDF. With Argos, translation throughput is
+# fast enough that the layout-model reload dominates per-chunk overhead — so
+# we trade a little streaming granularity for big wins on overhead. The user
+# still sees pages appear in groups of 3 with the rolling viewer.
+_PAGES_PER_CHUNK_ARGOS = 3
+
+# Argos-only cap on parallel chunks. Each in-flight BabelDOC sub-job peaks at
+# ~9 GB RAM on an academic paper (DocLayoutYOLO + IR + font maps). Four
+# parallel chunks = ~36 GB → swap thrashing on most desktops, which is what
+# produced the 120-second "PDF save timeout" warnings. Argos itself is the
+# bottleneck-side rate limiter and gains nothing from extra parallelism, so
+# we cap conservatively.
+_MAX_PARALLEL_CHUNKS_ARGOS = 2
+
 # How many BabelDOC sub-jobs may be in flight at once. BabelDOC's pipeline is
 # monolithic (you can't externally separate translate from render), but by
 # running multiple jobs concurrently we get natural pipelining: while job N is
@@ -50,7 +67,7 @@ _PAGES_PER_CHUNK = 1
 _MAX_PARALLEL_CHUNKS = 4
 
 
-def _effective_parallel_chunks(settings) -> int:
+def _effective_parallel_chunks(settings, translator=None) -> int:
     """Resolve the chunk-concurrency knob.
 
     `processing.max_parallel_chunks = 0` (default) means auto: roughly half the
@@ -58,15 +75,32 @@ def _effective_parallel_chunks(settings) -> int:
     ~150-300 MB of intermediate state on a typical academic paper, so we leave
     half the cores (and roughly half the RAM headroom) to the rest of the app
     plus the WebView2 renderer.
+
+    When `translator` is an ArgosTranslator, the result is clamped down to
+    `_MAX_PARALLEL_CHUNKS_ARGOS` to control memory — Argos throughput
+    saturates at low parallelism anyway, and per-chunk RAM is ~9 GB on
+    formula-heavy papers.
     """
     try:
         configured = int(settings.processing.max_parallel_chunks)
     except (AttributeError, TypeError, ValueError):
         configured = 0
     if configured > 0:
-        return configured
-    cpu = os.cpu_count() or 4
-    return max(2, min(8, cpu // 2))
+        base = configured
+    else:
+        cpu = os.cpu_count() or 4
+        base = max(2, min(8, cpu // 2))
+    if isinstance(translator, ArgosTranslator):
+        return min(base, _MAX_PARALLEL_CHUNKS_ARGOS)
+    return base
+
+
+def _effective_pages_per_chunk(translator) -> int:
+    """Chunk size in pages. Argos uses larger chunks to amortize BabelDOC's
+    per-chunk DocLayoutYOLO ONNX reload cost over more pages."""
+    if isinstance(translator, ArgosTranslator):
+        return _PAGES_PER_CHUNK_ARGOS
+    return _PAGES_PER_CHUNK
 
 
 logger = logging.getLogger(__name__)
@@ -395,12 +429,13 @@ class PDFProcessor:
         persist — repeated paragraphs across chunks translate for free.
         """
         chunk_tasks: list[asyncio.Task] = []
-        max_parallel = _effective_parallel_chunks(self.settings)
+        max_parallel = _effective_parallel_chunks(self.settings, translator)
+        pages_per_chunk = _effective_pages_per_chunk(translator)
         try:
             logger.info(
                 "Starting BabelDOC processing (parallel chunked, "
-                "pages_per_chunk=%d, max_parallel=%d)",
-                _PAGES_PER_CHUNK, max_parallel,
+                "pages_per_chunk=%d, max_parallel=%d, translator=%s)",
+                pages_per_chunk, max_parallel, type(translator).__name__,
             )
 
             chunk_work_dir = output_dir / f"{file_path.stem}_chunk_work"
@@ -410,13 +445,13 @@ class PDFProcessor:
             chunks_out_root.mkdir(parents=True, exist_ok=True)
 
             chunks = self._split_input_into_chunks(
-                file_path, chunks_in_dir, pages_per_chunk=_PAGES_PER_CHUNK
+                file_path, chunks_in_dir, pages_per_chunk=pages_per_chunk
             )
             total_chunks = len(chunks)
             logger.info(
                 "Split %s (%d pages) into %d chunk(s) of up to %d page(s)",
                 file_path.name, file_metadata.page_count, total_chunks,
-                _PAGES_PER_CHUNK,
+                pages_per_chunk,
             )
 
             yield ProgressEvent(
@@ -863,6 +898,15 @@ class PDFProcessor:
         logger.info(f"  lang_out: {translator.lang_out}")
         logger.info(f"  output_dir: {output_dir}")
         
+        # Per-translator overrides for heavy non-translation stages. Argos
+        # has no LLM available, so any flag that secretly triggers an LLM
+        # call (glossary extraction) is pure overhead — and skipping the
+        # SSIM scanned-page detector + the compatibility-enhancement pass
+        # both shave significant wall time on academic papers. LLM paths
+        # keep the previous behavior so glossary terms and OCR-quality
+        # detection still work for paid backends.
+        is_argos = isinstance(translator, ArgosTranslator)
+
         # Configure for single translated PDF output only (no dual, no decompressed, no bounding boxes)
         config = BabelDOCConfig(
             translator=translator,
@@ -878,14 +922,20 @@ class PDFProcessor:
             # Set to generate only monolingual PDF without dual version
             no_dual=True,      # Don't generate dual-language PDF
             no_mono=False,     # Generate monolingual PDF (the translated version)
-            qps=4,  # Default QPS limit
+            # Argos runs locally — there is no remote rate limit to respect,
+            # and BabelDOC's RateLimiter would otherwise inject ~250ms of dead
+            # time per paragraph. LLMs still need qps=4 to avoid 429s.
+            qps=10_000 if is_argos else 4,
             formular_font_pattern=None,
             formular_char_pattern=None,
             split_short_lines=False,
             short_line_split_factor=0.8,
             disable_rich_text_translate=True,
             dual_translate_first=False,
-            enhance_compatibility=True,
+            # `enhance_compatibility=True` forces extra typesetting passes
+            # that double-render text. Argos doesn't need them; LLMs benefit
+            # for tricky fonts.
+            enhance_compatibility=not is_argos,
             use_alternating_pages_dual=False,
             # Set watermark mode to NoWatermark to avoid bounding boxes
             watermark_output_mode=BabelDOCWatermarkMode.NoWatermark if BabelDOCWatermarkMode else None,
@@ -894,13 +944,19 @@ class PDFProcessor:
             skip_clean=True,
             split_strategy=None,
             table_model=None,
-            skip_scanned_detection=False,
+            # SSIM-based scanned-page detection renders every page twice.
+            # The papers users translate offline are almost always
+            # text-PDFs, so skip the detection for Argos.
+            skip_scanned_detection=is_argos,
             ocr_workaround=False,
             custom_system_prompt=None,
             glossaries=None,
             auto_enable_ocr_workaround=False,
             pool_max_workers=processing_settings.max_workers,
-            auto_extract_glossary=True,
+            # Heaviest non-translation stage (weight 30 in BabelDOC). It
+            # invokes the translator with extraction prompts — Argos is an
+            # NMT model, can't follow those prompts, so the work is wasted.
+            auto_extract_glossary=not is_argos,
             primary_font_family=None,
             only_include_translated_page=False,
             # Explicitly hide character boxes to prevent bounding boxes

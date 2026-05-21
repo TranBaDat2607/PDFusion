@@ -17,13 +17,14 @@ from __future__ import annotations
 import logging
 import socket
 import sys
+import threading
 from contextlib import asynccontextmanager
 
 import uvicorn
 from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from ..config import get_settings
+from ..config import TranslationService, get_settings
 from .auth import init_token, require_token
 from .routes import config as config_routes
 from .routes import pdf as pdf_routes
@@ -34,10 +35,67 @@ from .schemas import HealthResponse
 logger = logging.getLogger(__name__)
 
 
+def _should_prewarm_argos(settings) -> bool:
+    """Pre-warm Argos when it's the active default or the only usable backend.
+
+    - Preferred service is Argos → yes.
+    - No LLM API key configured anywhere → Argos is the inevitable fallback.
+    Otherwise skip so LLM-only users don't pay the ~80MB pack download or the
+    extra RAM for the CTranslate2 model.
+    """
+    if settings.translation.preferred_service == TranslationService.ARGOS:
+        return True
+    any_llm_key = any(
+        settings.has_api_key(s)
+        for s in (
+            TranslationService.OPENAI,
+            TranslationService.GEMINI,
+            TranslationService.ANTHROPIC,
+        )
+    )
+    return not any_llm_key
+
+
+def _prewarm_argos() -> None:
+    """Best-effort warmup so the first user click doesn't pay cold-start.
+
+    Materializes the language pack (downloads ~80 MB if first run), applies
+    our `argostranslate.settings` overrides, and forces the CTranslate2
+    Translator + tokenizer + sentencizer to load.
+
+    Implementation note: do NOT use `translate("warmup string")` — that path
+    short-circuits on the SQLite cache, defeating the warmup entirely on the
+    second run onwards. Call the low-level resolution directly.
+    """
+    try:
+        from ..translators.argos_translator import (
+            ArgosTranslator,
+            _ensure_en_vi_installed,
+        )
+
+        logger.info("Argos pre-warm: starting (background)")
+        # Pack install + settings overrides (logs "Argos CTranslate2 tuned: ...").
+        _ensure_en_vi_installed()
+        # Builds the ArgosTranslator instance and resolves the native
+        # CTranslate2 handles, JIT-loading the int8 kernels and the
+        # stanza-based sentencizer. This is the path real paragraphs hit.
+        t = ArgosTranslator(lang_in="en", lang_out="vi")
+        t._resolve_native_handles()
+        logger.info("Argos pre-warm: done")
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Argos pre-warm failed (non-fatal): %s", exc)
+
+
 @asynccontextmanager
 async def _lifespan(app: FastAPI):
     logger.info("Sidecar starting; loading settings…")
-    get_settings()  # warm the singleton (loads .env, decrypts keys)
+    settings = get_settings()  # warm the singleton (loads .env, decrypts keys)
+    if _should_prewarm_argos(settings):
+        threading.Thread(
+            target=_prewarm_argos,
+            name="argos-prewarm",
+            daemon=True,
+        ).start()
     yield
     logger.info("Sidecar shutting down")
 

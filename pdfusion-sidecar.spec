@@ -53,10 +53,15 @@ hiddenimports = [
     "chromadb.segment.impl.vector.local_persistent_hnsw",
     "chromadb.utils.embedding_functions",
 
-    # Argos translate (lazy-imported inside argos_translator)
+    # Argos translate (lazy-imported inside argos_translator). Use the explicit
+    # entries below as a fail-safe; the collect_submodules call further down
+    # picks up the rest (sbd, settings, fewshot, apis, models, utils, …) which
+    # our new native CTranslate2 batching path reaches into directly.
     "argostranslate",
     "argostranslate.package",
     "argostranslate.translate",
+    "argostranslate.settings",
+    "argostranslate.sbd",
 
     # tiktoken loads encoding constructors from a *separate* top-level
     # namespace package (`tiktoken_ext`) via `pkgutil.iter_modules` — see
@@ -82,6 +87,16 @@ hiddenimports += collect_submodules("bitstring")
 # kernel as a C extension; the Python package has small dynamic loaders that
 # PyInstaller occasionally misses.
 hiddenimports += collect_submodules("ctranslate2")
+# argostranslate has multiple lazy-imported submodules (sbd, settings, apis,
+# models, fewshot, utils) reached only at runtime — including from our own
+# code's CTranslate2 fast path. Pull the whole package in.
+hiddenimports += collect_submodules("argostranslate")
+# stanza is imported at the top of argostranslate.sbd. Without it, the whole
+# argostranslate.translate import chain raises ModuleNotFoundError on the
+# very first paragraph. The en→vi Argos pack ships its own stanza model
+# inside the language pack, so we don't need stanza's default model
+# downloads — just the package code on the import path.
+hiddenimports += collect_submodules("stanza")
 # transformers picks model-class modules at runtime based on the loaded model
 # config (e.g. `transformers.models.xlm_roberta.modeling_xlm_roberta` for the
 # default RAG embedding model). sentence-transformers triggers these on first
@@ -104,6 +119,10 @@ hiddenimports += collect_submodules("chromadb")
 # package — those must be copied into the bundle or runtime calls will fail.
 datas = []
 datas += collect_data_files("babeldoc")
+# Stanza ships small per-module data (e.g. resource manifests) inside its
+# package. argostranslate's bundled en→vi pack supplies the actual NLP model
+# weights, but stanza still expects package data on disk at import time.
+datas += collect_data_files("stanza")
 
 # sentence-transformers / tokenizers / transformers have small package data
 # (tokenizer configs, vocab fallbacks) that they expect to find on disk.
@@ -136,6 +155,23 @@ for pkg in (
 # Default configuration TOML — the ConfigManager reads this at startup as a
 # fallback when no user config exists yet.
 datas += [("config/default_config.toml", "config")]
+
+# Argos en→vi language pack pre-bundled so the bundled exe doesn't have to
+# download ~80 MB on first translate. The pack lives under
+# `_internal/argos_pack/` after install; argos_translator.py:_find_bundled_pack()
+# resolves it via sys._MEIPASS at runtime. If the asset is missing from the
+# checkout the build silently omits it and the runtime falls back to the
+# network download path, so this is fully optional.
+import os as _os
+_argos_pack = "assets/argos/translate-en_vi.argosmodel"
+if _os.path.exists(_argos_pack):
+    datas += [(_argos_pack, "argos_pack")]
+else:
+    print(
+        f"WARN: {_argos_pack} not found — bundled exe will download Argos "
+        "pack on first translate. Copy the pack into assets/argos/ to "
+        "ship an offline-first installer."
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -211,7 +247,10 @@ excludes = [
     "underthesea_core",
     "python_crfsuite",
     "jieba",
-    "stanza",
+    # NOTE: `stanza` is intentionally NOT excluded here. It looks like a
+    # langchain transitive dep, but argostranslate.sbd does `import stanza`
+    # at module load — excluding it crashes Argos translation on every
+    # paragraph with `No module named 'stanza'`.
 
     # --- OCR libraries (not used by current pipeline) ---
     "rapidocr_onnxruntime",

@@ -96,12 +96,21 @@ const BUNDLED_SIDECAR_FILENAME: &str = "pdfusion-sidecar.exe";
 const BUNDLED_SIDECAR_FILENAME: &str = "pdfusion-sidecar";
 
 /// Resolve the bundled sidecar exe via Tauri's resource resolver.
-/// Returns `None` if there's no `externalBin` ship of the sidecar (i.e. dev mode).
+/// Returns `None` if there's no `externalBin` ship of the sidecar (i.e. dev mode)
+/// OR the staged file looks like a stub (size < 1 MiB) so dev mode can replace
+/// the real exe with a placeholder and have the runtime fall through to the
+/// local Python interpreter. The real PyInstaller-built exe is ~80 MiB.
 fn resolve_bundled_sidecar(app: &AppHandle) -> Option<PathBuf> {
+    const STUB_THRESHOLD_BYTES: u64 = 1024 * 1024; // 1 MiB
     app.path()
         .resolve(BUNDLED_SIDECAR_FILENAME, tauri::path::BaseDirectory::Resource)
         .ok()
-        .filter(|p| p.exists())
+        .filter(|p| {
+            p.exists()
+                && std::fs::metadata(p)
+                    .map(|m| m.len() >= STUB_THRESHOLD_BYTES)
+                    .unwrap_or(false)
+        })
 }
 
 fn locate_python() -> Result<PathBuf, SidecarError> {

@@ -7,6 +7,11 @@ __pycache__/
 *.so
 pipeline.md
 logs.txt
+
+# Large model/asset binaries staged for PyInstaller bundling. Not checked in;
+# build-sidecar.ps1 / contributors fetch them locally before building the MSI.
+# See pdfusion-sidecar.spec for runtime resolution.
+/assets/argos/*.argosmodel
 # Distribution / packaging
 .Python
 build/
@@ -151,6 +156,9 @@ Thumbs.db
 *.log
 /logs/
 /translated_pdfs/
+# Translation output also lands here when the Tauri shell runs from src-tauri/
+# (dev cwd). Generated artifacts — chunk work dirs + versioned result PDFs.
+desktop/src-tauri/translated_pdfs/
 /AppData/
 /temp/
 
