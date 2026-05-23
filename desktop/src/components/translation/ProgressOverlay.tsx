@@ -154,14 +154,15 @@ export function ProgressOverlay({
         {state.status === "error" && state.error && (
           <p className="text-xs text-destructive">{state.error}</p>
         )}
-        {state.status === "done" && state.translatedPath && (
-          <p className="text-xs text-muted-foreground">
-            Saved to:{" "}
-            <span className="font-mono text-foreground">
-              {state.translatedPath}
-            </span>
-          </p>
-        )}
+        {(state.status === "done" || state.status === "cancelled") &&
+          state.translatedPath && (
+            <p className="text-xs text-muted-foreground">
+              {state.status === "cancelled" ? "Partial result: " : "Saved to: "}
+              <span className="font-mono text-foreground">
+                {state.translatedPath}
+              </span>
+            </p>
+          )}
       </div>
     </div>
   );

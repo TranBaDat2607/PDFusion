@@ -9,11 +9,13 @@ it, so sidecar startup time stays unaffected for users on LLM and the
 ~80 MB language pack downloads only on first translate.
 """
 
+import json
 import logging
 import os
 import sys
 import threading
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
@@ -46,6 +48,65 @@ def _preview(s: str, n: int = 60) -> str:
     """Single-line truncated preview for log lines."""
     s = (s or "").replace("\n", " ").replace("\r", " ").strip()
     return (s[:n] + "…") if len(s) > n else s
+
+
+# ---------------------------------------------------------------------------
+# Debug instrumentation
+#
+# Dumps the *input* (and key intermediates) of every Argos translation step to
+# a JSON file at the repo root: <repo>/argos_debug.json. Enabled by default;
+# set the env var PDFUSION_ARGOS_DEBUG=0 to turn it off without editing code.
+#
+# The file is rewritten in full after every recorded event, so it stays valid
+# JSON even if a translation run is interrupted. Translation runs across many
+# threads (BabelDOC's worker pool), so every write is guarded by a lock.
+# ---------------------------------------------------------------------------
+def _debug_json_path() -> Path:
+    """Location of argos_debug.json — the repo root (4 levels up from here)."""
+    try:
+        return Path(__file__).resolve().parents[3] / "argos_debug.json"
+    except IndexError:
+        return Path.cwd() / "argos_debug.json"
+
+
+class _ArgosDebugRecorder:
+    """Thread-safe recorder that appends translation-step events and flushes
+    the whole list to a JSON file after each one."""
+
+    def __init__(self) -> None:
+        self.enabled = os.environ.get("PDFUSION_ARGOS_DEBUG", "1").strip().lower() \
+            not in ("0", "false", "no", "off", "")
+        self._path = _debug_json_path()
+        self._lock = threading.Lock()
+        self._events: list[dict] = []
+        self._seq = 0
+        if self.enabled:
+            logger.info("Argos debug recorder ENABLED → %s", self._path)
+
+    def record(self, step: str, **data) -> None:
+        """Append one step event and rewrite the JSON file. `data` may hold any
+        JSON-serializable inputs/intermediates for `step`."""
+        if not self.enabled:
+            return
+        with self._lock:
+            self._seq += 1
+            self._events.append({
+                "seq": self._seq,
+                "time": datetime.now().isoformat(timespec="milliseconds"),
+                "thread": threading.current_thread().name,
+                "step": step,
+                **data,
+            })
+            try:
+                with open(self._path, "w", encoding="utf-8") as f:
+                    json.dump(self._events, f, ensure_ascii=False, indent=2)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("Argos debug recorder write failed: %s", exc)
+
+
+# Module-global singleton — shared across every ArgosTranslator instance and
+# every worker thread within a sidecar run.
+_debug = _ArgosDebugRecorder()
 
 
 def _detect_device() -> str:
@@ -270,6 +331,15 @@ class ArgosTranslator(BaseTranslator):
     def translate(self, text: str, **kwargs) -> str:
         self.translate_call_count += 1
 
+        # Step 1 — raw input handed to translate().
+        _debug.record(
+            "1.translate.input",
+            call=self.translate_call_count,
+            lang_in=self.lang_in,
+            lang_out=self.lang_out,
+            text=text,
+        )
+
         if (self.lang_in, self.lang_out) not in _SUPPORTED_PAIRS:
             raise ValueError(
                 f"Argos Translate supports only English → Vietnamese in this "
@@ -279,11 +349,28 @@ class ArgosTranslator(BaseTranslator):
             )
 
         processed = self._preprocess_text(text)
+        # Step 2 — text after placeholder/whitespace preprocessing.
+        _debug.record(
+            "2.preprocess",
+            call=self.translate_call_count,
+            raw=text,
+            processed=processed,
+        )
         if not processed.strip():
+            _debug.record(
+                "2b.empty_skip", call=self.translate_call_count, text=text
+            )
             return text
 
         cached = _llm_cache_get(processed, "en", "vi", "argos", self.model)
         if cached is not None:
+            # Step 3 — served from the process-lifetime cache; no NMT call.
+            _debug.record(
+                "3.cache_hit",
+                call=self.translate_call_count,
+                processed=processed,
+                cached=cached,
+            )
             self._fire_paragraph_callback(processed, cached)
             return cached
 
@@ -302,6 +389,13 @@ class ArgosTranslator(BaseTranslator):
         batch_id = 0
         with self._batch_lock:
             self._pending.append(entry)
+            # Step 4 — this paragraph joins the pending batch queue.
+            _debug.record(
+                "4.batch_enqueue",
+                call=self.translate_call_count,
+                processed=processed,
+                pending_count=len(self._pending),
+            )
             self._cancel_timer_locked()
             if len(self._pending) >= self.batch_size:
                 batch_to_flush, batch_id = self._take_batch_locked()
@@ -427,6 +521,14 @@ class ArgosTranslator(BaseTranslator):
         for processed, original, event, slot in batch:
             sentences = self._sentencizer.split_sentences(processed)
             toks = [self._tokenizer.encode(s) for s in sentences]
+            # Step 6 — per-paragraph sentence split + subword tokenization.
+            _debug.record(
+                "6.native_tokenize",
+                batch_id=batch_id,
+                processed=processed,
+                sentences=sentences,
+                tokens=toks,
+            )
             spans.append((offset, len(toks), processed, original, event, slot))
             flat_tokens.extend(toks)
             offset += len(toks)
@@ -443,6 +545,14 @@ class ArgosTranslator(BaseTranslator):
             [[self._target_prefix]] * len(flat_tokens)
             if self._target_prefix
             else None
+        )
+        # Step 7 — exact token input fed into CTranslate2 translate_batch.
+        _debug.record(
+            "7.ct2_input",
+            batch_id=batch_id,
+            num_sentences=len(flat_tokens),
+            target_prefix=self._target_prefix,
+            flat_tokens=flat_tokens,
         )
         # `beam_size=1` and `num_hypotheses=1` mirror our global settings —
         # explicit here to insulate against future Argos default changes.
@@ -473,6 +583,16 @@ class ArgosTranslator(BaseTranslator):
                 # line breaks BabelDOC may rely on.
                 translated = "\n".join(pieces)
                 result = self._postprocess_text(translated)
+                # Step 8 — decoded sentences, joined paragraph, final result.
+                _debug.record(
+                    "8.native_result",
+                    batch_id=batch_id,
+                    index=idx,
+                    processed=processed,
+                    decoded_pieces=pieces,
+                    translated=translated,
+                    result=result,
+                )
                 _llm_cache_set(processed, result, "en", "vi", "argos", self.model)
                 slot[0] = result
                 self._fire_paragraph_callback(processed, result)
@@ -496,6 +616,13 @@ class ArgosTranslator(BaseTranslator):
             "Argos streaming batch #%d: translating %d paragraph(s)",
             batch_id, len(batch),
         )
+        # Step 5 — a batch is dispatched for translation.
+        _debug.record(
+            "5.batch_start",
+            batch_id=batch_id,
+            size=len(batch),
+            processed_texts=[p for (p, _o, _e, _s) in batch],
+        )
         try:
             self._translate_batch_native(batch, batch_id)
             return
@@ -515,8 +642,23 @@ class ArgosTranslator(BaseTranslator):
                 # Native path partially succeeded — don't double-translate.
                 continue
             try:
+                # Step 8f — fallback per-entry Argos high-level translate().
+                _debug.record(
+                    "8f.fallback_input",
+                    batch_id=batch_id,
+                    index=idx,
+                    processed=processed,
+                )
                 translated = argostranslate.translate.translate(processed, "en", "vi")
                 result = self._postprocess_text(translated)
+                _debug.record(
+                    "8f.fallback_result",
+                    batch_id=batch_id,
+                    index=idx,
+                    processed=processed,
+                    translated=translated,
+                    result=result,
+                )
                 _llm_cache_set(processed, result, "en", "vi", "argos", self.model)
                 result_slot[0] = result
                 self._fire_paragraph_callback(processed, result)

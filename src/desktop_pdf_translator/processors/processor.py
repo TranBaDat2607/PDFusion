@@ -119,6 +119,10 @@ class PDFProcessor:
         self.settings = get_settings()
         self.session_id = None
         self._current_task = None
+        # Captured at process_pdf() entry so the API layer can locate the
+        # latest rolling translated PDF when the user cancels mid-run.
+        self._output_dir: Optional[Path] = None
+        self._input_stem: Optional[str] = None
         # Priority anchor for chunk scheduling — the 0-indexed page the viewer
         # is currently showing. Workers prefer chunks whose page index is
         # closest to this anchor. Updated live via `reprioritize()` as the
@@ -179,7 +183,9 @@ class PDFProcessor:
             if output_dir is None:
                 output_dir = Path.cwd() / "translated_pdfs"
             output_dir.mkdir(parents=True, exist_ok=True)
-            
+            self._output_dir = output_dir
+            self._input_stem = file_path.stem
+
             logger.info(f"Starting PDF processing session {self.session_id}")
             logger.info(f"File: {file_path}, {source_lang} -> {target_lang}, Service: {translation_service}")
             
@@ -1010,6 +1016,34 @@ class PDFProcessor:
         if self._current_task and not self._current_task.done():
             self._current_task.cancel()
             logger.info(f"Cancelled processing session {self.session_id}")
+
+    def get_partial_translated_file(self) -> Optional[Path]:
+        """Latest rolling translated PDF written so far, or None if no chunk
+        has finished. Used by the API layer to surface a partial result on
+        cancellation — the viewer is already pointing at this file via the
+        live chunk_ready stream, but the path needs to ride along on the
+        terminal `cancelled` event too so the UI can label it as saved."""
+        if self._output_dir is None or self._input_stem is None:
+            return None
+        return self._find_translated_file(self._output_dir, self._input_stem)
+
+    def cleanup_partial_artifacts(self) -> None:
+        """Remove older rolling-PDF versions, keeping only the latest as the
+        user's partial result. Best-effort — file lock errors on Windows
+        (PyMuPDF may still hold a handle from a worker thread that hasn't
+        unwound yet) are logged, not raised."""
+        if self._output_dir is None or self._input_stem is None:
+            return
+        versions = sorted(
+            self._output_dir.glob(f"{self._input_stem}_translated_v*.pdf"),
+            key=lambda p: int(p.stem.rsplit("_v", 1)[-1])
+            if p.stem.rsplit("_v", 1)[-1].isdigit() else -1,
+        )
+        for stale in versions[:-1]:
+            try:
+                stale.unlink()
+            except OSError as exc:
+                logger.warning("Could not delete intermediate %s: %s", stale, exc)
     
     def get_session_info(self) -> Dict[str, Any]:
         """Get information about current processing session."""

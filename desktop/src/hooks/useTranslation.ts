@@ -176,7 +176,15 @@ export function useTranslation() {
                 translatedPath: c.translated_file ?? null,
               }));
             } else if (type === "cancelled") {
-              setState((s) => ({ ...s, status: "cancelled" }));
+              const c = data as CompletionPayload;
+              if (c.translated_file) {
+                setTranslatedPdfPath(c.translated_file);
+              }
+              setState((s) => ({
+                ...s,
+                status: "cancelled",
+                translatedPath: c.translated_file ?? s.translatedPath ?? null,
+              }));
             } else if (type === "error") {
               const e = data as { message: string };
               setState((s) => ({
@@ -204,12 +212,19 @@ export function useTranslation() {
   const cancel = useCallback(async () => {
     const jobId = useAppStore.getState().activeTranslationJob;
     if (!jobId) return;
+    // Optimistic flip: reflect the cancel intent in the UI immediately so the
+    // user sees the overlay switch out of "running" without waiting for the
+    // backend to drain its in-flight chunk (1-3 s for Argos, a few seconds
+    // for an LLM mid-request — neither can be hard-killed).
+    setState((s) => ({ ...s, status: "cancelled" }));
     try {
       await api.post(`/translate/${jobId}/cancel`);
     } catch {
-      // Best-effort
+      // Best-effort — backend may already be tearing down.
     }
-    abortRef.current?.abort();
+    // Deliberately do NOT abort the SSE stream here. We keep listening so the
+    // terminal `cancelled` event lands with the partial rolling-PDF path; the
+    // backend closes the stream itself once that event fires.
   }, []);
 
   const reset = useCallback(() => setState(INITIAL), []);

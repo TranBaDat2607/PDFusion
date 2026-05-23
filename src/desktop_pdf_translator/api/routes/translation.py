@@ -26,6 +26,18 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/translate", tags=["translation"], dependencies=[Depends(require_token)])
 
 
+def _build_cancel_payload(processor: PDFProcessor, file_path: Path) -> dict:
+    """Resolve the latest partial rolling PDF, drop older versions, and shape
+    the payload like the `done` event so the React side can reuse the same
+    completion-handling path."""
+    partial = processor.get_partial_translated_file()
+    processor.cleanup_partial_artifacts()
+    return {
+        "translated_file": str(partial) if partial else None,
+        "original_file": str(file_path),
+    }
+
+
 async def _run_translation(job_id: str, payload: TranslateRequest) -> None:
     registry = get_registry()
     job = registry.get(job_id)
@@ -50,8 +62,7 @@ async def _run_translation(job_id: str, payload: TranslateRequest) -> None:
             visible_page=payload.visible_page,
         ):
             if job.cancelled:
-                await job.emit("cancelled", {})
-                await job.finish("cancelled", {})
+                await job.finish("cancelled", _build_cancel_payload(processor, file_path))
                 return
             event_dict = event.to_dict()
             if event.type == EventType.FINISH:
@@ -83,7 +94,7 @@ async def _run_translation(job_id: str, payload: TranslateRequest) -> None:
         logger.info("Emitting done event with payload: %s", completion_data)
         await job.finish("done", completion_data)
     except asyncio.CancelledError:
-        await job.finish("cancelled", {})
+        await job.finish("cancelled", _build_cancel_payload(processor, file_path))
         raise
     except Exception as exc:  # noqa: BLE001
         logger.exception("Translation job %s failed", job_id)
