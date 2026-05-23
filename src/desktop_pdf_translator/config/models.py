@@ -109,6 +109,14 @@ class TranslationSettings(BaseModel):
     cache_translations: bool = Field(True, description="Enable translation caching")
     cache_ttl_days: int = Field(30, ge=1, le=365, description="Days before cached translations expire")
     cache_max_size_mb: float = Field(500.0, ge=10.0, le=5000.0, description="Soft cap for translation cache size (MB)")
+    cache_translated_pdfs: bool = Field(
+        True,
+        description="Enable PDF-level translation cache (skip re-translating identical PDFs)",
+    )
+    pdf_cache_max_size_mb: float = Field(
+        1000.0, ge=100.0, le=20000.0,
+        description="Soft cap for the translated-PDF cache; oldest entries are LRU-evicted past this",
+    )
     preserve_formatting: bool = Field(True, description="Preserve PDF formatting")
     min_text_length: int = Field(5, ge=0, description="Minimum text length to translate")
 

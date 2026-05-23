@@ -5,6 +5,7 @@ Main PDF processing pipeline with BabelDOC integration and Vietnamese optimizati
 import asyncio
 import logging
 import os
+import shutil
 import time
 import uuid
 from pathlib import Path
@@ -28,6 +29,7 @@ from .events import (
     ParagraphTranslatedEvent,
     EventType,
 )
+from .pdf_cache import get_pdf_cache
 from .exceptions import ProcessingError, BabelDOCError, FileValidationError, ConfigurationError
 
 
@@ -147,6 +149,7 @@ class PDFProcessor:
         translation_service: Optional[TranslationService] = None,
         output_dir: Optional[Path] = None,
         visible_page: int = 1,
+        bypass_cache: bool = False,
     ) -> AsyncGenerator[ProcessingEvent, None]:
         """
         Process PDF file with translation.
@@ -179,9 +182,15 @@ class PDFProcessor:
             # Log the actual languages being used
             logger.info(f"Using languages - Source: {source_lang}, Target: {target_lang}")
             
-            # Set output directory
+            # Set output directory. NEVER fall back to Path.cwd() — when the
+            # installed app launches from `C:\Program Files\PDFusion\`, that's
+            # `Path.cwd()`, which is non-writable for normal users and produced
+            # `WinError 5: Access is denied` on bundled builds. Use the same
+            # writable AppData root the config and cache modules already use.
             if output_dir is None:
-                output_dir = Path.cwd() / "translated_pdfs"
+                output_dir = (
+                    Path.home() / "AppData" / "Local" / "PDFusion" / "translated_pdfs"
+                )
             output_dir.mkdir(parents=True, exist_ok=True)
             self._output_dir = output_dir
             self._input_stem = file_path.stem
@@ -203,7 +212,7 @@ class PDFProcessor:
             )
             
             file_metadata = await self._validate_file(file_path)
-            
+
             yield ProgressEvent(
                 type=EventType.PROGRESS_UPDATE,
                 timestamp=time.time(),
@@ -215,8 +224,12 @@ class PDFProcessor:
                 progress_percent=25.0,
                 message=f"File validated: {file_metadata.page_count} pages, {file_metadata.file_size_mb:.1f} MB"
             )
-            
-            # Step 2: Create translator
+
+            # Fallback notice — emit BEFORE the cache lookup so the user is
+            # informed about the silent service substitution whether or not the
+            # subsequent translation hits the cache. (Previously, a cached
+            # Argos-fallback result would silently serve under the user's
+            # OpenAI preference with no toast, hiding the substitution.)
             if fell_back:
                 yield ProgressEvent(
                     type=EventType.PROGRESS_UPDATE,
@@ -226,13 +239,124 @@ class PDFProcessor:
                     stage="fallback",
                     current_step=2,
                     total_steps=4,
-                    progress_percent=28.0,
+                    progress_percent=27.0,
                     message=(
                         f"No {requested_service.value} API key configured — "
                         f"falling back to Argos (offline) for this run."
                     ),
                 )
 
+            # PDF-level cache: skip the BabelDOC pipeline entirely if we've
+            # already translated this exact file with this service+model+langs.
+            # The synthetic chunk_ready + done events match the shape of a real
+            # run so the React side's hot-swap path (useTranslation.ts) works
+            # unchanged — the only difference is the `cache_hit` flag, which
+            # surfaces as a toast.
+            if (
+                self.settings.translation.cache_translated_pdfs
+                and not bypass_cache
+            ):
+                model_id = self._resolve_model_id(translation_service)
+                hit = await asyncio.to_thread(
+                    get_pdf_cache().lookup,
+                    file_path,
+                    source_lang.value,
+                    target_lang.value,
+                    translation_service.value,
+                    model_id,
+                )
+                if hit is not None:
+                    # Use the highest-int name in the rolling-version family
+                    # so `_find_translated_file` (highest-N-wins) returns OUR
+                    # materialized file even if older `_translated_v*.pdf`
+                    # leftovers from a prior real run are still on disk. The
+                    # real pipeline writes `_v{N:03d}.pdf` starting at v001;
+                    # _v999 ensures we win the sort. Also nuke older rolling
+                    # files for the stem so cancel-handlers (`_build_cancel_
+                    # payload` → `get_partial_translated_file`) don't return
+                    # something stale during the brief cache-hit window.
+                    target = output_dir / f"{file_path.stem}_translated_v999.pdf"
+                    for stale in output_dir.glob(
+                        f"{file_path.stem}_translated_v*.pdf"
+                    ):
+                        if stale == target:
+                            continue
+                        try:
+                            stale.unlink()
+                        except OSError as exc:
+                            logger.warning(
+                                "Could not remove stale rolling file %s (%s)",
+                                stale, exc,
+                            )
+                    # Copy via .tmp + atomic rename so a concurrent reader
+                    # (PdfViewer, or another job hitting the same input) never
+                    # sees a half-written `target`. os.replace is atomic on
+                    # Windows and POSIX.
+                    tmp_target = target.with_suffix(target.suffix + ".tmp")
+                    try:
+                        shutil.copyfile(hit.cached_path, tmp_target)
+                        os.replace(tmp_target, target)
+                    except FileNotFoundError as exc:
+                        # The cached file was evicted between lookup() and our
+                        # copyfile — most likely by another job's store()
+                        # triggering an LRU sweep. Treat as a miss and fall
+                        # through to the real pipeline.
+                        logger.info(
+                            "PDF cache entry evicted under us by a concurrent "
+                            "store (%s); falling through to full pipeline", exc,
+                        )
+                        try:
+                            tmp_target.unlink(missing_ok=True)
+                        except OSError:
+                            pass
+                    except OSError as exc:
+                        logger.warning(
+                            "PDF cache hit but materialize failed (%s); "
+                            "running full pipeline", exc,
+                        )
+                        try:
+                            tmp_target.unlink(missing_ok=True)
+                        except OSError:
+                            pass
+                    else:
+                        logger.info(
+                            "PDF cache HIT (cached_at=%s, hits=%d) → %s",
+                            hit.cached_at, hit.hit_count, target,
+                        )
+                        self._input_stem = file_path.stem
+                        yield ChunkReadyEvent(
+                            type=EventType.CHUNK_READY,
+                            timestamp=time.time(),
+                            session_id=self.session_id,
+                            data={},
+                            chunk_index=0,
+                            total_chunks=1,
+                            pages_in_chunk=(1, file_metadata.page_count),
+                            rolling_pdf_path=target,
+                            progress_percent=100.0,
+                            elapsed_seconds=0.0,
+                            eta_seconds=None,
+                            pages_per_second=None,
+                            cache_hit=True,
+                            cached_at=hit.cached_at,
+                        )
+                        yield CompletionEvent(
+                            type=EventType.FINISH,
+                            timestamp=time.time(),
+                            session_id=self.session_id,
+                            data={},
+                            success=True,
+                            original_file=file_path,
+                            translated_file=target,
+                            processing_time_seconds=time.time() - start_time,
+                            pages_processed=file_metadata.page_count,
+                            cache_hit=True,
+                            cached_at=hit.cached_at,
+                        )
+                        return
+
+            # Step 2: Create translator
+            # (fallback toast already emitted before the cache lookup above)
             yield ProgressEvent(
                 type=EventType.PROGRESS_UPDATE,
                 timestamp=time.time(),
@@ -299,6 +423,45 @@ class PDFProcessor:
                 translated_file,
             )
 
+            # Persist into the PDF-level cache so the next translation of this
+            # exact file (same service+model+langs) short-circuits. Run on a
+            # worker thread because store() hashes the input and copies the
+            # output — both blocking. Errors are non-fatal.
+            #
+            # IMPORTANT: only cache when `translated_file` is a real rolling
+            # output (`{stem}_translated_v*.pdf`). `_find_translated_file` has
+            # broad fallbacks (newest `*.pdf` in `output_dir`) that can return
+            # an unrelated stale PDF if BabelDOC silently produced no rolling
+            # files. Caching that would permanently bind a wrong translation
+            # to the input's hash, undetectable without a manual clear.
+            should_cache = (
+                translated_file
+                and self.settings.translation.cache_translated_pdfs
+                and translated_file.parent == output_dir
+                and translated_file.name.startswith(f"{file_path.stem}_translated_v")
+                and translated_file.suffix.lower() == ".pdf"
+            )
+            if should_cache:
+                try:
+                    await asyncio.to_thread(
+                        get_pdf_cache().store,
+                        file_path,
+                        translated_file,
+                        source_lang.value,
+                        target_lang.value,
+                        translation_service.value,
+                        self._resolve_model_id(translation_service),
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("PDF cache store failed (non-fatal): %s", exc)
+            elif translated_file and self.settings.translation.cache_translated_pdfs:
+                logger.warning(
+                    "Skipping PDF cache store: translated_file %s is not a "
+                    "rolling output for stem %r — would risk caching a "
+                    "stale/unrelated PDF",
+                    translated_file, file_path.stem,
+                )
+
             yield CompletionEvent(
                 type=EventType.FINISH,
                 timestamp=time.time(),
@@ -340,6 +503,21 @@ class PDFProcessor:
             )
             raise ProcessingError(f"Processing failed: {e}", details=str(e))
     
+    def _resolve_model_id(self, service: TranslationService) -> Optional[str]:
+        """Model string used in PDF-cache keys. Mirrors the per-service config
+        so changing model (e.g. gpt-4 → gpt-4o) invalidates cache entries
+        without manual intervention. Argos has a fixed model.
+        """
+        if service == TranslationService.ARGOS:
+            return "argostranslate"
+        if service == TranslationService.OPENAI:
+            return getattr(self.settings.openai, "model", None)
+        if service == TranslationService.GEMINI:
+            return getattr(self.settings.gemini, "model", None)
+        if service == TranslationService.ANTHROPIC:
+            return getattr(self.settings.anthropic, "model", None)
+        return None
+
     def _resolve_effective_service(
         self, requested: TranslationService
     ) -> TranslationService:

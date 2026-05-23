@@ -1,4 +1,4 @@
-import { ArrowRight, FilePlus, Loader2, MessageSquare, Sparkles } from "lucide-react";
+import { ArrowRight, FilePlus, Loader2, MessageSquare, RefreshCw, Sparkles } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -26,7 +26,11 @@ function prewarm() {
 interface ContextBarProps {
   onPickFile: () => void;
   onTranslate: () => void;
+  onReTranslate: () => void;
   translating: boolean;
+  /** True when a translation has completed for the current document, so the
+   *  user can re-run it with the PDF-level cache bypassed. */
+  canReTranslate: boolean;
 }
 
 function basename(path: string | null): string {
@@ -38,7 +42,9 @@ function basename(path: string | null): string {
 export function ContextBar({
   onPickFile,
   onTranslate,
+  onReTranslate,
   translating,
+  canReTranslate,
 }: ContextBarProps) {
   const { data: config } = useConfig();
   const { data: options } = useOptions();
@@ -201,6 +207,25 @@ export function ContextBar({
           )}
           {translating ? "Translating…" : "Translate"}
         </Button>
+
+        {canReTranslate && !translating && (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                onClick={onReTranslate}
+                variant="outline"
+                size="sm"
+                className="gap-2"
+              >
+                <RefreshCw className="h-4 w-4" />
+                Re-translate
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>
+              Run translation again, bypassing the cached result
+            </TooltipContent>
+          </Tooltip>
+        )}
       </div>
     </div>
   );

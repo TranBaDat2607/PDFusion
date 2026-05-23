@@ -87,6 +87,11 @@ function Workspace() {
     void translation.start(originalPath);
   }, [originalPath, translation]);
 
+  const handleReTranslate = useCallback(() => {
+    if (!originalPath) return;
+    void translation.start(originalPath, { bypassCache: true });
+  }, [originalPath, translation]);
+
   return (
     <div className="flex h-full w-full flex-col bg-background text-foreground">
       <Header
@@ -96,7 +101,16 @@ function Workspace() {
       <ContextBar
         onPickFile={handlePickFile}
         onTranslate={handleTranslate}
+        onReTranslate={handleReTranslate}
         translating={translation.state.status === "running"}
+        // Re-translate is available whenever a PDF is loaded and we're not
+        // currently running — including from idle (just-opened previously-
+        // translated file), error, or cancelled states. The previous
+        // status==="done" gate forced users through a (potentially stale)
+        // cache hit before they could force-fresh.
+        canReTranslate={
+          !!originalPath && translation.state.status !== "running"
+        }
       />
       <div className="relative flex-1 overflow-hidden">
         <MainLayout />

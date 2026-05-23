@@ -60,6 +60,7 @@ async def _run_translation(job_id: str, payload: TranslateRequest) -> None:
             translation_service=payload.service,
             output_dir=output_dir,
             visible_page=payload.visible_page,
+            bypass_cache=payload.bypass_cache,
         ):
             if job.cancelled:
                 await job.finish("cancelled", _build_cancel_payload(processor, file_path))

@@ -19,6 +19,8 @@ interface CompletionPayload {
   original_file?: string | null;
   processing_time_seconds?: number | null;
   pages_processed?: number | null;
+  cache_hit?: boolean;
+  cached_at?: string | null;
 }
 
 interface ChunkReadyPayload {
@@ -30,6 +32,8 @@ interface ChunkReadyPayload {
   elapsed_seconds?: number | null;
   eta_seconds?: number | null;
   pages_per_second?: number | null;
+  cache_hit?: boolean;
+  cached_at?: string | null;
 }
 
 interface ParagraphTranslatedPayload {
@@ -71,27 +75,57 @@ const INITIAL: TranslationState = {
   message: "",
 };
 
+const RELATIVE_TIME = new Intl.RelativeTimeFormat(undefined, { numeric: "auto" });
+
+function formatRelative(iso: string): string {
+  const then = new Date(iso).getTime();
+  if (Number.isNaN(then)) return "earlier";
+  const diffSec = Math.round((then - Date.now()) / 1000);
+  const abs = Math.abs(diffSec);
+  if (abs < 60) return RELATIVE_TIME.format(diffSec, "second");
+  if (abs < 3600) return RELATIVE_TIME.format(Math.round(diffSec / 60), "minute");
+  if (abs < 86400) return RELATIVE_TIME.format(Math.round(diffSec / 3600), "hour");
+  return RELATIVE_TIME.format(Math.round(diffSec / 86400), "day");
+}
+
+export interface StartOptions {
+  /** Skip the PDF-level cache for this run — forces a fresh translation. */
+  bypassCache?: boolean;
+}
+
 export function useTranslation() {
   const [state, setState] = useState<TranslationState>(INITIAL);
   const abortRef = useRef<AbortController | null>(null);
   const setTranslatedPdfPath = useAppStore((s) => s.setTranslatedPdfPath);
   const setActiveJob = useAppStore((s) => s.setActiveTranslationJob);
   const setChunkProgress = useAppStore((s) => s.setChunkProgress);
+  const bumpTranslatedReloadKey = useAppStore(
+    (s) => s.bumpTranslatedReloadKey,
+  );
 
   const start = useCallback(
-    async (filePath: string) => {
+    async (filePath: string, opts: StartOptions = {}) => {
       setState({ ...INITIAL, status: "running", stage: "Starting…" });
       setChunkProgress(null);
+      // Bump the viewer's reload nonce so the translated panel re-fetches the
+      // PDF even when the rolling output path is identical to the one already
+      // displayed (Re-translate writes to the same `_translated_v*.pdf` path).
+      bumpTranslatedReloadKey();
 
       // Seed priority from the page the user is currently looking at — defaults
       // to page 1 if no PDF is loaded yet (shouldn't happen in normal flow).
       const visiblePage = useAppStore.getState().visiblePage ?? 1;
+      // The backend may serve a cached translation as a single synthetic
+      // chunk_ready + done. We want the "Loaded from cache" toast to fire
+      // exactly once per run, hence this latch.
+      let cacheToastFired = false;
 
       let jobId: string;
       try {
         const accepted = await api.post<{ job_id: string }>("/translate", {
           file_path: filePath,
           visible_page: visiblePage,
+          bypass_cache: opts.bypassCache ?? false,
         });
         jobId = accepted.job_id;
         setActiveJob(jobId);
@@ -147,6 +181,11 @@ export function useTranslation() {
               }));
             } else if (type === "chunk_ready") {
               const c = data as ChunkReadyPayload;
+              if (c.cache_hit && !cacheToastFired) {
+                cacheToastFired = true;
+                const when = c.cached_at ? formatRelative(c.cached_at) : "earlier";
+                toast.success(`Loaded from cache · translated ${when}`);
+              }
               setTranslatedPdfPath(c.rolling_pdf_path);
               setChunkProgress({
                 chunksReady: c.chunk_index + 1,
@@ -156,8 +195,12 @@ export function useTranslation() {
               setState((s) => ({
                 ...s,
                 progress: c.progress_percent,
-                stage: `Chunk ${c.chunk_index + 1}/${c.total_chunks} ready`,
-                message: `Pages 1–${c.pages_in_chunk[1]} translated`,
+                stage: c.cache_hit
+                  ? "Loaded from cache"
+                  : `Chunk ${c.chunk_index + 1}/${c.total_chunks} ready`,
+                message: c.cache_hit
+                  ? `All ${c.pages_in_chunk[1]} page(s) ready`
+                  : `Pages 1–${c.pages_in_chunk[1]} translated`,
                 etaSeconds: c.eta_seconds ?? null,
                 etaAnchorAt:
                   c.eta_seconds != null ? Date.now() : (s.etaAnchorAt ?? null),
@@ -165,6 +208,11 @@ export function useTranslation() {
               }));
             } else if (type === "done") {
               const c = data as CompletionPayload;
+              if (c.cache_hit && !cacheToastFired) {
+                cacheToastFired = true;
+                const when = c.cached_at ? formatRelative(c.cached_at) : "earlier";
+                toast.success(`Loaded from cache · translated ${when}`);
+              }
               if (c.translated_file) {
                 setTranslatedPdfPath(c.translated_file);
               }
@@ -172,7 +220,7 @@ export function useTranslation() {
                 ...s,
                 status: "done",
                 progress: 100,
-                stage: "Done",
+                stage: c.cache_hit ? "Loaded from cache" : "Done",
                 translatedPath: c.translated_file ?? null,
               }));
             } else if (type === "cancelled") {
@@ -206,7 +254,7 @@ export function useTranslation() {
         abortRef.current = null;
       }
     },
-    [setActiveJob, setTranslatedPdfPath, setChunkProgress],
+    [setActiveJob, setTranslatedPdfPath, setChunkProgress, bumpTranslatedReloadKey],
   );
 
   const cancel = useCallback(async () => {

@@ -30,6 +30,11 @@ interface PdfViewerProps {
    *  the original viewer to feed the translation priority scheduler so the
    *  page the user is looking at translates first. */
   onVisiblePageChange?: (page: number) => void;
+  /** Bumped by the caller whenever the file at `filePath` may have been
+   *  overwritten in-place (e.g. Re-translate writing to the same rolling
+   *  output path that's currently displayed). Forces the load effect to
+   *  refetch and re-parse rather than reuse the cached PDFDocumentProxy. */
+  reloadKey?: number;
 }
 
 export function PdfViewer({
@@ -40,6 +45,7 @@ export function PdfViewer({
   placeholderSize,
   onFirstPageSize,
   onVisiblePageChange,
+  reloadKey = 0,
 }: PdfViewerProps) {
   // Throttle visible-page callbacks so a fast scroll doesn't spam the store
   // (and downstream the /translate/{job_id}/reprioritize endpoint).
@@ -136,7 +142,7 @@ export function PdfViewer({
     };
     // onFirstPageSize is intentionally excluded — we only want to refire on path change
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [filePath]);
+  }, [filePath, reloadKey]);
 
   // Lazy-render pages as they enter the viewport
   const renderPage = useCallback(

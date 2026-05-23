@@ -110,6 +110,8 @@ async def update_config(payload: ConfigUpdateRequest) -> ConfigResponse:
         current["processing"]["max_parallel_chunks"] = payload.max_parallel_chunks
     if payload.cache_translations is not None:
         current["translation"]["cache_translations"] = payload.cache_translations
+    if payload.cache_translated_pdfs is not None:
+        current["translation"]["cache_translated_pdfs"] = payload.cache_translated_pdfs
 
     new_settings = AppSettings(**current)
     if not mgr.save_settings(new_settings):
