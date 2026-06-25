@@ -177,26 +177,13 @@ class ConfigManager:
         """Load configuration from environment variables."""
         env_config = {}
         
-        # OpenAI settings
-        if openai_key := os.getenv("OPENAI_API_KEY"):
-            env_config.setdefault("openai", {})["api_key"] = openai_key
-        
-        if openai_model := os.getenv("OPENAI_MODEL"):
-            env_config.setdefault("openai", {})["model"] = openai_model
-        
-        # Gemini settings
-        if gemini_key := os.getenv("GEMINI_API_KEY"):
-            env_config.setdefault("gemini", {})["api_key"] = gemini_key
-        
-        if gemini_model := os.getenv("GEMINI_MODEL"):
-            env_config.setdefault("gemini", {})["model"] = gemini_model
-
-        # Anthropic settings
-        if anthropic_key := os.getenv("ANTHROPIC_API_KEY"):
-            env_config.setdefault("anthropic", {})["api_key"] = anthropic_key
-
-        if anthropic_model := os.getenv("ANTHROPIC_MODEL"):
-            env_config.setdefault("anthropic", {})["model"] = anthropic_model
+        # Per-service API key + model overrides, e.g. OPENAI_API_KEY /
+        # OPENAI_MODEL. Adding a service is a one-line edit to this list.
+        for service in ("openai", "gemini", "anthropic"):
+            if api_key := os.getenv(f"{service.upper()}_API_KEY"):
+                env_config.setdefault(service, {})["api_key"] = api_key
+            if model := os.getenv(f"{service.upper()}_MODEL"):
+                env_config.setdefault(service, {})["model"] = model
 
         # Application settings
         if debug := os.getenv("DEBUG_MODE"):

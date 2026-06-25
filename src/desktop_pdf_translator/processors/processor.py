@@ -1167,15 +1167,26 @@ class PDFProcessor:
         logger.debug("BabelDOC configuration created successfully")
         return config
     
+    @staticmethod
+    def _rolling_version(path: Path) -> int:
+        """Sort key for the `{stem}_translated_v{N}.pdf` rolling family: returns
+        N, or -1 when the suffix after `_v` isn't a number."""
+        tail = path.stem.rsplit("_v", 1)[-1]
+        return int(tail) if tail.isdigit() else -1
+
+    def _sorted_rolling_pdfs(self, output_dir: Path, stem: str) -> list[Path]:
+        """All rolling translated PDFs for `stem`, ascending by version number
+        (so `[-1]` is the latest, most-complete output). These are written by
+        `_rebuild_sparse_rolling_pdf` after each chunk."""
+        return sorted(
+            output_dir.glob(f"{stem}_translated_v*.pdf"),
+            key=self._rolling_version,
+        )
+
     def _find_translated_file(self, output_dir: Path, original_stem: str) -> Optional[Path]:
         """Find translated PDF file in output directory."""
-        # Streaming-render rolling output: highest-version wins. This is the
-        # `{stem}_translated_v{N}.pdf` family written by `_rebuild_sparse_rolling_pdf`
-        # after each chunk. The largest N is the latest, most-complete output.
-        rolling = sorted(
-            output_dir.glob(f"{original_stem}_translated_v*.pdf"),
-            key=lambda p: int(p.stem.rsplit("_v", 1)[-1]) if p.stem.rsplit("_v", 1)[-1].isdigit() else -1,
-        )
+        # Streaming-render rolling output: highest-version wins.
+        rolling = self._sorted_rolling_pdfs(output_dir, original_stem)
         if rolling:
             return rolling[-1]
 
@@ -1225,11 +1236,7 @@ class PDFProcessor:
         # the dir) that are correct for per-chunk lookups but would risk
         # returning a stale/unrelated PDF here — a cancelled run must only ever
         # surface a real rolling output we produced.
-        rolling = sorted(
-            self._output_dir.glob(f"{self._input_stem}_translated_v*.pdf"),
-            key=lambda p: int(p.stem.rsplit("_v", 1)[-1])
-            if p.stem.rsplit("_v", 1)[-1].isdigit() else -1,
-        )
+        rolling = self._sorted_rolling_pdfs(self._output_dir, self._input_stem)
         return rolling[-1] if rolling else None
 
     def cleanup_partial_artifacts(self) -> None:
@@ -1239,11 +1246,7 @@ class PDFProcessor:
         unwound yet) are logged, not raised."""
         if self._output_dir is None or self._input_stem is None:
             return
-        versions = sorted(
-            self._output_dir.glob(f"{self._input_stem}_translated_v*.pdf"),
-            key=lambda p: int(p.stem.rsplit("_v", 1)[-1])
-            if p.stem.rsplit("_v", 1)[-1].isdigit() else -1,
-        )
+        versions = self._sorted_rolling_pdfs(self._output_dir, self._input_stem)
         for stale in versions[:-1]:
             try:
                 stale.unlink()
