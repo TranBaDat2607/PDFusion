@@ -98,6 +98,11 @@ class ChunkReadyEvent(ProcessingEvent):
     elapsed_seconds: Optional[float] = None
     eta_seconds: Optional[float] = None
     pages_per_second: Optional[float] = None
+    # Set when this chunk was served from the PDF-level cache (synthetic event
+    # emitted from process_pdf's cache-hit short-circuit). `cached_at` is the
+    # ISO8601 timestamp the cache entry was originally written.
+    cache_hit: bool = False
+    cached_at: Optional[str] = None
 
     def __post_init__(self):
         self.data = {
@@ -109,6 +114,8 @@ class ChunkReadyEvent(ProcessingEvent):
             "elapsed_seconds": self.elapsed_seconds,
             "eta_seconds": self.eta_seconds,
             "pages_per_second": self.pages_per_second,
+            "cache_hit": self.cache_hit,
+            "cached_at": self.cached_at,
         }
 
 
@@ -143,7 +150,9 @@ class CompletionEvent(ProcessingEvent):
     translated_file: Optional[Path] = None
     processing_time_seconds: Optional[float] = None
     pages_processed: Optional[int] = None
-    
+    cache_hit: bool = False
+    cached_at: Optional[str] = None
+
     def __post_init__(self):
         """Initialize event data from attributes."""
         self.data = {
@@ -151,5 +160,7 @@ class CompletionEvent(ProcessingEvent):
             "original_file": str(self.original_file) if self.original_file else None,
             "translated_file": str(self.translated_file) if self.translated_file else None,
             "processing_time_seconds": self.processing_time_seconds,
-            "pages_processed": self.pages_processed
+            "pages_processed": self.pages_processed,
+            "cache_hit": self.cache_hit,
+            "cached_at": self.cached_at,
         }

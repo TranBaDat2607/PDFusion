@@ -61,6 +61,7 @@ class ConfigUpdateRequest(BaseModel):
     # Performance / cache toggles
     max_parallel_chunks: Optional[int] = Field(None, ge=0, le=16)
     cache_translations: Optional[bool] = None
+    cache_translated_pdfs: Optional[bool] = None
 
 
 class ValidateRequest(BaseModel):
@@ -86,6 +87,10 @@ class TranslateRequest(BaseModel):
     service: Optional[TranslationService] = None
     output_dir: Optional[str] = None
     visible_page: int = Field(1, ge=1, description="1-indexed page the viewer is currently showing; seeds the priority queue")
+    bypass_cache: bool = Field(
+        False,
+        description="Skip the PDF-level cache lookup for this run (forces a fresh translation)",
+    )
 
 
 class JobAccepted(BaseModel):

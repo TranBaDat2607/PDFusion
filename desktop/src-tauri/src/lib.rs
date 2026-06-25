@@ -49,6 +49,12 @@ pub fn run() {
         .plugin(tauri_plugin_fs::init())
         .invoke_handler(tauri::generate_handler![sidecar_info])
         .setup(|app| {
+            // Pre-create %LOCALAPPDATA%\PDFusion\ and the subdirs every
+            // sidecar subsystem writes to (logs, translated_pdfs, caches,
+            // chroma). Done synchronously before the sidecar spawn so the
+            // Python side never races on first-run mkdirs across subsystems.
+            sidecar::ensure_appdata_layout();
+
             let handle = app.handle().clone();
             let spawn_handle = handle.clone();
             tauri::async_runtime::spawn(async move {
@@ -75,6 +81,12 @@ pub fn run() {
                 if let Some(handle) = sidecar::current() {
                     handle.shutdown();
                 }
+                // Wipe any %TEMP%\pdfusion-translate-* dirs left behind by
+                // this session. The sidecar's per-job cleanup handles the
+                // common case (previous dir wiped when the next translation
+                // starts), but the *last* run's dir survives until exit —
+                // this is where it gets removed.
+                sidecar::cleanup_translate_temp_dirs();
             }
         });
 }

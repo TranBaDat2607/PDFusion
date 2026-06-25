@@ -28,6 +28,11 @@ logger = logging.getLogger(__name__)
 
 _SUPPORTED_PAIRS = {("en", "vi")}
 
+# Upper bound on how long a single translate() caller will block waiting for its
+# batch to decode. Guards against a hang if a batch worker dies without firing
+# the caller's completion event. Generous — pack install happens before the wait.
+_BATCH_WAIT_TIMEOUT = 180.0
+
 # Concurrent paragraph workers must not all attempt to download the pack.
 _install_lock = threading.Lock()
 _en_vi_ready = False
@@ -54,19 +59,24 @@ def _preview(s: str, n: int = 60) -> str:
 # Debug instrumentation
 #
 # Dumps the *input* (and key intermediates) of every Argos translation step to
-# a JSON file at the repo root: <repo>/argos_debug.json. Enabled by default;
-# set the env var PDFUSION_ARGOS_DEBUG=0 to turn it off without editing code.
+# a JSON file under AppData: ~/AppData/Local/PDFusion/logs/argos_debug.json.
+# Disabled by default; set the env var PDFUSION_ARGOS_DEBUG=1 to enable.
+#
+# Previous location was `<repo_root>/argos_debug.json` resolved via
+# `Path(__file__).parents[3]`. That works in dev but in the PyInstaller bundle
+# resolves to `C:\Program Files\PDFusion\` which is non-writable for normal
+# users — every paragraph translation hit WinError 5 (the write failure was
+# caught but the log was spammed for every paragraph).
 #
 # The file is rewritten in full after every recorded event, so it stays valid
 # JSON even if a translation run is interrupted. Translation runs across many
 # threads (BabelDOC's worker pool), so every write is guarded by a lock.
 # ---------------------------------------------------------------------------
 def _debug_json_path() -> Path:
-    """Location of argos_debug.json — the repo root (4 levels up from here)."""
-    try:
-        return Path(__file__).resolve().parents[3] / "argos_debug.json"
-    except IndexError:
-        return Path.cwd() / "argos_debug.json"
+    """Location of argos_debug.json — under the writable AppData logs dir."""
+    return (
+        Path.home() / "AppData" / "Local" / "PDFusion" / "logs" / "argos_debug.json"
+    )
 
 
 class _ArgosDebugRecorder:
@@ -74,13 +84,23 @@ class _ArgosDebugRecorder:
     the whole list to a JSON file after each one."""
 
     def __init__(self) -> None:
-        self.enabled = os.environ.get("PDFUSION_ARGOS_DEBUG", "1").strip().lower() \
-            not in ("0", "false", "no", "off", "")
+        # Off by default. Set PDFUSION_ARGOS_DEBUG=1 (or true/yes/on) to enable.
+        self.enabled = os.environ.get("PDFUSION_ARGOS_DEBUG", "0").strip().lower() \
+            in ("1", "true", "yes", "on")
         self._path = _debug_json_path()
         self._lock = threading.Lock()
         self._events: list[dict] = []
         self._seq = 0
         if self.enabled:
+            try:
+                self._path.parent.mkdir(parents=True, exist_ok=True)
+            except OSError as exc:
+                logger.warning(
+                    "Argos debug recorder: could not create %s (%s) — disabling",
+                    self._path.parent, exc,
+                )
+                self.enabled = False
+                return
             logger.info("Argos debug recorder ENABLED → %s", self._path)
 
     def record(self, step: str, **data) -> None:
@@ -415,8 +435,24 @@ class ArgosTranslator(BaseTranslator):
                 self._translate_batch, batch_to_flush, batch_id
             )
 
-        event.wait()
-        return result_slot[0]
+        # Bounded wait so a BabelDOC worker thread can never block forever if a
+        # batch worker dies before firing this entry's event (e.g. the executor
+        # was shut down, or an unforeseen crash skipped the `finally: set()`).
+        # The ~80 MB pack download already completed above, so only decode time
+        # remains; the timeout is generous. On timeout we fall back to the
+        # original text — a late event.set() on this abandoned entry is harmless.
+        if not event.wait(timeout=_BATCH_WAIT_TIMEOUT):
+            logger.warning(
+                "Argos batch wait timed out after %.0fs (call #%d); returning "
+                "original text as fallback.",
+                _BATCH_WAIT_TIMEOUT,
+                self.translate_call_count,
+            )
+            return text
+        result = result_slot[0]
+        # Slot can still be None if the event fired without a result assigned
+        # (shouldn't happen — every path sets it — but guard defensively).
+        return result if result is not None else text
 
     def _cancel_timer_locked(self) -> None:
         """Cancel any armed tail-flush timer. Caller must hold _batch_lock."""
@@ -596,7 +632,7 @@ class ArgosTranslator(BaseTranslator):
                 _llm_cache_set(processed, result, "en", "vi", "argos", self.model)
                 slot[0] = result
                 self._fire_paragraph_callback(processed, result)
-                logger.info(
+                logger.debug(
                     "  [%d.%d] EN: %s | VI: %s",
                     batch_id, idx, _preview(processed), _preview(result),
                 )
@@ -662,7 +698,7 @@ class ArgosTranslator(BaseTranslator):
                 _llm_cache_set(processed, result, "en", "vi", "argos", self.model)
                 result_slot[0] = result
                 self._fire_paragraph_callback(processed, result)
-                logger.info(
+                logger.debug(
                     "  [%d.%d] EN: %s | VI: %s (fallback)",
                     batch_id, idx, _preview(processed), _preview(result),
                 )

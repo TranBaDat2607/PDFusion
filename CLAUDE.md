@@ -125,8 +125,10 @@ The token is then forwarded to the webview via the `sidecar://ready` Tauri event
 | `src/desktop_pdf_translator/config/` | `ConfigManager` + Pydantic `AppSettings` (unchanged) |
 | `src/desktop_pdf_translator/processors/` | `PDFProcessor` async generator wrapping BabelDOC (unchanged) |
 | `src/desktop_pdf_translator/translators/` | `BaseTranslator`, OpenAI/Gemini/Anthropic/Argos + `TranslatorFactory` |
-| `src/desktop_pdf_translator/rag/` | ChromaDB + `EnhancedRAGChain` + deep search (unchanged) |
+| `src/desktop_pdf_translator/rag/` | ChromaDB + `EnhancedRAGChain` (deep-search/web-research was dropped in `35bca2c`) |
 | `src/desktop_pdf_translator/utils/` | API key encryption (unchanged) |
+| `src/desktop_pdf_translator/translators/translation_cache.py` | Persistent **paragraph-level** SQLite cache (singleton `get_translation_cache()`) |
+| `src/desktop_pdf_translator/processors/pdf_cache.py` | Persistent **whole-PDF** SQLite cache (singleton `get_pdf_cache()`) |
 
 ### HTTP API (sidecar)
 
@@ -140,7 +142,9 @@ All routes (except `GET /health`) require `Authorization: Bearer <token>`.
 | PUT | `/config` | Update API keys / models / language defaults |
 | POST | `/config/validate` | Test a key by spinning up a translator + calling its `validate_configuration()` |
 | GET | `/config/options` | Static dropdown data (languages, services, models) |
-| POST | `/translate` | Start translation job → returns `{ job_id }` |
+| GET | `/config/cache` | Paragraph-cache stats (entries, hit rate, size) |
+| DELETE | `/config/cache?scope=all\|expired` | Clear/GC the paragraph-level translation cache |
+| POST | `/translate` | Start translation job → returns `{ job_id }`. Body field `bypass_cache: bool` forces a full re-translate (used by the "Re-translate" button) |
 | GET | `/translate/{job_id}/events` | SSE: `progress`, `done`, `error`, `cancelled` |
 | POST | `/translate/{job_id}/cancel` | Cancel an in-flight translation |
 | POST | `/rag/index` | Index a PDF into ChromaDB → returns `{ job_id }` |
@@ -159,6 +163,31 @@ Long-running endpoints (translate, index, ask) follow the same pattern:
 4. A terminal event (`done`, `error`, or `cancelled`) closes the stream.
 
 This replaces the previous `QThread + new asyncio loop` pattern from the PySide6 GUI.
+
+### Two-tier translation caching
+
+Two independent, persistent SQLite caches sit on the translation path. Both live
+under `~/AppData/Local/PDFusion/`, use WAL + per-thread connections, are
+process-wide singletons, and are content-addressed by SHA-256 — so neither is
+invalidated by re-runs with identical inputs.
+
+1. **Whole-PDF cache** (`processors/pdf_cache.py`, `get_pdf_cache()`). Keyed on
+   `sha256(file_bytes) | lang_out | service | model | PIPELINE_VERSION`
+   (**source language is deliberately excluded** — see the comment at
+   `_make_cache_key`). A hit lets `process_pdf` **skip the entire BabelDOC
+   pipeline**, copy the cached PDF into the live output dir, and emit synthetic
+   SSE `progress`/`done` events. LRU-evicted to `pdf_cache_max_size_mb` (default
+   1000 MB). Bump `PIPELINE_VERSION` when any BabelDOC config field that changes
+   output (font, watermark mode, etc.) changes.
+2. **Paragraph cache** (`translators/translation_cache.py`,
+   `get_translation_cache()`). Keyed on `lang_in|lang_out|service|model|text`,
+   with a TTL (`expires_at`). Memoizes individual `translate()` calls across all
+   backends, so a partial/cancelled job still warms the cache for the next run.
+
+Gating: the PDF cache is checked only when `settings.translation.cache_translated_pdfs`
+is on and the request didn't pass `bypass_cache=true`; the paragraph cache is
+gated by `settings.translation.cache_translations`. The "Re-translate" button in
+the UI sends `bypass_cache=true` (`hooks/useTranslation.ts`).
 
 ### Translator plug-in interface (BabelDOC integration)
 
@@ -179,7 +208,7 @@ BabelDOC drives chunking, layout, and PDF reassembly; it delegates the actual te
 3. **Argos is the default offline backend.** `translators/argos_translator.py` is a free, no-API-key NMT translator used when no LLM key is configured. Important quirks:
    - **MVP supports en→vi only.** Other language pairs raise `ValueError` directing the user to switch source language or use an LLM. Update `_SUPPORTED_PAIRS` to broaden support.
    - **Lazy install.** The `argostranslate` package is imported lazily and the ~80 MB en→vi language pack is downloaded on first `translate()` call, guarded by a `threading.Lock`. Sidecar startup is unaffected.
-   - **Process-lifetime translation cache.** A FIFO-evicted `dict` (cap 20k entries) memoizes paragraph translations across jobs in the same sidecar run, since Argos is deterministic.
+   - **Caching.** Argos is deterministic, so it benefits from both the persistent paragraph cache (`translation_cache.py`) and the in-process batch coalescing added in `3356f30` (concurrent `translate()` calls are coalesced into batches of 4). Its `model` field is the fixed string `"argostranslate"`.
 
 ### React state ownership
 
@@ -202,8 +231,9 @@ BabelDOC drives chunking, layout, and PDF reassembly; it delegates the actual te
 
 - Runtime config: `~/AppData/Local/PDFusion/config.toml` (encrypted API keys).
 - Defaults / reference: `config/default_config.toml`.
-- `.env` (project root) is auto-loaded via `python-dotenv` and overrides the TOML.
+- `.env` is auto-loaded via `python-dotenv` and overrides the TOML. It's searched at the **repo root** (resolved from `__file__`, not `cwd` — `cwd` is non-writable `C:\Program Files\…` on an installed launch) and in the AppData config dir. See `config/manager.py:_load_dotenv`.
 - Singleton: `get_config_manager()` / `get_settings()` from `desktop_pdf_translator.config`.
+- Cache-related settings live under `[translation]` in `AppSettings` (`config/models.py`): `cache_translations` (paragraph cache, default on), `cache_translated_pdfs` (whole-PDF cache, default on), `pdf_cache_max_size_mb` (LRU cap, default 1000). Changing `pdf_cache_max_size_mb` applies without a sidecar restart (re-read on every eviction pass).
 
 ## Tauri shell details
 
@@ -211,6 +241,8 @@ BabelDOC drives chunking, layout, and PDF reassembly; it delegates the actual te
 - **Window**: 1400×900 default, min 1024×700.
 - **CSP**: currently `null` for dev. Tighten before bundling for distribution.
 - **Sidecar lifecycle** is wired in `lib.rs::run()`'s `setup` and the `RunEvent::ExitRequested` handler kills the child process.
+- **Sidecar cwd & writable paths**: the child is spawned with cwd = `%LOCALAPPDATA%\PDFusion\` (`sidecar::appdata_dir`), **not** the install dir (`C:\Program Files\PDFusion\` is read-only for non-admins → `WinError 5` on any relative-path write). `lib.rs::setup` pre-creates the AppData subdir layout (`sidecar::ensure_appdata_layout`) before spawn so Python subsystems don't race on first-run `mkdir`.
+- **Per-job translation output** is a throwaway `%TEMP%\pdfusion-translate-<rand>\` dir (not a persistent `translated_pdfs/`). It's wiped three ways: by the next job, by the Tauri `ExitRequested` handler (`sidecar::cleanup_translate_temp_dirs`), and by the FastAPI lifespan orphan sweep on sidecar startup (`server.py:_sweep_orphan_translate_dirs`, only dirs older than 1h). Persistent translated PDFs live in the whole-PDF cache instead.
 - **Sidecar discovery** order (see `desktop/src-tauri/src/sidecar.rs`):
   1. **Bundled exe** — `pdfusion-sidecar-<triple>.exe` resolved via `BaseDirectory::Resource`. This is what end users hit (shipped via `bundle.externalBin` in `tauri.conf.json`).
   2. **Dev fallback** — Python interpreter chain: `PDFUSION_PYTHON` env var → `~/anaconda3/envs/pdfusion/python.exe` → `~/miniconda3/envs/pdfusion/python.exe` → `python` on PATH, then `python -m desktop_pdf_translator.api.server` with `PYTHONPATH=<root>/src`.

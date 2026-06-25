@@ -24,6 +24,8 @@ export interface ConfigResponse {
     cache_translations?: boolean;
     cache_ttl_days?: number;
     cache_max_size_mb?: number;
+    cache_translated_pdfs?: boolean;
+    pdf_cache_max_size_mb?: number;
   };
   rag: { enabled: boolean };
   deep_search: Record<string, unknown>;
@@ -63,6 +65,7 @@ export interface ConfigUpdate {
   rag_enabled?: boolean;
   max_parallel_chunks?: number;
   cache_translations?: boolean;
+  cache_translated_pdfs?: boolean;
 }
 
 export interface ValidateResponse {

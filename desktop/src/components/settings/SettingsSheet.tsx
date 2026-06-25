@@ -584,6 +584,7 @@ function PerformanceSection() {
   const update = useUpdateConfig();
   const current = config?.processing?.max_parallel_chunks ?? 0;
   const cacheEnabled = config?.translation?.cache_translations ?? true;
+  const pdfCacheEnabled = config?.translation?.cache_translated_pdfs ?? true;
 
   return (
     <div className="space-y-4">
@@ -630,6 +631,24 @@ function PerformanceSection() {
         </Label>
         <p className="text-xs text-muted-foreground pl-10">
           Re-translating a paragraph you've seen before is instant.
+        </p>
+      </div>
+
+      <div className="space-y-2">
+        <Label htmlFor="cache-translated-pdfs" className="flex items-center gap-2">
+          <Switch
+            id="cache-translated-pdfs"
+            checked={pdfCacheEnabled}
+            onCheckedChange={(checked) =>
+              update.mutate({ cache_translated_pdfs: checked })
+            }
+          />
+          <span className="text-sm">Cache translated PDFs</span>
+        </Label>
+        <p className="text-xs text-muted-foreground pl-10">
+          Reopen the same PDF and the translated copy loads in under a second —
+          the layout / typeset / render pipeline is skipped entirely. Use
+          Re-translate to force a fresh run.
         </p>
       </div>
     </div>

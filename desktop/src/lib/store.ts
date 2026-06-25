@@ -24,6 +24,13 @@ interface AppState {
   translatedPdfPath: string | null;
   setTranslatedPdfPath: (path: string | null) => void;
 
+  /** Monotonic counter bumped at the start of every translation. The
+   *  translated-panel PdfViewer includes this in its load-effect deps so
+   *  Re-translate (which writes to the SAME rolling path) forces a fresh
+   *  fetch + parse instead of reusing the cached pdf.js document. */
+  translatedReloadKey: number;
+  bumpTranslatedReloadKey: () => void;
+
   /** Whether the chat drawer is expanded. */
   chatOpen: boolean;
   toggleChat: () => void;
@@ -63,6 +70,10 @@ export const useAppStore = create<AppState>((set) => ({
 
   translatedPdfPath: null,
   setTranslatedPdfPath: (path) => set({ translatedPdfPath: path }),
+
+  translatedReloadKey: 0,
+  bumpTranslatedReloadKey: () =>
+    set((s) => ({ translatedReloadKey: s.translatedReloadKey + 1 })),
 
   chatOpen: false,
   toggleChat: () => set((s) => ({ chatOpen: !s.chatOpen })),

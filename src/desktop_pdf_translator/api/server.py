@@ -15,10 +15,14 @@ Any process that can read this stdout line can talk to the sidecar.
 from __future__ import annotations
 
 import logging
+import shutil
 import socket
 import sys
+import tempfile
 import threading
+import time
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 import uvicorn
 from fastapi import Depends, FastAPI
@@ -86,9 +90,40 @@ def _prewarm_argos() -> None:
         logger.warning("Argos pre-warm failed (non-fatal): %s", exc)
 
 
+def _sweep_orphan_translate_dirs(max_age_seconds: int = 3600) -> int:
+    """Remove `pdfusion-translate-*` dirs left behind by a prior sidecar that
+    crashed or was killed before its next-job cleanup could fire.
+
+    Only sweeps dirs whose mtime is older than `max_age_seconds` (default 1h),
+    so a sidecar restarting moments after the Tauri shell respawns it won't
+    delete a still-active dir if two sidecars ever ran concurrently. Returns
+    the count cleaned.
+    """
+    temp_root = Path(tempfile.gettempdir())
+    cutoff = time.time() - max_age_seconds
+    cleaned = 0
+    try:
+        candidates = list(temp_root.glob("pdfusion-translate-*"))
+    except OSError as exc:
+        logger.warning("Orphan sweep: could not enumerate %s (%s)", temp_root, exc)
+        return 0
+    for d in candidates:
+        try:
+            if not d.is_dir() or d.stat().st_mtime > cutoff:
+                continue
+            shutil.rmtree(d, ignore_errors=True)
+            cleaned += 1
+        except OSError as exc:
+            logger.warning("Orphan sweep: could not remove %s (%s)", d, exc)
+    return cleaned
+
+
 @asynccontextmanager
 async def _lifespan(app: FastAPI):
     logger.info("Sidecar starting; loading settings…")
+    cleaned = _sweep_orphan_translate_dirs()
+    if cleaned:
+        logger.info("Cleaned %d orphan translate temp dirs", cleaned)
     settings = get_settings()  # warm the singleton (loads .env, decrypts keys)
     if _should_prewarm_argos(settings):
         threading.Thread(

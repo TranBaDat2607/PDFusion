@@ -11,7 +11,7 @@
 //!   4. Health-poll `http://127.0.0.1:<port>/auth/ping` until it answers OK.
 //!   5. Store the handle in a global so Tauri commands and shutdown can use it.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::Mutex;
 use std::time::Duration;
@@ -161,6 +161,99 @@ fn parse_ready_line(line: &str) -> Result<SidecarInfo, SidecarError> {
     Ok(SidecarInfo { port, token })
 }
 
+/// Writable working directory for the spawned sidecar. The bundled exe lives
+/// in `C:\Program Files\PDFusion\` (per-machine MSI install), which is
+/// non-writable for non-admin users. If we let the sidecar inherit that as its
+/// cwd, every `Path.cwd()` / relative-path write in Python lands on a
+/// read-only path and raises `WinError 5`. Pointing the child at
+/// `%LOCALAPPDATA%\PDFusion\` matches where the rest of the app already
+/// writes (config, logs, caches, translated PDFs) and defuses the whole
+/// class of cwd-write bugs.
+pub(crate) fn appdata_dir() -> PathBuf {
+    if let Some(local) = std::env::var_os("LOCALAPPDATA") {
+        let dir = PathBuf::from(local).join("PDFusion");
+        if std::fs::create_dir_all(&dir).is_ok() {
+            return dir;
+        }
+    }
+    // Cross-platform fallback (also covers a corrupt %LOCALAPPDATA%): try
+    // ~/AppData/Local/PDFusion, then finally the system temp dir so we never
+    // hand the child a non-writable path.
+    if let Some(home) = std::env::var_os("USERPROFILE").or_else(|| std::env::var_os("HOME")) {
+        let dir = PathBuf::from(home)
+            .join("AppData")
+            .join("Local")
+            .join("PDFusion");
+        if std::fs::create_dir_all(&dir).is_ok() {
+            return dir;
+        }
+    }
+    std::env::temp_dir()
+}
+
+/// Pre-create the AppData subdirectories every sidecar subsystem expects.
+/// Called from `lib.rs::setup` before the sidecar spawns so the Python side
+/// never has to race on first-run `mkdir(parents=True)` against another
+/// subsystem doing the same. Errors are logged and ignored — if AppData
+/// itself is unwritable, the sidecar will surface a clearer downstream error.
+pub fn ensure_appdata_layout() {
+    let root = appdata_dir();
+    // `translated_pdfs/` is intentionally absent: BabelDOC's live output now
+    // lives in a per-job %TEMP%\pdfusion-translate-<rand>\ dir that the
+    // sidecar wipes on the next translation start, on app exit (via
+    // `cleanup_translate_temp_dirs` below), and on sidecar startup (via
+    // the FastAPI lifespan orphan sweep).
+    let subdirs: &[&str] = &[
+        "logs",
+        "translated_pdf_cache/files",
+        "chroma_db",
+        "translation_cache",
+    ];
+    for sub in subdirs {
+        let dir = root.join(Path::new(sub));
+        if let Err(e) = std::fs::create_dir_all(&dir) {
+            log::warn!("Could not pre-create {}: {}", dir.display(), e);
+        }
+    }
+    log::info!("AppData layout ready at {}", root.display());
+}
+
+/// Wipe every `pdfusion-translate-*` directory under the system temp root.
+/// Called from the Tauri `ExitRequested` handler so we don't leak rolling
+/// translation outputs across app launches. Best-effort: log and continue
+/// on any individual failure (a file might still be held by a child process
+/// mid-shutdown). Returns the number of dirs removed.
+pub fn cleanup_translate_temp_dirs() -> usize {
+    let temp_root = std::env::temp_dir();
+    let entries = match std::fs::read_dir(&temp_root) {
+        Ok(it) => it,
+        Err(e) => {
+            log::warn!("Translate temp cleanup: could not read {}: {}", temp_root.display(), e);
+            return 0;
+        }
+    };
+    let mut removed = 0usize;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let is_match = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .map(|n| n.starts_with("pdfusion-translate-"))
+            .unwrap_or(false);
+        if !is_match || !path.is_dir() {
+            continue;
+        }
+        match std::fs::remove_dir_all(&path) {
+            Ok(()) => removed += 1,
+            Err(e) => log::warn!("Translate temp cleanup: could not remove {}: {}", path.display(), e),
+        }
+    }
+    if removed > 0 {
+        log::info!("Translate temp cleanup: removed {} dir(s)", removed);
+    }
+    removed
+}
+
 /// Build the spawn `Command` for the sidecar.
 ///
 /// Prefers a bundled exe (production install). Falls back to a Python
@@ -168,8 +261,11 @@ fn parse_ready_line(line: &str) -> Result<SidecarInfo, SidecarError> {
 fn build_command(app: &AppHandle) -> Result<Command, SidecarError> {
     if let Some(bundled) = resolve_bundled_sidecar(app) {
         log::info!("Sidecar (bundled): {}", bundled.display());
+        let cwd = appdata_dir();
+        log::info!("Sidecar cwd: {}", cwd.display());
         let mut cmd = Command::new(bundled);
-        cmd.env("PYTHONUNBUFFERED", "1")
+        cmd.current_dir(cwd)
+            .env("PYTHONUNBUFFERED", "1")
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .stdin(Stdio::null());
