@@ -107,10 +107,15 @@ export function useTranslation() {
     async (filePath: string, opts: StartOptions = {}) => {
       setState({ ...INITIAL, status: "running", stage: "Starting…" });
       setChunkProgress(null);
-      // Bump the viewer's reload nonce so the translated panel re-fetches the
-      // PDF even when the rolling output path is identical to the one already
-      // displayed (Re-translate writes to the same `_translated_v*.pdf` path).
-      bumpTranslatedReloadKey();
+      // Bump the viewer's reload nonce only when a translated PDF is already
+      // loaded — i.e. this is a Re-translate that will overwrite the file at
+      // the same `_translated_v*.pdf` path and pdf.js needs a forced refetch.
+      // First-time translations have nothing in the translated panel yet, so
+      // bumping there only costs an unnecessary pdf.js fetch + parse of the
+      // *source* PDF without changing anything visible.
+      if (useAppStore.getState().translatedPdfPath != null) {
+        bumpTranslatedReloadKey();
+      }
 
       // Seed priority from the page the user is currently looking at — defaults
       // to page 1 if no PDF is loaded yet (shouldn't happen in normal flow).

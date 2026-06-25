@@ -157,6 +157,10 @@ async def reprioritize_translation(job_id: str, visible_page: int) -> None:
 _WARMED: set[tuple[str, str, str]] = set()
 _WARM_LOCK = threading.Lock()
 
+# Strong refs to in-flight prewarm tasks. asyncio.create_task only holds a weak
+# reference, so without this the GC can reap a scheduled warm-up mid-flight.
+_PREWARM_TASKS: set[asyncio.Task] = set()
+
 
 def _warm_translator(service: TranslationService, lang_in: str, lang_out: str) -> str:
     """Blocking warm-up. Runs in a worker thread (asyncio.to_thread) so the
@@ -217,7 +221,9 @@ async def prewarm(payload: PrewarmRequest) -> PrewarmResponse:
             _WARMED.add(key)
         logger.info("Pre-warm complete: %s (%s)", service.value, msg)
 
-    asyncio.create_task(_run())
+    task = asyncio.create_task(_run())
+    _PREWARM_TASKS.add(task)
+    task.add_done_callback(_PREWARM_TASKS.discard)
     return PrewarmResponse(
         service=service.value,
         warmed=False,

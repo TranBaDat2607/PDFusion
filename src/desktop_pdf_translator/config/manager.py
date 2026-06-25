@@ -77,9 +77,71 @@ class ConfigManager:
             logger.info("Configuration loaded successfully")
             return settings
         except ValidationError as e:
-            logger.error(f"Configuration validation failed: {e}")
-            # Return default settings if validation fails
-            return AppSettings()
+            # Don't discard the whole config when a single field is invalid
+            # (e.g. an unknown model name). Drop only the offending fields and
+            # retry so valid siblings — crucially API keys loaded from env —
+            # survive.
+            logger.warning(
+                "Configuration validation failed; dropping invalid field(s) "
+                "and retrying: %s",
+                e,
+            )
+            return self._load_with_invalid_fields_dropped(config_data, e)
+
+    def _load_with_invalid_fields_dropped(
+        self, config_data: Dict[str, Any], error: ValidationError
+    ) -> AppSettings:
+        """Best-effort recovery from a ValidationError.
+
+        Removes each field flagged by `error` (by its `loc` path) from a copy
+        of `config_data`, then retries. Falls back to dropping whole offending
+        sections, and finally to bare defaults — but only as a last resort.
+        Each dropped field reverts to its model default rather than wiping the
+        entire configuration.
+        """
+        import copy
+
+        pruned = copy.deepcopy(config_data)
+        for err in error.errors():
+            loc = err.get("loc", ())
+            self._pop_path(pruned, loc)
+
+        try:
+            settings = AppSettings(**pruned)
+            logger.info("Configuration loaded after dropping invalid field(s)")
+            return settings
+        except ValidationError as e2:
+            # Second pass: drop the whole top-level section of anything still
+            # invalid (handles cross-field validators we can't pinpoint).
+            for err in e2.errors():
+                loc = err.get("loc", ())
+                if loc:
+                    pruned.pop(loc[0], None)
+            try:
+                settings = AppSettings(**pruned)
+                logger.info("Configuration loaded after dropping invalid section(s)")
+                return settings
+            except ValidationError as e3:
+                logger.error(
+                    "Configuration still invalid after pruning; using defaults: %s",
+                    e3,
+                )
+                return AppSettings()
+
+    @staticmethod
+    def _pop_path(data: Dict[str, Any], loc: tuple) -> None:
+        """Delete the value at a pydantic error `loc` path from a nested dict.
+        No-op if the path doesn't resolve (e.g. it points into a list)."""
+        if not loc:
+            return
+        node: Any = data
+        for key in loc[:-1]:
+            if isinstance(node, dict) and key in node:
+                node = node[key]
+            else:
+                return
+        if isinstance(node, dict):
+            node.pop(loc[-1], None)
     
     def save_settings(self, settings: AppSettings) -> bool:
         """Save settings to TOML file.
@@ -128,7 +190,14 @@ class ConfigManager:
         
         if gemini_model := os.getenv("GEMINI_MODEL"):
             env_config.setdefault("gemini", {})["model"] = gemini_model
-        
+
+        # Anthropic settings
+        if anthropic_key := os.getenv("ANTHROPIC_API_KEY"):
+            env_config.setdefault("anthropic", {})["api_key"] = anthropic_key
+
+        if anthropic_model := os.getenv("ANTHROPIC_MODEL"):
+            env_config.setdefault("anthropic", {})["model"] = anthropic_model
+
         # Application settings
         if debug := os.getenv("DEBUG_MODE"):
             env_config["debug_mode"] = debug.lower() in ("true", "1", "yes")
@@ -150,10 +219,18 @@ class ConfigManager:
     
     def _load_dotenv(self) -> None:
         """Load environment variables from .env file if available."""
-        # Look for .env file in project root and config directory
+        # Look for .env in two well-known locations:
+        #   1. The project root (only meaningful in dev — resolved via __file__,
+        #      NOT Path.cwd(), which would resolve to C:\Program Files\PDFusion\
+        #      on an installed Start-Menu launch and is non-writable / wrong).
+        #   2. The user's config dir under AppData.
+        # `parents[3]` from this file is `<repo>/src/desktop_pdf_translator/config/manager.py`
+        # → repo root in dev; in the PyInstaller bundle it points at the install
+        # dir which never contains a .env, so this is a harmless miss there.
+        project_root_env = Path(__file__).resolve().parents[3] / ".env"
         env_files = [
-            Path.cwd() / ".env",
-            self.config_dir / ".env"
+            project_root_env,
+            self.config_dir / ".env",
         ]
         
         for env_file in env_files:
@@ -168,8 +245,8 @@ class ConfigManager:
     def _remove_sensitive_data(self, config_dict: Dict[str, Any]) -> Dict[str, Any]:
         """Remove sensitive data like API keys from config before saving."""
         safe_config = config_dict.copy()
-        
-        for service in ["openai", "gemini"]:
+
+        for service in ["openai", "gemini", "anthropic"]:
             if service in safe_config and isinstance(safe_config[service], dict):
                 safe_config[service] = safe_config[service].copy()
                 api_key = safe_config[service].get("api_key")
@@ -190,7 +267,7 @@ class ConfigManager:
         return safe_config
 
     def _decrypt_sensitive_data(self, config_data: Dict[str, Any]) -> None:
-        for service in ["openai", "gemini"]:
+        for service in ["openai", "gemini", "anthropic"]:
             if service not in config_data or not isinstance(config_data[service], dict):
                 continue
             service_data = config_data[service]

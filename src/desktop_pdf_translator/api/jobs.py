@@ -7,6 +7,7 @@ them. A terminal event (type=`done` or `error`) closes the queue.
 import asyncio
 import json
 import logging
+import time
 import uuid
 from dataclasses import dataclass, field
 from typing import Any, AsyncIterator, Dict, Optional
@@ -16,6 +17,11 @@ logger = logging.getLogger(__name__)
 # Sentinel marking the terminal event. SSE handler stops iterating after this.
 _END = object()
 
+# Jobs whose worker has finished (or never had one) but were never drained by
+# an SSE consumer are reclaimed once they exceed this age. Generous enough that
+# a slow client reconnecting still finds its job.
+_JOB_TTL_SECONDS = 3600.0
+
 
 @dataclass
 class Job:
@@ -24,6 +30,7 @@ class Job:
     cancelled: bool = False
     task: Optional[asyncio.Task] = None
     finished: bool = False
+    created_at: float = field(default_factory=time.monotonic)
     # Opaque handle so the API layer can call `processor.reprioritize(...)`
     # for the priority-scheduler endpoint without taking a hard dep on the
     # processor class here. None when the job isn't using a processor.
@@ -50,10 +57,31 @@ class JobRegistry:
 
     async def create(self) -> Job:
         async with self._lock:
+            self._sweep_stale_locked()
             job_id = uuid.uuid4().hex
             job = Job(job_id=job_id)
             self._jobs[job_id] = job
             return job
+
+    def _sweep_stale_locked(self) -> None:
+        """Reclaim jobs that were never drained by an SSE consumer (so
+        `stream()`'s finally-discard never ran) and have outlived the TTL.
+
+        Only removes jobs whose worker task is absent or already done — a job
+        with an in-flight worker is left alone so the cancel path stays valid.
+        Caller must hold `self._lock`.
+        """
+        now = time.monotonic()
+        stale = [
+            jid
+            for jid, job in self._jobs.items()
+            if (job.task is None or job.task.done())
+            and (now - job.created_at) > _JOB_TTL_SECONDS
+        ]
+        for jid in stale:
+            self._jobs.pop(jid, None)
+        if stale:
+            logger.info("Reclaimed %d stale job(s) from the registry", len(stale))
 
     def get(self, job_id: str) -> Optional[Job]:
         return self._jobs.get(job_id)

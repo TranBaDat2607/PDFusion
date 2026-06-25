@@ -158,19 +158,25 @@ class PDFTranslationCache:
         target_lang: str,
         service: str,
         model: Optional[str],
+        file_hash: Optional[str] = None,
     ) -> Optional[CacheHit]:
         """Return a CacheHit or None. Bumps hit_count + last_used on hit.
 
         Returns None (and silently deletes the stale row) if the cached PDF
         file is missing on disk — protects against users wiping `files/`
         without clearing `index.db`.
+
+        If `file_hash` is provided, skip the internal SHA-256 streaming pass.
+        Caller is responsible for the hash matching `file_path`'s current
+        bytes — pass only a hash you just computed for the same file.
         """
-        try:
-            file_hash = compute_file_hash(file_path)
-        except OSError as exc:
-            logger.warning("PDF cache lookup: hash failed for %s (%s)", file_path, exc)
-            self._bump(miss=True)
-            return None
+        if file_hash is None:
+            try:
+                file_hash = compute_file_hash(file_path)
+            except OSError as exc:
+                logger.warning("PDF cache lookup: hash failed for %s (%s)", file_path, exc)
+                self._bump(miss=True)
+                return None
 
         key = _make_cache_key(
             file_hash, source_lang, target_lang, service, model, PIPELINE_VERSION
@@ -232,18 +238,25 @@ class PDFTranslationCache:
         target_lang: str,
         service: str,
         model: Optional[str],
+        file_hash: Optional[str] = None,
     ) -> Optional[Path]:
         """Copy `translated_path` into the cache; insert/replace the row.
         Returns the cached file path on success, None on failure (non-fatal).
+
+        If `file_hash` is provided, skip the internal SHA-256 streaming pass.
+        Pair this with a lookup() call that already hashed the same bytes
+        moments earlier — the input is the source PDF, which doesn't change
+        between lookup and store within a single translation run.
         """
         if not translated_path.exists():
             logger.warning("PDF cache store: translated file missing %s", translated_path)
             return None
-        try:
-            file_hash = compute_file_hash(file_path)
-        except OSError as exc:
-            logger.warning("PDF cache store: input hash failed (%s)", exc)
-            return None
+        if file_hash is None:
+            try:
+                file_hash = compute_file_hash(file_path)
+            except OSError as exc:
+                logger.warning("PDF cache store: input hash failed (%s)", exc)
+                return None
 
         key = _make_cache_key(
             file_hash, source_lang, target_lang, service, model, PIPELINE_VERSION

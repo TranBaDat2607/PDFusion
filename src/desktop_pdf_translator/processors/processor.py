@@ -6,6 +6,7 @@ import asyncio
 import logging
 import os
 import shutil
+import tempfile
 import time
 import uuid
 from pathlib import Path
@@ -29,8 +30,56 @@ from .events import (
     ParagraphTranslatedEvent,
     EventType,
 )
-from .pdf_cache import get_pdf_cache
+from .pdf_cache import compute_file_hash, get_pdf_cache
 from .exceptions import ProcessingError, BabelDOCError, FileValidationError, ConfigurationError
+
+
+# Background PDF-cache store tasks. The processor schedules store() off the
+# critical path so the SSE `done` event isn't held up by the SHA-256 + copy +
+# SQLite + LRU sweep. asyncio.create_task only holds a weak ref to its task,
+# so without this set the GC can reap a still-running store mid-flight.
+_pending_cache_writes: "set[asyncio.Task]" = set()
+
+
+def _log_cache_store_failure(task: "asyncio.Task") -> None:
+    if task.cancelled():
+        return
+    exc = task.exception()
+    if exc is not None:
+        logger.warning("PDF cache store failed (non-fatal): %s", exc)
+
+
+# Per-job output dirs live under %TEMP%\pdfusion-translate-<rand>\. Each new
+# translation creates a fresh dir; the *previous* one is wiped on next start
+# (the viewer has moved on by then). Tauri's exit handler sweeps any survivors,
+# and the FastAPI lifespan sweeps orphans from a crashed prior sidecar run.
+# This lives at module scope so it survives across `process_pdf` invocations.
+_TEMP_DIR_PREFIX = "pdfusion-translate-"
+_previous_output_dir: Optional[Path] = None
+_pending_temp_cleanups: "set[asyncio.Task]" = set()
+
+
+def _is_owned_temp_dir(path: Path) -> bool:
+    """Only wipe dirs we created (prefix-named under the system temp root).
+    Guards against a user-supplied `output_dir` ever getting rmtree'd."""
+    try:
+        return (
+            path.name.startswith(_TEMP_DIR_PREFIX)
+            and path.parent == Path(tempfile.gettempdir())
+        )
+    except OSError:
+        return False
+
+
+def _schedule_temp_cleanup(path: Path) -> None:
+    """Fire-and-forget rmtree of a previous per-job temp dir."""
+    if not _is_owned_temp_dir(path):
+        return
+    task = asyncio.create_task(
+        asyncio.to_thread(shutil.rmtree, str(path), True)
+    )
+    _pending_temp_cleanups.add(task)
+    task.add_done_callback(_pending_temp_cleanups.discard)
 
 
 # Number of source pages per BabelDOC sub-job. 1 = page-by-page streaming: the
@@ -182,15 +231,22 @@ class PDFProcessor:
             # Log the actual languages being used
             logger.info(f"Using languages - Source: {source_lang}, Target: {target_lang}")
             
-            # Set output directory. NEVER fall back to Path.cwd() — when the
-            # installed app launches from `C:\Program Files\PDFusion\`, that's
-            # `Path.cwd()`, which is non-writable for normal users and produced
-            # `WinError 5: Access is denied` on bundled builds. Use the same
-            # writable AppData root the config and cache modules already use.
+            # Set output directory. Default = fresh per-job temp dir under
+            # %TEMP%\pdfusion-translate-<rand>\. BabelDOC's rolling output
+            # (`_translated_v00X.pdf`) and chunk-work scratch live there; the
+            # durable copy is in `translated_pdf_cache/files/<key>.pdf` after
+            # the run. We wipe the *previous* job's temp dir as soon as a new
+            # one starts (the viewer has moved on by then) so only one
+            # translation's bytes ever sit on disk at a time. Callers can pin
+            # a specific dir via the `/translate` API's `output_dir` field;
+            # that path is honored verbatim and never auto-cleaned.
+            global _previous_output_dir
             if output_dir is None:
-                output_dir = (
-                    Path.home() / "AppData" / "Local" / "PDFusion" / "translated_pdfs"
-                )
+                output_dir = Path(tempfile.mkdtemp(prefix=_TEMP_DIR_PREFIX))
+                prev = _previous_output_dir
+                _previous_output_dir = output_dir
+                if prev is not None and prev != output_dir:
+                    _schedule_temp_cleanup(prev)
             output_dir.mkdir(parents=True, exist_ok=True)
             self._output_dir = output_dir
             self._input_stem = file_path.stem
@@ -252,9 +308,27 @@ class PDFProcessor:
             # run so the React side's hot-swap path (useTranslation.ts) works
             # unchanged — the only difference is the `cache_hit` flag, which
             # surfaces as a toast.
+            #
+            # Hash the input once and reuse it for both lookup and post-run
+            # store. compute_file_hash streams ~100-300 ms on a 50 MB PDF, and
+            # the source bytes don't change between the two calls in a single
+            # run, so paying twice was pure waste.
+            input_file_hash: Optional[str] = None
+            if self.settings.translation.cache_translated_pdfs:
+                try:
+                    input_file_hash = await asyncio.to_thread(
+                        compute_file_hash, file_path
+                    )
+                except OSError as exc:
+                    logger.warning(
+                        "PDF cache: input hash failed (%s); cache disabled for this run",
+                        exc,
+                    )
+
             if (
                 self.settings.translation.cache_translated_pdfs
                 and not bypass_cache
+                and input_file_hash is not None
             ):
                 model_id = self._resolve_model_id(translation_service)
                 hit = await asyncio.to_thread(
@@ -264,30 +338,19 @@ class PDFProcessor:
                     target_lang.value,
                     translation_service.value,
                     model_id,
+                    input_file_hash,
                 )
                 if hit is not None:
                     # Use the highest-int name in the rolling-version family
                     # so `_find_translated_file` (highest-N-wins) returns OUR
-                    # materialized file even if older `_translated_v*.pdf`
-                    # leftovers from a prior real run are still on disk. The
-                    # real pipeline writes `_v{N:03d}.pdf` starting at v001;
-                    # _v999 ensures we win the sort. Also nuke older rolling
-                    # files for the stem so cancel-handlers (`_build_cancel_
-                    # payload` → `get_partial_translated_file`) don't return
-                    # something stale during the brief cache-hit window.
+                    # materialized file. The real pipeline writes
+                    # `_v{N:03d}.pdf` starting at v001; _v999 ensures we win
+                    # the sort. (Previously this also globbed for older
+                    # rolling files and unlinked them, because output_dir was
+                    # a long-lived AppData dir shared across runs. Now that
+                    # output_dir is a fresh per-job temp dir, there are no
+                    # stale leftovers to nuke.)
                     target = output_dir / f"{file_path.stem}_translated_v999.pdf"
-                    for stale in output_dir.glob(
-                        f"{file_path.stem}_translated_v*.pdf"
-                    ):
-                        if stale == target:
-                            continue
-                        try:
-                            stale.unlink()
-                        except OSError as exc:
-                            logger.warning(
-                                "Could not remove stale rolling file %s (%s)",
-                                stale, exc,
-                            )
                     # Copy via .tmp + atomic rename so a concurrent reader
                     # (PdfViewer, or another job hitting the same input) never
                     # sees a half-written `target`. os.replace is atomic on
@@ -442,8 +505,14 @@ class PDFProcessor:
                 and translated_file.suffix.lower() == ".pdf"
             )
             if should_cache:
-                try:
-                    await asyncio.to_thread(
+                # Fire-and-forget: don't block CompletionEvent on store(). The
+                # SHA-256 + shutil.copyfile + SQLite INSERT + LRU sweep would
+                # otherwise add hundreds of ms (and sometimes seconds, on cap
+                # hits with big evictions) between BabelDOC finishing and the
+                # user seeing "done". Track the task in a module-level set so
+                # it isn't GC'd mid-flight; the discard callback cleans up.
+                store_task = asyncio.create_task(
+                    asyncio.to_thread(
                         get_pdf_cache().store,
                         file_path,
                         translated_file,
@@ -451,9 +520,12 @@ class PDFProcessor:
                         target_lang.value,
                         translation_service.value,
                         self._resolve_model_id(translation_service),
+                        input_file_hash,
                     )
-                except Exception as exc:  # noqa: BLE001
-                    logger.warning("PDF cache store failed (non-fatal): %s", exc)
+                )
+                _pending_cache_writes.add(store_task)
+                store_task.add_done_callback(_pending_cache_writes.discard)
+                store_task.add_done_callback(_log_cache_store_failure)
             elif translated_file and self.settings.translation.cache_translated_pdfs:
                 logger.warning(
                     "Skipping PDF cache store: translated_file %s is not a "
@@ -1012,75 +1084,20 @@ class PDFProcessor:
             src.close()
             merged.close()
 
-    def _rebuild_rolling_pdf(
-        self, rolling_path: Path, translated_chunk_paths: list
-    ) -> None:
-        """Concatenate translated chunks-so-far into a single rolling PDF.
-
-        Rebuild from scratch each time. `fitz.insert_pdf` does not re-render
-        page content (it copies the underlying objects), so this is fast
-        even for many chunks — ~tens of ms per 5 pages.
-        """
-        merged = fitz.open()
-        try:
-            for cp in translated_chunk_paths:
-                with fitz.open(cp) as chunk_doc:
-                    merged.insert_pdf(chunk_doc)
-            merged.save(rolling_path)
-        finally:
-            merged.close()
-    
-    async def _process_without_babeldoc(
-        self,
-        file_path: Path,
-        translator,
-        output_dir: Path,
-        file_metadata: FileMetadata
-    ) -> AsyncGenerator[ProcessingEvent, None]:
-        """Fallback processing without BabelDOC."""
-        logger.warning("Using fallback processing - BabelDOC not available or failed")
-        
-        yield ProgressEvent(
-            type=EventType.PROGRESS_UPDATE,
-            timestamp=time.time(),
-            session_id=self.session_id,
-            data={},
-            stage="Fallback processing",
-            current_step=3,
-            total_steps=4,
-            progress_percent=50.0,
-            message="BabelDOC not available, using fallback method"
-        )
-        
-        # This would implement a basic PDF processing pipeline
-        # For now, just simulate processing
-        await asyncio.sleep(2)  # Simulate processing time
-        
-        yield ProgressEvent(
-            type=EventType.PROGRESS_UPDATE,
-            timestamp=time.time(),
-            session_id=self.session_id,
-            data={},
-            stage="Fallback processing complete",
-            current_step=3,
-            total_steps=4,
-            progress_percent=90.0,
-            message="Basic processing completed"
-        )
-    
     def _create_babeldoc_config(self, file_path: Path, translator, output_dir: Path):
         """Create BabelDOC configuration."""
         # Get settings for additional parameters
         translation_settings = self.settings.translation
         processing_settings = self.settings.processing
         
-        # Log the configuration for debugging
-        logger.info(f"Creating BabelDOC config with:")
-        logger.info(f"  translator: {translator}")
-        logger.info(f"  input_file: {file_path}")
-        logger.info(f"  lang_in: {translator.lang_in}")
-        logger.info(f"  lang_out: {translator.lang_out}")
-        logger.info(f"  output_dir: {output_dir}")
+        # Per-chunk config dump — debug level so an N-page Argos run doesn't
+        # emit N of these blocks at INFO.
+        logger.debug("Creating BabelDOC config with:")
+        logger.debug(f"  translator: {translator}")
+        logger.debug(f"  input_file: {file_path}")
+        logger.debug(f"  lang_in: {translator.lang_in}")
+        logger.debug(f"  lang_out: {translator.lang_out}")
+        logger.debug(f"  output_dir: {output_dir}")
         
         # Per-translator overrides for heavy non-translation stages. Argos
         # has no LLM available, so any flag that secretly triggers an LLM
@@ -1147,13 +1164,13 @@ class PDFProcessor:
             show_char_box=False,
         )
         
-        logger.info("BabelDOC configuration created successfully")
+        logger.debug("BabelDOC configuration created successfully")
         return config
     
     def _find_translated_file(self, output_dir: Path, original_stem: str) -> Optional[Path]:
         """Find translated PDF file in output directory."""
         # Streaming-render rolling output: highest-version wins. This is the
-        # `{stem}_translated_v{N}.pdf` family written by `_rebuild_rolling_pdf`
+        # `{stem}_translated_v{N}.pdf` family written by `_rebuild_sparse_rolling_pdf`
         # after each chunk. The largest N is the latest, most-complete output.
         rolling = sorted(
             output_dir.glob(f"{original_stem}_translated_v*.pdf"),
@@ -1203,7 +1220,17 @@ class PDFProcessor:
         terminal `cancelled` event too so the UI can label it as saved."""
         if self._output_dir is None or self._input_stem is None:
             return None
-        return self._find_translated_file(self._output_dir, self._input_stem)
+        # Restrict to the rolling-version family only. `_find_translated_file`
+        # has broad fallbacks (BabelDOC's `_mono.pdf`, then newest `*.pdf` in
+        # the dir) that are correct for per-chunk lookups but would risk
+        # returning a stale/unrelated PDF here — a cancelled run must only ever
+        # surface a real rolling output we produced.
+        rolling = sorted(
+            self._output_dir.glob(f"{self._input_stem}_translated_v*.pdf"),
+            key=lambda p: int(p.stem.rsplit("_v", 1)[-1])
+            if p.stem.rsplit("_v", 1)[-1].isdigit() else -1,
+        )
+        return rolling[-1] if rolling else None
 
     def cleanup_partial_artifacts(self) -> None:
         """Remove older rolling-PDF versions, keeping only the latest as the

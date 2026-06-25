@@ -35,13 +35,6 @@ class OpenAISettings(BaseModel):
     temperature: float = Field(0.3, ge=0.0, le=2.0, description="Translation creativity")
     max_tokens: Optional[int] = Field(None, description="Maximum tokens per request")
 
-    @validator("model")
-    def validate_model(cls, v: str) -> str:
-        allowed_models = {"gpt-4.1"}
-        if v not in allowed_models:
-            raise ValueError(f"Unsupported OpenAI model: {v}")
-        return v
-
 
 class GeminiSettings(BaseModel):
     """Google Gemini translation service settings."""
@@ -49,13 +42,6 @@ class GeminiSettings(BaseModel):
     api_key: Optional[str] = Field(None, description="Google AI API key")
     model: str = Field("gemini-1.5-flash", description="Gemini model to use")
     temperature: float = Field(0.3, ge=0.0, le=1.0, description="Translation creativity")
-
-    @validator("model")
-    def validate_model(cls, v: str) -> str:
-        allowed_models = {"gemini-1.5-flash"}
-        if v not in allowed_models:
-            raise ValueError(f"Unsupported Gemini model: {v}")
-        return v
 
 
 class AnthropicSettings(BaseModel):
@@ -66,17 +52,6 @@ class AnthropicSettings(BaseModel):
     base_url: Optional[str] = Field(None, description="Custom API base URL")
     temperature: float = Field(0.3, ge=0.0, le=1.0, description="Translation creativity")
     max_tokens: int = Field(4000, ge=1, description="Maximum tokens per request")
-
-    @validator("model")
-    def validate_model(cls, v: str) -> str:
-        allowed_models = {
-            "claude-opus-4-7",
-            "claude-sonnet-4-6",
-            "claude-haiku-4-5-20251001",
-        }
-        if v not in allowed_models:
-            raise ValueError(f"Unsupported Anthropic model: {v}")
-        return v
 
 
 class ArgosSettings(BaseModel):
