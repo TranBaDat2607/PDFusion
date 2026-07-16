@@ -27,12 +27,21 @@ _rag_chain: Optional[EnhancedRAGChain] = None
 _init_lock = asyncio.Lock()
 
 
-async def _get_chain() -> EnhancedRAGChain:
+def _build_chain() -> EnhancedRAGChain:
+    """Blocking: constructs ChromaDB + loads the SentenceTransformer model."""
     global _vector_store, _rag_chain
+    _vector_store = ChromaDBManager()
+    _rag_chain = EnhancedRAGChain(_vector_store)
+    return _rag_chain
+
+
+async def _get_chain() -> EnhancedRAGChain:
     async with _init_lock:
         if _rag_chain is None:
-            _vector_store = ChromaDBManager()
-            _rag_chain = EnhancedRAGChain(_vector_store)
+            # First use loads the embedding model (seconds of CPU + disk).
+            # Run it off the event loop so the rest of the sidecar — health
+            # checks, translation SSE — stays responsive.
+            await asyncio.to_thread(_build_chain)
         return _rag_chain
 
 
@@ -65,7 +74,8 @@ async def _run_index(job: Job, payload: IndexRequest) -> None:
 
         await job.emit("progress", {"stage": "Extracting text", "progress": 20})
         processor = ScientificPDFProcessor()
-        chunks = await processor.process_pdf(file_path)
+        # Blocking fitz/camelot/pdfplumber work — keep it off the event loop.
+        chunks = await asyncio.to_thread(processor.process_pdf, file_path)
 
         if job.cancelled:
             await job.finish("cancelled", {})

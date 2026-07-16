@@ -22,8 +22,6 @@ class OpenAITranslator(BaseTranslator):
     for Vietnamese language translations.
     """
 
-    min_request_interval = 1.0
-
     def __init__(self, lang_in: str, lang_out: str, **kwargs):
         super().__init__(lang_in, lang_out, **kwargs)
 
@@ -54,8 +52,6 @@ class OpenAITranslator(BaseTranslator):
                 self._fire_paragraph_callback(processed_text, cached)
                 return cached
 
-            self._apply_rate_limiting()
-
             response = self.client.chat.completions.create(
                 model=self.model,
                 messages=self._create_translation_prompt(processed_text),
@@ -71,6 +67,31 @@ class OpenAITranslator(BaseTranslator):
 
         except Exception as e:
             return self._handle_translation_error(e, text)
+
+    def generate(
+        self,
+        prompt: str,
+        system: Optional[str] = None,
+        max_tokens: int = 1000,
+    ) -> Optional[str]:
+        """Freeform generation used by the RAG chain."""
+        try:
+            messages: List[Dict[str, str]] = []
+            if system:
+                messages.append({"role": "system", "content": system})
+            messages.append({"role": "user", "content": prompt})
+            response = self.client.chat.completions.create(
+                model=self.model,
+                messages=messages,
+                max_tokens=max_tokens,
+                temperature=0.3,
+                timeout=60,
+            )
+            content = response.choices[0].message.content
+            return content.strip() if content else None
+        except Exception as e:
+            logger.error(f"OpenAI generate failed: {e}")
+            return None
 
     def _create_translation_prompt(self, text: str) -> List[Dict[str, str]]:
         """Create optimized translation prompt for Vietnamese."""

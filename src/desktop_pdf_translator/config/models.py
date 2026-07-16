@@ -215,17 +215,3 @@ class FileMetadata(BaseModel):
     service_used: Optional[TranslationService] = None
     processing_time_seconds: Optional[float] = None
     translation_quality_score: Optional[float] = None
-    
-    @validator('file_size_mb')
-    def validate_file_size(cls, v, values):
-        """Validate file size against limits."""
-        # This will be checked against AppSettings.translation.max_file_size_mb
-        # in the actual processing logic
-        return v
-    
-    @validator('page_count') 
-    def validate_page_count(cls, v, values):
-        """Validate page count against limits."""
-        # This will be checked against AppSettings.translation.max_pages
-        # in the actual processing logic
-        return v

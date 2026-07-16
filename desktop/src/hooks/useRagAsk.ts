@@ -126,6 +126,12 @@ export function useRagAsk() {
           }
         },
       });
+      // Stream ended without a terminal event (sidecar died mid-answer).
+      setState((s) =>
+        s.status === "asking"
+          ? { ...s, status: "error", error: "Answer stream ended unexpectedly" }
+          : s,
+      );
     } catch (e) {
       setState((s) => ({
         ...s,

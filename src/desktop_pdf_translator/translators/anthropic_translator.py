@@ -27,8 +27,6 @@ class AnthropicTranslator(BaseTranslator):
     Claude Opus / Sonnet / Haiku 4.x model families.
     """
 
-    min_request_interval = 1.0
-
     def __init__(self, lang_in: str, lang_out: str, **kwargs):
         super().__init__(lang_in, lang_out, **kwargs)
 
@@ -62,8 +60,6 @@ class AnthropicTranslator(BaseTranslator):
                 self._fire_paragraph_callback(processed_text, cached)
                 return cached
 
-            self._apply_rate_limiting()
-
             system_prompt, user_prompt = self._create_translation_prompt(processed_text)
 
             response = self.client.messages.create(
@@ -90,6 +86,35 @@ class AnthropicTranslator(BaseTranslator):
 
         except Exception as e:
             return self._handle_translation_error(e, text)
+
+    def generate(
+        self,
+        prompt: str,
+        system: str | None = None,
+        max_tokens: int = 1000,
+    ) -> str | None:
+        """Freeform generation used by the RAG chain."""
+        try:
+            kwargs = {}
+            if system:
+                kwargs["system"] = system
+            response = self.client.messages.create(
+                model=self.model,
+                max_tokens=max_tokens,
+                temperature=0.3,
+                messages=[{"role": "user", "content": prompt}],
+                timeout=60,
+                **kwargs,
+            )
+            text = "".join(
+                block.text
+                for block in response.content
+                if getattr(block, "type", None) == "text"
+            ).strip()
+            return text or None
+        except Exception as e:
+            logger.error(f"Anthropic generate failed: {e}")
+            return None
 
     def _create_translation_prompt(self, text: str) -> tuple[str, str]:
         source_lang = LANGUAGE_DISPLAY_NAMES.get(self.lang_in, self.lang_in)

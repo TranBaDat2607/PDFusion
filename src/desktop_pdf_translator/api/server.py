@@ -14,6 +14,7 @@ Any process that can read this stdout line can talk to the sidecar.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import shutil
 import socket
@@ -118,6 +119,28 @@ def _sweep_orphan_translate_dirs(max_age_seconds: int = 3600) -> int:
     return cleaned
 
 
+def _gc_translation_cache() -> None:
+    """Startup GC for the paragraph cache: reap expired rows, then enforce the
+    size cap (which was previously declared but never enforced anywhere)."""
+    try:
+        from ..translators.translation_cache import get_translation_cache
+
+        cache = get_translation_cache()
+        expired = cache.clear_expired()
+        evicted = cache.enforce_size_cap()
+        if expired or evicted:
+            logger.info(
+                "Translation cache GC: %d expired, %d evicted for size",
+                expired, evicted,
+            )
+    except Exception as exc:  # noqa: BLE001 — GC is best-effort
+        logger.warning("Translation cache GC failed: %s", exc)
+
+
+# Strong ref so the GC task isn't reaped mid-flight (create_task holds weak refs).
+_startup_tasks: set[asyncio.Task] = set()
+
+
 @asynccontextmanager
 async def _lifespan(app: FastAPI):
     logger.info("Sidecar starting; loading settings…")
@@ -131,6 +154,10 @@ async def _lifespan(app: FastAPI):
             name="argos-prewarm",
             daemon=True,
         ).start()
+    # Paragraph-cache GC in the background so startup isn't delayed.
+    gc_task = asyncio.create_task(asyncio.to_thread(_gc_translation_cache))
+    _startup_tasks.add(gc_task)
+    gc_task.add_done_callback(_startup_tasks.discard)
     yield
     logger.info("Sidecar shutting down")
 

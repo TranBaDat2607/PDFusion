@@ -3,6 +3,7 @@ Vector store manager using ChromaDB for efficient similarity search.
 Handles embeddings, indexing, and retrieval for RAG system.
 """
 
+import asyncio
 import logging
 import os
 import json
@@ -226,11 +227,13 @@ class ChromaDBManager:
                 
                 metadatas.append(metadata)
             
-            # Add to collection
-            self.collection.add(
+            # Add to collection. Embedding + upsert are CPU-heavy and blocking;
+            # run off the event loop so the sidecar stays responsive.
+            await asyncio.to_thread(
+                self.collection.add,
                 ids=ids,
                 documents=documents,
-                metadatas=metadatas
+                metadatas=metadatas,
             )
             
             logger.info(f"Added {len(chunks)} chunks for document {document_id}")
@@ -254,12 +257,13 @@ class ChromaDBManager:
             List of similar chunks with scores
         """
         try:
-            # Perform similarity search
-            results = self.collection.query(
+            # Perform similarity search (embeds the query — run off-loop)
+            results = await asyncio.to_thread(
+                self.collection.query,
                 query_texts=[query],
                 n_results=n_results,
                 where=filter_metadata,
-                include=['documents', 'metadatas', 'distances']
+                include=['documents', 'metadatas', 'distances'],
             )
             
             # Format results
@@ -293,11 +297,12 @@ class ChromaDBManager:
             List of chunks for the document
         """
         try:
-            results = self.collection.get(
+            results = await asyncio.to_thread(
+                self.collection.get,
                 where={"document_id": document_id},
-                include=['documents', 'metadatas']
+                include=['documents', 'metadatas'],
             )
-            
+
             formatted_results = []
             if results['documents']:
                 for i in range(len(results['documents'])):
@@ -307,7 +312,7 @@ class ChromaDBManager:
                         'chunk_id': results['ids'][i]
                     }
                     formatted_results.append(result)
-            
+
             # Sort by chunk index
             formatted_results.sort(key=lambda x: x['metadata'].get('chunk_index', 0))
             
@@ -333,9 +338,10 @@ class ChromaDBManager:
         """
         try:
             # Get all chunks for the document
-            results = self.collection.get(
+            results = await asyncio.to_thread(
+                self.collection.get,
                 where={"document_id": document_id},
-                include=['documents', 'metadatas']
+                include=['documents', 'metadatas'],
             )
 
             formatted_results = []
@@ -385,14 +391,17 @@ class ChromaDBManager:
             True if successful
         """
         try:
-            # Get all chunk IDs for the document
-            results = self.collection.get(
+            # Get all chunk IDs for the document. NOTE: ids are always
+            # returned by get(); 'ids' is not a valid `include` value and
+            # passing it raises, which made this method always fail.
+            results = await asyncio.to_thread(
+                self.collection.get,
                 where={"document_id": document_id},
-                include=['ids']
+                include=[],
             )
-            
+
             if results['ids']:
-                self.collection.delete(ids=results['ids'])
+                await asyncio.to_thread(self.collection.delete, ids=results['ids'])
                 logger.info(f"Deleted {len(results['ids'])} chunks for document {document_id}")
             
             return True
