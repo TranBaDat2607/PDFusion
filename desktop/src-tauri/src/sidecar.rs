@@ -323,11 +323,14 @@ pub async fn spawn(app: AppHandle) -> Result<SidecarInfo, SidecarError> {
 
     let deadline = Instant::now() + Duration::from_secs(30);
     let info = loop {
-        if Instant::now() > deadline {
-            let _ = child.start_kill();
-            return Err(SidecarError::Timeout);
-        }
         tokio::select! {
+            // A silent-but-alive child never produces a line or an exit, so
+            // the timeout must be a select branch of its own — checking the
+            // deadline at the top of the loop only fires after output arrives.
+            _ = tokio::time::sleep_until(deadline) => {
+                let _ = child.start_kill();
+                return Err(SidecarError::Timeout);
+            }
             line = reader.next_line() => {
                 match line {
                     Ok(Some(text)) => {

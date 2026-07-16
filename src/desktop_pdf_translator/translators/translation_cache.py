@@ -212,6 +212,57 @@ class TranslationCache:
             logger.warning("clear_expired failed: %s", e)
             return 0
 
+    def enforce_size_cap(self) -> int:
+        """Delete oldest entries until the DB file is under `max_size_mb`.
+
+        The cap was previously declared but never enforced, so the cache grew
+        without bound (TTL expiry only marks rows; nothing reaped them
+        automatically). Deletes in oldest-first batches down to ~90% of the
+        cap, then VACUUMs to actually return the disk space. Returns the
+        number of rows removed.
+        """
+        try:
+            cap_bytes = int(self.max_size_mb * 1024 * 1024)
+            if not self.db_path.exists():
+                return 0
+            conn = self._conn()
+            # Fold the WAL into the main file first so st_size reflects the
+            # real on-disk footprint (in WAL mode the main file only shrinks
+            # after a checkpoint).
+            with self._write_lock:
+                conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+            if self.db_path.stat().st_size <= cap_bytes:
+                return 0
+            total_rows = conn.execute("SELECT COUNT(*) FROM translations").fetchone()[0]
+            if total_rows == 0:
+                return 0
+            size = self.db_path.stat().st_size
+            target_bytes = int(cap_bytes * 0.9)
+            avg_row = max(1, size // total_rows)
+            rows_to_remove = min(
+                total_rows, -(-(size - target_bytes) // avg_row)  # ceil div
+            )
+            with self._write_lock:
+                cur = conn.execute(
+                    "DELETE FROM translations WHERE cache_key IN ("
+                    "  SELECT cache_key FROM translations"
+                    "  ORDER BY COALESCE(last_used, cached_at) ASC LIMIT ?"
+                    ")",
+                    (rows_to_remove,),
+                )
+                conn.commit()
+                conn.execute("VACUUM")
+                conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+            removed = cur.rowcount
+            if removed:
+                logger.info(
+                    "Translation cache size cap: removed %d oldest entries", removed
+                )
+            return removed
+        except Exception as e:
+            logger.warning("enforce_size_cap failed: %s", e)
+            return 0
+
     def clear_all(self) -> int:
         try:
             conn = self._conn()

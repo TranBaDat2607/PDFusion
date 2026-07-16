@@ -4,7 +4,6 @@ Base translator interface compatible with BabelDOC.
 
 import logging
 import re
-import time
 from abc import ABC, abstractmethod
 from typing import Dict, Optional, Any
 
@@ -34,8 +33,6 @@ class BaseTranslator(ABC):
     - Must support language attributes: lang_in, lang_out
     """
 
-    min_request_interval: float = 0.0
-
     def __init__(self, lang_in: str, lang_out: str, **kwargs):
         """Initialize translator with language configuration.
 
@@ -53,7 +50,6 @@ class BaseTranslator(ABC):
         self.lang_in = self._normalize_language_code(lang_in)
         self.lang_out = self._normalize_language_code(lang_out)
         self.translate_call_count = 0
-        self._last_request_time = 0.0
 
         # Pop the cross-cutting callback before passing the rest to the
         # subclass setup so backends don't need to thread it through their
@@ -113,7 +109,22 @@ class BaseTranslator(ABC):
             Translated text
         """
         pass
-    
+
+    def generate(
+        self,
+        prompt: str,
+        system: Optional[str] = None,
+        max_tokens: int = 1000,
+    ) -> Optional[str]:
+        """Freeform text generation for RAG answer synthesis.
+
+        LLM backends override this. The base implementation returns None,
+        meaning the backend (e.g. Argos NMT) cannot follow instructions —
+        callers must fall back to a non-LLM path.
+        """
+        return None
+
+
     def get_formular_placeholder(self, placeholder_id: int) -> tuple[str, str]:
         """
         Get formula placeholder for protecting math content.
@@ -149,16 +160,11 @@ class BaseTranslator(ABC):
             Text with restored formula
         """
         placeholder, regex_pattern = self.get_formular_placeholder(placeholder_id)
-        return re.sub(regex_pattern, original_formula, text, flags=re.IGNORECASE)
-    
-    def _apply_rate_limiting(self) -> None:
-        """Sleep so consecutive requests are spaced by `min_request_interval`."""
-        if self.min_request_interval <= 0:
-            return
-        elapsed = time.time() - self._last_request_time
-        if elapsed < self.min_request_interval:
-            time.sleep(self.min_request_interval - elapsed)
-        self._last_request_time = time.time()
+        # The formula is literal text, not a regex replacement template — a
+        # lambda keeps backslashes/`\1` in it from being interpreted by re.sub.
+        return re.sub(
+            regex_pattern, lambda _m: original_formula, text, flags=re.IGNORECASE
+        )
 
     def _preprocess_text(self, text: str) -> str:
         """Preprocess text before translation."""
@@ -178,9 +184,14 @@ class BaseTranslator(ABC):
 
         if self.lang_out == "vi":
             text = re.sub(r'\s+([.,;:!?])', r'\1', text)
-            text = re.sub(r'([.,;:!?])([^\s])', r'\1 \2', text)
-            text = text.replace("  ", " ")
-            text = text.replace('"', '"').replace('"', '"')
+            # Insert a space after punctuation only at genuine word boundaries.
+            # `,;:` → only when followed by a letter, so `1,000`, `12:30`,
+            # and `http://` stay intact. Sentence enders `.!?` → only before
+            # an uppercase letter (sentence boundary), so `3.14`,
+            # `example.com`, and `?a=1` query strings stay intact.
+            text = re.sub(r'([,;:])(?=[^\W\d_])', r'\1 ', text)
+            text = re.sub(r'([.!?])(?=[A-Z])', r'\1 ', text)
+            text = re.sub(r' {2,}', ' ', text)
 
         return text
     

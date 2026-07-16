@@ -1,8 +1,10 @@
 """Configuration + API key management endpoints."""
 
+import asyncio
 import logging
 from fastapi import APIRouter, Depends, HTTPException
 
+from ...processors.pdf_cache import get_pdf_cache
 from ...config import (
     AppSettings,
     LanguageCode,
@@ -201,13 +203,22 @@ async def get_cache_stats() -> CacheStatsResponse:
 
 
 @router.delete("/cache", response_model=CacheClearResponse)
-async def clear_cache(scope: str = "all") -> CacheClearResponse:
-    """Clear the on-disk translation cache. `scope=expired` only reaps stale
-    entries; `scope=all` wipes everything (e.g. when the user changes models)."""
-    cache = get_translation_cache()
-    if scope == "expired":
-        removed = cache.clear_expired()
-    else:
-        scope = "all"
-        removed = cache.clear_all()
+async def clear_cache(scope: str = "all", target: str = "paragraph") -> CacheClearResponse:
+    """Clear the on-disk translation caches.
+
+    `scope=expired` only reaps stale entries; `scope=all` wipes everything
+    (e.g. when the user changes models). `target` picks which cache:
+    `paragraph` (default, backward compatible), `pdf` (whole-PDF cache), or
+    `all` (both). The PDF cache has no TTL, so `scope=expired` doesn't touch it.
+    """
+    removed = 0
+    if target in ("paragraph", "all"):
+        cache = get_translation_cache()
+        if scope == "expired":
+            removed += await asyncio.to_thread(cache.clear_expired)
+        else:
+            scope = "all"
+            removed += await asyncio.to_thread(cache.clear_all)
+    if target in ("pdf", "all") and scope != "expired":
+        removed += await asyncio.to_thread(get_pdf_cache().clear_all)
     return CacheClearResponse(removed=removed, scope=scope)

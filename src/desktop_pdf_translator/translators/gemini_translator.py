@@ -23,8 +23,6 @@ class GeminiTranslator(BaseTranslator):
     for Vietnamese language translations.
     """
 
-    min_request_interval = 2.0
-
     def __init__(self, lang_in: str, lang_out: str, **kwargs):
         super().__init__(lang_in, lang_out, **kwargs)
 
@@ -64,8 +62,6 @@ class GeminiTranslator(BaseTranslator):
                 self._fire_paragraph_callback(processed_text, cached)
                 return cached
 
-            self._apply_rate_limiting()
-
             response = self.client.models.generate_content(
                 model=self.model_name,
                 contents=self._create_translation_prompt(processed_text),
@@ -85,6 +81,30 @@ class GeminiTranslator(BaseTranslator):
 
         except Exception as e:
             return self._handle_translation_error(e, text)
+
+    def generate(
+        self,
+        prompt: str,
+        system: Optional[str] = None,
+        max_tokens: int = 1000,
+    ) -> Optional[str]:
+        """Freeform generation used by the RAG chain."""
+        try:
+            config = genai_types.GenerateContentConfig(
+                temperature=0.3,
+                max_output_tokens=max_tokens,
+                system_instruction=system if system else None,
+            )
+            response = self.client.models.generate_content(
+                model=self.model_name,
+                contents=prompt,
+                config=config,
+            )
+            text = response.text
+            return text.strip() if text else None
+        except Exception as e:
+            logger.error(f"Gemini generate failed: {e}")
+            return None
 
     def _create_translation_prompt(self, text: str) -> str:
         """Create optimized translation prompt for Vietnamese."""

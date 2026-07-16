@@ -248,6 +248,18 @@ export function useTranslation() {
             }
           },
         });
+        // The stream can end without a terminal event (sidecar crash or
+        // restart mid-job). Without this, the overlay stays on "running"
+        // forever. Functional update so a terminal event that did land wins.
+        setState((s) =>
+          s.status === "running"
+            ? {
+                ...s,
+                status: "error",
+                error: "Translation stream ended unexpectedly",
+              }
+            : s,
+        );
       } catch (e) {
         setState((s) => ({
           ...s,

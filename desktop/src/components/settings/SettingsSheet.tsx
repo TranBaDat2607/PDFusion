@@ -447,8 +447,12 @@ function CacheTab({ open }: { open: boolean }) {
   const handleClear = async (scope: "expired" | "all") => {
     setClearing(scope);
     try {
+      // "Clear all" also wipes the whole-PDF cache (translated PDFs), not
+      // just the paragraph cache; "Clear expired" is paragraph-only (the PDF
+      // cache has no TTL).
+      const target = scope === "all" ? "all" : "paragraph";
       const r = await api.delete<{ removed: number; scope: string }>(
-        `/config/cache?scope=${scope}`,
+        `/config/cache?scope=${scope}&target=${target}`,
       );
       toast.success(`Cleared ${r.removed} ${scope} entries`);
       await refresh();

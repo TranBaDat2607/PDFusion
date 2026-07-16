@@ -4,7 +4,6 @@ Handles equations, tables, figures, and complex scientific content.
 """
 
 import logging
-import asyncio
 from pathlib import Path
 from typing import List, Dict, Any, Optional, Tuple
 
@@ -171,7 +170,7 @@ class ScientificPDFProcessor:
         self.elements = []
         self.page_layouts = {}
         
-    async def process_pdf(self, pdf_path: Path) -> List[Dict[str, Any]]:
+    def process_pdf(self, pdf_path: Path) -> List[Dict[str, Any]]:
         """
         Process PDF and extract structured elements.
         
@@ -190,12 +189,12 @@ class ScientificPDFProcessor:
             # Process each page
             for page_num in range(len(doc)):
                 page = doc[page_num]
-                await self._process_page(page, page_num, pdf_path)
+                self._process_page(page, page_num, pdf_path)
                 
             doc.close()
             
             # Create contextual chunks
-            chunks = await self._create_contextual_chunks()
+            chunks = self._create_contextual_chunks()
             
             logger.info(f"Processed {len(self.elements)} elements into {len(chunks)} chunks")
             return chunks
@@ -204,7 +203,7 @@ class ScientificPDFProcessor:
             logger.error(f"PDF processing failed: {e}")
             raise
     
-    async def _process_page(self, page: fitz.Page, page_num: int, pdf_path: Path):
+    def _process_page(self, page: fitz.Page, page_num: int, pdf_path: Path):
         """Process a single page and extract elements."""
         
         # Get page text with formatting
@@ -212,13 +211,13 @@ class ScientificPDFProcessor:
         page_text = page.get_text()
         
         # Extract text elements
-        await self._extract_text_elements(text_dict, page_num)
+        self._extract_text_elements(text_dict, page_num)
         
         # Extract images (potential equations and figures)
-        await self._extract_images(page, page_num, page_text)
+        self._extract_images(page, page_num, page_text)
         
         # Extract tables
-        await self._extract_tables(page, page_num, pdf_path)
+        self._extract_tables(page, page_num, pdf_path)
         
         # Store page layout
         self.page_layouts[page_num] = {
@@ -227,7 +226,7 @@ class ScientificPDFProcessor:
             'text': page_text
         }
     
-    async def _extract_text_elements(self, text_dict: Dict, page_num: int):
+    def _extract_text_elements(self, text_dict: Dict, page_num: int):
         """Extract and analyze text elements."""
         
         for block in text_dict.get("blocks", []):
@@ -253,7 +252,7 @@ class ScientificPDFProcessor:
                     element.analyze_text_type()
                     self.elements.append(element)
     
-    async def _extract_images(self, page: fitz.Page, page_num: int, page_text: str):
+    def _extract_images(self, page: fitz.Page, page_num: int, page_text: str):
         """Extract images that might be equations or figures."""
         
         image_list = page.get_images()
@@ -294,7 +293,7 @@ class ScientificPDFProcessor:
             except Exception as e:
                 logger.warning(f"Failed to process image {img_index} on page {page_num}: {e}")
     
-    async def _extract_tables(self, page: fitz.Page, page_num: int, pdf_path: Path):
+    def _extract_tables(self, page: fitz.Page, page_num: int, pdf_path: Path):
         """Extract table elements."""
         
         # Simple table detection based on text layout
@@ -332,7 +331,7 @@ class ScientificPDFProcessor:
                     table_element.extract_table_data(pdf_path, page_num)
                     self.elements.append(table_element)
     
-    async def _create_contextual_chunks(self) -> List[Dict[str, Any]]:
+    def _create_contextual_chunks(self) -> List[Dict[str, Any]]:
         """Create contextual chunks that preserve document structure."""
         
         chunks = []

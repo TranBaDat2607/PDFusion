@@ -155,6 +155,9 @@ async def reprioritize_translation(job_id: str, visible_page: int) -> None:
 
 # (service, lang_in, lang_out) → already warmed in this sidecar process.
 _WARMED: set[tuple[str, str, str]] = set()
+# Keys with a warm-up currently in flight, so concurrent /prewarm calls don't
+# schedule duplicate work. Removed on completion (success or failure).
+_WARMING: set[tuple[str, str, str]] = set()
 _WARM_LOCK = threading.Lock()
 
 # Strong refs to in-flight prewarm tasks. asyncio.create_task only holds a weak
@@ -162,9 +165,13 @@ _WARM_LOCK = threading.Lock()
 _PREWARM_TASKS: set[asyncio.Task] = set()
 
 
-def _warm_translator(service: TranslationService, lang_in: str, lang_out: str) -> str:
+def _warm_translator(
+    service: TranslationService, lang_in: str, lang_out: str
+) -> tuple[bool, str]:
     """Blocking warm-up. Runs in a worker thread (asyncio.to_thread) so the
-    endpoint returns immediately even when Argos has to download its ~80 MB pack."""
+    endpoint returns immediately even when Argos has to download its ~80 MB
+    pack. Returns (ok, message); a failed warm-up must NOT be recorded as
+    warm so the next /prewarm can retry (e.g. transient network failure)."""
     try:
         translator = TranslatorFactory.create_translator(
             service=service, lang_in=lang_in, lang_out=lang_out
@@ -186,10 +193,10 @@ def _warm_translator(service: TranslationService, lang_in: str, lang_out: str) -
                 translator.validate_configuration()
             except Exception:
                 pass
-        return f"Warmed {service.value}"
+        return True, f"Warmed {service.value}"
     except Exception as e:
         logger.warning("Pre-warm failed for %s: %s", service, e)
-        return f"Pre-warm failed: {e}"
+        return False, f"Pre-warm failed: {e}"
 
 
 @router.post("/prewarm", response_model=PrewarmResponse)
@@ -203,22 +210,37 @@ async def prewarm(payload: PrewarmRequest) -> PrewarmResponse:
     key = (service.value, payload.source_lang.value, payload.target_lang.value)
     with _WARM_LOCK:
         already = key in _WARMED
+        in_flight = key in _WARMING
+        if not already and not in_flight:
+            _WARMING.add(key)
 
     if already:
         return PrewarmResponse(
             service=service.value, warmed=True, cached=True, message="Already warm"
         )
+    if in_flight:
+        return PrewarmResponse(
+            service=service.value,
+            warmed=False,
+            cached=False,
+            message="Warm-up already in progress",
+        )
 
     # Don't block the HTTP response on the pack download. Schedule and return.
     async def _run() -> None:
-        msg = await asyncio.to_thread(
-            _warm_translator,
-            service,
-            payload.source_lang.value,
-            payload.target_lang.value,
-        )
+        try:
+            ok, msg = await asyncio.to_thread(
+                _warm_translator,
+                service,
+                payload.source_lang.value,
+                payload.target_lang.value,
+            )
+        except Exception as exc:  # noqa: BLE001 — never leave key stuck in _WARMING
+            ok, msg = False, f"Pre-warm crashed: {exc}"
         with _WARM_LOCK:
-            _WARMED.add(key)
+            _WARMING.discard(key)
+            if ok:
+                _WARMED.add(key)
         logger.info("Pre-warm complete: %s (%s)", service.value, msg)
 
     task = asyncio.create_task(_run())

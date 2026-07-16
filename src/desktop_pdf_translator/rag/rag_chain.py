@@ -2,12 +2,13 @@
 RAG chain that answers questions over indexed PDF documents.
 """
 
+import asyncio
 import logging
 from typing import List, Dict, Any, Optional
 import json
 from datetime import datetime
 
-from ..config import get_settings
+from ..config import TranslationService, get_settings
 from ..translators import TranslatorFactory
 from .vector_store import ChromaDBManager
 from .reference_manager import ReferenceManager
@@ -29,17 +30,36 @@ class EnhancedRAGChain:
         logger.info("RAG chain initialized")
 
     def _initialize_translator(self):
-        """Initialize the translator for answer generation."""
-        try:
-            preferred_service = self.settings.translation.preferred_service
-            self.translator = TranslatorFactory.create_translator(
-                service=preferred_service,
-                lang_in="auto",
-                lang_out="vi"
-            )
-            logger.info(f"Translator initialized: {preferred_service}")
-        except Exception as e:
-            logger.error(f"Failed to initialize translator: {e}")
+        """Initialize an LLM translator for answer generation.
+
+        Answer synthesis needs an instruction-following model, so Argos (the
+        default preferred_service) is never used here. Pick the preferred
+        service when it's an LLM with a key, otherwise the first LLM service
+        that has a key. With no key at all, stay on the template-answer path.
+        """
+        llm_services = (
+            TranslationService.OPENAI,
+            TranslationService.ANTHROPIC,
+            TranslationService.GEMINI,
+        )
+        preferred = self.settings.translation.preferred_service
+        candidates = [preferred] if preferred in llm_services else []
+        candidates += [s for s in llm_services if s not in candidates]
+
+        for service in candidates:
+            if not self.settings.has_api_key(service):
+                continue
+            try:
+                self.translator = TranslatorFactory.create_translator(
+                    service=service,
+                    lang_in="auto",
+                    lang_out="vi",
+                )
+                logger.info(f"RAG answer LLM initialized: {service.value}")
+                return
+            except Exception as e:
+                logger.error(f"Failed to initialize {service.value} for RAG: {e}")
+        logger.info("No LLM key configured — RAG will use template answers")
 
     async def answer_question(self, question: str, document_id: Optional[str] = None,
                             max_pdf_sources: int = 5,
@@ -148,22 +168,13 @@ Question: {question}
 
 Hypothetical answer:"""
 
-            if hasattr(self.translator, 'client') and hasattr(self.translator.client, 'chat'):
-                response = self.translator.client.chat.completions.create(
-                    model=self.translator.model,
-                    messages=[
-                        {"role": "system", "content": "You generate hypothetical answers for document retrieval."},
-                        {"role": "user", "content": hyde_prompt}
-                    ],
-                    max_tokens=150,
-                    temperature=0.3
-                )
-                return response.choices[0].message.content.strip()
-            elif hasattr(self.translator, 'model'):
-                response = self.translator.model.generate_content(hyde_prompt)
-                return response.text.strip()
-            else:
-                return question
+            answer = await asyncio.to_thread(
+                self.translator.generate,
+                hyde_prompt,
+                "You generate hypothetical answers for document retrieval.",
+                150,
+            )
+            return answer or question
 
         except Exception as e:
             logger.error(f"HyDE generation failed: {e}")
@@ -362,33 +373,20 @@ ANSWER:
         return prompt
 
     async def _generate_with_llm(self, prompt: str) -> str:
-        """Generate answer using LLM (OpenAI/Gemini)."""
-
-        try:
-            if hasattr(self.translator, 'client'):
-                # OpenAI-compatible
-                if hasattr(self.translator.client, 'chat'):
-                    response = self.translator.client.chat.completions.create(
-                        model=self.translator.model,
-                        messages=[
-                            {"role": "system", "content": "You are an intelligent AI assistant that answers questions based on documents. Always respond in Vietnamese regardless of the language of the question or source documents."},
-                            {"role": "user", "content": prompt}
-                        ],
-                        max_tokens=1000,
-                        temperature=0.3
-                    )
-                    return response.choices[0].message.content
-
-                # Gemini
-                elif hasattr(self.translator, 'model'):
-                    response = self.translator.model.generate_content(prompt)
-                    return response.text
-
-            return "Unable to generate answer with LLM."
-
-        except Exception as e:
-            logger.error(f"LLM generation failed: {e}")
-            raise
+        """Generate an answer with whichever LLM backend is configured."""
+        answer = await asyncio.to_thread(
+            self.translator.generate,
+            prompt,
+            (
+                "You are an intelligent AI assistant that answers questions "
+                "based on documents. Always respond in Vietnamese regardless "
+                "of the language of the question or source documents."
+            ),
+            1000,
+        )
+        if not answer:
+            raise RuntimeError("LLM returned no answer")
+        return answer
 
     def _generate_template_answer(self, question: str, pdf_sources: List[Dict[str, Any]]) -> str:
         """Generate template-based answer as fallback."""

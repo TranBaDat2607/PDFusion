@@ -10,7 +10,7 @@ import tempfile
 import time
 import uuid
 from pathlib import Path
-from typing import AsyncGenerator, Optional, Dict, Any
+from typing import AsyncGenerator, Optional
 
 import fitz  # PyMuPDF
 
@@ -57,6 +57,22 @@ def _log_cache_store_failure(task: "asyncio.Task") -> None:
 _TEMP_DIR_PREFIX = "pdfusion-translate-"
 _previous_output_dir: Optional[Path] = None
 _pending_temp_cleanups: "set[asyncio.Task]" = set()
+
+# Ownership tracking so a new job never deletes a dir a still-running job is
+# writing into (two /translate calls can overlap: rapid re-click, or a cancel
+# whose worker is still draining). All mutations happen on the event loop, so
+# no locking is needed.
+_active_output_dirs: "set[Path]" = set()
+_deferred_cleanups: "set[Path]" = set()
+
+
+def _release_output_dir(path: Path) -> None:
+    """Mark a per-job temp dir as no longer owned by a running job. If a newer
+    job superseded it while it was still active, run its deferred cleanup."""
+    _active_output_dirs.discard(path)
+    if path in _deferred_cleanups:
+        _deferred_cleanups.discard(path)
+        _schedule_temp_cleanup(path)
 
 
 def _is_owned_temp_dir(path: Path) -> bool:
@@ -169,7 +185,6 @@ class PDFProcessor:
         """Initialize PDF processor."""
         self.settings = get_settings()
         self.session_id = None
-        self._current_task = None
         # Captured at process_pdf() entry so the API layer can locate the
         # latest rolling translated PDF when the user cancels mid-run.
         self._output_dir: Optional[Path] = None
@@ -215,7 +230,8 @@ class PDFProcessor:
         """
         self.session_id = str(uuid.uuid4())
         start_time = time.time()
-        
+        owns_output_dir = False
+
         try:
             # Use provided languages or fallback to config
             source_lang = source_lang or self.settings.translation.default_source_lang
@@ -243,10 +259,17 @@ class PDFProcessor:
             global _previous_output_dir
             if output_dir is None:
                 output_dir = Path(tempfile.mkdtemp(prefix=_TEMP_DIR_PREFIX))
+                owns_output_dir = True
+                _active_output_dirs.add(output_dir)
                 prev = _previous_output_dir
                 _previous_output_dir = output_dir
                 if prev is not None and prev != output_dir:
-                    _schedule_temp_cleanup(prev)
+                    if prev in _active_output_dirs:
+                        # The previous job is still running — defer its dir's
+                        # cleanup until that job releases it.
+                        _deferred_cleanups.add(prev)
+                    else:
+                        _schedule_temp_cleanup(prev)
             output_dir.mkdir(parents=True, exist_ok=True)
             self._output_dir = output_dir
             self._input_stem = file_path.stem
@@ -574,7 +597,10 @@ class PDFProcessor:
                 recoverable=False
             )
             raise ProcessingError(f"Processing failed: {e}", details=str(e))
-    
+        finally:
+            if owns_output_dir and output_dir is not None:
+                _release_output_dir(output_dir)
+
     def _resolve_model_id(self, service: TranslationService) -> Optional[str]:
         """Model string used in PDF-cache keys. Mirrors the per-service config
         so changing model (e.g. gpt-4 → gpt-4o) invalidates cache entries
@@ -631,7 +657,10 @@ class PDFProcessor:
                 doc.close()
             except Exception as e:
                 raise FileValidationError(f"Cannot open PDF file: {e}")
-            
+
+            if page_count == 0:
+                raise FileValidationError("PDF has no pages")
+
             # Check page count limit
             if page_count > self.settings.translation.max_pages:
                 raise FileValidationError(
@@ -891,7 +920,11 @@ class PDFProcessor:
                         output_dir
                         / f"{file_path.stem}_translated_v{completed_count:03d}.pdf"
                     )
-                    self._rebuild_sparse_rolling_pdf(
+                    # PyMuPDF merge is blocking (~50-100 ms, grows with page
+                    # count) — run it off the event loop so SSE delivery and
+                    # other requests aren't stalled per chunk.
+                    await asyncio.to_thread(
+                        self._rebuild_sparse_rolling_pdf,
                         rolling_path,
                         original_path=file_path,
                         chunks=chunks,
@@ -1217,12 +1250,6 @@ class PDFProcessor:
         
         return None
     
-    def cancel_processing(self):
-        """Cancel current processing task."""
-        if self._current_task and not self._current_task.done():
-            self._current_task.cancel()
-            logger.info(f"Cancelled processing session {self.session_id}")
-
     def get_partial_translated_file(self) -> Optional[Path]:
         """Latest rolling translated PDF written so far, or None if no chunk
         has finished. Used by the API layer to surface a partial result on
@@ -1252,10 +1279,3 @@ class PDFProcessor:
                 stale.unlink()
             except OSError as exc:
                 logger.warning("Could not delete intermediate %s: %s", stale, exc)
-    
-    def get_session_info(self) -> Dict[str, Any]:
-        """Get information about current processing session."""
-        return {
-            "session_id": self.session_id,
-            "settings": self.settings.dict()
-        }

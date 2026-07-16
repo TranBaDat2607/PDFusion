@@ -68,6 +68,12 @@ export function useRagIndex() {
           }
         },
       });
+      // Stream ended without a terminal event (sidecar died mid-index).
+      setState((s) =>
+        s.status === "indexing"
+          ? { ...s, status: "error", error: "Index stream ended unexpectedly" }
+          : s,
+      );
     } catch (e) {
       setState((s) => ({
         ...s,
