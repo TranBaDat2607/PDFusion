@@ -22,6 +22,7 @@ from babeldoc.format.pdf.translation_config import WatermarkOutputMode as BabelD
 from ..config import get_settings, FileMetadata, LanguageCode, TranslationService
 from ..translators import TranslatorFactory
 from ..translators.argos_translator import ArgosTranslator
+from ..translators.base import describe_fatal_error
 from ..translators.capabilities import resolve_effective_service, resolve_languages
 from .events import (
     ProcessingEvent,
@@ -602,7 +603,15 @@ class PDFProcessor:
                 pages_processed=file_metadata.page_count,
                 target_lang=target_lang.value,
                 failed_paragraphs=self._failed_paragraphs,
-                total_paragraphs=self._paragraphs_seen + self._failed_paragraphs,
+                # The translator's own call count, not `_paragraphs_seen`:
+                # the latter is the ticker's counter and skips any paragraph
+                # whose preview came out empty, which would understate the
+                # denominator of "N of M could not be translated". One
+                # translator instance serves every chunk, so this is a
+                # whole-document total.
+                total_paragraphs=max(
+                    translator.translate_call_count, self._failed_paragraphs
+                ),
             )
             
         except ProcessingError as e:
@@ -1126,9 +1135,8 @@ class PDFProcessor:
             self._failed_paragraphs += 1
             if not fatal or self._fatal_translation_error is not None:
                 return
-            self._fatal_translation_error = (
-                f"{self._service_name} rejected the request: {error}. "
-                "Check the API key in Settings, or switch to Argos (offline)."
+            self._fatal_translation_error = describe_fatal_error(
+                self._service_name, error
             )
         loop, queue = self._event_loop, self._events_queue
         if loop is None or queue is None:

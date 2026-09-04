@@ -121,7 +121,10 @@ export function useUpdateConfig() {
       // …and the server only promotes on a key that *validates*. When it
       // doesn't, the save still succeeds but nothing visible changes — which
       // reads as "my key was accepted" for a key the provider just rejected.
-      const savedKeyFor = (["openai", "gemini", "anthropic"] as const).find(
+      // Same priority the server promotes by (`routes/config.py`): one PUT
+      // can carry keys for several services, and only the first by this order
+      // is probed — so a different order here would name the wrong provider.
+      const savedKeyFor = (["openai", "anthropic", "gemini"] as const).find(
         (code) => update[code]?.api_key,
       );
       if (

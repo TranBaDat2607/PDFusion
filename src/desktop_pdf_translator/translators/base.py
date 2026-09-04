@@ -32,14 +32,18 @@ _FATAL_STATUS_CODES = frozenset({401, 403})
 # Fallback for SDK wrappers that don't expose a status: google-genai's
 # ClientError, for one, puts the code in its message. Matched against
 # `str(error)` — the exception's own text, never the document's.
+#
+# Every marker here names an API key specifically. Generic phrases like
+# "unauthorized" or "permission denied" were tried and removed: a provider
+# that means them also sends 401/403, which `_status_code_of` already catches,
+# while `PermissionError`/`OSError` — a Windows file lock on the CTranslate2
+# model, say — carry "Permission denied" in their text and would abort a run
+# that had nothing wrong with its credentials.
 _FATAL_MESSAGE_MARKERS = (
     "invalid_api_key",
     "invalid api key",
     "incorrect api key",
     "api key not valid",
-    "unauthorized",
-    "permission denied",
-    "permission_denied",
     "authenticationerror",
 )
 
@@ -77,6 +81,27 @@ def is_fatal_translation_error(error: BaseException) -> bool:
     return any(marker in message for marker in _FATAL_MESSAGE_MARKERS)
 
 
+def describe_fatal_error(service_name: str, error: BaseException) -> str:
+    """The sentence the user sees when a fatal failure stops a job.
+
+    Argos gets its own wording. It is a fatal path — a blocked package index
+    returns 403 from `_ensure_en_vi_installed`, which fails every paragraph
+    identically — but it has no API key, so the LLM sentence would tell the
+    user to check a credential they never set and to "switch to Argos" while
+    already on it.
+    """
+    if service_name == "argos":
+        return (
+            f"Argos could not translate: {error}. The offline language pack "
+            "may be missing or unreachable — check your connection, or add an "
+            "API key in Settings to use an online translator."
+        )
+    return (
+        f"{service_name} rejected the request: {error}. "
+        "Check the API key in Settings, or switch to Argos (offline)."
+    )
+
+
 class BaseTranslator(ABC):
     """
     Base translator interface compatible with BabelDOC integration.
@@ -109,15 +134,16 @@ class BaseTranslator(ABC):
         """
         self.lang_in = self._normalize_language_code(lang_in)
         self.lang_out = self._normalize_language_code(lang_out)
-        self.translate_call_count = 0
-        # Paragraphs this instance handed back untranslated. Read by the
-        # processor to decide whether the run is cacheable and what to tell
-        # the user; the translator itself never acts on it.
+        # Both counters are read by the processor: `translate_call_count` is
+        # the denominator of the "N of M paragraphs could not be translated"
+        # banner, `failed_translations` the numerator and the reason a run is
+        # kept out of the PDF cache. The translator itself never acts on them.
         #
-        # One instance is shared across BabelDOC's whole worker pool, so the
-        # increment is locked — `+= 1` is a read-modify-write and would drop
-        # counts under exactly the concurrent failures this exists to measure.
-        self._failure_lock = threading.Lock()
+        # One instance is shared across BabelDOC's whole worker pool, so both
+        # increments are locked — `+= 1` is a read-modify-write and would drop
+        # counts under exactly the concurrency this exists to measure.
+        self._counter_lock = threading.Lock()
+        self.translate_call_count = 0
         self.failed_translations = 0
 
         # Pop the cross-cutting callbacks before passing the rest to the
@@ -144,6 +170,18 @@ class BaseTranslator(ABC):
             cb(source, target)
         except Exception:
             logger.debug("on_paragraph_translated callback raised", exc_info=True)
+
+    def _note_translate_call(self) -> int:
+        """Count one `translate()` entry and return the new total.
+
+        Every backend calls this on the first line of `translate()`, so the
+        total covers each unit BabelDOC handed over — including the ones that
+        short-circuit on empty text, which is what makes it a usable
+        denominator for the failure banner.
+        """
+        with self._counter_lock:
+            self.translate_call_count += 1
+            return self.translate_call_count
 
     def _fire_failure_callback(self, error: BaseException, fatal: bool) -> None:
         """Best-effort: report a failed paragraph. Same contract as
@@ -286,7 +324,7 @@ class BaseTranslator(ABC):
         that to refuse caching the result, to tell the user how much of the
         document is untranslated, and to abort outright on a rejected key.
         """
-        with self._failure_lock:
+        with self._counter_lock:
             self.failed_translations += 1
             failure_number = self.failed_translations
         fatal = is_fatal_translation_error(error)

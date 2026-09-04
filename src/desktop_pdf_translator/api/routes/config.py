@@ -37,13 +37,25 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/config", tags=["config"], dependencies=[Depends(require_token)])
 
 
+# Deadline for the auto-promotion probe below. Generous enough for a cold
+# TLS handshake to a provider, short enough that Settings → Save still feels
+# like a save.
+_VALIDATE_PROBE_TIMEOUT_S = 20.0
+
+
 async def _credentials_work(
     service: TranslationService, service_config: dict
 ) -> tuple[bool, str]:
     """Probe a just-saved key the same way `POST /config/validate` does.
 
     Runs off the event loop — `validate_configuration()` is a blocking HTTP
-    call to the provider.
+    call to the provider — and under a deadline, because this sits on the
+    Settings *save* path now, not just behind the Validate button. OpenAI and
+    Anthropic pass their own `timeout=10`; Gemini passes none, so without this
+    a save on a flaky connection would hang for the SDK's default.
+
+    A timeout reports the same thing as a rejection: don't promote. The key is
+    still saved, and the user can switch services explicitly.
     """
 
     def probe() -> tuple[bool, str]:
@@ -58,7 +70,12 @@ async def _credentials_work(
         return translator.validate_configuration()
 
     try:
-        return await asyncio.to_thread(probe)
+        return await asyncio.wait_for(
+            asyncio.to_thread(probe), timeout=_VALIDATE_PROBE_TIMEOUT_S
+        )
+    except (asyncio.TimeoutError, TimeoutError):
+        # The thread is left to finish on its own; nothing reads its result.
+        return False, f"timed out contacting {service.value}"
     except Exception as exc:  # noqa: BLE001 — any failure means "don't promote"
         return False, str(exc)
 

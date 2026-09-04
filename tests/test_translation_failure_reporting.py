@@ -19,11 +19,15 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import threading
+import urllib.error
+
 import pytest
 
 from desktop_pdf_translator.processors.pdf_cache import is_cacheable_artifact
 from desktop_pdf_translator.translators.base import (
     BaseTranslator,
+    describe_fatal_error,
     is_fatal_translation_error,
 )
 
@@ -96,6 +100,50 @@ def test_a_boolean_attribute_is_not_a_status():
     assert is_fatal_translation_error(_Flagged("something")) is False
 
 
+@pytest.mark.parametrize(
+    "error",
+    [
+        PermissionError(13, "Permission denied"),
+        OSError(13, "Permission denied"),
+    ],
+    ids=["PermissionError", "OSError"],
+)
+def test_a_local_permission_error_is_not_a_credentials_failure(error):
+    """These carry "Permission denied" in their text, and a Windows file lock
+    on the CTranslate2 model reaches the funnel through Argos's batch worker.
+    Reading them as a rejected key would hard-abort a run that has nothing
+    wrong with its credentials — and tell the user to check an API key."""
+    assert is_fatal_translation_error(error) is False
+
+
+def test_a_403_from_the_argos_package_index_is_still_fatal():
+    """`urllib.error.HTTPError` exposes the status as `.code`. A blocked
+    package index fails every paragraph identically, so stopping is right —
+    it is the *message* that has to know Argos has no API key."""
+    blocked = urllib.error.HTTPError("http://index", 403, "Forbidden", {}, None)
+    assert is_fatal_translation_error(blocked) is True
+
+    missing = urllib.error.HTTPError("http://index", 404, "Not Found", {}, None)
+    assert is_fatal_translation_error(missing) is False
+
+
+def test_the_fatal_sentence_does_not_offer_argos_an_api_key():
+    """Argos is reachable on the fatal path but has no credentials, so the LLM
+    sentence would name a key the user never set and tell them to switch to
+    the service they are already on."""
+    argos = describe_fatal_error("argos", RuntimeError("HTTP Error 403"))
+    # It may offer a key as the *alternative* — what it must not do is send
+    # the user to check a credential Argos never had, or tell them to switch
+    # to the service they are already running.
+    assert "Check the API key" not in argos
+    assert "switch to Argos" not in argos
+    assert "language pack" in argos
+
+    openai = describe_fatal_error("openai", RuntimeError("bad key"))
+    assert "Check the API key in Settings" in openai
+    assert "language pack" not in openai
+
+
 # ---------------------------------------------------------------------------
 # Counting and reporting
 # ---------------------------------------------------------------------------
@@ -157,6 +205,27 @@ def test_a_translator_without_the_callback_still_counts():
     translator = _StubTranslator(lang_in="en", lang_out="vi")
     translator._handle_translation_error(ValueError("x"), "text")
     assert translator.failed_translations == 1
+
+
+def test_the_call_counter_survives_the_worker_pool():
+    """`translate_call_count` is the denominator of the failure banner and one
+    translator instance serves BabelDOC's whole pool, so the increment has to
+    be locked — an unguarded `+= 1` drops counts under concurrency."""
+    translator = _StubTranslator(lang_in="en", lang_out="vi")
+    threads = 8
+    per_thread = 2_000
+
+    def hammer() -> None:
+        for _ in range(per_thread):
+            translator._note_translate_call()
+
+    workers = [threading.Thread(target=hammer) for _ in range(threads)]
+    for w in workers:
+        w.start()
+    for w in workers:
+        w.join()
+
+    assert translator.translate_call_count == threads * per_thread
 
 
 # ---------------------------------------------------------------------------

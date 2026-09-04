@@ -48,7 +48,7 @@ class AnthropicTranslator(BaseTranslator):
         logger.info(f"Anthropic translator configured with model: {self.model}")
 
     def translate(self, text: str, **kwargs) -> str:
-        self.translate_call_count += 1
+        self._note_translate_call()
 
         try:
             processed_text = self._preprocess_text(text)
@@ -76,8 +76,13 @@ class AnthropicTranslator(BaseTranslator):
             ).strip()
 
             if not translated_text:
-                logger.warning("Anthropic response was empty")
-                return text
+                # Same as any other failed paragraph — see the funnel in
+                # base.py. Returning bare source text here left it uncounted
+                # and the run cacheable.
+                return self._handle_translation_error(
+                    RuntimeError("Anthropic returned an empty translation"),
+                    text,
+                )
 
             result = self._postprocess_text(translated_text)
             _llm_cache_set(processed_text, result, self.lang_in, self.lang_out, "anthropic", self.model)
