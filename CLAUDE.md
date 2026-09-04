@@ -34,7 +34,8 @@ python main.py          # equivalent to: pdfusion-sidecar (console script from p
 **External system dependencies:**
 - Ghostscript (optional — only needed by Camelot for table extraction during RAG indexing; pdfplumber fallback runs without it)
 - WebView2 Runtime (ships with Windows 11)
-- MSVC Build Tools 2022/2026 (Rust on Windows)
+- Rust toolchain (rustup + cargo, `stable-x86_64-pc-windows-msvc`) — required to build/run the Tauri shell (`cargo check` / `pnpm tauri dev` / `pnpm tauri build`)
+- MSVC Build Tools 2022/2026 (Rust's linker on Windows)
 
 **Environment setup:**
 ```bash
@@ -46,6 +47,10 @@ pip install -r requirements.txt        # canonical install — pins all RAG + ad
 cd desktop
 pnpm install
 ```
+
+> If bare `pnpm` isn't resolvable even after `corepack enable` (it can fail
+> with `EPERM` writing shims into `Program Files\nodejs` without admin rights),
+> install it globally instead: `npm install -g pnpm`.
 
 > Note: `requirements.txt` and `pyproject.toml` are **not** kept in lockstep.
 > `requirements.txt` flatly installs the RAG + advanced extras (chromadb,

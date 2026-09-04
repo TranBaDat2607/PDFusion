@@ -38,6 +38,10 @@ cd desktop
 pnpm install
 ```
 
+> If bare `pnpm` isn't resolvable even after `corepack enable` (it can fail
+> with `EPERM` writing shims into `Program Files\nodejs` without admin rights),
+> install it globally instead: `npm install -g pnpm`.
+
 ### 3. API keys
 
 Create a `.env` file in the project root:
