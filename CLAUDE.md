@@ -297,6 +297,80 @@ is on and the request didn't pass `bypass_cache=true`; the paragraph cache is
 gated by `settings.translation.cache_translations`. The "Re-translate" button in
 the UI sends `bypass_cache=true` (`hooks/useTranslation.ts`).
 
+What may be **written** to the PDF cache is a separate question, answered by
+`pdf_cache.py:is_cacheable_artifact`: the file must be a real
+`{stem}_translated_v*.pdf` in the job's own output dir, **and the run must have
+had zero failed paragraphs**. A cache entry is keyed by the input's hash, so a
+partly-untranslated artifact would be served on every later open of that file
+and stays invisible until someone clicks Re-translate.
+
+### Translator failures are counted, not swallowed
+
+`BaseTranslator._handle_translation_error` is the funnel every backend's
+`except` clause routes into, and it still returns the **source text** — raising
+would change nothing, because BabelDOC's `ILTranslator` catches whatever
+`translate()` raises and continues ("ignore error and continue"). So a bad key,
+a 429 or a network blip cannot fail a job on its own; the document just comes
+out partly untranslated while the pipeline reports success.
+
+**Every path that hands back source text goes through that funnel — including
+the ones that never raise.** That is the invariant a new backend has to
+preserve, and the one that was missed first time round: a bare `return text`
+is invisible to the counter, so the run still reports "complete" and still gets
+cached. The non-exception cases are "the provider returned nothing usable"
+(a Gemini safety filter drops `candidates` entirely; Anthropic/OpenAI can
+return empty content), and, in Argos, a failed `_ensure_en_vi_installed()`
+(the ~80 MB pack download — it raises for *every* paragraph, so an unguarded
+call meant a first run with no network produced a whole untranslated document
+that looked finished), a batch-wait timeout, and an empty result slot.
+
+Three things close that gap:
+
+- **Counting.** `BaseTranslator.failed_translations`, plus an
+  `on_translation_failed(error, fatal)` kwarg threaded through the same way as
+  `on_paragraph_translated`. `CompletionEvent` carries `failed_paragraphs` /
+  `total_paragraphs`, and the overlay says "N of M paragraphs could not be
+  translated" with a Retry (which is Re-translate — `bypass_cache=true`).
+  The **M** is `translator.translate_call_count`, not the processor's
+  `_paragraphs_seen`: the latter is the live-ticker's counter and skips any
+  paragraph whose preview came out empty, which understates the denominator.
+  Both counters increment under `BaseTranslator._counter_lock` — one instance
+  serves BabelDOC's whole worker pool, and `+= 1` is a read-modify-write.
+- **Not caching such a run** (see `is_cacheable_artifact` above).
+- **Aborting on a fatal error.** `translators/base.py:is_fatal_translation_error`
+  classifies 401/403 (duck-typed on `status_code`/`code`/`.response`, with a
+  message fallback for google-genai, which carries the code only in its text).
+  On the first fatal failure `PDFProcessor._handle_translation_failure` pushes a
+  wake-up item onto the multiplexer queue — the loop is parked on
+  `events_queue.get()`, so without it the job would sit there while every
+  remaining paragraph made the same doomed call — and the loop raises
+  `TranslationProcessError`, which `_process_with_babeldoc` re-raises unwrapped
+  so its user-facing sentence survives.
+
+  The message-marker fallback names an **API key** specifically. Generic
+  phrases (`unauthorized`, `permission denied`) were tried and removed: a
+  provider that means them also sends 401/403, which the status check already
+  catches, while `PermissionError`/`OSError` carry "Permission denied" in their
+  text and would abort a run whose credentials were fine. Argos reaches this
+  path too (a 403 from the package index is fatal, and correctly so), which is
+  why the sentence comes from `base.py:describe_fatal_error` — it has no API
+  key, so the LLM wording would send the user to check a credential they never
+  set and to "switch to Argos" while already on it.
+
+Relatedly, `PUT /config` **only auto-promotes `preferred_service` off Argos
+when the new key validates** (one provider round-trip, only on that path). An
+explicit `preferred_service` in the payload is always honoured — that's the
+user's own choice. Promoting on a typo'd key used to move the user from a
+working offline translator onto one that fails every paragraph silently.
+
+Two things that probe has to keep: it runs under `_VALIDATE_PROBE_TIMEOUT_S`
+(Gemini's `validate_configuration` passes no timeout of its own, and this is
+the *save* path now, not just the Validate button), and a timeout reports the
+same "don't promote" as a rejection. The frontend's warning toast in
+`useConfig.ts` picks the provider to name using the **same priority order** the
+server promotes by — one PUT can carry several keys, and only the first is
+probed, so the two orders must not drift apart.
+
 ### Translator plug-in interface (BabelDOC integration)
 
 BabelDOC drives chunking, layout, and PDF reassembly; it delegates the actual text translation to a translator object passed into `BabelDOCConfig(translator=...)` (see `processors/processor.py:364`). Two important facts about this seam:

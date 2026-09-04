@@ -7,6 +7,7 @@ import logging
 import os
 import shutil
 import tempfile
+import threading
 import time
 import uuid
 from pathlib import Path
@@ -21,6 +22,7 @@ from babeldoc.format.pdf.translation_config import WatermarkOutputMode as BabelD
 from ..config import get_settings, FileMetadata, LanguageCode, TranslationService
 from ..translators import TranslatorFactory
 from ..translators.argos_translator import ArgosTranslator
+from ..translators.base import describe_fatal_error
 from ..translators.capabilities import resolve_effective_service, resolve_languages
 from .events import (
     ProcessingEvent,
@@ -31,8 +33,14 @@ from .events import (
     ParagraphTranslatedEvent,
     EventType,
 )
-from .pdf_cache import compute_file_hash, get_pdf_cache
-from .exceptions import ProcessingError, BabelDOCError, FileValidationError, ConfigurationError
+from .pdf_cache import compute_file_hash, get_pdf_cache, is_cacheable_artifact
+from .exceptions import (
+    ProcessingError,
+    BabelDOCError,
+    FileValidationError,
+    ConfigurationError,
+    TranslationProcessError,
+)
 
 
 # Background PDF-cache store tasks. The processor schedules store() off the
@@ -134,6 +142,10 @@ _MAX_PARALLEL_CHUNKS_ARGOS = 2
 # but improve pipeline depth. 4 is a reasonable default for desktop machines.
 _MAX_PARALLEL_CHUNKS = 4
 
+# Tag for the "stop now, the credentials are being rejected" item that
+# `_handle_translation_failure` pushes onto the multiplexer queue.
+_FATAL_KIND = "fatal"
+
 
 def _effective_parallel_chunks(settings, translator=None) -> int:
     """Resolve the chunk-concurrency knob.
@@ -205,6 +217,15 @@ class PDFProcessor:
         self._event_loop: Optional[asyncio.AbstractEventLoop] = None
         self._paragraphs_seen: int = 0
         self._service_name: str = "argos"
+        # Failure accounting. `_handle_translation_failure` runs on BabelDOC's
+        # worker threads — several at once — so the counter and the
+        # "already reported" latch are both taken under a lock: `+= 1` is a
+        # read-modify-write that can drop increments, and an unguarded
+        # check-then-set would let two threads each raise the abort.
+        self._failure_lock = threading.Lock()
+        self._failed_paragraphs: int = 0
+        self._fatal_translation_error: Optional[str] = None
+        self._events_queue: Optional[asyncio.Queue] = None
     
     async def process_pdf(
         self,
@@ -464,6 +485,8 @@ class PDFProcessor:
             self._paragraph_queue = asyncio.Queue(maxsize=64)
             self._event_loop = asyncio.get_running_loop()
             self._paragraphs_seen = 0
+            self._failed_paragraphs = 0
+            self._fatal_translation_error = None
             self._service_name = translation_service.value
 
             translator = TranslatorFactory.create_translator(
@@ -471,6 +494,7 @@ class PDFProcessor:
                 lang_in=source_lang,
                 lang_out=target_lang,
                 on_paragraph_translated=self._handle_paragraph,
+                on_translation_failed=self._handle_translation_failure,
             )
             
             yield ProgressEvent(
@@ -518,18 +542,16 @@ class PDFProcessor:
             # worker thread because store() hashes the input and copies the
             # output — both blocking. Errors are non-fatal.
             #
-            # IMPORTANT: only cache when `translated_file` is a real rolling
-            # output (`{stem}_translated_v*.pdf`). `_find_translated_file` has
-            # broad fallbacks (newest `*.pdf` in `output_dir`) that can return
-            # an unrelated stale PDF if BabelDOC silently produced no rolling
-            # files. Caching that would permanently bind a wrong translation
-            # to the input's hash, undetectable without a manual clear.
-            should_cache = (
-                translated_file
-                and self.settings.translation.cache_translated_pdfs
-                and translated_file.parent == output_dir
-                and translated_file.name.startswith(f"{file_path.stem}_translated_v")
-                and translated_file.suffix.lower() == ".pdf"
+            # What may be cached at all is `is_cacheable_artifact`'s call: the
+            # file must be a real rolling output, and no paragraph may have
+            # failed. Both rules live next to the cache they guard.
+            should_cache = self.settings.translation.cache_translated_pdfs and (
+                is_cacheable_artifact(
+                    translated_file,
+                    output_dir,
+                    file_path.stem,
+                    self._failed_paragraphs,
+                )
             )
             if should_cache:
                 # Fire-and-forget: don't block CompletionEvent on store(). The
@@ -554,12 +576,20 @@ class PDFProcessor:
                 store_task.add_done_callback(_pending_cache_writes.discard)
                 store_task.add_done_callback(_log_cache_store_failure)
             elif translated_file and self.settings.translation.cache_translated_pdfs:
-                logger.warning(
-                    "Skipping PDF cache store: translated_file %s is not a "
-                    "rolling output for stem %r — would risk caching a "
-                    "stale/unrelated PDF",
-                    translated_file, file_path.stem,
-                )
+                if self._failed_paragraphs:
+                    logger.warning(
+                        "Skipping PDF cache store: %d paragraph(s) fell back to "
+                        "source text, so this artifact is only partially "
+                        "translated",
+                        self._failed_paragraphs,
+                    )
+                else:
+                    logger.warning(
+                        "Skipping PDF cache store: translated_file %s is not a "
+                        "rolling output for stem %r — would risk caching a "
+                        "stale/unrelated PDF",
+                        translated_file, file_path.stem,
+                    )
 
             yield CompletionEvent(
                 type=EventType.FINISH,
@@ -572,6 +602,16 @@ class PDFProcessor:
                 processing_time_seconds=processing_time,
                 pages_processed=file_metadata.page_count,
                 target_lang=target_lang.value,
+                failed_paragraphs=self._failed_paragraphs,
+                # The translator's own call count, not `_paragraphs_seen`:
+                # the latter is the ticker's counter and skips any paragraph
+                # whose preview came out empty, which would understate the
+                # denominator of "N of M could not be translated". One
+                # translator instance serves every chunk, so this is a
+                # whole-document total.
+                total_paragraphs=max(
+                    translator.translate_call_count, self._failed_paragraphs
+                ),
             )
             
         except ProcessingError as e:
@@ -836,6 +876,9 @@ class PDFProcessor:
             # generator drains it and yields events in arrival order until
             # the chunk-completion task signals done via `None`.
             events_queue: asyncio.Queue = asyncio.Queue()
+            # Published so `_handle_translation_failure` — which runs on
+            # BabelDOC's worker threads — can wake this loop on a fatal error.
+            self._events_queue = events_queue
             _SENTINEL = object()
             chunk_weight = 40.0 / total_chunks
 
@@ -887,6 +930,15 @@ class PDFProcessor:
                     if event is _SENTINEL:
                         break
                     kind = event[0]
+                    if kind == _FATAL_KIND:
+                        # A rejected key. BabelDOC swallows translator errors
+                        # and carries on, so nothing else would stop this run
+                        # before it produced — and cached — an untranslated PDF.
+                        raise TranslationProcessError(
+                            self._fatal_translation_error
+                            or "Translation service rejected the request",
+                            translator_name=self._service_name,
+                        )
                     if kind == "paragraph":
                         _, s, t = event
                         yield ParagraphTranslatedEvent(
@@ -999,12 +1051,16 @@ class PDFProcessor:
                 message="All pages translated",
             )
 
-        except BabelDOCError:
+        except (BabelDOCError, TranslationProcessError):
+            # TranslationProcessError already carries a sentence written for
+            # the user — wrapping it in "BabelDOC processing error: …" would
+            # bury it.
             raise
         except Exception as e:
             logger.exception(f"BabelDOC processing error: {e}")
             raise BabelDOCError(f"BabelDOC processing error: {e}", original_error=e)
         finally:
+            self._events_queue = None
             # On error, cancel, or normal exit: ensure no worker task is left
             # running. asyncio.gather with return_exceptions consumes any
             # CancelledError so it doesn't propagate out of the cleanup.
@@ -1062,6 +1118,34 @@ class PDFProcessor:
             self._event_loop.call_soon_threadsafe(self._enqueue_paragraph, (s, t))
         except RuntimeError:
             # Loop shutting down; drop silently.
+            pass
+
+    def _handle_translation_failure(
+        self, error: BaseException, fatal: bool
+    ) -> None:
+        """Thread-safe failure callback, wired into every translator.
+
+        Counts the paragraph, and on the first *fatal* failure (a rejected
+        key) wakes the event multiplexer so the job stops now. Without that
+        wake the loop would sit on `events_queue.get()` while the remaining
+        paragraphs each made the same doomed API call — minutes of billing
+        and waiting for a document that will come out untranslated.
+        """
+        with self._failure_lock:
+            self._failed_paragraphs += 1
+            if not fatal or self._fatal_translation_error is not None:
+                return
+            self._fatal_translation_error = describe_fatal_error(
+                self._service_name, error
+            )
+        loop, queue = self._event_loop, self._events_queue
+        if loop is None or queue is None:
+            return
+        try:
+            loop.call_soon_threadsafe(queue.put_nowait, (_FATAL_KIND,))
+        except RuntimeError:
+            # Loop shutting down — nothing left to wake. The count still
+            # stands, so the run stays out of the PDF cache either way.
             pass
 
     def _enqueue_paragraph(self, payload: tuple[str, str]) -> None:

@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
-import { Clock, Loader2, X } from "lucide-react";
+import { AlertTriangle, Clock, Loader2, RotateCcw, X } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
@@ -17,6 +17,18 @@ interface ProgressOverlayProps {
   state: TranslationState;
   onCancel: () => void;
   onDismiss: () => void;
+  /** Re-run the translation, skipping the PDF cache. Offered when a run
+   *  finished with untranslated paragraphs, or failed outright. */
+  onRetry?: () => void;
+}
+
+function RetryButton({ onRetry }: { onRetry: () => void }) {
+  return (
+    <Button size="sm" variant="outline" onClick={onRetry}>
+      <RotateCcw className="mr-1.5 h-3.5 w-3.5" />
+      Retry translation
+    </Button>
+  );
 }
 
 function formatEta(seconds: number): string {
@@ -57,6 +69,7 @@ export function ProgressOverlay({
   state,
   onCancel,
   onDismiss,
+  onRetry,
 }: ProgressOverlayProps) {
   const chunkProgress = useAppStore((s) => s.chunkProgress);
   const exportedPath = useAppStore((s) => s.exportedPdfPath);
@@ -68,6 +81,11 @@ export function ProgressOverlay({
   if (state.status === "idle") return null;
 
   const busy = isTranslationBusy(state);
+  // A "complete" run can still be partly the source document: the translator
+  // falls back to source text on any error and BabelDOC carries on. The count
+  // is the only evidence, so it gets said out loud.
+  const failed = state.failedParagraphs ?? 0;
+  const partial = state.status === "done" && failed > 0;
   // Pages, not chunks: Argos translates 3 pages per chunk, so `totalChunks`
   // is not a page count.
   const donePages = chunkProgress ? pagesReady(chunkProgress) : 0;
@@ -94,7 +112,8 @@ export function ProgressOverlay({
               <Loader2 className="h-4 w-4 shrink-0 animate-spin text-primary" />
             )}
             <span className="truncate text-sm font-medium">
-              {state.status === "done" && "Translation complete"}
+              {state.status === "done" &&
+                (partial ? "Translation incomplete" : "Translation complete")}
               {state.status === "error" && "Translation failed"}
               {state.status === "cancelled" && "Translation cancelled"}
               {state.status === "cancelling" && "Cancelling…"}
@@ -180,7 +199,24 @@ export function ProgressOverlay({
           </>
         )}
         {state.status === "error" && state.error && (
-          <p className="text-xs text-destructive">{state.error}</p>
+          <div className="space-y-2.5">
+            <p className="text-xs text-destructive">{state.error}</p>
+            {onRetry && <RetryButton onRetry={onRetry} />}
+          </div>
+        )}
+        {partial && (
+          <div className="mb-2.5 space-y-2 rounded-md border border-amber-500/40 bg-amber-500/10 p-2.5">
+            <p className="flex items-start gap-1.5 text-xs text-amber-700 dark:text-amber-500">
+              <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+              <span>
+                {failed} of {state.totalParagraphs ?? failed} paragraph
+                {failed === 1 ? "" : "s"} could not be translated and are still
+                in the source language. This result was not cached — retrying
+                runs them again.
+              </span>
+            </p>
+            {onRetry && <RetryButton onRetry={onRetry} />}
+          </div>
         )}
         {(state.status === "done" || state.status === "cancelled") &&
           resultPath && (

@@ -32,6 +32,11 @@ interface CompletionPayload {
   /** Language the run actually produced, straight from the processor. Names
    *  the default file in the Save dialog — see `translationTargetLang`. */
   target_lang?: string | null;
+  /** Paragraphs handed back as source text because the translator errored.
+   *  BabelDOC swallows those errors, so this count is the only evidence that
+   *  a "complete" translation is partly the original document. */
+  failed_paragraphs?: number;
+  total_paragraphs?: number;
 }
 
 // `ChunkReadyLike` is the accumulator's view of this same payload. Extending
@@ -66,6 +71,11 @@ export interface TranslationState {
   message: string;
   error?: string;
   translatedPath?: string | null;
+  /** Non-zero means the finished PDF is only partly translated — those
+   *  paragraphs are still in the source language. Such a run is deliberately
+   *  not cached, so Re-translate can produce a better one. */
+  failedParagraphs?: number;
+  totalParagraphs?: number;
   /** Server-reported ETA at the moment of the last chunk_ready, in seconds.
    *  Frontend smooth-decays this between updates. */
   etaSeconds?: number | null;
@@ -282,6 +292,8 @@ export function useTranslation() {
                 progress: 100,
                 stage: c.cache_hit ? "Loaded from cache" : "Done",
                 translatedPath: c.translated_file ?? null,
+                failedParagraphs: c.failed_paragraphs ?? 0,
+                totalParagraphs: c.total_paragraphs ?? 0,
               }));
             } else if (type === "cancelled") {
               const c = data as CompletionPayload;
