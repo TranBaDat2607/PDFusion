@@ -98,6 +98,10 @@ class ChunkReadyEvent(ProcessingEvent):
     elapsed_seconds: Optional[float] = None
     eta_seconds: Optional[float] = None
     pages_per_second: Optional[float] = None
+    # Pages in the whole document. `total_chunks` is NOT a page count — Argos
+    # runs 3-page chunks (`_PAGES_PER_CHUNK_ARGOS`) — so the UI needs this to
+    # say "N of M pages" without guessing.
+    total_pages: Optional[int] = None
     # Set when this chunk was served from the PDF-level cache (synthetic event
     # emitted from process_pdf's cache-hit short-circuit). `cached_at` is the
     # ISO8601 timestamp the cache entry was originally written.
@@ -114,6 +118,7 @@ class ChunkReadyEvent(ProcessingEvent):
             "elapsed_seconds": self.elapsed_seconds,
             "eta_seconds": self.eta_seconds,
             "pages_per_second": self.pages_per_second,
+            "total_pages": self.total_pages,
             "cache_hit": self.cache_hit,
             "cached_at": self.cached_at,
         }

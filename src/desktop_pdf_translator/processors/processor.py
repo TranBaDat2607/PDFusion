@@ -425,6 +425,7 @@ class PDFProcessor:
                             elapsed_seconds=0.0,
                             eta_seconds=None,
                             pages_per_second=None,
+                            total_pages=file_metadata.page_count,
                             cache_hit=True,
                             cached_at=hit.cached_at,
                         )
@@ -954,20 +955,27 @@ class PDFProcessor:
                         elapsed_seconds=elapsed,
                         eta_seconds=eta_seconds,
                         pages_per_second=pages_per_second,
+                        total_pages=file_metadata.page_count,
+                    )
+                    # Name the pages this chunk actually covers. `page_range[1]`
+                    # alone silently dropped the other two pages of an Argos
+                    # 3-page chunk, and reads like a running total even though
+                    # chunks complete in priority order, not 1..N.
+                    pages_label = (
+                        f"Page {page_range[0]}"
+                        if page_range[0] == page_range[1]
+                        else f"Pages {page_range[0]}–{page_range[1]}"
                     )
                     yield ProgressEvent(
                         type=EventType.PROGRESS_UPDATE,
                         timestamp=time.time(),
                         session_id=self.session_id,
                         data={},
-                        stage=f"Page {page_range[1]}/{file_metadata.page_count} ready",
+                        stage=f"{pages_label} of {file_metadata.page_count} ready",
                         current_step=3,
                         total_steps=4,
                         progress_percent=global_progress,
-                        message=(
-                            f"Translated page {page_range[1]} of "
-                            f"{file_metadata.page_count}"
-                        ),
+                        message=f"{pages_label} translated",
                     )
             finally:
                 # Stop the ticker; completion_task is already done by sentinel.

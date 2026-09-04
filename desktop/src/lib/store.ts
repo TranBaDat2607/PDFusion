@@ -5,6 +5,8 @@
 
 import { create } from "zustand";
 
+import type { ChunkProgress } from "@/lib/translation-progress";
+
 export type Theme = "light" | "dark" | "system";
 
 interface AppState {
@@ -67,13 +69,11 @@ interface AppState {
   setActiveTranslationJob: (id: string | null) => void;
 
   /** Streaming-translate chunk progress. Set as chunks complete; reset on
-   *  new translation start or when the job ends. */
-  chunkProgress: {
-    chunksReady: number;
-    totalChunks: number;
-    pagesReady: number;
-  } | null;
-  setChunkProgress: (p: AppState["chunkProgress"]) => void;
+   *  new translation start or when the job ends. Accumulated by
+   *  `lib/translation-progress.ts` — chunks land in priority order, so this
+   *  records *which* completed, never a high-water mark. */
+  chunkProgress: ChunkProgress | null;
+  setChunkProgress: (p: ChunkProgress | null) => void;
 
   /** 1-indexed page the user is currently looking at in the *original*
    *  viewer. Updated (throttled) by the IntersectionObserver in PdfViewer.
