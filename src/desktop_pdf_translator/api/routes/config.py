@@ -37,6 +37,32 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/config", tags=["config"], dependencies=[Depends(require_token)])
 
 
+async def _credentials_work(
+    service: TranslationService, service_config: dict
+) -> tuple[bool, str]:
+    """Probe a just-saved key the same way `POST /config/validate` does.
+
+    Runs off the event loop — `validate_configuration()` is a blocking HTTP
+    call to the provider.
+    """
+
+    def probe() -> tuple[bool, str]:
+        kwargs = {"api_key": service_config.get("api_key")}
+        # Only override the model when we have one: passing `model=None`
+        # replaces the backend's own default with None.
+        if service_config.get("model"):
+            kwargs["model"] = service_config["model"]
+        translator = TranslatorFactory.create_translator(
+            service=service, lang_in="en", lang_out="vi", **kwargs
+        )
+        return translator.validate_configuration()
+
+    try:
+        return await asyncio.to_thread(probe)
+    except Exception as exc:  # noqa: BLE001 — any failure means "don't promote"
+        return False, str(exc)
+
+
 def _mask(service_settings) -> APIKeyMaskedSettings:
     # ArgosSettings has no api_key attribute, so getattr falls through to False.
     return APIKeyMaskedSettings(
@@ -90,6 +116,7 @@ async def update_config(payload: ConfigUpdateRequest) -> ConfigResponse:
             current[service.value]["model"] = update.model
 
     if payload.preferred_service is not None:
+        # An explicit choice is the user's to make — honoured unconditionally.
         current["translation"]["preferred_service"] = payload.preferred_service.value
     elif (
         current["translation"].get("preferred_service") == TranslationService.ARGOS.value
@@ -101,11 +128,25 @@ async def update_config(payload: ConfigUpdateRequest) -> ConfigResponse:
             TranslationService.GEMINI,
         )
         chosen = next((s for s in priority if s in newly_keyed), newly_keyed[0])
-        current["translation"]["preferred_service"] = chosen.value
-        logger.info(
-            "Auto-switching preferred_service argos -> %s after key save",
-            chosen.value,
-        )
+        # Promote only on a key that actually works. Moving the user off Argos
+        # on a typo'd key used to hand them a translator that fails every
+        # paragraph, silently, for every document from then on — while Argos
+        # would have kept working. One provider round-trip, and only on the
+        # rare "first key saved while still on Argos" path.
+        ok, message = await _credentials_work(chosen, current[chosen.value])
+        if ok:
+            current["translation"]["preferred_service"] = chosen.value
+            logger.info(
+                "Auto-switching preferred_service argos -> %s after key save",
+                chosen.value,
+            )
+        else:
+            logger.warning(
+                "Key saved for %s but it did not validate (%s) — staying on "
+                "Argos. The user can still switch services explicitly.",
+                chosen.value,
+                message,
+            )
 
     if payload.default_source_lang is not None:
         current["translation"]["default_source_lang"] = payload.default_source_lang.value

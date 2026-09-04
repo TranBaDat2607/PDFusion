@@ -81,6 +81,40 @@ def _make_cache_key(
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
+def is_cacheable_artifact(
+    translated_file: Optional[Path],
+    output_dir: Path,
+    input_stem: str,
+    failed_paragraphs: int = 0,
+) -> bool:
+    """Whether a finished run may be written to the cache.
+
+    A cache entry is keyed by the input's hash, so a bad one is served for
+    every later open of that file and is invisible until someone thinks to
+    click Re-translate. Two ways a run earns a `False`:
+
+    * **The artifact isn't ours.** `_find_translated_file` has broad fallbacks
+      (newest `*.pdf` in `output_dir`) that can return an unrelated PDF when
+      BabelDOC produced no rolling output. Only `{stem}_translated_v*.pdf`
+      directly inside `output_dir` counts.
+    * **Paragraphs failed.** `_handle_translation_error` hands back source
+      text on any error and BabelDOC carries on, so a rejected key, a 429 or a
+      network blip yields a full-length, partly-untranslated PDF that looks
+      finished. Storing that pins the bad result to the input's hash.
+
+    Lives here rather than in `processor.py` so the rule is next to the cache
+    it guards, and so the test suite can exercise it without importing
+    BabelDOC.
+    """
+    if translated_file is None or failed_paragraphs > 0:
+        return False
+    return (
+        translated_file.parent == output_dir
+        and translated_file.name.startswith(f"{input_stem}_translated_v")
+        and translated_file.suffix.lower() == ".pdf"
+    )
+
+
 @dataclass
 class CacheHit:
     cached_path: Path

@@ -4,6 +4,7 @@ Base translator interface compatible with BabelDOC.
 
 import logging
 import re
+import threading
 from abc import ABC, abstractmethod
 from typing import Dict, Optional, Any
 
@@ -21,6 +22,59 @@ LANGUAGE_DISPLAY_NAMES: Dict[str, str] = {
     "zh-tw": "Traditional Chinese (繁體中文)",
     "auto": "automatically detected language",
 }
+
+
+# Statuses that mean the credentials are wrong, not that the request was
+# unlucky. Every remaining paragraph will fail identically, so the job should
+# stop rather than quietly emit a source-text copy of the document.
+_FATAL_STATUS_CODES = frozenset({401, 403})
+
+# Fallback for SDK wrappers that don't expose a status: google-genai's
+# ClientError, for one, puts the code in its message. Matched against
+# `str(error)` — the exception's own text, never the document's.
+_FATAL_MESSAGE_MARKERS = (
+    "invalid_api_key",
+    "invalid api key",
+    "incorrect api key",
+    "api key not valid",
+    "unauthorized",
+    "permission denied",
+    "permission_denied",
+    "authenticationerror",
+)
+
+
+def _status_code_of(error: BaseException) -> Optional[int]:
+    """Best-effort HTTP status for an SDK exception.
+
+    Duck-typed on purpose: this module must stay importable without the
+    OpenAI / Anthropic / google-genai packages installed, so the exception
+    classes can't be referenced by name. All three expose the status either
+    directly or on a `.response`.
+    """
+    for attr in ("status_code", "code", "http_status"):
+        value = getattr(error, attr, None)
+        if isinstance(value, bool):  # bool is an int subclass — never a status
+            continue
+        if isinstance(value, int):
+            return value
+        if isinstance(value, str) and value.isdigit():
+            return int(value)
+    status = getattr(getattr(error, "response", None), "status_code", None)
+    return status if isinstance(status, int) else None
+
+
+def is_fatal_translation_error(error: BaseException) -> bool:
+    """Whether this failure means every later paragraph will fail the same way.
+
+    A rejected key is the case that matters: BabelDOC logs and continues on a
+    translator error, so without this a bad key produces a full-length,
+    fully-untranslated PDF that reports success.
+    """
+    if _status_code_of(error) in _FATAL_STATUS_CODES:
+        return True
+    message = str(error).lower()
+    return any(marker in message for marker in _FATAL_MESSAGE_MARKERS)
 
 
 class BaseTranslator(ABC):
@@ -46,17 +100,33 @@ class BaseTranslator(ABC):
                     each paragraph is translated. Receives (source, target).
                     Used by the processor to emit `paragraph_translated`
                     SSE events for the live ticker UI.
+                  on_translation_failed: Optional[Callable[[BaseException, bool], None]]
+                    Fired on the same threads when a paragraph could not be
+                    translated. Receives (error, fatal), where `fatal` marks a
+                    failure that will repeat for every remaining paragraph
+                    (see `is_fatal_translation_error`). The processor counts
+                    these and aborts the job on a fatal one.
         """
         self.lang_in = self._normalize_language_code(lang_in)
         self.lang_out = self._normalize_language_code(lang_out)
         self.translate_call_count = 0
+        # Paragraphs this instance handed back untranslated. Read by the
+        # processor to decide whether the run is cacheable and what to tell
+        # the user; the translator itself never acts on it.
+        #
+        # One instance is shared across BabelDOC's whole worker pool, so the
+        # increment is locked — `+= 1` is a read-modify-write and would drop
+        # counts under exactly the concurrent failures this exists to measure.
+        self._failure_lock = threading.Lock()
+        self.failed_translations = 0
 
-        # Pop the cross-cutting callback before passing the rest to the
-        # subclass setup so backends don't need to thread it through their
+        # Pop the cross-cutting callbacks before passing the rest to the
+        # subclass setup so backends don't need to thread them through their
         # own kwargs handling.
         self._on_paragraph_translated = kwargs.pop(
             "on_paragraph_translated", None
         )
+        self._on_translation_failed = kwargs.pop("on_translation_failed", None)
 
         # Initialize translator-specific settings
         self._setup_translator(**kwargs)
@@ -74,6 +144,17 @@ class BaseTranslator(ABC):
             cb(source, target)
         except Exception:
             logger.debug("on_paragraph_translated callback raised", exc_info=True)
+
+    def _fire_failure_callback(self, error: BaseException, fatal: bool) -> None:
+        """Best-effort: report a failed paragraph. Same contract as
+        `_fire_paragraph_callback` — a UI hook must never break a run."""
+        cb = self._on_translation_failed
+        if cb is None:
+            return
+        try:
+            cb(error, fatal)
+        except Exception:
+            logger.debug("on_translation_failed callback raised", exc_info=True)
     
     def _normalize_language_code(self, lang_code: str) -> str:
         """Normalize language code for translator compatibility."""
@@ -196,9 +277,29 @@ class BaseTranslator(ABC):
         return text
     
     def _handle_translation_error(self, error: Exception, text: str) -> str:
-        """Handle translation errors gracefully."""
-        logger.error(f"Translation failed for text: {text[:100]}..., Error: {error}")
-        
+        """Record a failed paragraph and fall back to its source text.
+
+        The fallback stays: BabelDOC's `ILTranslator` catches whatever
+        `translate()` raises and continues anyway, so raising here would only
+        lose the paragraph's text without stopping anything. What changes is
+        that the failure is now *counted* and *reported* — the processor uses
+        that to refuse caching the result, to tell the user how much of the
+        document is untranslated, and to abort outright on a rejected key.
+        """
+        with self._failure_lock:
+            self.failed_translations += 1
+            failure_number = self.failed_translations
+        fatal = is_fatal_translation_error(error)
+        logger.error(
+            "Translation failed (%s#%d, fatal=%s) for text: %s..., Error: %s",
+            self.__class__.__name__,
+            failure_number,
+            fatal,
+            text[:100],
+            error,
+        )
+        self._fire_failure_callback(error, fatal)
+
         # Return original text as fallback
         return text
     
