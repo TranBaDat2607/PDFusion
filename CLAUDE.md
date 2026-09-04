@@ -151,7 +151,7 @@ All routes (except `GET /health`) require `Authorization: Bearer <token>`.
 | GET | `/config/cache` | Paragraph-cache stats (entries, hit rate, size) |
 | DELETE | `/config/cache?scope=all\|expired` | Clear/GC the paragraph-level translation cache |
 | POST | `/translate` | Start translation job → returns `{ job_id }`. `source_lang` / `target_lang` / `service` are `None`-defaulted (config applies); an unsupported pair is refused with **422** before the job is created. `bypass_cache: bool` forces a full re-translate (used by the "Re-translate" button) |
-| GET | `/translate/{job_id}/events` | SSE: `progress`, `done`, `error`, `cancelled` |
+| GET | `/translate/{job_id}/events` | SSE: `progress`, `chunk_ready`, `paragraph_translated`, `done`, `error`, `cancelled`. **`chunk_ready` arrives in priority order, not page order** — nearest the viewer's page first — so `chunk_index` is not a completion count and `pages_in_chunk[1]` is not a running total. Accumulate with `lib/translation-progress.ts`; page totals come from `total_pages` (`total_chunks` is not a page count — Argos runs 3-page chunks) |
 | POST | `/translate/{job_id}/cancel` | Cancel an in-flight translation |
 | POST | `/rag/index` | Index a PDF into ChromaDB → returns `{ job_id }` |
 | GET | `/rag/index/{job_id}/events` | SSE: `progress`, `done`, `error` |
