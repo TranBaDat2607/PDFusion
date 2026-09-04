@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import shutil
 import socket
 import sys
@@ -162,6 +163,32 @@ async def _lifespan(app: FastAPI):
     logger.info("Sidecar shutting down")
 
 
+def _dev_origins_allowed() -> bool:
+    """Whether the Vite dev server's origins belong in the allowlist.
+
+    The Tauri shell answers this via `PDFUSION_DEV_ORIGINS` (`sidecar.rs:
+    dev_origins_flag`), because it is the side that knows: it decides whether
+    the webview loads from Vite or from the custom protocol.
+
+    `sys.frozen` alone is *not* that answer, and relying on it was a bug.
+    Frozen means "built by PyInstaller", not "shipped app": the Rust shell
+    prefers a staged `binaries/pdfusion-sidecar-*.exe` over local Python
+    whenever one is present, so after `build-sidecar.ps1` (a documented step
+    before `pnpm tauri build`) `pnpm tauri dev` runs a *frozen* sidecar behind a
+    *Vite-hosted* webview. Withholding the dev origins there rejects every
+    request the app makes — CORS preflights come back `400 Disallowed CORS
+    origin` — and it reads like the sidecar failed to start.
+
+    `sys.frozen` stays as the fallback for a sidecar started without the shell:
+    `python main.py` for backend debugging against `pnpm dev` gets the dev
+    origins; a bundled exe run by hand does not.
+    """
+    signal = os.environ.get("PDFUSION_DEV_ORIGINS")
+    if signal is not None:
+        return signal == "1"
+    return not getattr(sys, "frozen", False)
+
+
 def _allowed_origins() -> list[str]:
     """Origins the webview can legitimately be running on.
 
@@ -172,16 +199,15 @@ def _allowed_origins() -> list[str]:
 
     The production webview loads from Tauri's custom protocol, which WebView2
     presents as `http://tauri.localhost` (WebKit, on macOS/Linux, uses
-    `tauri://localhost`). The Vite dev server's origins are added only when
-    running from source — `sys.frozen` is set by the PyInstaller bundle, so a
-    shipped sidecar never accepts them.
+    `tauri://localhost`). The Vite dev server's origins are added only in dev;
+    see `_dev_origins_allowed` for how that's decided.
     """
     origins = [
         "http://tauri.localhost",
         "https://tauri.localhost",
         "tauri://localhost",
     ]
-    if not getattr(sys, "frozen", False):
+    if _dev_origins_allowed():
         origins += ["http://localhost:1420", "http://127.0.0.1:1420"]
     return origins
 

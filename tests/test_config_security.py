@@ -14,6 +14,7 @@ import tomlkit
 
 from desktop_pdf_translator.config.manager import ConfigManager
 from desktop_pdf_translator.config.models import AppSettings
+from desktop_pdf_translator.utils import encryption
 from desktop_pdf_translator.utils.encryption import (
     DPAPI_PREFIX,
     _derive_key_from_machine,
@@ -194,3 +195,62 @@ def test_the_previous_generation_is_kept_as_a_backup(manager: ConfigManager):
 def test_the_first_save_needs_no_backup(manager: ConfigManager):
     assert manager.save_settings(AppSettings())
     assert not (manager.config_dir / "config.toml.bak").exists()
+
+
+def _write_legacy_config(config_file, key: str = KEY) -> None:
+    """Put a pre-DPAPI `config.toml` on disk: machine-key ciphertext beside the
+    `api_key_salt` it needs."""
+    import base64
+    import os
+
+    from cryptography.fernet import Fernet
+
+    salt = os.urandom(16)
+    ciphertext = base64.urlsafe_b64encode(
+        Fernet(_derive_key_from_machine(salt)).encrypt(key.encode())
+    ).decode()
+    config_file.write_text(
+        f'[openai]\napi_key = "{ciphertext}"\n'
+        f'api_key_salt = "{base64.urlsafe_b64encode(salt).decode()}"\n',
+        encoding="utf-8",
+    )
+
+
+@on_windows
+def test_a_migrating_save_does_not_leave_the_legacy_key_in_the_backup(
+    manager: ConfigManager,
+):
+    """The upgrade must not park a machine-readable copy of the key next to the
+    hardened one. `.bak` holds the *previous* generation, and on this one save
+    the previous generation is exactly the MachineGuid-encrypted value the
+    migration exists to retire — decryptable by any process on the box."""
+    _write_legacy_config(manager.config_file)
+
+    settings = ConfigManager(config_dir=manager.config_dir).load_settings()
+    assert settings.openai.api_key == KEY  # the legacy value still loads
+    assert manager.save_settings(settings)
+
+    assert DPAPI_PREFIX in manager.config_file.read_text(encoding="utf-8")
+    backup = manager.config_dir / "config.toml.bak"
+    if backup.exists():
+        assert "api_key_salt" not in backup.read_text(encoding="utf-8")
+
+
+def test_a_non_migrating_save_still_keeps_a_backup(
+    manager: ConfigManager, monkeypatch: pytest.MonkeyPatch
+):
+    """Only a real upgrade drops the backup. Where DPAPI is unavailable — off
+    Windows, or a broken crypt32 — both generations are legacy, which is not a
+    downgrade, and the recovery copy has to survive."""
+    monkeypatch.setattr(encryption, "_dpapi_available", lambda: False)
+
+    first = AppSettings()
+    first.openai.api_key = KEY
+    assert manager.save_settings(first)
+    assert "api_key_salt" in manager.config_file.read_text(encoding="utf-8")
+
+    second = AppSettings()
+    second.openai.api_key = "sk-second"
+    assert manager.save_settings(second)
+
+    assert (manager.config_dir / "config.toml.bak").exists()

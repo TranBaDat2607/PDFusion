@@ -145,10 +145,20 @@ fn project_root() -> Option<PathBuf> {
 
 /// Strip the bearer token out of a line before it reaches the log.
 ///
-/// The handshake carries the sidecar's token, and `app.log` is a plain file in
-/// `%LOCALAPPDATA%` that users paste into bug reports. The token is the only
-/// thing standing between a local process and the sidecar's API, so it does
-/// not belong in a file whose whole purpose is to be shared.
+/// The handshake carries the sidecar's token, which is the only thing standing
+/// between a local process and the sidecar's API — so it should not be printed
+/// at all, wherever the printing happens to land.
+///
+/// Where it lands today: `log::info!` here goes to `env_logger`, which
+/// `lib.rs::run` initialises with no target of its own, so it writes to *this*
+/// process's stderr — the `pnpm tauri dev` terminal, and any CI/console capture
+/// of it. A release build discards that stream (`main.rs` sets
+/// `windows_subsystem = "windows"`, so there's no console attached). It does
+/// **not** reach `~/AppData/Local/PDFusion/logs/app.log`: that file is written
+/// by the Python child (`main.py::_setup_logging`), and the token never goes
+/// through Python's `logging` — `server.py::main` `print`s it to stdout.
+/// Redacting here keeps it out of dev terminals now and out of any file logger
+/// added later.
 fn redact_ready_line(line: &str) -> String {
     if !line.starts_with("READY ") {
         return line.to_string();
@@ -276,6 +286,35 @@ pub fn cleanup_translate_temp_dirs() -> usize {
     removed
 }
 
+/// Whether the sidecar should accept the Vite dev server's origin.
+///
+/// The sidecar's CORS allowlist has to know whether the webview is being served
+/// by Vite (`http://localhost:1420`) or from Tauri's custom protocol
+/// (`http://tauri.localhost`). It can't work that out for itself: it used to
+/// infer "dev" from `sys.frozen`, but the two are independent. A real
+/// PyInstaller sidecar staged into `binaries/` — the state after
+/// `build-sidecar.ps1` or any `pnpm tauri build` — wins `resolve_bundled_sidecar`
+/// even under `pnpm tauri dev`, so a *frozen* sidecar routinely serves a
+/// *Vite-hosted* webview, and every request from it was rejected as a
+/// disallowed origin. The shell is the side that knows, so the shell says.
+///
+/// `debug_assertions`, not `tauri::is_dev()`: the latter is
+/// `!cfg!(feature = "custom-protocol")` and this crate declares no `[features]`
+/// at all, so it is `true` even in a release bundle — it would hand the shipped
+/// app the dev answer. `debug_assertions` is already what `main.rs` uses to tell
+/// a dev build from a shipped one.
+///
+/// Sent explicitly on both spawn paths, including the "0", so that a stray
+/// `PDFUSION_DEV_ORIGINS=1` in a developer's environment can't be inherited by
+/// an installed app.
+fn dev_origins_flag() -> &'static str {
+    if cfg!(debug_assertions) {
+        "1"
+    } else {
+        "0"
+    }
+}
+
 /// Build the spawn `Command` for the sidecar.
 ///
 /// Prefers a bundled exe (production install). Falls back to a Python
@@ -288,6 +327,7 @@ fn build_command(app: &AppHandle) -> Result<Command, SidecarError> {
         let mut cmd = Command::new(bundled);
         cmd.current_dir(cwd)
             .env("PYTHONUNBUFFERED", "1")
+            .env("PDFUSION_DEV_ORIGINS", dev_origins_flag())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .stdin(Stdio::null());
@@ -307,6 +347,7 @@ fn build_command(app: &AppHandle) -> Result<Command, SidecarError> {
         .current_dir(&root)
         .env("PYTHONPATH", &src_dir)
         .env("PYTHONUNBUFFERED", "1")
+        .env("PDFUSION_DEV_ORIGINS", dev_origins_flag())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .stdin(Stdio::null());
