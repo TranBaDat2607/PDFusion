@@ -15,6 +15,7 @@ from ...translators import TranslatorFactory
 from ...translators.capabilities import (
     resolve_effective_service,
     resolve_languages,
+    unsupported_reason,
 )
 from ..auth import require_token
 from ..jobs import get_registry, serialize_sse_event
@@ -110,6 +111,26 @@ async def _run_translation(job_id: str, payload: TranslateRequest) -> None:
 async def start_translation(payload: TranslateRequest) -> JobAccepted:
     if not Path(payload.file_path).exists():
         raise HTTPException(status_code=400, detail=f"File not found: {payload.file_path}")
+
+    # Pre-flight the language pair before the job exists. Argos raises on an
+    # unsupported pair from inside translate(), which is minutes into a run —
+    # after file validation, translator setup and BabelDOC layout, with a
+    # partial artifact already on disk. Reject it here instead.
+    #
+    # Checked against the *effective* service: with no API key the request
+    # silently becomes an Argos run, so "OpenAI + Japanese" must be refused
+    # even though OpenAI itself could do it.
+    settings = get_settings()
+    source_lang, target_lang = resolve_languages(
+        settings, payload.source_lang, payload.target_lang
+    )
+    effective_service = resolve_effective_service(
+        settings, payload.service or settings.translation.preferred_service
+    )
+    reason = unsupported_reason(effective_service, source_lang, target_lang)
+    if reason:
+        raise HTTPException(status_code=422, detail=reason)
+
     registry = get_registry()
     job = await registry.create()
     job.task = asyncio.create_task(_run_translation(job.job_id, payload))

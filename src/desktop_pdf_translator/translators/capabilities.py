@@ -21,11 +21,133 @@ Both now live here.
 from __future__ import annotations
 
 import logging
-from typing import Optional, Tuple
+from typing import Dict, List, Optional, Set, Tuple, Union
 
 from ..config import LanguageCode, TranslationService
 
 logger = logging.getLogger(__name__)
+
+
+LangLike = Union[LanguageCode, str]
+
+
+# User-facing language names. Lives here rather than in the API layer so the
+# capability messages below and the `/config/options` dropdown data can't drift
+# apart.
+LANGUAGE_LABELS: Dict[LanguageCode, str] = {
+    LanguageCode.AUTO: "Auto-detect",
+    LanguageCode.VIETNAMESE: "Vietnamese",
+    LanguageCode.ENGLISH: "English",
+    LanguageCode.JAPANESE: "Japanese",
+    LanguageCode.CHINESE_SIMPLIFIED: "Chinese (Simplified)",
+    LanguageCode.CHINESE_TRADITIONAL: "Chinese (Traditional)",
+}
+
+SERVICE_LABELS: Dict[TranslationService, str] = {
+    TranslationService.ARGOS: "Argos Translate (offline)",
+    TranslationService.OPENAI: "OpenAI",
+    TranslationService.GEMINI: "Google Gemini",
+    TranslationService.ANTHROPIC: "Anthropic Claude",
+}
+
+
+# Which (source, target) pairs each backend can actually produce.
+#
+#   None      → no restriction; the backend handles any pair we expose.
+#   set[...]  → exhaustive. Anything outside it fails.
+#
+# The LLMs prompt for an arbitrary target language (see LANGUAGE_DISPLAY_NAMES
+# in base.py), so they are unrestricted. Argos is an NMT model with one
+# installed language pack — this is the MVP limit noted in argos_translator.py,
+# and broadening it means shipping more packs, not editing this table alone.
+SUPPORTED_PAIRS: Dict[TranslationService, Optional[Set[Tuple[str, str]]]] = {
+    TranslationService.ARGOS: {("en", "vi")},
+    TranslationService.OPENAI: None,
+    TranslationService.GEMINI: None,
+    TranslationService.ANTHROPIC: None,
+}
+
+# Backends with no language detection of their own need "auto" pinned to a
+# concrete source. Argos assumes English — the dominant case for the academic
+# PDFs this app targets. LLMs detect from content, so they are absent here and
+# "auto" stays "auto" for them.
+_AUTO_SOURCE_SUBSTITUTE: Dict[TranslationService, str] = {
+    TranslationService.ARGOS: "en",
+}
+
+
+def _code(lang: LangLike) -> str:
+    """Accept either a `LanguageCode` or a bare wire string."""
+    return lang.value if isinstance(lang, LanguageCode) else str(lang)
+
+
+def normalize_pair(
+    service: TranslationService, lang_in: LangLike, lang_out: LangLike
+) -> Tuple[str, str]:
+    """Resolve a requested pair to the one the backend will really run.
+
+    Only "auto" moves, and only for backends that cannot detect a source
+    language. Mirrors `ArgosTranslator._setup_translator`, which performs the
+    same substitution on itself.
+    """
+    source = _code(lang_in)
+    target = _code(lang_out)
+    if source == "auto":
+        source = _AUTO_SOURCE_SUBSTITUTE.get(service, source)
+    return source, target
+
+
+def supported_pairs_for(
+    service: TranslationService,
+) -> Optional[List[List[str]]]:
+    """Wire format for `/config/options`: every pair the frontend may offer,
+    or `None` for "unrestricted".
+
+    Auto-source aliases are expanded here rather than re-derived in TypeScript,
+    so the substitution rule above stays the only copy.
+    """
+    pairs = SUPPORTED_PAIRS.get(service)
+    if pairs is None:
+        return None
+    expanded: Set[Tuple[str, str]] = set(pairs)
+    substitute = _AUTO_SOURCE_SUBSTITUTE.get(service)
+    if substitute is not None:
+        expanded |= {
+            ("auto", target) for source, target in pairs if source == substitute
+        }
+    return sorted([source, target] for source, target in expanded)
+
+
+def unsupported_reason(
+    service: TranslationService, lang_in: LangLike, lang_out: LangLike
+) -> Optional[str]:
+    """Why this request cannot run, or `None` if it can.
+
+    Ask about the *effective* service (see `resolve_effective_service`): with no
+    API key, "OpenAI + Japanese" really means "Argos + Japanese".
+    """
+    pairs = SUPPORTED_PAIRS.get(service)
+    if pairs is None:
+        return None
+
+    source, target = normalize_pair(service, lang_in, lang_out)
+    if (source, target) in pairs:
+        return None
+
+    def label(code: str) -> str:
+        try:
+            return LANGUAGE_LABELS[LanguageCode(code)]
+        except ValueError:
+            return code
+
+    allowed = ", ".join(
+        f"{label(s)} → {label(t)}" for s, t in sorted(pairs)
+    )
+    return (
+        f"{SERVICE_LABELS.get(service, service.value)} translates "
+        f"{allowed} only, but {label(source)} → {label(target)} was requested. "
+        f"Add an API key in Settings to use a translator that supports it."
+    )
 
 
 def resolve_languages(

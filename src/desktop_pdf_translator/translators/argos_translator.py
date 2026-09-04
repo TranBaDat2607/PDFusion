@@ -19,14 +19,18 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
+from ..config import TranslationService
 from .base import BaseTranslator
+from .capabilities import SUPPORTED_PAIRS
 from .translation_cache import llm_cache_get as _llm_cache_get, llm_cache_set as _llm_cache_set
 
 
 logger = logging.getLogger(__name__)
 
 
-_SUPPORTED_PAIRS = {("en", "vi")}
+# Declared once, in the capability matrix the API layer also consults, so a
+# request can't be accepted as valid and then rejected here mid-run.
+_SUPPORTED_PAIRS = SUPPORTED_PAIRS[TranslationService.ARGOS]
 
 # Upper bound on how long a single translate() caller will block waiting for its
 # batch to decode. Guards against a hang if a batch worker dies without firing

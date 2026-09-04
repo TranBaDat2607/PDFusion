@@ -13,6 +13,11 @@ from ...config import (
     get_settings,
 )
 from ...translators import TranslatorFactory, get_translation_cache
+from ...translators.capabilities import (
+    LANGUAGE_LABELS,
+    SERVICE_LABELS,
+    supported_pairs_for,
+)
 from ..auth import require_token
 from ..schemas import (
     APIKeyMaskedSettings,
@@ -160,32 +165,31 @@ async def validate_credentials(payload: ValidateRequest) -> ValidateResponse:
 # Static option lists (helpful for select dropdowns in the frontend)
 # ---------------------------------------------------------------------------
 
-_LANGUAGE_LABELS = {
-    LanguageCode.AUTO: "Auto-detect",
-    LanguageCode.VIETNAMESE: "Vietnamese",
-    LanguageCode.ENGLISH: "English",
-    LanguageCode.JAPANESE: "Japanese",
-    LanguageCode.CHINESE_SIMPLIFIED: "Chinese (Simplified)",
-    LanguageCode.CHINESE_TRADITIONAL: "Chinese (Traditional)",
-}
-
+# Labels come from the capability module so the dropdown and the "unsupported
+# pair" error message can never name the same language differently.
 _SERVICE_MODELS = {
-    TranslationService.ARGOS: ("Argos Translate (offline)", ["argostranslate"]),
-    TranslationService.OPENAI: ("OpenAI", ["gpt-4.1"]),
-    TranslationService.GEMINI: ("Google Gemini", ["gemini-1.5-flash"]),
-    TranslationService.ANTHROPIC: (
-        "Anthropic Claude",
-        ["claude-opus-4-7", "claude-sonnet-4-6", "claude-haiku-4-5-20251001"],
-    ),
+    TranslationService.ARGOS: ["argostranslate"],
+    TranslationService.OPENAI: ["gpt-4.1"],
+    TranslationService.GEMINI: ["gemini-1.5-flash"],
+    TranslationService.ANTHROPIC: [
+        "claude-opus-4-7",
+        "claude-sonnet-4-6",
+        "claude-haiku-4-5-20251001",
+    ],
 }
 
 
 @router.get("/options", response_model=OptionsResponse)
 async def get_options() -> OptionsResponse:
     return OptionsResponse(
-        languages=[LanguageOption(code=c.value, label=_LANGUAGE_LABELS[c]) for c in LanguageCode],
+        languages=[LanguageOption(code=c.value, label=LANGUAGE_LABELS[c]) for c in LanguageCode],
         services=[
-            ServiceOption(code=s.value, label=_SERVICE_MODELS[s][0], models=_SERVICE_MODELS[s][1])
+            ServiceOption(
+                code=s.value,
+                label=SERVICE_LABELS[s],
+                models=_SERVICE_MODELS[s],
+                supported_pairs=supported_pairs_for(s),
+            )
             for s in TranslationService
         ],
     )

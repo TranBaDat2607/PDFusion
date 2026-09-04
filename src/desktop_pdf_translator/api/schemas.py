@@ -201,6 +201,11 @@ class ServiceOption(BaseModel):
     code: str
     label: str
     models: List[str]
+    # Every (source, target) pair this backend can produce, or `None` for
+    # "unrestricted". Lets the toolbar grey out targets the selected backend
+    # can't reach instead of letting the user start a job that dies mid-run.
+    # Auto-source aliases are already expanded server-side.
+    supported_pairs: Optional[List[List[str]]] = None
 
 
 class OptionsResponse(BaseModel):
