@@ -47,6 +47,10 @@ export interface ServiceOption {
   code: ServiceCode;
   label: string;
   models: string[];
+  /** `[source, target]` pairs this backend can produce, or `null` when it has
+   *  no restriction. Auto-source aliases are already expanded server-side —
+   *  see `translators/capabilities.py:supported_pairs_for`. */
+  supported_pairs: string[][] | null;
 }
 
 export interface OptionsResponse {

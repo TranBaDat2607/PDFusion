@@ -147,10 +147,10 @@ All routes (except `GET /health`) require `Authorization: Bearer <token>`.
 | GET | `/config` | Current settings (API keys masked) |
 | PUT | `/config` | Update API keys / models / language defaults |
 | POST | `/config/validate` | Test a key by spinning up a translator + calling its `validate_configuration()` |
-| GET | `/config/options` | Static dropdown data (languages, services, models) |
+| GET | `/config/options` | Static dropdown data (languages, services, models) + `supported_pairs` per service (`null` = unrestricted) |
 | GET | `/config/cache` | Paragraph-cache stats (entries, hit rate, size) |
 | DELETE | `/config/cache?scope=all\|expired` | Clear/GC the paragraph-level translation cache |
-| POST | `/translate` | Start translation job → returns `{ job_id }`. Body field `bypass_cache: bool` forces a full re-translate (used by the "Re-translate" button) |
+| POST | `/translate` | Start translation job → returns `{ job_id }`. `source_lang` / `target_lang` / `service` are `None`-defaulted (config applies); an unsupported pair is refused with **422** before the job is created. `bypass_cache: bool` forces a full re-translate (used by the "Re-translate" button) |
 | GET | `/translate/{job_id}/events` | SSE: `progress`, `done`, `error`, `cancelled` |
 | POST | `/translate/{job_id}/cancel` | Cancel an in-flight translation |
 | POST | `/rag/index` | Index a PDF into ChromaDB → returns `{ job_id }` |
@@ -224,18 +224,51 @@ Three non-obvious invariants in this area, each with a test:
    filename (`chapter_vi.pdf` is a Roman numeral) and manufactures exactly that
    collision.
 
-> **Pre-existing gap, deliberately not fixed here:** the ContextBar's
-> target-language `Select` writes `default_target_lang` to config, but
-> `useTranslation.start()` never sends `target_lang`, and
-> `TranslateRequest.target_lang` defaults to Vietnamese — so `process_pdf`'s
-> `target_lang or settings…` fallback never fires and output is *always*
-> Vietnamese. Rather than mirror that guess in the frontend, `CompletionEvent`
-> carries `target_lang` (the language `process_pdf` actually resolved) and the
-> store's `translationTargetLang` records what the producer reported, so the
-> Save dialog can't name a Vietnamese file `_ja.pdf` and wiring the selector
-> through later needs no frontend change. That wiring is its own fix: Argos is
-> en→vi only, so sending another language turns a silently-ignored setting into
-> a hard error.
+### Language selection and backend capabilities
+
+The toolbar's From/To selection reaches the pipeline through the request body,
+not through config. `useTranslation.start()` sends `source_lang` / `target_lang`
+/ `service` explicitly (built by `lib/translate-request.ts`), because
+`ContextBar`'s `update.mutate` is async: a Translate click landing before that
+PUT would otherwise run the *previous* selection. `CompletionEvent.target_lang`
+still reports the language `process_pdf` actually resolved, and the store's
+`translationTargetLang` records it, so the Save dialog names the file after what
+was produced rather than what was asked for.
+
+**`None` is the only way to say "unspecified".** `TranslateRequest` /
+`PrewarmRequest` default both language fields to `None`; the configured default
+is applied in exactly one place,
+`translators/capabilities.py:resolve_languages`. Restoring a non-null default
+on those fields (`LanguageCode.AUTO` / `VIETNAMESE`) is what caused issue #12 —
+both sentinels are truthy, so `process_pdf`'s `source_lang or settings…`
+fallback became dead code and every run produced Vietnamese. `AUTO` is a real,
+user-selectable source language, never a stand-in for "not chosen".
+
+**`translators/capabilities.py` is the single source of truth** for which
+requests can run, and is kept free of heavyweight imports (no BabelDOC, no
+torch, no SDK clients) so the API layer and tests can consult it cheaply:
+
+- `SUPPORTED_PAIRS` — `None` means unrestricted (the LLMs prompt for any target
+  via `LANGUAGE_DISPLAY_NAMES`); a `set` is exhaustive. Argos declares
+  `{("en","vi")}` and `argos_translator.py` reads its own `_SUPPORTED_PAIRS`
+  from here, so a request cannot be accepted as valid and then rejected mid-run.
+- `resolve_effective_service` — the "LLM with no API key silently becomes
+  Argos" rule, previously duplicated in `PDFProcessor` and the prewarm route.
+- `POST /translate` pre-flights the pair and returns **422** before creating the
+  job, checked against the *effective* service. Without this, honoring the
+  target language would trade a silent wrong-output for a `ValueError` raised
+  minutes into a run, from inside `translate()`, with a partial artifact on disk.
+- `GET /config/options` exposes `supported_pairs` per service, with auto-source
+  aliases already expanded, so the toolbar greys out unreachable targets without
+  reimplementing the matrix in TypeScript.
+
+Two consequences worth remembering: the frontend sends the **requested** service
+(not the effective one) so the sidecar still emits its "falling back to Argos"
+notice; and a disabled Radix `SelectItem` sets `pointer-events: none`, so the
+"why" is rendered as inline text plus a footer note, never a hover tooltip.
+
+Broadening Argos beyond en→vi means shipping more language packs, not editing
+`SUPPORTED_PAIRS` alone.
 
 ### Two-tier translation caching
 
@@ -245,9 +278,11 @@ process-wide singletons, and are content-addressed by SHA-256 — so neither is
 invalidated by re-runs with identical inputs.
 
 1. **Whole-PDF cache** (`processors/pdf_cache.py`, `get_pdf_cache()`). Keyed on
-   `sha256(file_bytes) | lang_out | service | model | PIPELINE_VERSION`
-   (**source language is deliberately excluded** — see the comment at
-   `_make_cache_key`). A hit lets `process_pdf` **skip the entire BabelDOC
+   `sha256(file_bytes) | lang_in | lang_out | service | model | PIPELINE_VERSION`.
+   Source language *was* excluded, on the premise that it never changes output;
+   that only held while the API pinned every request to `auto`. The LLM system
+   prompts name the source explicitly, so `auto` and `en` must not collide —
+   see the comment at `_make_cache_key`. A hit lets `process_pdf` **skip the entire BabelDOC
    pipeline**, copy the cached PDF into the live output dir, and emit synthetic
    SSE `progress`/`done` events. LRU-evicted to `pdf_cache_max_size_mb` (default
    1000 MB). Bump `PIPELINE_VERSION` when any BabelDOC config field that changes
@@ -376,24 +411,31 @@ Application logs are written to `~/AppData/Local/PDFusion/logs/app.log`.
 
 ## Tests and code quality
 
-- **Test coverage is narrow — only the PDF-export path is covered.** There is no
-  suite for the translation pipeline, RAG, config, or the caches; if you touch
-  those, expect to write tests from scratch.
+- **Test coverage is narrow — the PDF-export path and the language contract.**
+  There is still no suite for the translation pipeline proper, RAG, config, or
+  the cache *storage* layer; if you touch those, expect to write tests from
+  scratch.
 
   ```bash
   # Python (pytest config lives in pyproject.toml; tests/conftest.py puts src/ on sys.path)
-  python -m pytest tests           # tests/test_file_export.py, tests/test_pdf_export_api.py
+  python -m pytest tests           # test_file_export.py, test_pdf_export_api.py,
+                                   # test_translate_language_contract.py
 
   # Frontend (vitest, node environment — no jsdom)
   cd desktop && pnpm test          # src/**/*.test.ts
   ```
 
-  `tests/test_pdf_export_api.py` mounts `routes/pdf.py`'s router on a bare
-  `FastAPI()` rather than calling `create_app()`, because the full app imports
-  `routes/translation.py` → BabelDOC → torch, which turns a sub-second run into
-  a minute-long one. The frontend suite runs in the `node` environment: the
-  logic under test takes its Tauri/sidecar collaborators as arguments
-  (`lib/export-pdf.ts`), so no DOM or testing-library is needed.
+  Both Python suites avoid importing `routes/translation.py` → BabelDOC →
+  torch, which turns a sub-second run into a minute-long one:
+  `test_pdf_export_api.py` mounts `routes/pdf.py`'s router on a bare
+  `FastAPI()` instead of calling `create_app()`, and
+  `test_translate_language_contract.py` sticks to `api/schemas.py`,
+  `translators/capabilities.py` and `processors/pdf_cache.py` — all pure
+  decisions, so nothing is lost by staying out of the heavy modules. Keep new
+  tests on that side of the line where you can. The frontend suite runs in the
+  `node` environment: the logic under test takes its Tauri/sidecar
+  collaborators as arguments (`lib/export-pdf.ts`) or is pure
+  (`lib/translate-request.ts`), so no DOM or testing-library is needed.
 - **Python lint/format** tools are declared in `pyproject.toml [project.optional-dependencies].dev` (black line-length 88, isort with black profile, flake8, mypy) but the project has **no** pre-commit, no Makefile, and no CI. Run them manually if you want: `black src/ && isort src/`.
 - **TypeScript** is checked by `pnpm build` (which runs `tsc` before `vite build`). There is no separate lint step (no ESLint config).
 - **No CI**: `.github/workflows/` does not exist. All checks are local.
@@ -404,7 +446,10 @@ Application logs are written to `~/AppData/Local/PDFusion/logs/app.log`.
 - **Code signing** for Windows (SmartScreen will warn on first install of the unsigned `.msi`).
 - **CSP tightening** — `tauri.conf.json` still has `"csp": null`.
 - **Cross-platform** (macOS/Linux) — Tauri supports both, but explicit testing deferred. The PyInstaller spec is Windows-tested only.
-- **i18n of the UI strings** (the UI itself stays English; only the translation *output* is Vietnamese).
+- **i18n of the UI strings** (the UI itself stays English; the translation *output* follows the toolbar's target language).
+- **More Argos language pairs** — the offline backend ships en→vi only. Adding
+  a pair means shipping/downloading its pack, then extending `SUPPORTED_PAIRS`
+  in `translators/capabilities.py`.
 - **Pre-bundled ML assets** (HuggingFace embedding model + Argos en→vi pack) — currently both download on first use. Bundle them later for true offline-first.
 - **Auto-save preference** — saving a translation is an explicit action (Save dialog). A "always save `<name>_vi.pdf` beside the source" setting was proposed in issue #11 but deliberately not built: it needs a config field, a Settings control, and an overwrite policy for repeat runs.
 
