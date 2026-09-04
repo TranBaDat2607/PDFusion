@@ -1,28 +1,17 @@
 import { useEffect, useRef, useState } from "react";
-import { Globe, Send, Sparkles } from "lucide-react";
+import { Send } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipTrigger,
-} from "@/components/ui/tooltip";
 
 interface ChatInputProps {
-  onSubmit: (params: {
-    text: string;
-    includeWebResearch: boolean;
-    useDeepSearch: boolean;
-  }) => void;
+  onSubmit: (params: { text: string }) => void;
   disabled?: boolean;
   busy?: boolean;
 }
 
 export function ChatInput({ onSubmit, disabled, busy }: ChatInputProps) {
   const [text, setText] = useState("");
-  const [web, setWeb] = useState(false);
-  const [deep, setDeep] = useState(false);
   const ref = useRef<HTMLTextAreaElement>(null);
 
   // Auto-grow up to ~4 lines
@@ -40,7 +29,7 @@ export function ChatInput({ onSubmit, disabled, busy }: ChatInputProps) {
   const submit = () => {
     const trimmed = text.trim();
     if (!trimmed || disabled || busy) return;
-    onSubmit({ text: trimmed, includeWebResearch: web, useDeepSearch: deep });
+    onSubmit({ text: trimmed });
     setText("");
   };
 
@@ -76,43 +65,7 @@ export function ChatInput({ onSubmit, disabled, busy }: ChatInputProps) {
           <Send className="h-3.5 w-3.5" />
         </Button>
       </div>
-      <div className="flex items-center gap-2 text-xs text-muted-foreground">
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <button
-              type="button"
-              onClick={() => setWeb((v) => !v)}
-              className={`flex items-center gap-1.5 rounded-full border px-2.5 py-1 transition-colors ${
-                web
-                  ? "border-primary bg-primary/10 text-primary"
-                  : "border-border hover:bg-accent"
-              }`}
-            >
-              <Globe className="h-3 w-3" />
-              Web research
-            </button>
-          </TooltipTrigger>
-          <TooltipContent>Augment answers with live web sources</TooltipContent>
-        </Tooltip>
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <button
-              type="button"
-              onClick={() => setDeep((v) => !v)}
-              className={`flex items-center gap-1.5 rounded-full border px-2.5 py-1 transition-colors ${
-                deep
-                  ? "border-primary bg-primary/10 text-primary"
-                  : "border-border hover:bg-accent"
-              }`}
-            >
-              <Sparkles className="h-3 w-3" />
-              Deep search
-            </button>
-          </TooltipTrigger>
-          <TooltipContent>
-            Multi-hop academic citation search (PubMed, arXiv, Semantic Scholar)
-          </TooltipContent>
-        </Tooltip>
+      <div className="flex items-center text-xs text-muted-foreground">
         <span className="ml-auto opacity-70">Enter to send · Shift+Enter for new line</span>
       </div>
     </div>
