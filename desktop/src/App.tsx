@@ -139,11 +139,18 @@ function Workspace() {
 
     void (async () => {
       try {
-        const initial = await invoke<string | null>("initial_file_argument");
-        if (!cancelled && initial) openDocumentRef.current(initial);
-        unlisten = await listen<string>("pdfusion://open-file", (event) => {
+        // Subscribe *before* asking for our own argv. Tauri does not buffer
+        // events, so anything emitted before this resolves is dropped — and
+        // the gap is exactly when a second launch is most likely to arrive,
+        // since the user is already double-clicking a PDF.
+        const un = await listen<string>("pdfusion://open-file", (event) => {
           if (!cancelled) openDocumentRef.current(event.payload);
         });
+        if (cancelled) un();
+        else unlisten = un;
+
+        const initial = await invoke<string | null>("initial_file_argument");
+        if (!cancelled && initial) openDocumentRef.current(initial);
       } catch {
         // No shell (plain `pnpm dev` in a browser tab) — nothing to open.
       }

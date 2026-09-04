@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import { AlertTriangle, FileText, FolderOpen, Loader2, RotateCcw } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -27,7 +28,6 @@ export function StartupScreen({ state }: StartupScreenProps) {
   const invokeCommand = async (command: string) => {
     setBusy(true);
     try {
-      const { invoke } = await import("@tauri-apps/api/core");
       await invoke(command);
     } catch {
       // Nothing useful to show: if the shell can't be reached, this screen is

@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 use serde::Serialize;
 use tauri::{Emitter, Manager, RunEvent};
 use tauri_plugin_opener::OpenerExt;
+use tauri_plugin_window_state::{AppHandleExt, StateFlags};
 
 /// Emitted when a *second* launch hands this instance a PDF to open, instead
 /// of starting a second app (and a second sidecar) of its own.
@@ -132,11 +133,25 @@ fn open_logs_folder(app: tauri::AppHandle) -> Result<(), String> {
 /// making that lifecycle re-entrant — two spawn paths, a window where two
 /// Python processes share one `chroma_db`. A relaunch re-runs the existing
 /// startup path unchanged, which is the whole point of retrying.
+///
+/// Everything an ordinary exit does has to be done *here*, explicitly.
+/// `AppHandle::restart` only routes through `RunEvent::ExitRequested` when
+/// it is called off the main thread; a synchronous command handler runs on
+/// it, so restart takes the `cleanup_before_exit` branch instead — which
+/// clears resource tables and hides windows, and nothing else. Neither the
+/// `ExitRequested` arm at the bottom of this file nor the window-state
+/// plugin's own `RunEvent::Exit` hook fires. Without the two calls below, a
+/// Retry would leak the job temp dir and silently discard any resize the
+/// user made before clicking it.
 #[tauri::command]
 fn restart_app(app: tauri::AppHandle) {
     if let Some(handle) = sidecar::current() {
         handle.shutdown();
     }
+    // `StateFlags::default()` is what `Builder::default()` above registers
+    // with, so this writes exactly the state an exit would have written.
+    let _ = app.save_window_state(StateFlags::default());
+    sidecar::cleanup_translate_temp_dirs();
     app.restart();
 }
 
