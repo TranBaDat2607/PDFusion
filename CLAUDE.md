@@ -70,9 +70,15 @@ before being written to `~/AppData/Local/PDFusion/config.toml`. On Windows that
 is **DPAPI** (`CryptProtectData`, user-scoped, with app entropy); values written
 by the older MachineGuid-derived Fernet scheme still decrypt and are upgraded on
 the next save, so nobody re-enters a key. `config.toml` is written to a temp file
-and `os.replace`d into position, keeping one `.bak` — an in-place write that
-crashed used to truncate the file, and a truncated config loads as defaults, i.e.
-silently discards every setting including the keys.
+and `os.replace`d into position — an in-place write that crashed used to truncate
+the file, and a truncated config loads as defaults, i.e. silently discards every
+setting including the keys. The outgoing generation is kept as `config.toml.bak`
+**with the API keys stripped out** (`manager.py:_write_backup`): a backup must
+never be more readable than the file it backs up, and holding that as an
+unconditional invariant is what avoids having to detect the one migration
+(legacy → DPAPI) where copying verbatim would have parked a machine-readable key
+beside the hardened one. A key is re-enterable; the rest of the file is what is
+worth recovering by hand.
 
 ## Architecture
 
@@ -427,7 +433,7 @@ BabelDOC drives chunking, layout, and PDF reassembly; it delegates the actual te
 
 ## Tauri shell details
 
-- **Plugins enabled**: `opener` (open external URLs) and `dialog` (file picker) — that's all. `shell` and `fs` were registered but never imported by `desktop/src`; PDFs reach the viewer over HTTP from the sidecar, and Save/Open/Reveal go through the app commands in `lib.rs`. Don't re-add a plugin "just in case": every one widens what an injected script can invoke.
+- **Plugins enabled**: `opener` (open external URLs) and `dialog` (file picker) — that's all. `shell` and `fs` were registered but never imported by `desktop/src`; PDFs reach the viewer over HTTP from the sidecar, and Save/Open/Reveal go through the app commands in `lib.rs`. Don't re-add a plugin "just in case": every one widens what an injected script can invoke. Same reasoning inside a plugin: the capability grants `opener:allow-open-url` + `opener:allow-default-urls` rather than `opener:default`, because that set also carries `allow-reveal-item-in-dir` — a second, unvalidated route to the reveal that `reveal_path_in_file_manager` exists to gate. The app commands call the plugin's **Rust** API (`app.opener()`), which capabilities don't apply to, so narrowing the webview's grant costs nothing.
 - **Window**: 1400×900 default, min 1024×700. `withGlobalTauri` is off — `__TAURI_INTERNALS__` (which `lib/tauri-ready.ts` waits on) is injected regardless; the flag only adds the legacy `window.__TAURI__` global.
 - **CSP**: set in `tauri.conf.json` — `default-src 'self'` with `connect-src` widened to `http://127.0.0.1:*` (the sidecar) plus Tauri's IPC origin, `worker-src blob:` (pdf.js), and `style-src 'unsafe-inline'` (Tailwind's runtime styles). Tauri nonces its own init script, so `script-src` stays at `'self'`. It applies to the bundled app only — in `pnpm tauri dev` the page is served by Vite, which Tauri doesn't inject headers into, so **a CSP break shows up first in `pnpm tauri build`**, not in dev.
 - **CORS / dev origins**: the sidecar's allowlist (`server.py:_allowed_origins`) is exactly Tauri's custom-protocol origins, plus Vite's `localhost:1420` **only in dev**. Which one applies is a two-sided handshake: the shell sets `PDFUSION_DEV_ORIGINS` to `"1"`/`"0"` from `cfg!(debug_assertions)` (`sidecar.rs:dev_origins_flag`), on both spawn paths. The sidecar must **not** decide this from `sys.frozen` alone — frozen means "PyInstaller built it", not "shipped app", and discovery prefers a staged `binaries/*.exe` over local Python, so after `build-sidecar.ps1` a `pnpm tauri dev` run pairs a *frozen* sidecar with a *Vite-hosted* webview. Getting that wrong rejects every request the app makes (preflights → `400 Disallowed CORS origin`) and looks exactly like the sidecar failing to start. `sys.frozen` remains the fallback for a sidecar started without the shell. Don't swap `debug_assertions` for `tauri::is_dev()`: that's `!cfg!(feature = "custom-protocol")` and this crate declares no `[features]`, so it's `true` even in a release bundle.

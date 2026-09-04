@@ -11,6 +11,8 @@
 //!   4. Health-poll `http://127.0.0.1:<port>/auth/ping` until it answers OK.
 //!   5. Store the handle in a global so Tauri commands and shutdown can use it.
 
+use std::borrow::Cow;
+use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::Mutex;
@@ -159,25 +161,32 @@ fn project_root() -> Option<PathBuf> {
 /// through Python's `logging` — `server.py::main` `print`s it to stdout.
 /// Redacting here keeps it out of dev terminals now and out of any file logger
 /// added later.
-fn redact_ready_line(line: &str) -> String {
+fn redact_ready_line(line: &str) -> Cow<'_, str> {
     if !line.starts_with("READY ") {
-        return line.to_string();
+        return Cow::Borrowed(line);
     }
-    line.split_whitespace()
-        .map(|kv| {
-            if kv.starts_with("token=") {
-                "token=<redacted>".to_string()
-            } else {
-                kv.to_string()
-            }
-        })
-        .collect::<Vec<_>>()
-        .join(" ")
+    Cow::Owned(
+        line.split_whitespace()
+            .map(|kv| {
+                if kv.starts_with("token=") {
+                    "token=<redacted>"
+                } else {
+                    kv
+                }
+            })
+            .collect::<Vec<&str>>()
+            .join(" "),
+    )
 }
 
+/// Parse the handshake line. Note the errors below render the line through
+/// `redact_ready_line` as well: `SidecarError` reaches `log::error!` and the
+/// `sidecar://error` event, so redacting only at the two `log::info!` call
+/// sites would leave the token in every sink a *malformed* line reaches.
 fn parse_ready_line(line: &str) -> Result<SidecarInfo, SidecarError> {
+    let safe = redact_ready_line(line);
     let stripped = line.strip_prefix("READY ").ok_or_else(|| {
-        SidecarError::BadReadyLine(format!("missing 'READY' prefix: {line}"))
+        SidecarError::BadReadyLine(format!("missing 'READY' prefix: {safe}"))
     })?;
     let mut port: Option<u16> = None;
     let mut token: Option<String> = None;
@@ -188,8 +197,8 @@ fn parse_ready_line(line: &str) -> Result<SidecarInfo, SidecarError> {
             token = Some(rest.to_string());
         }
     }
-    let port = port.ok_or_else(|| SidecarError::BadReadyLine(format!("missing port: {line}")))?;
-    let token = token.ok_or_else(|| SidecarError::BadReadyLine(format!("missing token: {line}")))?;
+    let port = port.ok_or_else(|| SidecarError::BadReadyLine(format!("missing port: {safe}")))?;
+    let token = token.ok_or_else(|| SidecarError::BadReadyLine(format!("missing token: {safe}")))?;
     Ok(SidecarInfo { port, token })
 }
 
@@ -319,19 +328,27 @@ fn dev_origins_flag() -> &'static str {
 ///
 /// Prefers a bundled exe (production install). Falls back to a Python
 /// interpreter running the module (developer machine, `pnpm tauri dev`).
+/// Everything both spawn paths need: a writable cwd, unbuffered output, the
+/// dev-origins answer, and piped stdio. Kept in one place so the bundled and
+/// the dev sidecar can't drift into different environments — they are 20 lines
+/// apart, and a one-sided edit compiles fine.
+fn base_command(program: impl AsRef<OsStr>, cwd: &Path) -> Command {
+    let mut cmd = Command::new(program);
+    cmd.current_dir(cwd)
+        .env("PYTHONUNBUFFERED", "1")
+        .env("PDFUSION_DEV_ORIGINS", dev_origins_flag())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .stdin(Stdio::null());
+    cmd
+}
+
 fn build_command(app: &AppHandle) -> Result<Command, SidecarError> {
     if let Some(bundled) = resolve_bundled_sidecar(app) {
         log::info!("Sidecar (bundled): {}", bundled.display());
         let cwd = appdata_dir();
         log::info!("Sidecar cwd: {}", cwd.display());
-        let mut cmd = Command::new(bundled);
-        cmd.current_dir(cwd)
-            .env("PYTHONUNBUFFERED", "1")
-            .env("PDFUSION_DEV_ORIGINS", dev_origins_flag())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .stdin(Stdio::null());
-        return Ok(cmd);
+        return Ok(base_command(bundled, &cwd));
     }
 
     let python = locate_python()?;
@@ -341,16 +358,10 @@ fn build_command(app: &AppHandle) -> Result<Command, SidecarError> {
     log::info!("Sidecar (dev) python: {}", python.display());
     log::info!("Sidecar (dev) PYTHONPATH: {}", src_dir.display());
 
-    let mut cmd = Command::new(python);
+    let mut cmd = base_command(python, &root);
     cmd.arg("-m")
         .arg("desktop_pdf_translator.api.server")
-        .current_dir(&root)
-        .env("PYTHONPATH", &src_dir)
-        .env("PYTHONUNBUFFERED", "1")
-        .env("PDFUSION_DEV_ORIGINS", dev_origins_flag())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .stdin(Stdio::null());
+        .env("PYTHONPATH", &src_dir);
     Ok(cmd)
 }
 
@@ -491,5 +502,15 @@ mod tests {
     fn ordinary_stdout_passes_through_unchanged() {
         let line = "INFO Argos pre-warm: done";
         assert_eq!(redact_ready_line(line), line);
+    }
+
+    #[test]
+    fn a_malformed_ready_line_does_not_leak_its_token_through_the_error() {
+        // `SidecarError` is rendered by `log::error!` and by the
+        // `sidecar://error` event, so this is the third sink the token could
+        // reach — and the one no `log::info!` call site guards.
+        let line = "READY token=Yd7HfSuperSecretG3";
+        let err = parse_ready_line(line).expect_err("no port, so it must fail");
+        assert!(!format!("{err}").contains("Yd7HfSuperSecretG3"));
     }
 }

@@ -134,7 +134,7 @@ def _derive_key_from_machine(salt: bytes) -> bytes:
 # ---------------------------------------------------------------------------
 
 
-def encrypt_api_key(api_key: str, salt: Optional[bytes] = None) -> tuple[str, str]:
+def encrypt_api_key(api_key: str) -> tuple[str, str]:
     """Encrypt a key for storage.
 
     Returns `(stored_value, salt_b64)`. The salt is empty for DPAPI blobs,
@@ -151,9 +151,7 @@ def encrypt_api_key(api_key: str, salt: Optional[bytes] = None) -> tuple[str, st
             "DPAPI unavailable; falling back to machine-derived key encryption"
         )
 
-    if salt is None:
-        salt = os.urandom(16)
-
+    salt = os.urandom(16)
     key = _derive_key_from_machine(salt)
     fernet = Fernet(key)
 

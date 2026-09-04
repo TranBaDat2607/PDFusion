@@ -86,7 +86,8 @@ def _release_output_dir(path: Path) -> None:
 
 def _is_owned_temp_dir(path: Path) -> bool:
     """Only wipe dirs we created (prefix-named under the system temp root).
-    Guards against a user-supplied `output_dir` ever getting rmtree'd."""
+    A stale `_previous_output_dir` is the one thing that reaches this from
+    outside a live job, so the prefix check is what keeps it honest."""
     try:
         return (
             path.name.startswith(_TEMP_DIR_PREFIX)
@@ -233,7 +234,6 @@ class PDFProcessor:
         source_lang: Optional[LanguageCode] = None,
         target_lang: Optional[LanguageCode] = None,
         translation_service: Optional[TranslationService] = None,
-        output_dir: Optional[Path] = None,
         visible_page: int = 1,
         bypass_cache: bool = False,
     ) -> AsyncGenerator[ProcessingEvent, None]:
@@ -245,14 +245,13 @@ class PDFProcessor:
             source_lang: Source language (optional, uses config default)
             target_lang: Target language (optional, uses config default) 
             translation_service: Translation service (optional, uses config default)
-            output_dir: Output directory (optional, uses temp directory)
             
         Yields:
             ProcessingEvent: Progress updates and completion events
         """
         self.session_id = str(uuid.uuid4())
         start_time = time.time()
-        owns_output_dir = False
+        output_dir: Optional[Path] = None
 
         try:
             # Use provided languages or fallback to config
@@ -270,31 +269,26 @@ class PDFProcessor:
             # Log the actual languages being used
             logger.info(f"Using languages - Source: {source_lang}, Target: {target_lang}")
             
-            # Set output directory. Default = fresh per-job temp dir under
-            # %TEMP%\pdfusion-translate-<rand>\. BabelDOC's rolling output
+            # Output goes to a fresh per-job temp dir under
+            # %TEMP%\pdfusion-translate-<rand>\ — always, with no way for a
+            # caller to name one. BabelDOC's rolling output
             # (`_translated_v00X.pdf`) and chunk-work scratch live there; the
             # durable copy is in `translated_pdf_cache/files/<key>.pdf` after
             # the run. We wipe the *previous* job's temp dir as soon as a new
             # one starts (the viewer has moved on by then) so only one
-            # translation's bytes ever sit on disk at a time. In-process
-            # callers can still pin a dir via the `output_dir` argument — it's
-            # honored verbatim and never auto-cleaned — but that is no longer
-            # reachable over HTTP; see `TranslateRequest`.
+            # translation's bytes ever sit on disk at a time.
             global _previous_output_dir
-            if output_dir is None:
-                output_dir = Path(tempfile.mkdtemp(prefix=_TEMP_DIR_PREFIX))
-                owns_output_dir = True
-                _active_output_dirs.add(output_dir)
-                prev = _previous_output_dir
-                _previous_output_dir = output_dir
-                if prev is not None and prev != output_dir:
-                    if prev in _active_output_dirs:
-                        # The previous job is still running — defer its dir's
-                        # cleanup until that job releases it.
-                        _deferred_cleanups.add(prev)
-                    else:
-                        _schedule_temp_cleanup(prev)
-            output_dir.mkdir(parents=True, exist_ok=True)
+            output_dir = Path(tempfile.mkdtemp(prefix=_TEMP_DIR_PREFIX))
+            _active_output_dirs.add(output_dir)
+            prev = _previous_output_dir
+            _previous_output_dir = output_dir
+            if prev is not None and prev != output_dir:
+                if prev in _active_output_dirs:
+                    # The previous job is still running — defer its dir's
+                    # cleanup until that job releases it.
+                    _deferred_cleanups.add(prev)
+                else:
+                    _schedule_temp_cleanup(prev)
             self._output_dir = output_dir
             self._input_stem = file_path.stem
 
@@ -644,7 +638,7 @@ class PDFProcessor:
             )
             raise ProcessingError(f"Processing failed: {e}", details=str(e))
         finally:
-            if owns_output_dir and output_dir is not None:
+            if output_dir is not None:
                 _release_output_dir(output_dir)
 
     def _resolve_model_id(self, service: TranslationService) -> Optional[str]:

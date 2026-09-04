@@ -4,7 +4,6 @@ Configuration manager for desktop PDF translator.
 
 import os
 import logging
-import shutil
 from pathlib import Path
 from typing import Optional, Dict, Any
 
@@ -19,6 +18,10 @@ from dotenv import load_dotenv
 
 
 logger = logging.getLogger(__name__)
+
+# The services whose settings carry an API key. Adding a backend that needs one
+# is a one-line edit here rather than in each of the loops below.
+KEYED_SERVICES = ("openai", "gemini", "anthropic")
 
 
 class ConfigManager:
@@ -153,10 +156,8 @@ class ConfigManager:
         intact instead of a truncated one — which, for this file, means
         silently resetting every setting *including the encrypted API keys* to
         defaults. The previous contents are also kept as `config.toml.bak` for
-        one generation, so a bad-but-complete write is recoverable by hand —
-        except on the legacy → DPAPI key migration, where keeping it would park
-        a machine-readable copy of the keys beside the hardened file. See
-        `_backup_would_weaken_keys`.
+        one generation — minus the API keys — so a bad-but-complete write is
+        recoverable by hand. See `_write_backup`.
 
         Args:
             settings: Settings to save
@@ -180,28 +181,13 @@ class ConfigManager:
                 f.flush()
                 os.fsync(f.fileno())
 
-            if self.config_file.exists():
-                backup = self.config_file.with_name(self.config_file.name + ".bak")
-                # A backup must never be more readable than the file it backs
-                # up. On the legacy → DPAPI migration the outgoing generation is
-                # exactly the MachineGuid-encrypted copy this whole scheme
-                # exists to retire — any process on the box can decrypt it — so
-                # it is dropped rather than parked next to the hardened file.
-                # Only an actual migration drops it: a legacy → legacy save (no
-                # DPAPI, e.g. off Windows) is not a downgrade and keeps its
-                # backup. Copying rather than renaming, in that case, is what
-                # keeps `config.toml` present for the whole operation.
-                weakens = self._backup_would_weaken_keys(config_dict)
-                try:
-                    if weakens:
-                        backup.unlink(missing_ok=True)
-                    else:
-                        shutil.copyfile(self.config_file, backup)
-                except OSError as exc:
-                    # Neither failure may block the save — the atomic replace
-                    # below still protects the file itself.
-                    verb = "remove stale" if weakens else "refresh"
-                    logger.warning("Could not %s %s: %s", verb, backup, exc)
+            # Read the outgoing generation once, while it is still there.
+            try:
+                previous = self.config_file.read_text(encoding="utf-8")
+            except OSError:
+                previous = None  # first save, or unreadable — nothing to back up
+            if previous is not None:
+                self._write_backup(previous)
 
             os.replace(tmp_file, self.config_file)
 
@@ -215,14 +201,45 @@ class ConfigManager:
             except OSError:
                 pass
             return False
-    
+
+    def _write_backup(self, previous: str) -> None:
+        """Keep the outgoing generation of `config.toml` as `config.toml.bak`.
+
+        The API keys are stripped on the way in, so a backup is never more
+        readable than the file it backs up. That has to hold for every storage
+        format, not just the legacy → DPAPI upgrade that made it obvious — that
+        one would otherwise have parked a MachineGuid-encrypted key, decryptable
+        by any process on the box, beside the hardened file. A key is
+        re-enterable; the rest of the file (models, languages, cache limits) is
+        what is actually worth recovering by hand.
+
+        Best-effort by design: failing to write it must not block the save, and
+        a backup that can't be refreshed is removed rather than left behind
+        holding a stale generation of the same settings.
+        """
+        backup = self.config_file.with_name(self.config_file.name + ".bak")
+        try:
+            document = tomlkit.parse(previous)
+            for service in KEYED_SERVICES:
+                section = document.get(service)
+                if isinstance(section, dict):
+                    section.pop("api_key", None)
+                    section.pop("api_key_salt", None)
+            backup.write_text(tomlkit.dumps(document), encoding="utf-8")
+        except Exception as exc:  # noqa: BLE001 — a backup is never load-bearing
+            logger.warning("Could not refresh %s: %s", backup, exc)
+            try:
+                backup.unlink(missing_ok=True)
+            except OSError:
+                pass
+
     def _load_from_environment(self) -> Dict[str, Any]:
         """Load configuration from environment variables."""
         env_config = {}
         
         # Per-service API key + model overrides, e.g. OPENAI_API_KEY /
-        # OPENAI_MODEL. Adding a service is a one-line edit to this list.
-        for service in ("openai", "gemini", "anthropic"):
+        # OPENAI_MODEL.
+        for service in KEYED_SERVICES:
             if api_key := os.getenv(f"{service.upper()}_API_KEY"):
                 env_config.setdefault(service, {})["api_key"] = api_key
             if model := os.getenv(f"{service.upper()}_MODEL"):
@@ -276,7 +293,7 @@ class ConfigManager:
         """Remove sensitive data like API keys from config before saving."""
         safe_config = config_dict.copy()
 
-        for service in ["openai", "gemini", "anthropic"]:
+        for service in KEYED_SERVICES:
             if service in safe_config and isinstance(safe_config[service], dict):
                 safe_config[service] = safe_config[service].copy()
                 api_key = safe_config[service].get("api_key")
@@ -305,7 +322,7 @@ class ConfigManager:
         only required for the legacy one. Re-encryption to DPAPI happens on
         the next `save_settings`.
         """
-        for service in ["openai", "gemini", "anthropic"]:
+        for service in KEYED_SERVICES:
             if service not in config_data or not isinstance(config_data[service], dict):
                 continue
             service_data = config_data[service]
@@ -313,56 +330,16 @@ class ConfigManager:
             salt = service_data.get("api_key_salt")
             if not isinstance(salt, str):
                 salt = ""
-            if (
-                isinstance(encrypted_key, str)
-                and encrypted_key
-                and is_encrypted(encrypted_key)
-                and (salt or encrypted_key.startswith(DPAPI_PREFIX))
+            # Either a DPAPI blob, or a legacy value with its salt beside it.
+            # `is_encrypted` can't separate the second from plaintext on its own
+            # — it answers True for anything that base64-decodes — so the salt
+            # is what says a legacy value was stored rather than typed.
+            if isinstance(encrypted_key, str) and (
+                encrypted_key.startswith(DPAPI_PREFIX)
+                or (salt and is_encrypted(encrypted_key))
             ):
-                decrypted = decrypt_api_key(encrypted_key, salt)
-                service_data["api_key"] = decrypted
+                service_data["api_key"] = decrypt_api_key(encrypted_key, salt)
             service_data.pop("api_key_salt", None)
-
-    @staticmethod
-    def _has_legacy_ciphertext(config_data: Dict[str, Any]) -> bool:
-        """Whether any stored key is a legacy machine-key Fernet value.
-
-        The legacy on-disk shape is ciphertext *plus* its `api_key_salt`
-        sibling; a DPAPI blob is self-contained and prefixed. Matching on that
-        pair rather than on `is_encrypted()` is deliberate — `is_encrypted`
-        answers True for anything that base64-decodes, so a plaintext key that
-        happens to be valid base64 would be misread as legacy.
-        """
-        for service in ("openai", "gemini", "anthropic"):
-            section = config_data.get(service)
-            if not isinstance(section, dict):
-                continue
-            key = section.get("api_key")
-            salt = section.get("api_key_salt")
-            if not (isinstance(key, str) and isinstance(salt, str)):
-                continue
-            if key and salt and not key.startswith(DPAPI_PREFIX):
-                return True
-        return False
-
-    def _backup_would_weaken_keys(self, new_config: Dict[str, Any]) -> bool:
-        """Whether backing up the current file would leave weaker ciphertext.
-
-        True only for a real upgrade: the file on disk still holds legacy
-        machine-key values and the content replacing it doesn't. An unreadable
-        or unparsable current file answers False, so the normal backup happens —
-        the safe default.
-        """
-        try:
-            with open(self.config_file, "r", encoding="utf-8") as f:
-                on_disk = dict(tomlkit.load(f))
-        except Exception as exc:  # noqa: BLE001 — unreadable ⇒ back it up as usual
-            logger.debug("Could not inspect %s for key format: %s", self.config_file, exc)
-            return False
-
-        return self._has_legacy_ciphertext(on_disk) and not self._has_legacy_ciphertext(
-            new_config
-        )
 
     def _clean_none_values(self, config_dict: Dict[str, Any]) -> Dict[str, Any]:
         """Remove None values from config dict to prevent TOML serialization errors."""

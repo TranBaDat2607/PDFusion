@@ -8,6 +8,7 @@ avoiding.
 from __future__ import annotations
 
 import platform
+from unittest import mock
 
 import pytest
 import tomlkit
@@ -17,7 +18,6 @@ from desktop_pdf_translator.config.models import AppSettings
 from desktop_pdf_translator.utils import encryption
 from desktop_pdf_translator.utils.encryption import (
     DPAPI_PREFIX,
-    _derive_key_from_machine,
     decrypt_api_key,
     encrypt_api_key,
     is_encrypted,
@@ -64,25 +64,16 @@ def test_windows_keys_are_stored_with_dpapi():
     assert salt == ""
 
 
-@on_windows
-def test_a_dpapi_blob_needs_no_salt_to_decrypt():
-    stored, _ = encrypt_api_key(KEY)
-    assert decrypt_api_key(stored, "") == KEY
-
-
 def _make_legacy_ciphertext(key: str = KEY) -> tuple[str, str]:
-    """Fabricate a pre-DPAPI stored value: `(ciphertext, salt)`, both base64,
-    as the machine-key Fernet scheme wrote them."""
-    import base64
-    import os
+    """A pre-DPAPI stored value: `(ciphertext, salt_b64)`.
 
-    from cryptography.fernet import Fernet
-
-    salt = os.urandom(16)
-    ciphertext = base64.urlsafe_b64encode(
-        Fernet(_derive_key_from_machine(salt)).encrypt(key.encode())
-    ).decode()
-    return ciphertext, base64.urlsafe_b64encode(salt).decode()
+    Produced by the code that used to write it — with DPAPI forced off,
+    `encrypt_api_key` *is* the legacy branch — rather than by restating the
+    HKDF-over-MachineGuid + double-base64 encoding here, where it could drift
+    into a format nothing ever wrote while these tests kept passing.
+    """
+    with mock.patch.object(encryption, "_dpapi_available", return_value=False):
+        return encrypt_api_key(key)
 
 
 def test_legacy_machine_key_values_still_decrypt():
@@ -126,19 +117,28 @@ def manager(tmp_path, monkeypatch: pytest.MonkeyPatch) -> ConfigManager:
     return ConfigManager(config_dir=tmp_path)
 
 
-def test_settings_round_trip_through_the_file(manager: ConfigManager):
+def _with_key(key: str = KEY, model: str | None = None) -> AppSettings:
     settings = AppSettings()
-    settings.openai.api_key = KEY
-    assert manager.save_settings(settings)
+    settings.openai.api_key = key
+    if model is not None:
+        settings.openai.model = model
+    return settings
+
+
+def _no_space(*_args, **_kwargs):
+    """Stand-in for a crash or a full disk part-way through the write."""
+    raise OSError(28, "No space left on device")
+
+
+def test_settings_round_trip_through_the_file(manager: ConfigManager):
+    assert manager.save_settings(_with_key())
 
     reloaded = ConfigManager(config_dir=manager.config_dir).load_settings()
     assert reloaded.openai.api_key == KEY
 
 
 def test_the_key_is_not_written_in_the_clear(manager: ConfigManager):
-    settings = AppSettings()
-    settings.openai.api_key = KEY
-    manager.save_settings(settings)
+    manager.save_settings(_with_key())
     assert KEY not in manager.config_file.read_text(encoding="utf-8")
 
 
@@ -148,19 +148,11 @@ def test_a_failed_write_leaves_the_previous_config_intact(
     """The regression this is about. `config.toml` used to be written in
     place, so a crash mid-write truncated it — and a truncated config loads as
     defaults, silently discarding every setting *including the API keys*."""
-    good = AppSettings()
-    good.openai.api_key = KEY
-    assert manager.save_settings(good)
+    assert manager.save_settings(_with_key())
     before = manager.config_file.read_text(encoding="utf-8")
 
-    def die(*_args, **_kwargs):
-        raise OSError(28, "No space left on device")
-
-    monkeypatch.setattr(tomlkit, "dump", die)
-
-    doomed = AppSettings()
-    doomed.openai.api_key = "sk-replacement"
-    assert manager.save_settings(doomed) is False
+    monkeypatch.setattr(tomlkit, "dump", _no_space)
+    assert manager.save_settings(_with_key("sk-replacement")) is False
 
     assert manager.config_file.read_text(encoding="utf-8") == before
     assert ConfigManager(config_dir=manager.config_dir).load_settings().openai.api_key == KEY
@@ -171,31 +163,36 @@ def test_a_failed_write_leaves_no_temp_file_behind(
 ):
     manager.save_settings(AppSettings())
 
-    def die(*_args, **_kwargs):
-        raise OSError(28, "No space left on device")
-
-    monkeypatch.setattr(tomlkit, "dump", die)
+    monkeypatch.setattr(tomlkit, "dump", _no_space)
     manager.save_settings(AppSettings())
 
     assert list(manager.config_dir.glob("*.tmp")) == []
 
 
 def test_the_previous_generation_is_kept_as_a_backup(manager: ConfigManager):
-    first = AppSettings()
-    first.openai.api_key = KEY
-    manager.save_settings(first)
+    """A bad-but-complete save is recoverable by hand."""
+    manager.save_settings(_with_key(model="gpt-first"))
+    manager.save_settings(_with_key("sk-second", model="gpt-second"))
 
-    second = AppSettings()
-    second.openai.api_key = "sk-second"
-    manager.save_settings(second)
+    backup = (manager.config_dir / "config.toml.bak").read_text(encoding="utf-8")
+    assert "gpt-first" in backup
+    assert "gpt-second" in manager.config_file.read_text(encoding="utf-8")
 
-    backup = manager.config_dir / "config.toml.bak"
-    assert backup.exists()
-    # The backup holds the *previous* write, so a bad-but-complete save is
-    # recoverable by hand.
-    assert backup.read_text(encoding="utf-8") != manager.config_file.read_text(
-        encoding="utf-8"
-    )
+
+def test_the_backup_never_holds_key_material(manager: ConfigManager):
+    """A backup must never be more readable than the file it backs up.
+
+    Stripping the keys makes that hold for every storage format at once,
+    rather than detecting the one migration where it would have been violated.
+    The rest of the file — models, languages, cache limits — is what is
+    actually worth recovering; a key is re-enterable.
+    """
+    manager.save_settings(_with_key())
+    manager.save_settings(_with_key("sk-second"))
+
+    backup = (manager.config_dir / "config.toml.bak").read_text(encoding="utf-8")
+    assert KEY not in backup
+    assert "api_key" not in backup  # covers `api_key_salt` too
 
 
 def test_the_first_save_needs_no_backup(manager: ConfigManager):
@@ -203,51 +200,47 @@ def test_the_first_save_needs_no_backup(manager: ConfigManager):
     assert not (manager.config_dir / "config.toml.bak").exists()
 
 
-def _write_legacy_config(config_file, key: str = KEY) -> None:
-    """Put a pre-DPAPI `config.toml` on disk: machine-key ciphertext beside the
-    `api_key_salt` it needs."""
-    ciphertext, salt_b64 = _make_legacy_ciphertext(key)
+def _write_legacy_config(config_file) -> tuple[str, str]:
+    """Put a pre-DPAPI `config.toml` on disk and return `(ciphertext, salt_b64)`.
+
+    The legacy on-disk shape is the machine-key ciphertext beside the
+    `api_key_salt` it needs to decrypt.
+    """
+    ciphertext, salt_b64 = _make_legacy_ciphertext()
     config_file.write_text(
-        f'[openai]\napi_key = "{ciphertext}"\napi_key_salt = "{salt_b64}"\n',
+        f'''[openai]
+api_key = "{ciphertext}"
+api_key_salt = "{salt_b64}"
+''',
         encoding="utf-8",
     )
+    return ciphertext, salt_b64
 
 
-@on_windows
-def test_a_migrating_save_does_not_leave_the_legacy_key_in_the_backup(
-    manager: ConfigManager,
-):
-    """The upgrade must not park a machine-readable copy of the key next to the
-    hardened one. `.bak` holds the *previous* generation, and on this one save
-    the previous generation is exactly the MachineGuid-encrypted value the
+def test_the_backup_of_a_legacy_config_holds_no_legacy_key(manager: ConfigManager):
+    """The case that forced the invariant: on the legacy → DPAPI upgrade the
+    outgoing generation is exactly the MachineGuid-encrypted value the
     migration exists to retire — decryptable by any process on the box."""
-    _write_legacy_config(manager.config_file)
+    ciphertext, salt_b64 = _write_legacy_config(manager.config_file)
 
     settings = ConfigManager(config_dir=manager.config_dir).load_settings()
     assert settings.openai.api_key == KEY  # the legacy value still loads
     assert manager.save_settings(settings)
 
-    assert DPAPI_PREFIX in manager.config_file.read_text(encoding="utf-8")
-    backup = manager.config_dir / "config.toml.bak"
-    if backup.exists():
-        assert "api_key_salt" not in backup.read_text(encoding="utf-8")
+    backup = (manager.config_dir / "config.toml.bak").read_text(encoding="utf-8")
+    assert ciphertext not in backup
+    assert salt_b64 not in backup
 
 
-def test_a_non_migrating_save_still_keeps_a_backup(
-    manager: ConfigManager, monkeypatch: pytest.MonkeyPatch
-):
-    """Only a real upgrade drops the backup. Where DPAPI is unavailable — off
-    Windows, or a broken crypt32 — both generations are legacy, which is not a
-    downgrade, and the recovery copy has to survive."""
-    monkeypatch.setattr(encryption, "_dpapi_available", lambda: False)
+@on_windows
+def test_a_migrating_save_rewrites_the_key_as_a_dpapi_blob(manager: ConfigManager):
+    """Nobody re-enters a key because the storage format changed."""
+    ciphertext, salt_b64 = _write_legacy_config(manager.config_file)
 
-    first = AppSettings()
-    first.openai.api_key = KEY
-    assert manager.save_settings(first)
-    assert "api_key_salt" in manager.config_file.read_text(encoding="utf-8")
+    settings = ConfigManager(config_dir=manager.config_dir).load_settings()
+    assert manager.save_settings(settings)
 
-    second = AppSettings()
-    second.openai.api_key = "sk-second"
-    assert manager.save_settings(second)
-
-    assert (manager.config_dir / "config.toml.bak").exists()
+    saved = manager.config_file.read_text(encoding="utf-8")
+    assert DPAPI_PREFIX in saved
+    assert "api_key_salt" not in saved
+    assert ConfigManager(config_dir=manager.config_dir).load_settings().openai.api_key == KEY
