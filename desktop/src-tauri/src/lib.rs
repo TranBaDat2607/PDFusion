@@ -47,8 +47,9 @@ fn sidecar_info() -> SidecarStatus {
 /// commands below are reachable from the webview, and `open_path` bottoms out
 /// in `ShellExecute`, which will happily launch an `.exe`/`.bat`/`.lnk`. The
 /// app only ever needs to open PDFs, so anything else is refused here rather
-/// than trusting that no injected script (the CSP is still `null`, and the
-/// chat panel renders model-authored markdown) ever reaches `invoke`.
+/// than trusting that no injected script ever reaches `invoke` — the chat
+/// panel renders model-authored markdown, and a CSP is a second line of
+/// defence, not a substitute for validating what a command is handed.
 ///
 /// The existence check is a UX one: Explorer and the default-app launcher both
 /// fail opaquely on a missing path, so we return a message the UI can show.
@@ -90,10 +91,13 @@ pub fn run() {
     let _ = env_logger::try_init();
 
     tauri::Builder::default()
+        // `shell` and `fs` were registered but never imported by the webview:
+        // Save/Open/Reveal go through the app commands below, and PDFs are
+        // streamed from the sidecar over HTTP rather than read from disk by
+        // the frontend. Registering them only widened what an injected script
+        // could reach.
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
-        .plugin(tauri_plugin_shell::init())
-        .plugin(tauri_plugin_fs::init())
         .invoke_handler(tauri::generate_handler![
             sidecar_info,
             open_path_in_default_app,

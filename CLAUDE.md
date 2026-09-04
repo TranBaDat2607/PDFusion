@@ -65,7 +65,20 @@ OPENAI_API_KEY=...
 GEMINI_API_KEY=...
 ANTHROPIC_API_KEY=...    # optional
 ```
-Or use the in-app Settings sheet — keys are encrypted via `utils/encryption.py` before being written to `~/AppData/Local/PDFusion/config.toml`.
+Or use the in-app Settings sheet — keys are encrypted via `utils/encryption.py`
+before being written to `~/AppData/Local/PDFusion/config.toml`. On Windows that
+is **DPAPI** (`CryptProtectData`, user-scoped, with app entropy); values written
+by the older MachineGuid-derived Fernet scheme still decrypt and are upgraded on
+the next save, so nobody re-enters a key. `config.toml` is written to a temp file
+and `os.replace`d into position — an in-place write that crashed used to truncate
+the file, and a truncated config loads as defaults, i.e. silently discards every
+setting including the keys. The outgoing generation is kept as `config.toml.bak`
+**with the API keys stripped out** (`manager.py:_write_backup`): a backup must
+never be more readable than the file it backs up, and holding that as an
+unconditional invariant is what avoids having to detect the one migration
+(legacy → DPAPI) where copying verbatim would have parked a machine-readable key
+beside the hardened one. A key is re-enterable; the rest of the file is what is
+worth recovering by hand.
 
 ## Architecture
 
@@ -77,7 +90,7 @@ Or use the in-app Settings sheet — keys are encrypted via `utils/encryption.py
 │  • Spawns + supervises Python sidecar at startup        │
 │  • Kills sidecar on app exit (RunEvent::ExitRequested)  │
 │  • Exposes `sidecar_info` command to the React side     │
-│  • Native dialogs (open/save), shell.openUrl, fs read   │
+│  • Native dialogs (open/save), open/reveal a PDF        │
 │                                                         │
 │  ┌──────────────────────────────────────────────────┐   │
 │  │ WebView2: React + Vite + Tailwind + shadcn/ui    │   │
@@ -150,7 +163,7 @@ All routes (except `GET /health`) require `Authorization: Bearer <token>`.
 | GET | `/config/options` | Static dropdown data (languages, services, models) + `supported_pairs` per service (`null` = unrestricted) |
 | GET | `/config/cache` | Paragraph-cache stats (entries, hit rate, size) |
 | DELETE | `/config/cache?scope=all\|expired` | Clear/GC the paragraph-level translation cache |
-| POST | `/translate` | Start translation job → returns `{ job_id }`. `source_lang` / `target_lang` / `service` are `None`-defaulted (config applies); an unsupported pair is refused with **422** before the job is created. `bypass_cache: bool` forces a full re-translate (used by the "Re-translate" button) |
+| POST | `/translate` | Start translation job → returns `{ job_id }`. `source_lang` / `target_lang` / `service` are `None`-defaulted (config applies); an unsupported pair is refused with **422** before the job is created. `bypass_cache: bool` forces a full re-translate (used by the "Re-translate" button). There is deliberately **no `output_dir`** — output always lands in a per-job `%TEMP%` dir that the cleanup paths know about |
 | GET | `/translate/{job_id}/events` | SSE: `progress`, `chunk_ready`, `paragraph_translated`, `done`, `error`, `cancelled`. **`chunk_ready` arrives in priority order, not page order** — nearest the viewer's page first — so `chunk_index` is not a completion count and `pages_in_chunk[1]` is not a running total. Accumulate with `lib/translation-progress.ts`; page totals come from `total_pages` (`total_chunks` is not a page count — Argos runs 3-page chunks) |
 | POST | `/translate/{job_id}/cancel` | Cancel an in-flight translation |
 | POST | `/rag/index` | Index a PDF into ChromaDB → returns `{ job_id }` |
@@ -198,8 +211,9 @@ Open and reveal go through the app-defined Tauri commands
 are app commands rather than the opener plugin's JS API, whose `open-path`
 capability scope would have to enumerate every folder a user might save into —
 so `checked_pdf_path` substitutes a **file-type restriction** for that scope.
-Keep it: `open_path` bottoms out in `ShellExecute`, the command is reachable
-from the webview, and `"csp": null` is still in `tauri.conf.json`.
+Keep it: `open_path` bottoms out in `ShellExecute` and the command is reachable
+from the webview. The CSP narrows what can get *into* the webview; it does not
+vet what a command is handed once something is there.
 
 Three non-obvious invariants in this area, each with a test:
 
@@ -419,9 +433,10 @@ BabelDOC drives chunking, layout, and PDF reassembly; it delegates the actual te
 
 ## Tauri shell details
 
-- **Plugins enabled**: `opener` (open external URLs), `dialog` (file picker), `shell`, `fs` (allow reading `*.pdf`).
-- **Window**: 1400×900 default, min 1024×700.
-- **CSP**: currently `null` for dev. Tighten before bundling for distribution.
+- **Plugins enabled**: `opener` (open external URLs) and `dialog` (file picker) — that's all. `shell` and `fs` were registered but never imported by `desktop/src`; PDFs reach the viewer over HTTP from the sidecar, and Save/Open/Reveal go through the app commands in `lib.rs`. Don't re-add a plugin "just in case": every one widens what an injected script can invoke. Same reasoning inside a plugin: the capability grants `opener:allow-open-url` + `opener:allow-default-urls` rather than `opener:default`, because that set also carries `allow-reveal-item-in-dir` — a second, unvalidated route to the reveal that `reveal_path_in_file_manager` exists to gate. The app commands call the plugin's **Rust** API (`app.opener()`), which capabilities don't apply to, so narrowing the webview's grant costs nothing.
+- **Window**: 1400×900 default, min 1024×700. `withGlobalTauri` is off — `__TAURI_INTERNALS__` (which `lib/tauri-ready.ts` waits on) is injected regardless; the flag only adds the legacy `window.__TAURI__` global.
+- **CSP**: set in `tauri.conf.json` — `default-src 'self'` with `connect-src` widened to `http://127.0.0.1:*` (the sidecar) plus Tauri's IPC origin, `worker-src blob:` (pdf.js), and `style-src 'unsafe-inline'` (Tailwind's runtime styles). Tauri nonces its own init script, so `script-src` stays at `'self'`. It applies to the bundled app only — in `pnpm tauri dev` the page is served by Vite, which Tauri doesn't inject headers into, so **a CSP break shows up first in `pnpm tauri build`**, not in dev.
+- **CORS / dev origins**: the sidecar's allowlist (`server.py:_allowed_origins`) is exactly Tauri's custom-protocol origins, plus Vite's `localhost:1420` **only in dev**. Which one applies is a two-sided handshake: the shell sets `PDFUSION_DEV_ORIGINS` to `"1"`/`"0"` from `cfg!(debug_assertions)` (`sidecar.rs:dev_origins_flag`), on both spawn paths. The sidecar must **not** decide this from `sys.frozen` alone — frozen means "PyInstaller built it", not "shipped app", and discovery prefers a staged `binaries/*.exe` over local Python, so after `build-sidecar.ps1` a `pnpm tauri dev` run pairs a *frozen* sidecar with a *Vite-hosted* webview. Getting that wrong rejects every request the app makes (preflights → `400 Disallowed CORS origin`) and looks exactly like the sidecar failing to start. `sys.frozen` remains the fallback for a sidecar started without the shell. Don't swap `debug_assertions` for `tauri::is_dev()`: that's `!cfg!(feature = "custom-protocol")` and this crate declares no `[features]`, so it's `true` even in a release bundle.
 - **Sidecar lifecycle** is wired in `lib.rs::run()`'s `setup` and the `RunEvent::ExitRequested` handler kills the child process.
 - **Sidecar cwd & writable paths**: the child is spawned with cwd = `%LOCALAPPDATA%\PDFusion\` (`sidecar::appdata_dir`), **not** the install dir (`C:\Program Files\PDFusion\` is read-only for non-admins → `WinError 5` on any relative-path write). `lib.rs::setup` pre-creates the AppData subdir layout (`sidecar::ensure_appdata_layout`) before spawn so Python subsystems don't race on first-run `mkdir`.
 - **Per-job translation output** is a throwaway `%TEMP%\pdfusion-translate-<rand>\` dir (not a persistent `translated_pdfs/`). It's wiped three ways: by the next job, by the Tauri `ExitRequested` handler (`sidecar::cleanup_translate_temp_dirs`), and by the FastAPI lifespan orphan sweep on sidecar startup (`server.py:_sweep_orphan_translate_dirs`, only dirs older than 1h). Persistent translated PDFs live in the whole-PDF cache instead.
@@ -481,32 +496,60 @@ when the bundled exe raises `ModuleNotFoundError` at startup.
 
 ## Logs
 
-Application logs are written to `~/AppData/Local/PDFusion/logs/app.log`.
+Two log streams, and they don't meet — worth knowing before hunting for a line
+that isn't there:
+
+- **Python sidecar** → `~/AppData/Local/PDFusion/logs/app.log`, but only via
+  `main.py::_setup_logging` (the `pdfusion-sidecar` console script, i.e. the
+  bundled build or a hand-run `python main.py`). Launched the dev way
+  (`python -m desktop_pdf_translator.api.server`, which is what `pnpm tauri dev`
+  does), `server.py::main` configures logging to **stderr only** — nothing
+  reaches `app.log`.
+- **Rust shell** → stderr, always. `lib.rs::run` calls a bare
+  `env_logger::try_init()` with no file target, so `log::info!`/`warn!` — including
+  the `[sidecar stdout]` / `[sidecar stderr]` relays — land in the `pnpm tauri dev`
+  terminal and are **discarded in a release build** (`main.rs` sets
+  `windows_subsystem = "windows"`, so there's no console). None of it is in
+  `app.log`.
+
+The sidecar's bearer token is `print`ed to stdout, not logged, so it was never in
+`app.log`; `sidecar.rs:redact_ready_line` keeps it out of the shell's stderr and
+of any file logger added later.
 
 ## Tests and code quality
 
-- **Test coverage is narrow — the PDF-export path and the language contract.**
-  There is still no suite for the translation pipeline proper, RAG, config, or
-  the cache *storage* layer; if you touch those, expect to write tests from
-  scratch.
+- **Test coverage is narrow — the PDF-export path, the language contract, and
+  key storage / config writes.** There is still no suite for the translation
+  pipeline proper, RAG, or the cache *storage* layer; if you touch those,
+  expect to write tests from scratch.
 
   ```bash
   # Python (pytest config lives in pyproject.toml; tests/conftest.py puts src/ on sys.path)
   python -m pytest tests           # test_file_export.py, test_pdf_export_api.py,
-                                   # test_translate_language_contract.py
+                                   # test_translate_language_contract.py,
+                                   # test_translation_failure_reporting.py,
+                                   # test_config_security.py, test_cors_origins.py
 
   # Frontend (vitest, node environment — no jsdom)
   cd desktop && pnpm test          # src/**/*.test.ts
+
+  # Rust shell (the only Rust tests so far live in sidecar.rs)
+  cd desktop/src-tauri && cargo test
   ```
 
-  Both Python suites avoid importing `routes/translation.py` → BabelDOC →
-  torch, which turns a sub-second run into a minute-long one:
-  `test_pdf_export_api.py` mounts `routes/pdf.py`'s router on a bare
-  `FastAPI()` instead of calling `create_app()`, and
-  `test_translate_language_contract.py` sticks to `api/schemas.py`,
-  `translators/capabilities.py` and `processors/pdf_cache.py` — all pure
-  decisions, so nothing is lost by staying out of the heavy modules. Keep new
-  tests on that side of the line where you can. The frontend suite runs in the
+  Importing **anything** under `desktop_pdf_translator.api` costs ~13s: the
+  package `__init__` does `from .server import create_app`, and `server.py`
+  imports `routes/translation.py` → BabelDOC → torch. Avoiding `create_app()`
+  is not enough to dodge it — `test_pdf_export_api.py` mounts `routes/pdf.py`'s
+  router on a bare `FastAPI()` and still pays, because it imports `api.auth`.
+  `test_cors_origins.py` pays the same toll (it needs the real
+  `_allowed_origins`), which is why it's a separate file rather than folded into
+  `test_config_security.py` — that one and
+  `test_translate_language_contract.py` stay on `config/`, `utils/`,
+  `api/schemas.py`, `translators/capabilities.py` and `processors/pdf_cache.py`,
+  all pure decisions, and run in a fraction of a second. Keep new tests on that
+  side of the line where you can, and don't move a cheap suite onto the
+  expensive one. The frontend suite runs in the
   `node` environment: the logic under test takes its Tauri/sidecar
   collaborators as arguments (`lib/export-pdf.ts`) or is pure
   (`lib/translate-request.ts`), so no DOM or testing-library is needed.
@@ -518,7 +561,6 @@ Application logs are written to `~/AppData/Local/PDFusion/logs/app.log`.
 
 - **Auto-update** flow.
 - **Code signing** for Windows (SmartScreen will warn on first install of the unsigned `.msi`).
-- **CSP tightening** — `tauri.conf.json` still has `"csp": null`.
 - **Cross-platform** (macOS/Linux) — Tauri supports both, but explicit testing deferred. The PyInstaller spec is Windows-tested only.
 - **i18n of the UI strings** (the UI itself stays English; the translation *output* follows the toolbar's target language).
 - **More Argos language pairs** — the offline backend ships en→vi only. Adding

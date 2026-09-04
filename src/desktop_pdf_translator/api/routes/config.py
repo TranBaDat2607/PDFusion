@@ -179,7 +179,9 @@ async def update_config(payload: ConfigUpdateRequest) -> ConfigResponse:
         current["translation"]["cache_translated_pdfs"] = payload.cache_translated_pdfs
 
     new_settings = AppSettings(**current)
-    if not mgr.save_settings(new_settings):
+    # Off the loop thread: `save_settings` fsyncs and rewrites the backup, and
+    # this loop is also carrying any in-flight translation's SSE stream.
+    if not await asyncio.to_thread(mgr.save_settings, new_settings):
         raise HTTPException(status_code=500, detail="Failed to save settings")
     mgr._settings = new_settings  # refresh cached singleton
     return await get_config()

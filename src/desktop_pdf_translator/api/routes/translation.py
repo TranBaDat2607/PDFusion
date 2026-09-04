@@ -50,7 +50,6 @@ async def _run_translation(job_id: str, payload: TranslateRequest) -> None:
         return
 
     file_path = Path(payload.file_path)
-    output_dir = Path(payload.output_dir) if payload.output_dir else None
     processor = PDFProcessor()
     # Expose the processor so the reprioritize endpoint can reach it via the
     # job registry. Cleared automatically when the job is discarded.
@@ -63,7 +62,6 @@ async def _run_translation(job_id: str, payload: TranslateRequest) -> None:
             source_lang=payload.source_lang,
             target_lang=payload.target_lang,
             translation_service=payload.service,
-            output_dir=output_dir,
             visible_page=payload.visible_page,
             bypass_cache=payload.bypass_cache,
         ):

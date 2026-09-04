@@ -90,7 +90,11 @@ class TranslateRequest(BaseModel):
     source_lang: Optional[LanguageCode] = None
     target_lang: Optional[LanguageCode] = None
     service: Optional[TranslationService] = None
-    output_dir: Optional[str] = None
+    # No `output_dir`. It let a caller name any writable path on the machine,
+    # was never sent by the UI, and — being outside `%TEMP%\pdfusion-translate-*`
+    # — was exempt from every cleanup path, so it also leaked whatever it
+    # wrote. `process_pdf` doesn't take one either: the per-job temp dir is the
+    # only answer, so there is nothing left to honour verbatim.
     visible_page: int = Field(1, ge=1, description="1-indexed page the viewer is currently showing; seeds the priority queue")
     bypass_cache: bool = Field(
         False,
