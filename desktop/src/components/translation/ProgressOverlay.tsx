@@ -7,6 +7,11 @@ import { Progress } from "@/components/ui/progress";
 import { TranslatedFileActions } from "@/components/translation/TranslatedFileActions";
 import { isTranslationBusy, type TranslationState } from "@/hooks/useTranslation";
 import { useAppStore } from "@/lib/store";
+import {
+  pagesReady,
+  pagesRemaining,
+  pluralizePages,
+} from "@/lib/translation-progress";
 
 interface ProgressOverlayProps {
   state: TranslationState;
@@ -81,10 +86,11 @@ export function ProgressOverlay({
   // is the only evidence, so it gets said out loud.
   const failed = state.failedParagraphs ?? 0;
   const partial = state.status === "done" && failed > 0;
-  const pagesLeft =
-    chunkProgress && chunkProgress.totalChunks > 0
-      ? chunkProgress.totalChunks - chunkProgress.chunksReady
-      : null;
+  // Pages, not chunks: Argos translates 3 pages per chunk, so `totalChunks`
+  // is not a page count.
+  const donePages = chunkProgress ? pagesReady(chunkProgress) : 0;
+  const totalPages = chunkProgress?.totalPages ?? null;
+  const pagesLeft = chunkProgress ? pagesRemaining(chunkProgress) : null;
 
   // Only `exportedPath` is a copy the user keeps. The translated path is a
   // rolling file in a per-job %TEMP% dir that the next translation, app exit,
@@ -142,8 +148,9 @@ export function ProgressOverlay({
             <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs">
               {chunkProgress && (
                 <span className="font-medium text-primary">
-                  {chunkProgress.pagesReady} of {chunkProgress.totalChunks}{" "}
-                  page{chunkProgress.totalChunks === 1 ? "" : "s"} translated
+                  {totalPages != null
+                    ? `${donePages} of ${pluralizePages(totalPages)} translated`
+                    : `${pluralizePages(donePages)} translated`}
                 </span>
               )}
               {smoothEta != null && smoothEta > 0 && (
@@ -151,7 +158,7 @@ export function ProgressOverlay({
                   <Clock className="h-3 w-3" />~{formatEta(smoothEta)} remaining
                   {pagesLeft != null && pagesLeft > 0 && (
                     <span className="opacity-70">
-                      &middot; {pagesLeft} page{pagesLeft === 1 ? "" : "s"} left
+                      &middot; {pluralizePages(pagesLeft)} left
                     </span>
                   )}
                 </span>

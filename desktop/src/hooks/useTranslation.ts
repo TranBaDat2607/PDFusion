@@ -5,6 +5,13 @@ import { ApiError, api } from "@/lib/api-client";
 import { streamEvents } from "@/lib/sse";
 import { useAppStore } from "@/lib/store";
 import { buildTranslateBody } from "@/lib/translate-request";
+import {
+  applyChunkReady,
+  describeChunk,
+  pagesReady,
+  pluralizePages,
+  type ChunkReadyLike,
+} from "@/lib/translation-progress";
 
 interface ProgressUpdate {
   stage?: string;
@@ -32,10 +39,10 @@ interface CompletionPayload {
   total_paragraphs?: number;
 }
 
-interface ChunkReadyPayload {
-  chunk_index: number;
-  total_chunks: number;
-  pages_in_chunk: [number, number];
+// `ChunkReadyLike` is the accumulator's view of this same payload. Extending
+// it keeps a new wire field declared once instead of in two files that have to
+// be edited together.
+interface ChunkReadyPayload extends ChunkReadyLike {
   rolling_pdf_path: string;
   progress_percent: number;
   elapsed_seconds?: number | null;
@@ -244,20 +251,25 @@ export function useTranslation() {
                 toast.success(`Loaded from cache · translated ${when}`);
               }
               adoptArtifact(c.rolling_pdf_path);
-              setChunkProgress({
-                chunksReady: c.chunk_index + 1,
-                totalChunks: c.total_chunks,
-                pagesReady: c.pages_in_chunk[1],
-              });
+              // Read the store rather than close over it: chunk_ready fires
+              // per completed chunk and each one builds on the last.
+              const progress = applyChunkReady(
+                useAppStore.getState().chunkProgress,
+                c,
+              );
+              setChunkProgress(progress);
+              const donePages = pagesReady(progress);
               setState((s) => ({
                 ...s,
                 progress: c.progress_percent,
-                stage: c.cache_hit
-                  ? "Loaded from cache"
-                  : `Chunk ${c.chunk_index + 1}/${c.total_chunks} ready`,
+                // Chunks complete nearest-the-visible-page first, so neither
+                // `chunk_index` nor the chunk's last page is a running total.
+                // The stage is left to the `progress` event that follows this
+                // one, which names the same pages.
+                stage: c.cache_hit ? "Loaded from cache" : s.stage,
                 message: c.cache_hit
-                  ? `All ${c.pages_in_chunk[1]} page(s) ready`
-                  : `Pages 1–${c.pages_in_chunk[1]} translated`,
+                  ? `All ${pluralizePages(donePages)} ready`
+                  : describeChunk(c),
                 etaSeconds: c.eta_seconds ?? null,
                 etaAnchorAt:
                   c.eta_seconds != null ? Date.now() : (s.etaAnchorAt ?? null),

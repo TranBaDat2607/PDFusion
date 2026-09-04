@@ -28,7 +28,8 @@ export interface ConfigResponse {
     pdf_cache_max_size_mb?: number;
   };
   rag: { enabled: boolean };
-  deep_search: Record<string, unknown>;
+  // No `deep_search` section: deep search / web research were removed in
+  // `35bca2c` and `AppSettings` has had no such field since.
   gui: Record<string, unknown>;
   processing?: {
     max_workers?: number;
