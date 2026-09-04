@@ -32,10 +32,10 @@ def _no_inherited_signal(monkeypatch: pytest.MonkeyPatch):
 
 
 def _frozen(monkeypatch: pytest.MonkeyPatch, value: bool) -> None:
-    if value:
-        monkeypatch.setattr(sys, "frozen", True, raising=False)
-    else:
-        monkeypatch.delattr(sys, "frozen", raising=False)
+    # The code under test reads `getattr(sys, "frozen", False)`, so setting the
+    # attribute to False is indistinguishable from its absence — no need to
+    # delete it to model a source run.
+    monkeypatch.setattr(sys, "frozen", value, raising=False)
 
 
 def test_the_tauri_protocol_origins_are_always_allowed(monkeypatch: pytest.MonkeyPatch):

@@ -70,19 +70,25 @@ def test_a_dpapi_blob_needs_no_salt_to_decrypt():
     assert decrypt_api_key(stored, "") == KEY
 
 
-def test_legacy_machine_key_values_still_decrypt():
-    """Existing installs must keep working — nobody should have to re-enter a
-    key because the storage format changed."""
+def _make_legacy_ciphertext(key: str = KEY) -> tuple[str, str]:
+    """Fabricate a pre-DPAPI stored value: `(ciphertext, salt)`, both base64,
+    as the machine-key Fernet scheme wrote them."""
     import base64
     import os
 
     from cryptography.fernet import Fernet
 
     salt = os.urandom(16)
-    legacy = base64.urlsafe_b64encode(
-        Fernet(_derive_key_from_machine(salt)).encrypt(KEY.encode())
+    ciphertext = base64.urlsafe_b64encode(
+        Fernet(_derive_key_from_machine(salt)).encrypt(key.encode())
     ).decode()
-    salt_b64 = base64.urlsafe_b64encode(salt).decode()
+    return ciphertext, base64.urlsafe_b64encode(salt).decode()
+
+
+def test_legacy_machine_key_values_still_decrypt():
+    """Existing installs must keep working — nobody should have to re-enter a
+    key because the storage format changed."""
+    legacy, salt_b64 = _make_legacy_ciphertext()
 
     assert not legacy.startswith(DPAPI_PREFIX)
     assert decrypt_api_key(legacy, salt_b64) == KEY
@@ -200,18 +206,9 @@ def test_the_first_save_needs_no_backup(manager: ConfigManager):
 def _write_legacy_config(config_file, key: str = KEY) -> None:
     """Put a pre-DPAPI `config.toml` on disk: machine-key ciphertext beside the
     `api_key_salt` it needs."""
-    import base64
-    import os
-
-    from cryptography.fernet import Fernet
-
-    salt = os.urandom(16)
-    ciphertext = base64.urlsafe_b64encode(
-        Fernet(_derive_key_from_machine(salt)).encrypt(key.encode())
-    ).decode()
+    ciphertext, salt_b64 = _make_legacy_ciphertext(key)
     config_file.write_text(
-        f'[openai]\napi_key = "{ciphertext}"\n'
-        f'api_key_salt = "{base64.urlsafe_b64encode(salt).decode()}"\n',
+        f'[openai]\napi_key = "{ciphertext}"\napi_key_salt = "{salt_b64}"\n',
         encoding="utf-8",
     )
 
