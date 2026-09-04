@@ -1,12 +1,11 @@
 import { useState } from "react";
 import { ChevronDown, ChevronRight, FileText } from "lucide-react";
 
-interface ReferenceItem {
+export interface ReferenceItem {
   key: string;
   label: string;
   detail?: string;
   page?: number;
-  url?: string;
 }
 
 interface ReferenceListProps {
