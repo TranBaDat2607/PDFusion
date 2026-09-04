@@ -82,8 +82,13 @@ class ValidateResponse(BaseModel):
 
 class TranslateRequest(BaseModel):
     file_path: str
-    source_lang: LanguageCode = LanguageCode.AUTO
-    target_lang: LanguageCode = LanguageCode.VIETNAMESE
+    # `None` means "unspecified" — the configured default applies. These were
+    # previously non-null sentinels (AUTO / VIETNAMESE), which made the config
+    # fallback in `processor.process_pdf` dead code and pinned every run to
+    # Vietnamese no matter what the toolbar said (issue #12). Defaults are
+    # resolved in exactly one place: `translators.capabilities.resolve_languages`.
+    source_lang: Optional[LanguageCode] = None
+    target_lang: Optional[LanguageCode] = None
     service: Optional[TranslationService] = None
     output_dir: Optional[str] = None
     visible_page: int = Field(1, ge=1, description="1-indexed page the viewer is currently showing; seeds the priority queue")
@@ -103,8 +108,10 @@ class PrewarmRequest(BaseModel):
     instantiates the SDK client so the first translate() call avoids cold-start."""
 
     service: Optional[TranslationService] = None
-    source_lang: LanguageCode = LanguageCode.AUTO
-    target_lang: LanguageCode = LanguageCode.VIETNAMESE
+    # Same "None means unspecified" contract as TranslateRequest — pre-warming
+    # auto→vi while the toolbar says Japanese warms the wrong backend.
+    source_lang: Optional[LanguageCode] = None
+    target_lang: Optional[LanguageCode] = None
 
 
 class PrewarmResponse(BaseModel):

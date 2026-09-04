@@ -21,6 +21,7 @@ from babeldoc.format.pdf.translation_config import WatermarkOutputMode as BabelD
 from ..config import get_settings, FileMetadata, LanguageCode, TranslationService
 from ..translators import TranslatorFactory
 from ..translators.argos_translator import ArgosTranslator
+from ..translators.capabilities import resolve_effective_service, resolve_languages
 from .events import (
     ProcessingEvent,
     ProgressEvent,
@@ -234,8 +235,9 @@ class PDFProcessor:
 
         try:
             # Use provided languages or fallback to config
-            source_lang = source_lang or self.settings.translation.default_source_lang
-            target_lang = target_lang or self.settings.translation.default_target_lang
+            source_lang, target_lang = resolve_languages(
+                self.settings, source_lang, target_lang
+            )
             translation_service = translation_service or self.settings.translation.preferred_service
 
             # Soft-fallback: if the user picked an LLM service but didn't
@@ -621,18 +623,10 @@ class PDFProcessor:
     def _resolve_effective_service(
         self, requested: TranslationService
     ) -> TranslationService:
-        """Pick the service to actually use given current credentials.
-
-        Argos (offline) is always usable. For LLM services, fall back to Argos
-        when the user has no key configured. Matches the product rule:
-        "Argos is default; LLM wins when a key exists".
-        """
-        if self.settings.has_api_key(requested):
-            return requested
-        logger.info(
-            "No API key for %s — falling back to Argos for this run", requested
-        )
-        return TranslationService.ARGOS
+        """Thin wrapper over the shared rule in `translators.capabilities` —
+        kept so the API layer and the processor can never disagree about which
+        service a request will really run on."""
+        return resolve_effective_service(self.settings, requested)
 
     async def _validate_file(self, file_path: Path) -> FileMetadata:
         """Validate PDF file and extract metadata."""

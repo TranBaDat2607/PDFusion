@@ -12,6 +12,10 @@ from ...config import TranslationService, get_settings
 from ...processors.events import EventType
 from ...processors.processor import PDFProcessor
 from ...translators import TranslatorFactory
+from ...translators.capabilities import (
+    resolve_effective_service,
+    resolve_languages,
+)
 from ..auth import require_token
 from ..jobs import get_registry, serialize_sse_event
 from ..schemas import (
@@ -202,12 +206,16 @@ def _warm_translator(
 @router.post("/prewarm", response_model=PrewarmResponse)
 async def prewarm(payload: PrewarmRequest) -> PrewarmResponse:
     settings = get_settings()
-    service = payload.service or settings.translation.preferred_service
-    # Soft-fallback to Argos when LLM has no key, matching processor logic.
-    if service != TranslationService.ARGOS and not settings.has_api_key(service):
-        service = TranslationService.ARGOS
+    service = resolve_effective_service(
+        settings, payload.service or settings.translation.preferred_service
+    )
+    # Unspecified languages mean "whatever is configured" — warming auto→vi
+    # while the toolbar says Japanese warms the wrong backend.
+    source_lang, target_lang = resolve_languages(
+        settings, payload.source_lang, payload.target_lang
+    )
 
-    key = (service.value, payload.source_lang.value, payload.target_lang.value)
+    key = (service.value, source_lang.value, target_lang.value)
     with _WARM_LOCK:
         already = key in _WARMED
         in_flight = key in _WARMING
@@ -232,8 +240,8 @@ async def prewarm(payload: PrewarmRequest) -> PrewarmResponse:
             ok, msg = await asyncio.to_thread(
                 _warm_translator,
                 service,
-                payload.source_lang.value,
-                payload.target_lang.value,
+                source_lang.value,
+                target_lang.value,
             )
         except Exception as exc:  # noqa: BLE001 — never leave key stuck in _WARMING
             ok, msg = False, f"Pre-warm crashed: {exc}"
