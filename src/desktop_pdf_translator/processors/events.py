@@ -85,8 +85,15 @@ class ErrorEvent(ProcessingEvent):
 
 @dataclass
 class ChunkReadyEvent(ProcessingEvent):
-    """A chunk of the source PDF has finished translating; the rolling
-    merged PDF on disk now contains pages 1..pages_in_chunk[1]."""
+    """A chunk of the source PDF has finished translating.
+
+    `rolling_pdf_path` is always a *full-length* document:
+    `_rebuild_sparse_rolling_pdf` fills the finished slots with translated
+    chunks and the rest with the original pages, so the viewer keeps its
+    scroll position. Chunks are scheduled nearest the reader's page first, so
+    `chunk_index` is not a completion count and `pages_in_chunk` names only
+    the pages *this* chunk covers — never a range starting at page 1 (#15).
+    """
 
     chunk_index: int
     total_chunks: int
@@ -98,6 +105,10 @@ class ChunkReadyEvent(ProcessingEvent):
     elapsed_seconds: Optional[float] = None
     eta_seconds: Optional[float] = None
     pages_per_second: Optional[float] = None
+    # Pages in the whole document. `total_chunks` is NOT a page count — Argos
+    # runs 3-page chunks (`_PAGES_PER_CHUNK_ARGOS`) — so the UI needs this to
+    # say "N of M pages" without guessing.
+    total_pages: Optional[int] = None
     # Set when this chunk was served from the PDF-level cache (synthetic event
     # emitted from process_pdf's cache-hit short-circuit). `cached_at` is the
     # ISO8601 timestamp the cache entry was originally written.
@@ -114,6 +125,7 @@ class ChunkReadyEvent(ProcessingEvent):
             "elapsed_seconds": self.elapsed_seconds,
             "eta_seconds": self.eta_seconds,
             "pages_per_second": self.pages_per_second,
+            "total_pages": self.total_pages,
             "cache_hit": self.cache_hit,
             "cached_at": self.cached_at,
         }
@@ -157,6 +169,12 @@ class CompletionEvent(ProcessingEvent):
     # rather than from its own config copy, which the user can change after
     # the run finishes.
     target_lang: Optional[str] = None
+    # Paragraphs the translator could not translate and handed back as source
+    # text. BabelDOC ignores translator errors and carries on, so a non-zero
+    # count is the *only* signal that a "complete" PDF is partly untranslated.
+    # Such a run is never written to the PDF cache.
+    failed_paragraphs: int = 0
+    total_paragraphs: int = 0
 
     def __post_init__(self):
         """Initialize event data from attributes."""
@@ -169,4 +187,6 @@ class CompletionEvent(ProcessingEvent):
             "cache_hit": self.cache_hit,
             "cached_at": self.cached_at,
             "target_lang": self.target_lang,
+            "failed_paragraphs": self.failed_paragraphs,
+            "total_paragraphs": self.total_paragraphs,
         }

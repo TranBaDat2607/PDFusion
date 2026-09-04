@@ -80,15 +80,7 @@ export function ChatPanel({
   }, [messages.length, ask.state.actions.length, ask.state.status]);
 
   const handleSubmit = useCallback(
-    ({
-      text,
-      includeWebResearch,
-      useDeepSearch,
-    }: {
-      text: string;
-      includeWebResearch: boolean;
-      useDeepSearch: boolean;
-    }) => {
+    ({ text }: { text: string }) => {
       setMessages((prev) => [
         ...prev,
         { id: ++messageCounter, kind: "user", text },
@@ -97,8 +89,6 @@ export function ChatPanel({
       void ask.ask({
         question: text,
         documentId: index.state.documentId,
-        includeWebResearch,
-        useDeepSearch,
       });
     },
     [ask, index.state.documentId],
@@ -230,7 +220,7 @@ function EmptyState({ ready }: { ready: boolean }) {
         <p className="text-sm font-medium">Ask the document</p>
         <p className="text-xs text-muted-foreground max-w-[260px]">
           {ready
-            ? "Type a question about the loaded PDF. Toggle Web research or Deep search for richer answers."
+            ? "Type a question about the loaded PDF. Answers cite the pages they came from."
             : "Open a PDF to start indexing. Then ask away."}
         </p>
       </div>

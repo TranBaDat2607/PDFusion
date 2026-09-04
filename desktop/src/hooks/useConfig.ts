@@ -28,7 +28,8 @@ export interface ConfigResponse {
     pdf_cache_max_size_mb?: number;
   };
   rag: { enabled: boolean };
-  deep_search: Record<string, unknown>;
+  // No `deep_search` section: deep search / web research were removed in
+  // `35bca2c` and `AppSettings` has had no such field since.
   gui: Record<string, unknown>;
   processing?: {
     max_workers?: number;
@@ -97,9 +98,14 @@ export function useUpdateConfig() {
   return useMutation({
     mutationFn: (update: ConfigUpdate) =>
       api.put<ConfigResponse>("/config", update),
-    onSuccess: (data) => {
+    onSuccess: (data, update) => {
       const previous = qc.getQueryData<ConfigResponse>(["config"]);
       qc.setQueryData(["config"], data);
+
+      const label = (code: string) => {
+        const options = qc.getQueryData<OptionsResponse>(["config", "options"]);
+        return options?.services.find((s) => s.code === code)?.label ?? code;
+      };
 
       // Server may auto-promote preferred_service from "argos" to an LLM
       // when the user just saved a key. Surface that to the user.
@@ -108,12 +114,28 @@ export function useUpdateConfig() {
         previous.translation.preferred_service !==
           data.translation.preferred_service
       ) {
-        const options = qc.getQueryData<OptionsResponse>(["config", "options"]);
-        const label =
-          options?.services.find(
-            (s) => s.code === data.translation.preferred_service,
-          )?.label ?? data.translation.preferred_service;
-        toast.success(`Switched to ${label}`);
+        toast.success(`Switched to ${label(data.translation.preferred_service)}`);
+        return;
+      }
+
+      // …and the server only promotes on a key that *validates*. When it
+      // doesn't, the save still succeeds but nothing visible changes — which
+      // reads as "my key was accepted" for a key the provider just rejected.
+      // Same priority the server promotes by (`routes/config.py`): one PUT
+      // can carry keys for several services, and only the first by this order
+      // is probed — so a different order here would name the wrong provider.
+      const savedKeyFor = (["openai", "anthropic", "gemini"] as const).find(
+        (code) => update[code]?.api_key,
+      );
+      if (
+        savedKeyFor &&
+        previous?.translation.preferred_service === "argos" &&
+        data.translation.preferred_service === "argos"
+      ) {
+        toast.warning(`${label(savedKeyFor)} did not accept that key`, {
+          description:
+            "The key is saved, but translation stays on Argos (offline). Use Validate to check it.",
+        });
       }
     },
   });

@@ -40,7 +40,7 @@ class OpenAITranslator(BaseTranslator):
         logger.info(f"OpenAI translator configured with model: {self.model}")
     
     def translate(self, text: str, **kwargs) -> str:
-        self.translate_call_count += 1
+        self._note_translate_call()
 
         try:
             processed_text = self._preprocess_text(text)
@@ -59,7 +59,15 @@ class OpenAITranslator(BaseTranslator):
                 max_tokens=self.max_tokens,
                 timeout=30,
             )
-            translated_text = response.choices[0].message.content.strip()
+            content = response.choices[0].message.content
+            translated_text = (content or "").strip()
+            if not translated_text:
+                # Already counted by the outer `except` (a None content raises
+                # AttributeError), but named explicitly so the log says what
+                # happened instead of "NoneType has no attribute 'strip'".
+                return self._handle_translation_error(
+                    RuntimeError("OpenAI returned an empty translation"), text
+                )
             result = self._postprocess_text(translated_text)
             _llm_cache_set(processed_text, result, self.lang_in, self.lang_out, "openai", self.model)
             self._fire_paragraph_callback(processed_text, result)

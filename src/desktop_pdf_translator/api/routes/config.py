@@ -37,6 +37,49 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/config", tags=["config"], dependencies=[Depends(require_token)])
 
 
+# Deadline for the auto-promotion probe below. Generous enough for a cold
+# TLS handshake to a provider, short enough that Settings → Save still feels
+# like a save.
+_VALIDATE_PROBE_TIMEOUT_S = 20.0
+
+
+async def _credentials_work(
+    service: TranslationService, service_config: dict
+) -> tuple[bool, str]:
+    """Probe a just-saved key the same way `POST /config/validate` does.
+
+    Runs off the event loop — `validate_configuration()` is a blocking HTTP
+    call to the provider — and under a deadline, because this sits on the
+    Settings *save* path now, not just behind the Validate button. OpenAI and
+    Anthropic pass their own `timeout=10`; Gemini passes none, so without this
+    a save on a flaky connection would hang for the SDK's default.
+
+    A timeout reports the same thing as a rejection: don't promote. The key is
+    still saved, and the user can switch services explicitly.
+    """
+
+    def probe() -> tuple[bool, str]:
+        kwargs = {"api_key": service_config.get("api_key")}
+        # Only override the model when we have one: passing `model=None`
+        # replaces the backend's own default with None.
+        if service_config.get("model"):
+            kwargs["model"] = service_config["model"]
+        translator = TranslatorFactory.create_translator(
+            service=service, lang_in="en", lang_out="vi", **kwargs
+        )
+        return translator.validate_configuration()
+
+    try:
+        return await asyncio.wait_for(
+            asyncio.to_thread(probe), timeout=_VALIDATE_PROBE_TIMEOUT_S
+        )
+    except (asyncio.TimeoutError, TimeoutError):
+        # The thread is left to finish on its own; nothing reads its result.
+        return False, f"timed out contacting {service.value}"
+    except Exception as exc:  # noqa: BLE001 — any failure means "don't promote"
+        return False, str(exc)
+
+
 def _mask(service_settings) -> APIKeyMaskedSettings:
     # ArgosSettings has no api_key attribute, so getattr falls through to False.
     return APIKeyMaskedSettings(
@@ -90,6 +133,7 @@ async def update_config(payload: ConfigUpdateRequest) -> ConfigResponse:
             current[service.value]["model"] = update.model
 
     if payload.preferred_service is not None:
+        # An explicit choice is the user's to make — honoured unconditionally.
         current["translation"]["preferred_service"] = payload.preferred_service.value
     elif (
         current["translation"].get("preferred_service") == TranslationService.ARGOS.value
@@ -101,11 +145,25 @@ async def update_config(payload: ConfigUpdateRequest) -> ConfigResponse:
             TranslationService.GEMINI,
         )
         chosen = next((s for s in priority if s in newly_keyed), newly_keyed[0])
-        current["translation"]["preferred_service"] = chosen.value
-        logger.info(
-            "Auto-switching preferred_service argos -> %s after key save",
-            chosen.value,
-        )
+        # Promote only on a key that actually works. Moving the user off Argos
+        # on a typo'd key used to hand them a translator that fails every
+        # paragraph, silently, for every document from then on — while Argos
+        # would have kept working. One provider round-trip, and only on the
+        # rare "first key saved while still on Argos" path.
+        ok, message = await _credentials_work(chosen, current[chosen.value])
+        if ok:
+            current["translation"]["preferred_service"] = chosen.value
+            logger.info(
+                "Auto-switching preferred_service argos -> %s after key save",
+                chosen.value,
+            )
+        else:
+            logger.warning(
+                "Key saved for %s but it did not validate (%s) — staying on "
+                "Argos. The user can still switch services explicitly.",
+                chosen.value,
+                message,
+            )
 
     if payload.default_source_lang is not None:
         current["translation"]["default_source_lang"] = payload.default_source_lang.value
@@ -121,7 +179,9 @@ async def update_config(payload: ConfigUpdateRequest) -> ConfigResponse:
         current["translation"]["cache_translated_pdfs"] = payload.cache_translated_pdfs
 
     new_settings = AppSettings(**current)
-    if not mgr.save_settings(new_settings):
+    # Off the loop thread: `save_settings` fsyncs and rewrites the backup, and
+    # this loop is also carrying any in-flight translation's SSE stream.
+    if not await asyncio.to_thread(mgr.save_settings, new_settings):
         raise HTTPException(status_code=500, detail="Failed to save settings")
     mgr._settings = new_settings  # refresh cached singleton
     return await get_config()

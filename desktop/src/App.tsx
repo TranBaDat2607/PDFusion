@@ -191,6 +191,10 @@ function Workspace() {
           state={translation.state}
           onCancel={translation.cancel}
           onDismiss={translation.reset}
+          // Same path as the toolbar's Re-translate: a retry must skip the
+          // PDF cache, or a cached earlier result would be served instead of
+          // the re-run the user asked for.
+          onRetry={handleReTranslate}
         />
       </div>
 

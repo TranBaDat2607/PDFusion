@@ -353,7 +353,7 @@ class ArgosTranslator(BaseTranslator):
         )
 
     def translate(self, text: str, **kwargs) -> str:
-        self.translate_call_count += 1
+        self._note_translate_call()
 
         # Step 1 — raw input handed to translate().
         _debug.record(
@@ -403,7 +403,16 @@ class ArgosTranslator(BaseTranslator):
         # blocks inside _ensure_en_vi_installed while other threads pile
         # additional paragraphs into the queue and the tail-timer may fire
         # against an unfinished install.
-        _ensure_en_vi_installed()
+        #
+        # This raises on any network problem (update_package_index, download)
+        # and it raises for *every* paragraph, so leaving it unguarded meant a
+        # first run with no network produced a fully-untranslated PDF that
+        # reported success and was cached against the input's hash. Routing it
+        # through the funnel is what keeps such a run out of the PDF cache.
+        try:
+            _ensure_en_vi_installed()
+        except Exception as e:  # noqa: BLE001 — counted, then falls back
+            return self._handle_translation_error(e, text)
 
         event = threading.Event()
         result_slot: list[str | None] = [None]
@@ -446,17 +455,21 @@ class ArgosTranslator(BaseTranslator):
         # remains; the timeout is generous. On timeout we fall back to the
         # original text — a late event.set() on this abandoned entry is harmless.
         if not event.wait(timeout=_BATCH_WAIT_TIMEOUT):
-            logger.warning(
-                "Argos batch wait timed out after %.0fs (call #%d); returning "
-                "original text as fallback.",
-                _BATCH_WAIT_TIMEOUT,
-                self.translate_call_count,
+            return self._handle_translation_error(
+                TimeoutError(
+                    f"Argos batch wait timed out after "
+                    f"{_BATCH_WAIT_TIMEOUT:.0f}s"
+                ),
+                text,
             )
-            return text
         result = result_slot[0]
         # Slot can still be None if the event fired without a result assigned
         # (shouldn't happen — every path sets it — but guard defensively).
-        return result if result is not None else text
+        if result is None:
+            return self._handle_translation_error(
+                RuntimeError("Argos batch worker fired without a result"), text
+            )
+        return result
 
     def _cancel_timer_locked(self) -> None:
         """Cancel any armed tail-flush timer. Caller must hold _batch_lock."""

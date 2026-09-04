@@ -50,7 +50,7 @@ class GeminiTranslator(BaseTranslator):
         logger.info(f"Gemini translator configured with model: {self.model_name}")
     
     def translate(self, text: str, **kwargs) -> str:
-        self.translate_call_count += 1
+        self._note_translate_call()
 
         try:
             processed_text = self._preprocess_text(text)
@@ -68,11 +68,23 @@ class GeminiTranslator(BaseTranslator):
                 config=self.generation_config,
             )
 
-            if response.candidates and response.candidates[0].content:
-                translated_text = response.text.strip()
-            else:
-                logger.warning("Gemini response was filtered or empty")
-                return text
+            if not (response.candidates and response.candidates[0].content):
+                # A safety filter drops `candidates` entirely. That is a failed
+                # paragraph like any other: without the funnel it came back as
+                # source text, uncounted, and the run stayed cacheable.
+                return self._handle_translation_error(
+                    RuntimeError(
+                        "Gemini returned no candidates (response filtered or "
+                        "empty)"
+                    ),
+                    text,
+                )
+
+            translated_text = response.text.strip()
+            if not translated_text:
+                return self._handle_translation_error(
+                    RuntimeError("Gemini returned an empty translation"), text
+                )
 
             result = self._postprocess_text(translated_text)
             _llm_cache_set(processed_text, result, self.lang_in, self.lang_out, "gemini", self.model_name)

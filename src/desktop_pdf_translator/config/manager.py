@@ -11,13 +11,17 @@ import tomlkit
 from pydantic import ValidationError
 
 from .models import AppSettings
-from ..utils import encrypt_api_key, decrypt_api_key, is_encrypted
+from ..utils import DPAPI_PREFIX, encrypt_api_key, decrypt_api_key, is_encrypted
 
 # Try to import python-dotenv for .env file support
 from dotenv import load_dotenv
 
 
 logger = logging.getLogger(__name__)
+
+# The services whose settings carry an API key. Adding a backend that needs one
+# is a one-line edit here rather than in each of the loops below.
+KEYED_SERVICES = ("openai", "gemini", "anthropic")
 
 
 class ConfigManager:
@@ -144,42 +148,98 @@ class ConfigManager:
             node.pop(loc[-1], None)
     
     def save_settings(self, settings: AppSettings) -> bool:
-        """Save settings to TOML file.
-        
+        """Save settings to the TOML file, atomically.
+
+        The write goes to a sibling temp file that is fsync'd and then
+        `os.replace`d over `config.toml`. `os.replace` is atomic on Windows and
+        POSIX, so a crash or a full disk mid-write leaves the previous file
+        intact instead of a truncated one — which, for this file, means
+        silently resetting every setting *including the encrypted API keys* to
+        defaults. The previous contents are also kept as `config.toml.bak` for
+        one generation — minus the API keys — so a bad-but-complete write is
+        recoverable by hand. See `_write_backup`.
+
         Args:
             settings: Settings to save
-            
+
         Returns:
             True if saved successfully, False otherwise
         """
+        tmp_file = self.config_file.with_name(self.config_file.name + ".tmp")
         try:
             # Convert to dict and format for TOML
             config_dict = settings.dict()
-            
+
             # Prepare sensitive data (API keys) for storage
             config_dict = self._remove_sensitive_data(config_dict)
-            
+
             # Clean None values that can't be serialized to TOML
             config_dict = self._clean_none_values(config_dict)
-            
-            # Write directly using tomlkit.dump without manual document creation
-            with open(self.config_file, "w", encoding="utf-8") as f:
+
+            with open(tmp_file, "w", encoding="utf-8") as f:
                 tomlkit.dump(config_dict, f)
-            
+                f.flush()
+                os.fsync(f.fileno())
+
+            # Read the outgoing generation once, while it is still there.
+            try:
+                previous = self.config_file.read_text(encoding="utf-8")
+            except OSError:
+                previous = None  # first save, or unreadable — nothing to back up
+            if previous is not None:
+                self._write_backup(previous)
+
+            os.replace(tmp_file, self.config_file)
+
             logger.info(f"Settings saved to {self.config_file}")
             return True
-            
+
         except Exception as e:
             logger.error(f"Failed to save settings: {e}")
+            try:
+                tmp_file.unlink(missing_ok=True)
+            except OSError:
+                pass
             return False
-    
+
+    def _write_backup(self, previous: str) -> None:
+        """Keep the outgoing generation of `config.toml` as `config.toml.bak`.
+
+        The API keys are stripped on the way in, so a backup is never more
+        readable than the file it backs up. That has to hold for every storage
+        format, not just the legacy → DPAPI upgrade that made it obvious — that
+        one would otherwise have parked a MachineGuid-encrypted key, decryptable
+        by any process on the box, beside the hardened file. A key is
+        re-enterable; the rest of the file (models, languages, cache limits) is
+        what is actually worth recovering by hand.
+
+        Best-effort by design: failing to write it must not block the save, and
+        a backup that can't be refreshed is removed rather than left behind
+        holding a stale generation of the same settings.
+        """
+        backup = self.config_file.with_name(self.config_file.name + ".bak")
+        try:
+            document = tomlkit.parse(previous)
+            for service in KEYED_SERVICES:
+                section = document.get(service)
+                if isinstance(section, dict):
+                    section.pop("api_key", None)
+                    section.pop("api_key_salt", None)
+            backup.write_text(tomlkit.dumps(document), encoding="utf-8")
+        except Exception as exc:  # noqa: BLE001 — a backup is never load-bearing
+            logger.warning("Could not refresh %s: %s", backup, exc)
+            try:
+                backup.unlink(missing_ok=True)
+            except OSError:
+                pass
+
     def _load_from_environment(self) -> Dict[str, Any]:
         """Load configuration from environment variables."""
         env_config = {}
         
         # Per-service API key + model overrides, e.g. OPENAI_API_KEY /
-        # OPENAI_MODEL. Adding a service is a one-line edit to this list.
-        for service in ("openai", "gemini", "anthropic"):
+        # OPENAI_MODEL.
+        for service in KEYED_SERVICES:
             if api_key := os.getenv(f"{service.upper()}_API_KEY"):
                 env_config.setdefault(service, {})["api_key"] = api_key
             if model := os.getenv(f"{service.upper()}_MODEL"):
@@ -233,7 +293,7 @@ class ConfigManager:
         """Remove sensitive data like API keys from config before saving."""
         safe_config = config_dict.copy()
 
-        for service in ["openai", "gemini", "anthropic"]:
+        for service in KEYED_SERVICES:
             if service in safe_config and isinstance(safe_config[service], dict):
                 safe_config[service] = safe_config[service].copy()
                 api_key = safe_config[service].get("api_key")
@@ -254,17 +314,33 @@ class ConfigManager:
         return safe_config
 
     def _decrypt_sensitive_data(self, config_data: Dict[str, Any]) -> None:
-        for service in ["openai", "gemini", "anthropic"]:
+        """Turn stored ciphertext back into usable keys, in place.
+
+        Two formats can be on disk: a DPAPI blob (self-contained, no salt) and
+        the legacy machine-key Fernet value (needs its `api_key_salt`
+        sibling). `encryption.decrypt_api_key` picks by prefix; the salt is
+        only required for the legacy one. Re-encryption to DPAPI happens on
+        the next `save_settings`.
+        """
+        for service in KEYED_SERVICES:
             if service not in config_data or not isinstance(config_data[service], dict):
                 continue
             service_data = config_data[service]
             encrypted_key = service_data.get("api_key")
             salt = service_data.get("api_key_salt")
-            if isinstance(encrypted_key, str) and isinstance(salt, str) and encrypted_key and salt and is_encrypted(encrypted_key):
-                decrypted = decrypt_api_key(encrypted_key, salt)
-                service_data["api_key"] = decrypted
+            if not isinstance(salt, str):
+                salt = ""
+            # Either a DPAPI blob, or a legacy value with its salt beside it.
+            # `is_encrypted` can't separate the second from plaintext on its own
+            # — it answers True for anything that base64-decodes — so the salt
+            # is what says a legacy value was stored rather than typed.
+            if isinstance(encrypted_key, str) and (
+                encrypted_key.startswith(DPAPI_PREFIX)
+                or (salt and is_encrypted(encrypted_key))
+            ):
+                service_data["api_key"] = decrypt_api_key(encrypted_key, salt)
             service_data.pop("api_key_salt", None)
-    
+
     def _clean_none_values(self, config_dict: Dict[str, Any]) -> Dict[str, Any]:
         """Remove None values from config dict to prevent TOML serialization errors."""
         cleaned = {}

@@ -11,7 +11,7 @@ const HINTS = {
   browserTab:
     "→ This looks like a regular browser tab. Close it and use the Tauri desktop window opened by `pnpm tauri dev`.",
   noInjection:
-    "→ Page is in some webview but Tauri injection didn't run. Check tauri.conf.json `app.security.csp` and `app.withGlobalTauri`.",
+    "→ Page is in some webview but Tauri injection didn't run. Check `app.security.csp` in tauri.conf.json — Tauri nonces its own init script, so a hand-edited CSP that drops `script-src 'self'` will block it.",
 } as const;
 
 export function tauriAvailable(): boolean {

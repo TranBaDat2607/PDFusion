@@ -1,6 +1,7 @@
 import { useCallback, useRef, useState } from "react";
 
 import { api } from "@/lib/api-client";
+import { buildAskBody } from "@/lib/ask-request";
 import { streamEvents } from "@/lib/sse";
 
 export interface ActionEvent {
@@ -9,22 +10,29 @@ export interface ActionEvent {
   status: "running" | "done" | "failed";
 }
 
+/** One retrieved chunk from `rag_chain._create_pdf_references`. */
+export interface PdfReference {
+  text?: string;
+  /** 1-indexed — `rag_chain._display_page` converts at that boundary, so it
+   *  goes straight to `PdfViewer.scrollToPage`. `null` when the chunk has no
+   *  usable page; the sidecar sends that rather than guessing one. */
+  page?: number | null;
+}
+
+/**
+ * The `answer` / `done` SSE payload from `POST /rag/ask`, narrowed to what the
+ * UI reads — the sidecar also sends `quality_metrics`, `sources_used`,
+ * `processing_time` and `timestamp`, so this is not a mirror of
+ * `EnhancedRAGChain.answer_question` and shouldn't be maintained as one.
+ *
+ * The key is load-bearing: the chain has always returned `pdf_references`, and
+ * this file declaring `pdf_sources` (alongside a `web_sources` branch left
+ * over from the web research dropped in `35bca2c`) is what kept the reference
+ * list empty (#13).
+ */
 export interface RagAnswer {
   answer: string;
-  pdf_sources?: Array<{
-    text?: string;
-    page?: number;
-    document_id?: string;
-    score?: number;
-  }>;
-  web_sources?: Array<{
-    url?: string;
-    title?: string;
-    snippet?: string;
-    source_type?: string;
-  }>;
-  citations?: Record<string, unknown>;
-  metadata?: Record<string, unknown>;
+  pdf_references?: PdfReference[];
 }
 
 export interface AskState {
@@ -49,8 +57,6 @@ let actionCounter = 0;
 interface AskParams {
   question: string;
   documentId: string | null;
-  includeWebResearch: boolean;
-  useDeepSearch: boolean;
 }
 
 export function useRagAsk() {
@@ -62,12 +68,10 @@ export function useRagAsk() {
 
     let jobId: string;
     try {
-      const accepted = await api.post<{ job_id: string }>("/rag/ask", {
-        question: params.question,
-        document_id: params.documentId,
-        include_web_research: params.includeWebResearch,
-        use_deep_search: params.useDeepSearch,
-      });
+      const accepted = await api.post<{ job_id: string }>(
+        "/rag/ask",
+        buildAskBody(params),
+      );
       jobId = accepted.job_id;
     } catch (e) {
       setState({ ...INITIAL, status: "error", error: (e as Error).message });
