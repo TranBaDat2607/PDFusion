@@ -9,22 +9,37 @@ export interface ActionEvent {
   status: "running" | "done" | "failed";
 }
 
+/** One retrieved chunk, as `rag_chain._create_pdf_references` builds it. */
+export interface PdfReference {
+  type?: string;
+  /** 1-indexed — converted at the boundary in `rag_chain._display_page`, so it
+   *  can be handed straight to `PdfViewer.scrollToPage`. */
+  page?: number;
+  text?: string;
+  confidence?: number;
+  document_id?: string;
+  document_path?: string;
+  chunk_id?: string;
+  has_equations?: boolean;
+  has_tables?: boolean;
+  has_figures?: boolean;
+  bbox?: number[];
+}
+
+/**
+ * The `answer` / `done` SSE payload from `POST /rag/ask`.
+ *
+ * Mirrors what `EnhancedRAGChain.answer_question` actually returns. It
+ * previously declared `pdf_sources`, `web_sources`, `citations` and `metadata`
+ * — none of which the backend has ever sent, which is why the reference list
+ * never rendered (#13). Web research was removed in `35bca2c`.
+ */
 export interface RagAnswer {
   answer: string;
-  pdf_sources?: Array<{
-    text?: string;
-    page?: number;
-    document_id?: string;
-    score?: number;
-  }>;
-  web_sources?: Array<{
-    url?: string;
-    title?: string;
-    snippet?: string;
-    source_type?: string;
-  }>;
-  citations?: Record<string, unknown>;
-  metadata?: Record<string, unknown>;
+  pdf_references?: PdfReference[];
+  quality_metrics?: Record<string, number>;
+  processing_time?: number;
+  error?: string;
 }
 
 export interface AskState {

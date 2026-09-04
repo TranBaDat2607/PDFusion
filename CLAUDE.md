@@ -156,7 +156,7 @@ All routes (except `GET /health`) require `Authorization: Bearer <token>`.
 | POST | `/rag/index` | Index a PDF into ChromaDB → returns `{ job_id }` |
 | GET | `/rag/index/{job_id}/events` | SSE: `progress`, `done`, `error` |
 | POST | `/rag/ask` | Ask the RAG chain → returns `{ job_id }` |
-| GET | `/rag/ask/{job_id}/events` | SSE: `progress`, `answer`, `done`, `error` |
+| GET | `/rag/ask/{job_id}/events` | SSE: `progress`, `answer`, `done`, `error`. Retrieved chunks ride on `answer.pdf_references` (**not** `pdf_sources`), and their `page` is **1-indexed**: chunk metadata is 0-indexed, `PdfViewer.scrollToPage` counts from 1, so `rag_chain._display_page` converts at that one boundary |
 | DELETE | `/rag/document/{document_id}` | Remove an indexed document from the vector store |
 | GET | `/pdf/file?path=...` | Stream a PDF from disk (used by pdf.js client-side) |
 | POST | `/pdf/export` | Copy a translated PDF to a user-chosen permanent path (`{source_path, destination_path, protect_path?}` → `{saved_path, bytes_written}`). `protect_path` is the opened document; it's refused as a destination |

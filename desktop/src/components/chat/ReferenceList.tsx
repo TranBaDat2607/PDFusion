@@ -6,7 +6,6 @@ interface ReferenceItem {
   label: string;
   detail?: string;
   page?: number;
-  url?: string;
 }
 
 interface ReferenceListProps {

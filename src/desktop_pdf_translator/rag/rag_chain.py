@@ -16,6 +16,21 @@ from .reference_manager import ReferenceManager
 logger = logging.getLogger(__name__)
 
 
+def _display_page(metadata: Dict[str, Any]) -> int:
+    """Page number as a human (and `PdfViewer.scrollToPage`) counts them.
+
+    Chunk metadata stores `page` 0-indexed — it comes straight from
+    `document_processor.process_pdf`'s `range(len(doc))` and is used that way
+    internally (`_add_surrounding_context`'s page window, the re-rank
+    page score). Everything that *leaves* this module is read by a person or
+    scrolled to by the viewer, so it converts here, at the single boundary.
+    """
+    try:
+        return int(metadata.get('page', 0)) + 1
+    except (TypeError, ValueError):
+        return 1
+
+
 class EnhancedRAGChain:
     """RAG chain that retrieves PDF context from ChromaDB and synthesizes an answer via an LLM translator."""
 
@@ -331,7 +346,7 @@ Hypothetical answer:"""
             context_parts.append("=== INFORMATION FROM PDF DOCUMENTS ===")
             for i, source in enumerate(pdf_sources[:3]):
                 text = source.get('text', '')
-                page = source.get('metadata', {}).get('page', 'N/A')
+                page = _display_page(source.get('metadata', {}))
                 context_parts.append(f"[PDF Source {i+1}, Page {page}]: {text[:300]}...")
 
         full_context = '\n'.join(context_parts)
@@ -398,7 +413,7 @@ ANSWER:
             answer_parts.append("\n**Information from PDF documents:**")
             for i, source in enumerate(pdf_sources[:2]):
                 text = source.get('text', '')
-                page = source.get('metadata', {}).get('page', 'N/A')
+                page = _display_page(source.get('metadata', {}))
                 answer_parts.append(f"- Page {page}: {text[:200]}...")
             answer_parts.append("\n**Conclusion:** The above information provides an overview of your question. For more details, please refer to the cited sources.")
         else:
@@ -407,7 +422,12 @@ ANSWER:
         return '\n'.join(answer_parts)
 
     def _create_pdf_references(self, pdf_sources: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        """Create PDF references with navigation information."""
+        """Create PDF references with navigation information.
+
+        `page` is 1-indexed here — this list is the `pdf_references` field of
+        the `answer`/`done` SSE payload, and the chat panel feeds it straight
+        to `PdfViewer.scrollToPage`, which counts from 1.
+        """
 
         references = []
 
@@ -416,7 +436,7 @@ ANSWER:
 
             reference = {
                 'type': 'pdf',
-                'page': metadata.get('page', 0),
+                'page': _display_page(metadata),
                 'text': source.get('text', '')[:150] + "...",
                 'confidence': source.get('similarity_score', 0.0),
                 'document_id': metadata.get('document_id', ''),
