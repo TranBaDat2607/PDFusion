@@ -527,6 +527,7 @@ of any file logger added later.
   # Python (pytest config lives in pyproject.toml; tests/conftest.py puts src/ on sys.path)
   python -m pytest tests           # test_file_export.py, test_pdf_export_api.py,
                                    # test_translate_language_contract.py,
+                                   # test_translation_failure_reporting.py,
                                    # test_config_security.py, test_cors_origins.py
 
   # Frontend (vitest, node environment — no jsdom)
