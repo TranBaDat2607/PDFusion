@@ -9,7 +9,9 @@
  * returned `pdf_references`; the UI read `pdf_sources`, so the reference list
  * was permanently empty and the click-to-jump affordance unreachable (#13).
  * Page numbers arrive 1-indexed — converted once, in `rag_chain._display_page`
- * — because that is what `PdfViewer.scrollToPage` expects.
+ * — because that is what `PdfViewer.scrollToPage` expects. A chunk with no
+ * usable page arrives as `null`; it becomes a "Page ?" row with no `page`, so
+ * `AssistantMessage`'s click guard leaves the viewer where it is.
  */
 
 import type { RagAnswer } from "@/hooks/useRagAsk";
@@ -29,6 +31,8 @@ export function toReferenceRows(answer: RagAnswer): ReferenceRow[] {
     key: `pdf-${i}`,
     label: ref.page != null ? `Page ${ref.page}` : "Page ?",
     detail: (ref.text ?? "").slice(0, DETAIL_CHARS),
-    page: ref.page,
+    // `null` and absent both mean "unknown page" — collapse them, so callers
+    // have one shape to guard on.
+    page: ref.page ?? undefined,
   }));
 }

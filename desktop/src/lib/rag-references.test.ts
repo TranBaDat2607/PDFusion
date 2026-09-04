@@ -89,4 +89,16 @@ describe("toReferenceRows", () => {
     expect(row.label).toBe("Page ?");
     expect(row.page).toBeUndefined();
   });
+
+  // `null` is the shape that actually arrives: `_display_page` returns None
+  // for an unusable page rather than defaulting to 1, so the row must not
+  // carry a page a click could scroll to.
+  it("treats an explicitly null page as unknown", () => {
+    const row = toReferenceRows({
+      answer: "…",
+      pdf_references: [{ type: "pdf", page: null, text: "orphan chunk" }],
+    })[0];
+    expect(row.label).toBe("Page ?");
+    expect(row.page).toBeUndefined();
+  });
 });

@@ -16,7 +16,7 @@ from .reference_manager import ReferenceManager
 logger = logging.getLogger(__name__)
 
 
-def _display_page(metadata: Dict[str, Any]) -> int:
+def _display_page(metadata: Dict[str, Any]) -> Optional[int]:
     """Page number as a human (and `PdfViewer.scrollToPage`) counts them.
 
     Chunk metadata stores `page` 0-indexed — it comes straight from
@@ -24,11 +24,26 @@ def _display_page(metadata: Dict[str, Any]) -> int:
     internally (`_add_surrounding_context`'s page window, the re-rank
     page score). Everything that *leaves* this module is read by a person or
     scrolled to by the viewer, so it converts here, at the single boundary.
+
+    `None` when the chunk carries no usable page. Every writer of this metadata
+    stores an int (`vector_store.add_document_chunks`), so that's defensive —
+    but defaulting to page 1 would cite the first page with exactly the
+    confidence of a real hit, and the viewer would scroll there. An absent page
+    says so instead: the chat panel labels it "Page ?" and won't jump.
     """
+    raw = metadata.get('page')
+    if raw is None:
+        return None
     try:
-        return int(metadata.get('page', 0)) + 1
+        return int(raw) + 1
     except (TypeError, ValueError):
-        return 1
+        return None
+
+
+def _page_label(metadata: Dict[str, Any]) -> str:
+    """`_display_page` for prose — the LLM's context block and answer text."""
+    page = _display_page(metadata)
+    return 'N/A' if page is None else str(page)
 
 
 class EnhancedRAGChain:
@@ -346,7 +361,7 @@ Hypothetical answer:"""
             context_parts.append("=== INFORMATION FROM PDF DOCUMENTS ===")
             for i, source in enumerate(pdf_sources[:3]):
                 text = source.get('text', '')
-                page = _display_page(source.get('metadata', {}))
+                page = _page_label(source.get('metadata', {}))
                 context_parts.append(f"[PDF Source {i+1}, Page {page}]: {text[:300]}...")
 
         full_context = '\n'.join(context_parts)
@@ -413,7 +428,7 @@ ANSWER:
             answer_parts.append("\n**Information from PDF documents:**")
             for i, source in enumerate(pdf_sources[:2]):
                 text = source.get('text', '')
-                page = _display_page(source.get('metadata', {}))
+                page = _page_label(source.get('metadata', {}))
                 answer_parts.append(f"- Page {page}: {text[:200]}...")
             answer_parts.append("\n**Conclusion:** The above information provides an overview of your question. For more details, please refer to the cited sources.")
         else:
@@ -426,7 +441,9 @@ ANSWER:
 
         `page` is 1-indexed here — this list is the `pdf_references` field of
         the `answer`/`done` SSE payload, and the chat panel feeds it straight
-        to `PdfViewer.scrollToPage`, which counts from 1.
+        to `PdfViewer.scrollToPage`, which counts from 1. It is `None` for a
+        chunk with no usable page, rather than a made-up number the viewer
+        would happily scroll to.
         """
 
         references = []

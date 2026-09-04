@@ -13,8 +13,10 @@ export interface ActionEvent {
 export interface PdfReference {
   type?: string;
   /** 1-indexed — converted at the boundary in `rag_chain._display_page`, so it
-   *  can be handed straight to `PdfViewer.scrollToPage`. */
-  page?: number;
+   *  can be handed straight to `PdfViewer.scrollToPage`. `null` when the chunk
+   *  has no usable page: the backend sends that rather than guessing a page
+   *  the viewer would scroll to. */
+  page?: number | null;
   text?: string;
   confidence?: number;
   document_id?: string;
