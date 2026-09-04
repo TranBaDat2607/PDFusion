@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 
-import { api } from "@/lib/api-client";
+import { ApiError, api } from "@/lib/api-client";
 import { streamEvents } from "@/lib/sse";
 import { useAppStore } from "@/lib/store";
+import { buildTranslateBody } from "@/lib/translate-request";
 
 interface ProgressUpdate {
   stage?: string;
@@ -104,6 +105,13 @@ function formatRelative(iso: string): string {
 export interface StartOptions {
   /** Skip the PDF-level cache for this run — forces a fresh translation. */
   bypassCache?: boolean;
+  /** The toolbar's current selection. Passed explicitly rather than left to
+   *  the sidecar's config lookup: changing a dropdown fires an async PUT, so a
+   *  Translate click landing before that PUT would otherwise run the *previous*
+   *  selection. Omitted values fall back to the configured defaults. */
+  sourceLang?: string | null;
+  targetLang?: string | null;
+  service?: string | null;
 }
 
 export function useTranslation() {
@@ -150,19 +158,30 @@ export function useTranslation() {
 
       let jobId: string;
       try {
-        const accepted = await api.post<{ job_id: string }>("/translate", {
-          file_path: filePath,
-          visible_page: visiblePage,
-          bypass_cache: opts.bypassCache ?? false,
-        });
+        const accepted = await api.post<{ job_id: string }>(
+          "/translate",
+          buildTranslateBody({
+            filePath,
+            visiblePage,
+            bypassCache: opts.bypassCache,
+            sourceLang: opts.sourceLang,
+            targetLang: opts.targetLang,
+            service: opts.service,
+          }),
+        );
         jobId = accepted.job_id;
         setActiveJob(jobId);
       } catch (e) {
-        setState({
-          ...INITIAL,
-          status: "error",
-          error: (e as Error).message,
-        });
+        // The sidecar pre-flights the language pair and answers 422 with a
+        // sentence meant for the user ("Argos translates English → Vietnamese
+        // only…"). Show that, not `ApiError`'s "422: " prefix.
+        const message = e instanceof ApiError ? e.detail : (e as Error).message;
+        if (e instanceof ApiError && e.status === 422) {
+          toast.error("Can't translate this combination", {
+            description: message,
+          });
+        }
+        setState({ ...INITIAL, status: "error", error: message });
         return;
       }
 

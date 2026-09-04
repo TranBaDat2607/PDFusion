@@ -1,4 +1,4 @@
-import { useCallback, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { toast } from "sonner";
@@ -13,6 +13,7 @@ import { StartupScreen } from "@/components/StartupScreen";
 import { ThemeProvider } from "@/components/theme-provider";
 import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { useConfig } from "@/hooks/useConfig";
 import { useSidecar } from "@/hooks/useSidecar";
 import { isTranslationBusy, useTranslation } from "@/hooks/useTranslation";
 import { useAppStore } from "@/lib/store";
@@ -58,6 +59,25 @@ function Workspace() {
   const setExportedPath = useAppStore((s) => s.setExportedPdfPath);
   const originalPath = useAppStore((s) => s.originalPdfPath);
   const translation = useTranslation();
+  const { data: config } = useConfig();
+
+  // The toolbar persists its dropdowns to config, but that PUT is async — a
+  // Translate click can land first. Read the selection here and send it with
+  // the request so the run can't use a stale one.
+  // Deliberately the *requested* service, not the effective one: the sidecar
+  // does its own no-key fallback and emits the "falling back to Argos" notice
+  // the user sees as a toast. Pre-resolving it here would silence that.
+  const selection = useMemo(
+    () =>
+      config
+        ? {
+            sourceLang: config.translation.default_source_lang,
+            targetLang: config.translation.default_target_lang,
+            service: config.translation.preferred_service,
+          }
+        : {},
+    [config],
+  );
 
   const handlePickFile = useCallback(async () => {
     try {
@@ -75,26 +95,34 @@ function Workspace() {
         translation.reset();
         // Fire-and-forget pre-warm: by the time the user clicks Translate, the
         // Argos pack should be installed (or the LLM client should be live).
-        // Errors are intentionally swallowed — this is a UX optimization,
-        // never a correctness gate.
-        void api.post("/translate/prewarm", {}).catch(() => undefined);
+        // Carries the current selection — an empty body warms the configured
+        // default, which is the wrong backend once the user has changed the
+        // dropdowns. Errors are intentionally swallowed: this is a UX
+        // optimization, never a correctness gate.
+        void api
+          .post("/translate/prewarm", {
+            source_lang: selection.sourceLang,
+            target_lang: selection.targetLang,
+            service: selection.service,
+          })
+          .catch(() => undefined);
       }
     } catch (e) {
       toast.error("Could not open file picker", {
         description: (e as Error).message,
       });
     }
-  }, [setOriginalPath, setTranslatedPath, setExportedPath, translation]);
+  }, [setOriginalPath, setTranslatedPath, setExportedPath, translation, selection]);
 
   const handleTranslate = useCallback(() => {
     if (!originalPath) return;
-    void translation.start(originalPath);
-  }, [originalPath, translation]);
+    void translation.start(originalPath, selection);
+  }, [originalPath, translation, selection]);
 
   const handleReTranslate = useCallback(() => {
     if (!originalPath) return;
-    void translation.start(originalPath, { bypassCache: true });
-  }, [originalPath, translation]);
+    void translation.start(originalPath, { ...selection, bypassCache: true });
+  }, [originalPath, translation, selection]);
 
   return (
     <div className="flex h-full w-full flex-col bg-background text-foreground">

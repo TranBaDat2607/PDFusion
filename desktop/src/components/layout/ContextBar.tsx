@@ -1,4 +1,4 @@
-import { ArrowRight, FilePlus, Loader2, MessageSquare, RefreshCw, Sparkles } from "lucide-react";
+import { ArrowRight, FilePlus, Loader2, Lock, MessageSquare, RefreshCw, Sparkles } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -18,11 +18,19 @@ import {
 import { useConfig, useOptions, useUpdateConfig } from "@/hooks/useConfig";
 import { api } from "@/lib/api-client";
 import { basename } from "@/lib/export-pdf";
+import { effectiveService, isPairSupported } from "@/lib/translate-request";
 import { useAppStore } from "@/lib/store";
 import { cn } from "@/lib/utils";
 
-function prewarm() {
-  void api.post("/translate/prewarm", {}).catch(() => undefined);
+/** Warm the backend the user just selected. The value is passed in rather than
+ *  read back from config: `update.mutate` hasn't round-tripped yet, so config
+ *  still holds the *previous* selection at this point. */
+function prewarm(selection: {
+  source_lang?: string;
+  target_lang?: string;
+  service?: string;
+}) {
+  void api.post("/translate/prewarm", selection).catch(() => undefined);
 }
 
 interface ContextBarProps {
@@ -62,6 +70,19 @@ export function ContextBar({
     ? config?.[service].model ?? activeService.models[0]
     : "";
 
+  // Which targets the backend that will *actually* run can reach. An LLM with
+  // no API key is silently downgraded to Argos by the sidecar, so this asks
+  // about the effective service — offering Japanese under a keyless "OpenAI"
+  // selection would produce a job the sidecar refuses.
+  const targetSupported = (code: string) =>
+    !config || !options
+      ? true
+      : isPairSupported(options, effectiveService(config), sourceLang, code);
+
+  const hasLockedTarget = !!options?.languages.some(
+    (l) => l.code !== "auto" && !targetSupported(l.code),
+  );
+
   const ready = config && options;
   const canTranslate = !!originalPath && !translating && ready;
 
@@ -91,7 +112,7 @@ export function ContextBar({
           value={sourceLang}
           onValueChange={(v) => {
             update.mutate({ default_source_lang: v });
-            prewarm();
+            prewarm({ source_lang: v, target_lang: targetLang, service });
           }}
         >
           <SelectTrigger size="sm" className="h-8 min-w-[140px]">
@@ -110,7 +131,7 @@ export function ContextBar({
           value={targetLang}
           onValueChange={(v) => {
             update.mutate({ default_target_lang: v });
-            prewarm();
+            prewarm({ source_lang: sourceLang, target_lang: v, service });
           }}
         >
           <SelectTrigger size="sm" className="h-8 min-w-[140px]">
@@ -119,11 +140,33 @@ export function ContextBar({
           <SelectContent>
             {options?.languages
               .filter((l) => l.code !== "auto")
-              .map((l) => (
-                <SelectItem key={l.code} value={l.code}>
-                  {l.label}
-                </SelectItem>
-              ))}
+              .map((l) => {
+                const supported = targetSupported(l.code);
+                return (
+                  <SelectItem key={l.code} value={l.code} disabled={!supported}>
+                    <span className="flex items-center gap-1.5">
+                      {l.label}
+                      {!supported && (
+                        <>
+                          <Lock className="h-3 w-3" />
+                          <span className="text-[10px] text-muted-foreground">
+                            API key needed
+                          </span>
+                        </>
+                      )}
+                    </span>
+                  </SelectItem>
+                );
+              })}
+            {hasLockedTarget && (
+              // A disabled Radix item sets `pointer-events: none`, so a hover
+              // tooltip on the row can never fire. The explanation goes here
+              // instead, where it's visible without hovering anything.
+              <p className="mt-1 border-t border-border px-2 pt-2 text-[11px] leading-snug text-muted-foreground">
+                Offline Argos translates English → Vietnamese only. Add an API
+                key in Settings to translate to other languages.
+              </p>
+            )}
           </SelectContent>
         </Select>
       </div>
@@ -134,7 +177,7 @@ export function ContextBar({
         value={service}
         onValueChange={(v) => {
           update.mutate({ preferred_service: v as typeof service });
-          prewarm();
+          prewarm({ source_lang: sourceLang, target_lang: targetLang, service: v });
         }}
       >
         <SelectTrigger size="sm" className="h-8 min-w-[150px]">
