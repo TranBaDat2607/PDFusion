@@ -25,17 +25,15 @@ def _display_page(metadata: Dict[str, Any]) -> Optional[int]:
     page score). Everything that *leaves* this module is read by a person or
     scrolled to by the viewer, so it converts here, at the single boundary.
 
-    `None` when the chunk carries no usable page. Every writer of this metadata
-    stores an int (`vector_store.add_document_chunks`), so that's defensive —
-    but defaulting to page 1 would cite the first page with exactly the
-    confidence of a real hit, and the viewer would scroll there. An absent page
-    says so instead: the chat panel labels it "Page ?" and won't jump.
+    `None` when the chunk carries no usable page — missing, or unparseable.
+    Every writer of this metadata stores an int
+    (`vector_store.add_document_chunks`), so that's defensive — but defaulting
+    to page 1 would cite the first page with exactly the confidence of a real
+    hit, and the viewer would scroll there. An absent page says so instead: the
+    chat panel labels it "Page ?" and won't jump.
     """
-    raw = metadata.get('page')
-    if raw is None:
-        return None
     try:
-        return int(raw) + 1
+        return int(metadata.get('page')) + 1
     except (TypeError, ValueError):
         return None
 
@@ -439,11 +437,10 @@ ANSWER:
     def _create_pdf_references(self, pdf_sources: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """Create PDF references with navigation information.
 
-        `page` is 1-indexed here — this list is the `pdf_references` field of
-        the `answer`/`done` SSE payload, and the chat panel feeds it straight
-        to `PdfViewer.scrollToPage`, which counts from 1. It is `None` for a
-        chunk with no usable page, rather than a made-up number the viewer
-        would happily scroll to.
+        This list is the `pdf_references` field of the `answer`/`done` SSE
+        payload, and the chat panel feeds `page` straight to
+        `PdfViewer.scrollToPage` — so it is 1-indexed, or `None`. See
+        `_display_page`.
         """
 
         references = []
