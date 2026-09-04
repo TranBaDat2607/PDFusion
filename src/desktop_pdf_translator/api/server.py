@@ -162,6 +162,30 @@ async def _lifespan(app: FastAPI):
     logger.info("Sidecar shutting down")
 
 
+def _allowed_origins() -> list[str]:
+    """Origins the webview can legitimately be running on.
+
+    Previously `["*"]`, which let any web page the user happened to have open
+    probe the loopback port and read `/health`'s response. Everything real
+    still needs the bearer token, so this is hygiene rather than a hole — but
+    the allowlist is short and known, so there's no reason to publish it.
+
+    The production webview loads from Tauri's custom protocol, which WebView2
+    presents as `http://tauri.localhost` (WebKit, on macOS/Linux, uses
+    `tauri://localhost`). The Vite dev server's origins are added only when
+    running from source — `sys.frozen` is set by the PyInstaller bundle, so a
+    shipped sidecar never accepts them.
+    """
+    origins = [
+        "http://tauri.localhost",
+        "https://tauri.localhost",
+        "tauri://localhost",
+    ]
+    if not getattr(sys, "frozen", False):
+        origins += ["http://localhost:1420", "http://127.0.0.1:1420"]
+    return origins
+
+
 def create_app() -> FastAPI:
     settings = get_settings()
     app = FastAPI(
@@ -170,11 +194,10 @@ def create_app() -> FastAPI:
         lifespan=_lifespan,
     )
 
-    # The Tauri webview talks to http://127.0.0.1:<port>. We allow any local
-    # origin so dev mode (vite on 1420) and the production webview both work.
+    # The Tauri webview talks to http://127.0.0.1:<port>.
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["*"],
+        allow_origins=_allowed_origins(),
         allow_credentials=False,
         allow_methods=["*"],
         allow_headers=["*"],

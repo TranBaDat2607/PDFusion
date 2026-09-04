@@ -276,9 +276,10 @@ class PDFProcessor:
             # durable copy is in `translated_pdf_cache/files/<key>.pdf` after
             # the run. We wipe the *previous* job's temp dir as soon as a new
             # one starts (the viewer has moved on by then) so only one
-            # translation's bytes ever sit on disk at a time. Callers can pin
-            # a specific dir via the `/translate` API's `output_dir` field;
-            # that path is honored verbatim and never auto-cleaned.
+            # translation's bytes ever sit on disk at a time. In-process
+            # callers can still pin a dir via the `output_dir` argument — it's
+            # honored verbatim and never auto-cleaned — but that is no longer
+            # reachable over HTTP; see `TranslateRequest`.
             global _previous_output_dir
             if output_dir is None:
                 output_dir = Path(tempfile.mkdtemp(prefix=_TEMP_DIR_PREFIX))

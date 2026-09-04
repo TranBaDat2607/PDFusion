@@ -143,6 +143,28 @@ fn project_root() -> Option<PathBuf> {
     Some(manifest_dir.parent()?.parent()?.to_path_buf())
 }
 
+/// Strip the bearer token out of a line before it reaches the log.
+///
+/// The handshake carries the sidecar's token, and `app.log` is a plain file in
+/// `%LOCALAPPDATA%` that users paste into bug reports. The token is the only
+/// thing standing between a local process and the sidecar's API, so it does
+/// not belong in a file whose whole purpose is to be shared.
+fn redact_ready_line(line: &str) -> String {
+    if !line.starts_with("READY ") {
+        return line.to_string();
+    }
+    line.split_whitespace()
+        .map(|kv| {
+            if kv.starts_with("token=") {
+                "token=<redacted>".to_string()
+            } else {
+                kv.to_string()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 fn parse_ready_line(line: &str) -> Result<SidecarInfo, SidecarError> {
     let stripped = line.strip_prefix("READY ").ok_or_else(|| {
         SidecarError::BadReadyLine(format!("missing 'READY' prefix: {line}"))
@@ -334,7 +356,7 @@ pub async fn spawn(app: AppHandle) -> Result<SidecarInfo, SidecarError> {
             line = reader.next_line() => {
                 match line {
                     Ok(Some(text)) => {
-                        log::info!("[sidecar stdout] {text}");
+                        log::info!("[sidecar stdout] {}", redact_ready_line(&text));
                         if text.starts_with("READY ") {
                             break parse_ready_line(&text)?;
                         }
@@ -358,7 +380,7 @@ pub async fn spawn(app: AppHandle) -> Result<SidecarInfo, SidecarError> {
     tokio::spawn(async move {
         let mut reader = reader;
         while let Ok(Some(line)) = reader.next_line().await {
-            log::info!("[sidecar stdout] {line}");
+            log::info!("[sidecar stdout] {}", redact_ready_line(&line));
         }
     });
 
@@ -399,5 +421,34 @@ async fn health_check(port: u16, token: &str) -> Result<(), SidecarError> {
             return Err(SidecarError::Health("auth/ping never returned 200".into()));
         }
         sleep(Duration::from_millis(300)).await;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{parse_ready_line, redact_ready_line};
+
+    #[test]
+    fn ready_line_is_logged_without_its_token() {
+        let line = "READY port=54213 token=Yd7HfSuperSecretG3";
+        let redacted = redact_ready_line(line);
+        assert_eq!(redacted, "READY port=54213 token=<redacted>");
+        assert!(!redacted.contains("Yd7HfSuperSecretG3"));
+    }
+
+    #[test]
+    fn redaction_does_not_disturb_parsing() {
+        // The raw line is still what gets parsed — redaction is for the log
+        // only, so the token must survive the path that actually uses it.
+        let line = "READY port=54213 token=Yd7HfSuperSecretG3";
+        let info = parse_ready_line(line).expect("should parse");
+        assert_eq!(info.port, 54213);
+        assert_eq!(info.token, "Yd7HfSuperSecretG3");
+    }
+
+    #[test]
+    fn ordinary_stdout_passes_through_unchanged() {
+        let line = "INFO Argos pre-warm: done";
+        assert_eq!(redact_ready_line(line), line);
     }
 }

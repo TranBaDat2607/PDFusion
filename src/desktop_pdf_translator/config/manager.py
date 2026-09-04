@@ -4,6 +4,7 @@ Configuration manager for desktop PDF translator.
 
 import os
 import logging
+import shutil
 from pathlib import Path
 from typing import Optional, Dict, Any
 
@@ -11,7 +12,7 @@ import tomlkit
 from pydantic import ValidationError
 
 from .models import AppSettings
-from ..utils import encrypt_api_key, decrypt_api_key, is_encrypted
+from ..utils import DPAPI_PREFIX, encrypt_api_key, decrypt_api_key, is_encrypted
 
 # Try to import python-dotenv for .env file support
 from dotenv import load_dotenv
@@ -144,33 +145,60 @@ class ConfigManager:
             node.pop(loc[-1], None)
     
     def save_settings(self, settings: AppSettings) -> bool:
-        """Save settings to TOML file.
-        
+        """Save settings to the TOML file, atomically.
+
+        The write goes to a sibling temp file that is fsync'd and then
+        `os.replace`d over `config.toml`. `os.replace` is atomic on Windows and
+        POSIX, so a crash or a full disk mid-write leaves the previous file
+        intact instead of a truncated one — which, for this file, means
+        silently resetting every setting *including the encrypted API keys* to
+        defaults. The previous contents are also kept as `config.toml.bak` for
+        one generation, so a bad-but-complete write is recoverable by hand.
+
         Args:
             settings: Settings to save
-            
+
         Returns:
             True if saved successfully, False otherwise
         """
+        tmp_file = self.config_file.with_name(self.config_file.name + ".tmp")
         try:
             # Convert to dict and format for TOML
             config_dict = settings.dict()
-            
+
             # Prepare sensitive data (API keys) for storage
             config_dict = self._remove_sensitive_data(config_dict)
-            
+
             # Clean None values that can't be serialized to TOML
             config_dict = self._clean_none_values(config_dict)
-            
-            # Write directly using tomlkit.dump without manual document creation
-            with open(self.config_file, "w", encoding="utf-8") as f:
+
+            with open(tmp_file, "w", encoding="utf-8") as f:
                 tomlkit.dump(config_dict, f)
-            
+                f.flush()
+                os.fsync(f.fileno())
+
+            if self.config_file.exists():
+                # Copy rather than rename: a rename would leave `config.toml`
+                # missing for the instant between the two calls.
+                backup = self.config_file.with_name(self.config_file.name + ".bak")
+                try:
+                    shutil.copyfile(self.config_file, backup)
+                except OSError as exc:
+                    # A failed backup must not block the save — the atomic
+                    # replace below still protects the file itself.
+                    logger.warning("Could not refresh %s: %s", backup, exc)
+
+            os.replace(tmp_file, self.config_file)
+
             logger.info(f"Settings saved to {self.config_file}")
             return True
-            
+
         except Exception as e:
             logger.error(f"Failed to save settings: {e}")
+            try:
+                tmp_file.unlink(missing_ok=True)
+            except OSError:
+                pass
             return False
     
     def _load_from_environment(self) -> Dict[str, Any]:
@@ -254,13 +282,28 @@ class ConfigManager:
         return safe_config
 
     def _decrypt_sensitive_data(self, config_data: Dict[str, Any]) -> None:
+        """Turn stored ciphertext back into usable keys, in place.
+
+        Two formats can be on disk: a DPAPI blob (self-contained, no salt) and
+        the legacy machine-key Fernet value (needs its `api_key_salt`
+        sibling). `encryption.decrypt_api_key` picks by prefix; the salt is
+        only required for the legacy one. Re-encryption to DPAPI happens on
+        the next `save_settings`.
+        """
         for service in ["openai", "gemini", "anthropic"]:
             if service not in config_data or not isinstance(config_data[service], dict):
                 continue
             service_data = config_data[service]
             encrypted_key = service_data.get("api_key")
             salt = service_data.get("api_key_salt")
-            if isinstance(encrypted_key, str) and isinstance(salt, str) and encrypted_key and salt and is_encrypted(encrypted_key):
+            if not isinstance(salt, str):
+                salt = ""
+            if (
+                isinstance(encrypted_key, str)
+                and encrypted_key
+                and is_encrypted(encrypted_key)
+                and (salt or encrypted_key.startswith(DPAPI_PREFIX))
+            ):
                 decrypted = decrypt_api_key(encrypted_key, salt)
                 service_data["api_key"] = decrypted
             service_data.pop("api_key_salt", None)
