@@ -20,9 +20,31 @@ interface AppState {
     size: { width: number; height: number } | null,
   ) => void;
 
-  /** Path of the translated PDF (filled when a translation completes). */
+  /** Path of the translated PDF (filled when a translation completes).
+   *  NOTE: this is an *ephemeral* artifact — a rolling file in the per-job
+   *  `%TEMP%\pdfusion-translate-*` dir, wiped by the next job and on app exit.
+   *  Never present it to the user as a saved copy; see `exportedPdfPath`. */
   translatedPdfPath: string | null;
   setTranslatedPdfPath: (path: string | null) => void;
+
+  /** Where the user actually saved the translation via the Save dialog, if
+   *  they have. This is the only path that survives the app closing, so it's
+   *  the only one the UI may call "Saved to". Cleared on a new translation
+   *  run and when a different document is opened. */
+  exportedPdfPath: string | null;
+  setExportedPdfPath: (path: string | null) => void;
+
+  /** Take a freshly produced artifact as the on-screen translation, retiring
+   *  any saved copy — which describes the *previous* result from here on.
+   *  A single action rather than two setters: this fires once per
+   *  `chunk_ready` (i.e. per page), and the two writes must not drift apart. */
+  adoptTranslatedArtifact: (path: string) => void;
+
+  /** Language the on-screen translation was actually produced in, as reported
+   *  by the job that produced it — not read from live config, which the user
+   *  can change after a run. Names the default file in the Save dialog. */
+  translationTargetLang: string;
+  setTranslationTargetLang: (lang: string) => void;
 
   /** Monotonic counter bumped at the start of every translation. The
    *  translated-panel PdfViewer includes this in its load-effect deps so
@@ -70,6 +92,16 @@ export const useAppStore = create<AppState>((set) => ({
 
   translatedPdfPath: null,
   setTranslatedPdfPath: (path) => set({ translatedPdfPath: path }),
+
+  exportedPdfPath: null,
+  setExportedPdfPath: (path) => set({ exportedPdfPath: path }),
+
+  adoptTranslatedArtifact: (path) =>
+    set({ translatedPdfPath: path, exportedPdfPath: null }),
+
+  translationTargetLang: "vi",
+  setTranslationTargetLang: (translationTargetLang) =>
+    set({ translationTargetLang }),
 
   translatedReloadKey: 0,
   bumpTranslatedReloadKey: () =>

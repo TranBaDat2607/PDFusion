@@ -115,6 +115,32 @@ class PrewarmResponse(BaseModel):
 
 
 # ---------------------------------------------------------------------------
+# PDF export
+# ---------------------------------------------------------------------------
+
+
+class ExportPdfRequest(BaseModel):
+    """Save a translated PDF to a permanent location the user picked.
+
+    `source_path` is whatever the translation job reported (a rolling file in
+    the per-job temp dir, or a cache materialization); `destination_path` comes
+    straight from the native Save dialog.
+    """
+
+    source_path: str
+    destination_path: str
+    # The document the user opened. Never a valid destination: overwriting it
+    # with the translation destroys their input, and the suggested filename can
+    # collide with it for an already-`_vi`-suffixed source.
+    protect_path: Optional[str] = None
+
+
+class ExportPdfResponse(BaseModel):
+    saved_path: str
+    bytes_written: int
+
+
+# ---------------------------------------------------------------------------
 # Cache
 # ---------------------------------------------------------------------------
 

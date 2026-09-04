@@ -438,6 +438,7 @@ class PDFProcessor:
                             pages_processed=file_metadata.page_count,
                             cache_hit=True,
                             cached_at=hit.cached_at,
+                            target_lang=target_lang.value,
                         )
                         return
 
@@ -566,7 +567,8 @@ class PDFProcessor:
                 original_file=file_path,
                 translated_file=translated_file,
                 processing_time_seconds=processing_time,
-                pages_processed=file_metadata.page_count
+                pages_processed=file_metadata.page_count,
+                target_lang=target_lang.value,
             )
             
         except ProcessingError as e:

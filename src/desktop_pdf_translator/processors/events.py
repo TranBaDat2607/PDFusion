@@ -152,6 +152,11 @@ class CompletionEvent(ProcessingEvent):
     pages_processed: Optional[int] = None
     cache_hit: bool = False
     cached_at: Optional[str] = None
+    # Language actually produced, after `process_pdf` resolves the request
+    # against config defaults. The frontend names the saved file from this
+    # rather than from its own config copy, which the user can change after
+    # the run finishes.
+    target_lang: Optional[str] = None
 
     def __post_init__(self):
         """Initialize event data from attributes."""
@@ -163,4 +168,5 @@ class CompletionEvent(ProcessingEvent):
             "pages_processed": self.pages_processed,
             "cache_hit": self.cache_hit,
             "cached_at": self.cached_at,
+            "target_lang": self.target_lang,
         }

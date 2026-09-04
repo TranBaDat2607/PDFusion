@@ -4,7 +4,8 @@ import { Clock, Loader2, X } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
-import type { TranslationState } from "@/hooks/useTranslation";
+import { TranslatedFileActions } from "@/components/translation/TranslatedFileActions";
+import { isTranslationBusy, type TranslationState } from "@/hooks/useTranslation";
 import { useAppStore } from "@/lib/store";
 
 interface ProgressOverlayProps {
@@ -53,6 +54,7 @@ export function ProgressOverlay({
   onDismiss,
 }: ProgressOverlayProps) {
   const chunkProgress = useAppStore((s) => s.chunkProgress);
+  const exportedPath = useAppStore((s) => s.exportedPdfPath);
   const smoothEta = useSmoothEta(
     state.etaSeconds,
     state.etaAnchorAt,
@@ -60,28 +62,47 @@ export function ProgressOverlay({
   );
   if (state.status === "idle") return null;
 
+  const busy = isTranslationBusy(state);
   const pagesLeft =
     chunkProgress && chunkProgress.totalChunks > 0
       ? chunkProgress.totalChunks - chunkProgress.chunksReady
       : null;
+
+  // Only `exportedPath` is a copy the user keeps. The translated path is a
+  // rolling file in a per-job %TEMP% dir that the next translation, app exit,
+  // and the sidecar's orphan sweep all delete — labelling it "Saved to" sends
+  // the user looking for a file that is gone.
+  const resultPath = exportedPath ?? state.translatedPath;
+  const resultLabel = exportedPath
+    ? "Saved to: "
+    : state.status === "cancelled"
+      ? "Partial preview at: "
+      : "Preview at: ";
 
   return (
     <div className="pointer-events-none absolute inset-x-0 bottom-4 z-30 flex justify-center">
       <div className="pointer-events-auto w-full max-w-xl rounded-xl border border-border bg-background/95 p-4 shadow-xl backdrop-blur">
         <div className="mb-2 flex items-center justify-between gap-3">
           <div className="flex items-center gap-2 min-w-0">
-            {state.status === "running" && (
+            {busy && (
               <Loader2 className="h-4 w-4 shrink-0 animate-spin text-primary" />
             )}
             <span className="truncate text-sm font-medium">
               {state.status === "done" && "Translation complete"}
               {state.status === "error" && "Translation failed"}
               {state.status === "cancelled" && "Translation cancelled"}
+              {state.status === "cancelling" && "Cancelling…"}
               {state.status === "running" && (state.stage || "Translating…")}
             </span>
           </div>
-          {state.status === "running" ? (
-            <Button size="sm" variant="ghost" onClick={onCancel}>
+          {busy ? (
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={onCancel}
+              // Already draining — a second click has nothing left to cancel.
+              disabled={state.status === "cancelling"}
+            >
               Cancel
             </Button>
           ) : (
@@ -155,13 +176,21 @@ export function ProgressOverlay({
           <p className="text-xs text-destructive">{state.error}</p>
         )}
         {(state.status === "done" || state.status === "cancelled") &&
-          state.translatedPath && (
-            <p className="text-xs text-muted-foreground">
-              {state.status === "cancelled" ? "Partial result: " : "Saved to: "}
-              <span className="font-mono text-foreground">
-                {state.translatedPath}
-              </span>
-            </p>
+          resultPath && (
+            <div className="space-y-2.5">
+              <p className="text-xs text-muted-foreground">
+                {resultLabel}
+                <span className="break-all font-mono text-foreground">
+                  {resultPath}
+                </span>
+                {!exportedPath && (
+                  <span className="mt-0.5 block text-[11px] text-amber-600 dark:text-amber-500">
+                    Temporary file — save it to keep this translation.
+                  </span>
+                )}
+              </p>
+              <TranslatedFileActions />
+            </div>
           )}
       </div>
     </div>
