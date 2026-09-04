@@ -1,6 +1,7 @@
 import { useCallback, useRef, useState } from "react";
 
 import { api } from "@/lib/api-client";
+import { buildAskBody } from "@/lib/ask-request";
 import { streamEvents } from "@/lib/sse";
 
 export interface ActionEvent {
@@ -56,8 +57,6 @@ let actionCounter = 0;
 interface AskParams {
   question: string;
   documentId: string | null;
-  includeWebResearch: boolean;
-  useDeepSearch: boolean;
 }
 
 export function useRagAsk() {
@@ -69,12 +68,10 @@ export function useRagAsk() {
 
     let jobId: string;
     try {
-      const accepted = await api.post<{ job_id: string }>("/rag/ask", {
-        question: params.question,
-        document_id: params.documentId,
-        include_web_research: params.includeWebResearch,
-        use_deep_search: params.useDeepSearch,
-      });
+      const accepted = await api.post<{ job_id: string }>(
+        "/rag/ask",
+        buildAskBody(params),
+      );
       jobId = accepted.job_id;
     } catch (e) {
       setState({ ...INITIAL, status: "error", error: (e as Error).message });
