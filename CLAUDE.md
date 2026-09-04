@@ -117,12 +117,13 @@ The token is then forwarded to the webview via the `sidecar://ready` Tauri event
 | `desktop/src/components/pdf-viewer/` | `PdfViewer` (pdf.js, lazy render, zoom/fit) |
 | `desktop/src/components/chat/` | `ChatPanel`, `UserMessage`, `AssistantMessage`, `ActionLog`, `ReferenceList`, `ChatInput` |
 | `desktop/src/components/settings/` | `SettingsSheet` (tabs per service) |
-| `desktop/src/components/translation/` | `ProgressOverlay` |
+| `desktop/src/components/translation/` | `ProgressOverlay`, `TranslatedFileActions` (Save / Open / Show in folder) |
 | `desktop/src/components/ui/` | shadcn-generated primitives (button, dialog, sheet, …) |
 | `desktop/src/lib/api-client.ts` | Typed HTTP wrapper with bearer-token + sidecar URL helpers |
 | `desktop/src/lib/sse.ts` | Authenticated SSE reader (native EventSource can't set headers) |
 | `desktop/src/lib/store.ts` | Zustand store for UI state |
-| `desktop/src/hooks/` | `useSidecar`, `useConfig`, `useTranslation`, `useRagIndex`, `useRagAsk` |
+| `desktop/src/lib/export-pdf.ts` | Pure save-flow logic + path helpers (deps injected, so it's unit-testable) |
+| `desktop/src/hooks/` | `useSidecar`, `useConfig`, `useTranslation`, `useRagIndex`, `useRagAsk`, `useExportTranslated` |
 | `src/desktop_pdf_translator/api/server.py` | FastAPI app + uvicorn entry + port discovery |
 | `src/desktop_pdf_translator/api/auth.py` | Bearer-token middleware |
 | `src/desktop_pdf_translator/api/jobs.py` | In-memory job registry + asyncio.Queue per job for SSE |
@@ -131,7 +132,7 @@ The token is then forwarded to the webview via the `sidecar://ready` Tauri event
 | `src/desktop_pdf_translator/processors/` | `PDFProcessor` async generator wrapping BabelDOC (unchanged) |
 | `src/desktop_pdf_translator/translators/` | `BaseTranslator`, OpenAI/Gemini/Anthropic/Argos + `TranslatorFactory` |
 | `src/desktop_pdf_translator/rag/` | ChromaDB + `EnhancedRAGChain` (deep-search/web-research was dropped in `35bca2c`) |
-| `src/desktop_pdf_translator/utils/` | API key encryption (unchanged) |
+| `src/desktop_pdf_translator/utils/` | API key encryption; `file_export.py` (durable copy of a translated PDF) |
 | `src/desktop_pdf_translator/translators/translation_cache.py` | Persistent **paragraph-level** SQLite cache (singleton `get_translation_cache()`) |
 | `src/desktop_pdf_translator/processors/pdf_cache.py` | Persistent **whole-PDF** SQLite cache (singleton `get_pdf_cache()`) |
 
@@ -158,6 +159,7 @@ All routes (except `GET /health`) require `Authorization: Bearer <token>`.
 | GET | `/rag/ask/{job_id}/events` | SSE: `progress`, `answer`, `done`, `error` |
 | DELETE | `/rag/document/{document_id}` | Remove an indexed document from the vector store |
 | GET | `/pdf/file?path=...` | Stream a PDF from disk (used by pdf.js client-side) |
+| POST | `/pdf/export` | Copy a translated PDF to a user-chosen permanent path (`{source_path, destination_path, protect_path?}` → `{saved_path, bytes_written}`). `protect_path` is the opened document; it's refused as a destination |
 
 ### Long-running jobs (SSE pattern)
 
@@ -168,6 +170,72 @@ Long-running endpoints (translate, index, ask) follow the same pattern:
 4. A terminal event (`done`, `error`, or `cancelled`) closes the stream.
 
 This replaces the previous `QThread + new asyncio loop` pattern from the PySide6 GUI.
+
+### Translation output lifecycle — nothing the pipeline writes is permanent
+
+Everything a translation job produces is disposable:
+
+- the rolling `{stem}_translated_v{N}.pdf` in `%TEMP%\pdfusion-translate-<rand>\`
+  is wiped by the next job, by Tauri's `ExitRequested` handler, and by the
+  sidecar's orphan sweep;
+- the whole-PDF cache entry under `translated_pdf_cache/files/<sha>.pdf` is
+  SHA-named, LRU-evicted at `pdf_cache_max_size_mb`, and cleared wholesale by
+  `DELETE /config/cache`.
+
+The user's only durable copy comes from **`POST /pdf/export`** (`utils/file_export.py`),
+which copies the artifact to a destination picked in the native Save dialog via
+a sibling staging file + `os.replace`, so a failed copy never leaves a truncated
+PDF where the user believes a good one is.
+
+Consequence for UI copy: **never label an unexported path "Saved to"**. The
+frontend keeps the two apart in the Zustand store — `translatedPdfPath`
+(ephemeral, drives the viewer) vs `exportedPdfPath` (permanent, the only one
+allowed to say "Saved to"). Save / Open / Show-in-folder live in
+`components/translation/TranslatedFileActions.tsx`, backed by
+`hooks/useExportTranslated.ts` and the pure flow in `lib/export-pdf.ts`.
+Open and reveal go through the app-defined Tauri commands
+`open_path_in_default_app` / `reveal_path_in_file_manager` (`lib.rs`). These
+are app commands rather than the opener plugin's JS API, whose `open-path`
+capability scope would have to enumerate every folder a user might save into —
+so `checked_pdf_path` substitutes a **file-type restriction** for that scope.
+Keep it: `open_path` bottoms out in `ShellExecute`, the command is reachable
+from the webview, and `"csp": null` is still in `tauri.conf.json`.
+
+Three non-obvious invariants in this area, each with a test:
+
+1. **`exportedPdfPath` is cleared when a new artifact arrives, never at job
+   start.** Starting a job immediately `rmtree`s the previous job's temp dir
+   (`processor.py:_schedule_temp_cleanup`), so clearing at start would discard
+   the pointer to the user's saved copy — the only file still on disk — if the
+   new run failed before producing anything. See `adoptArtifact` in
+   `useTranslation.ts`.
+2. **`cancelling` is a real status, not "cancelled early".** `cancel()` can't
+   wait for the backend (a chunk mid-flight can't be hard-killed), and its
+   drain runs `cleanup_partial_artifacts()`, which unlinks all but the newest
+   rolling PDF. So `TranslationState.status` has a `cancelling` state covering
+   the window until the terminal SSE event. Anything that touches the artifact
+   must gate on `isTranslationBusy()`, never on `status === "running"`.
+3. **`export_pdf(protect=...)` refuses to overwrite the opened document.** The
+   Save dialog lets the user type their source document's own name and confirm
+   "Replace?", which would destroy their input with no undo. Relatedly,
+   `suggestedExportName` *always* appends `_<lang>` — `paper_vi.pdf` →
+   `paper_vi_vi.pdf` — so the suggestion can never collide with the source.
+   Skipping the suffix when the stem "looks translated" guesses intent from a
+   filename (`chapter_vi.pdf` is a Roman numeral) and manufactures exactly that
+   collision.
+
+> **Pre-existing gap, deliberately not fixed here:** the ContextBar's
+> target-language `Select` writes `default_target_lang` to config, but
+> `useTranslation.start()` never sends `target_lang`, and
+> `TranslateRequest.target_lang` defaults to Vietnamese — so `process_pdf`'s
+> `target_lang or settings…` fallback never fires and output is *always*
+> Vietnamese. Rather than mirror that guess in the frontend, `CompletionEvent`
+> carries `target_lang` (the language `process_pdf` actually resolved) and the
+> store's `translationTargetLang` records what the producer reported, so the
+> Save dialog can't name a Vietnamese file `_ja.pdf` and wiring the selector
+> through later needs no frontend change. That wiring is its own fix: Argos is
+> en→vi only, so sending another language turns a silently-ignored setting into
+> a hard error.
 
 ### Two-tier translation caching
 
@@ -308,7 +376,24 @@ Application logs are written to `~/AppData/Local/PDFusion/logs/app.log`.
 
 ## Tests and code quality
 
-- **There are currently no tests in this repo** — no `tests/` directory, no `test_*.py` files. `pyproject.toml` lists `pytest` / `pytest-cov` under the `dev` extra, but nothing is wired up. Don't waste time looking for an existing test suite; if you add one, set up `tests/` from scratch.
+- **Test coverage is narrow — only the PDF-export path is covered.** There is no
+  suite for the translation pipeline, RAG, config, or the caches; if you touch
+  those, expect to write tests from scratch.
+
+  ```bash
+  # Python (pytest config lives in pyproject.toml; tests/conftest.py puts src/ on sys.path)
+  python -m pytest tests           # tests/test_file_export.py, tests/test_pdf_export_api.py
+
+  # Frontend (vitest, node environment — no jsdom)
+  cd desktop && pnpm test          # src/**/*.test.ts
+  ```
+
+  `tests/test_pdf_export_api.py` mounts `routes/pdf.py`'s router on a bare
+  `FastAPI()` rather than calling `create_app()`, because the full app imports
+  `routes/translation.py` → BabelDOC → torch, which turns a sub-second run into
+  a minute-long one. The frontend suite runs in the `node` environment: the
+  logic under test takes its Tauri/sidecar collaborators as arguments
+  (`lib/export-pdf.ts`), so no DOM or testing-library is needed.
 - **Python lint/format** tools are declared in `pyproject.toml [project.optional-dependencies].dev` (black line-length 88, isort with black profile, flake8, mypy) but the project has **no** pre-commit, no Makefile, and no CI. Run them manually if you want: `black src/ && isort src/`.
 - **TypeScript** is checked by `pnpm build` (which runs `tsc` before `vite build`). There is no separate lint step (no ESLint config).
 - **No CI**: `.github/workflows/` does not exist. All checks are local.
@@ -321,6 +406,7 @@ Application logs are written to `~/AppData/Local/PDFusion/logs/app.log`.
 - **Cross-platform** (macOS/Linux) — Tauri supports both, but explicit testing deferred. The PyInstaller spec is Windows-tested only.
 - **i18n of the UI strings** (the UI itself stays English; only the translation *output* is Vietnamese).
 - **Pre-bundled ML assets** (HuggingFace embedding model + Argos en→vi pack) — currently both download on first use. Bundle them later for true offline-first.
+- **Auto-save preference** — saving a translation is an explicit action (Save dialog). A "always save `<name>_vi.pdf` beside the source" setting was proposed in issue #11 but deliberately not built: it needs a config field, a Settings control, and an overwrite policy for repeat runs.
 
 ## Removed (legacy)
 

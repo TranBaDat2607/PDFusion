@@ -21,6 +21,9 @@ interface CompletionPayload {
   pages_processed?: number | null;
   cache_hit?: boolean;
   cached_at?: string | null;
+  /** Language the run actually produced, straight from the processor. Names
+   *  the default file in the Save dialog — see `translationTargetLang`. */
+  target_lang?: string | null;
 }
 
 interface ChunkReadyPayload {
@@ -44,7 +47,12 @@ interface ParagraphTranslatedPayload {
 }
 
 export interface TranslationState {
-  status: "idle" | "running" | "done" | "error" | "cancelled";
+  /** `cancelling` is the window between the user clicking Cancel and the
+   *  backend's terminal event. The worker is still draining, and its cancel
+   *  path runs `cleanup_partial_artifacts()`, which deletes all but the newest
+   *  rolling PDF — so the artifact on disk is not settled yet and nothing may
+   *  act on it. Treat it as busy, not as a result. */
+  status: "idle" | "running" | "cancelling" | "done" | "error" | "cancelled";
   stage: string;
   progress: number; // 0-100
   message: string;
@@ -75,6 +83,11 @@ const INITIAL: TranslationState = {
   message: "",
 };
 
+/** Statuses where a backend worker may still be touching the artifact. */
+export function isTranslationBusy(state: TranslationState): boolean {
+  return state.status === "running" || state.status === "cancelling";
+}
+
 const RELATIVE_TIME = new Intl.RelativeTimeFormat(undefined, { numeric: "auto" });
 
 function formatRelative(iso: string): string {
@@ -96,7 +109,10 @@ export interface StartOptions {
 export function useTranslation() {
   const [state, setState] = useState<TranslationState>(INITIAL);
   const abortRef = useRef<AbortController | null>(null);
-  const setTranslatedPdfPath = useAppStore((s) => s.setTranslatedPdfPath);
+  const adoptArtifact = useAppStore((s) => s.adoptTranslatedArtifact);
+  const setTranslationTargetLang = useAppStore(
+    (s) => s.setTranslationTargetLang,
+  );
   const setActiveJob = useAppStore((s) => s.setActiveTranslationJob);
   const setChunkProgress = useAppStore((s) => s.setChunkProgress);
   const bumpTranslatedReloadKey = useAppStore(
@@ -107,6 +123,13 @@ export function useTranslation() {
     async (filePath: string, opts: StartOptions = {}) => {
       setState({ ...INITIAL, status: "running", stage: "Starting…" });
       setChunkProgress(null);
+      // NOTE: `exportedPdfPath` is deliberately NOT cleared here. Starting a
+      // job immediately rmtree's the previous job's temp dir, so if this run
+      // fails before its first artifact, clearing now would throw away the
+      // pointer to the user's saved copy — the only one still on disk — while
+      // leaving `translatedPdfPath` aimed at a file that no longer exists.
+      // It's cleared below instead, when a new artifact actually arrives.
+      //
       // Bump the viewer's reload nonce only when a translated PDF is already
       // loaded — i.e. this is a Re-translate that will overwrite the file at
       // the same `_translated_v*.pdf` path and pdf.js needs a forced refetch.
@@ -191,7 +214,7 @@ export function useTranslation() {
                 const when = c.cached_at ? formatRelative(c.cached_at) : "earlier";
                 toast.success(`Loaded from cache · translated ${when}`);
               }
-              setTranslatedPdfPath(c.rolling_pdf_path);
+              adoptArtifact(c.rolling_pdf_path);
               setChunkProgress({
                 chunksReady: c.chunk_index + 1,
                 totalChunks: c.total_chunks,
@@ -219,8 +242,9 @@ export function useTranslation() {
                 toast.success(`Loaded from cache · translated ${when}`);
               }
               if (c.translated_file) {
-                setTranslatedPdfPath(c.translated_file);
+                adoptArtifact(c.translated_file);
               }
+              if (c.target_lang) setTranslationTargetLang(c.target_lang);
               setState((s) => ({
                 ...s,
                 status: "done",
@@ -231,7 +255,7 @@ export function useTranslation() {
             } else if (type === "cancelled") {
               const c = data as CompletionPayload;
               if (c.translated_file) {
-                setTranslatedPdfPath(c.translated_file);
+                adoptArtifact(c.translated_file);
               }
               setState((s) => ({
                 ...s,
@@ -240,17 +264,16 @@ export function useTranslation() {
               }));
             } else if (type === "error") {
               const e = data as { message: string };
-              setState((s) => ({
-                ...s,
-                status: "error",
-                error: e.message,
-              }));
+              setState((s) => ({ ...s, status: "error", error: e.message }));
             }
           },
         });
         // The stream can end without a terminal event (sidecar crash or
-        // restart mid-job). Without this, the overlay stays on "running"
-        // forever. Functional update so a terminal event that did land wins.
+        // restart mid-job). Without this the overlay stays busy forever.
+        // Functional update so a terminal event that did land wins. A pending
+        // cancel resolves to `cancelled`: the stream closing means the backend
+        // has stopped touching the artifact, which is all `cancelling` was
+        // waiting for.
         setState((s) =>
           s.status === "running"
             ? {
@@ -258,30 +281,37 @@ export function useTranslation() {
                 status: "error",
                 error: "Translation stream ended unexpectedly",
               }
-            : s,
+            : s.status === "cancelling"
+              ? { ...s, status: "cancelled" }
+              : s,
         );
       } catch (e) {
-        setState((s) => ({
-          ...s,
-          status: "error",
-          error: (e as Error).message,
-        }));
+        setState((s) => ({ ...s, status: "error", error: (e as Error).message }));
       } finally {
         setActiveJob(null);
         abortRef.current = null;
       }
     },
-    [setActiveJob, setTranslatedPdfPath, setChunkProgress, bumpTranslatedReloadKey],
+    [
+      setActiveJob,
+      adoptArtifact,
+      setTranslationTargetLang,
+      setChunkProgress,
+      bumpTranslatedReloadKey,
+    ],
   );
 
   const cancel = useCallback(async () => {
     const jobId = useAppStore.getState().activeTranslationJob;
     if (!jobId) return;
-    // Optimistic flip: reflect the cancel intent in the UI immediately so the
-    // user sees the overlay switch out of "running" without waiting for the
-    // backend to drain its in-flight chunk (1-3 s for Argos, a few seconds
-    // for an LLM mid-request — neither can be hard-killed).
-    setState((s) => ({ ...s, status: "cancelled" }));
+    // Reflect the cancel intent immediately so the user isn't left staring at
+    // a progress bar while the backend drains its in-flight chunk (1-3 s for
+    // Argos, a few seconds for an LLM mid-request — neither can be hard-killed).
+    // Deliberately `cancelling`, not `cancelled`: the drain runs
+    // `cleanup_partial_artifacts()`, which unlinks every rolling version but
+    // the newest, so nothing may act on the artifact until the terminal event
+    // brings back the surviving one.
+    setState((s) => ({ ...s, status: "cancelling" }));
     try {
       await api.post(`/translate/${jobId}/cancel`);
     } catch {

@@ -9,6 +9,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
+import { TranslatedFileActions } from "@/components/translation/TranslatedFileActions";
 import {
   Tooltip,
   TooltipContent,
@@ -16,6 +17,7 @@ import {
 } from "@/components/ui/tooltip";
 import { useConfig, useOptions, useUpdateConfig } from "@/hooks/useConfig";
 import { api } from "@/lib/api-client";
+import { basename } from "@/lib/export-pdf";
 import { useAppStore } from "@/lib/store";
 import { cn } from "@/lib/utils";
 
@@ -27,16 +29,12 @@ interface ContextBarProps {
   onPickFile: () => void;
   onTranslate: () => void;
   onReTranslate: () => void;
+  /** A backend worker is still touching the artifact — running *or* draining
+   *  a cancel. */
   translating: boolean;
   /** True when a translation has completed for the current document, so the
    *  user can re-run it with the PDF-level cache bypassed. */
   canReTranslate: boolean;
-}
-
-function basename(path: string | null): string {
-  if (!path) return "";
-  const sep = path.includes("\\") ? "\\" : "/";
-  return path.split(sep).pop() ?? path;
 }
 
 export function ContextBar({
@@ -226,6 +224,11 @@ export function ContextBar({
             </TooltipContent>
           </Tooltip>
         )}
+
+        {/* Save / Open / Reveal live here as well as in the completion
+            overlay: the overlay is dismissible, and the translation is still
+            sitting in a temp dir that the next run will delete. */}
+        {!translating && <TranslatedFileActions compact />}
       </div>
     </div>
   );

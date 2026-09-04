@@ -14,7 +14,7 @@ import { ThemeProvider } from "@/components/theme-provider";
 import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { useSidecar } from "@/hooks/useSidecar";
-import { useTranslation } from "@/hooks/useTranslation";
+import { isTranslationBusy, useTranslation } from "@/hooks/useTranslation";
 import { useAppStore } from "@/lib/store";
 import { api } from "@/lib/api-client";
 
@@ -55,6 +55,7 @@ function Workspace() {
   const [aboutOpen, setAboutOpen] = useState(false);
   const setOriginalPath = useAppStore((s) => s.setOriginalPdfPath);
   const setTranslatedPath = useAppStore((s) => s.setTranslatedPdfPath);
+  const setExportedPath = useAppStore((s) => s.setExportedPdfPath);
   const originalPath = useAppStore((s) => s.originalPdfPath);
   const translation = useTranslation();
 
@@ -68,6 +69,9 @@ function Workspace() {
       if (typeof selected === "string") {
         setOriginalPath(selected);
         setTranslatedPath(null);
+        // The saved copy belongs to the *previous* document — keeping it would
+        // make the toolbar offer "Open" on an unrelated file.
+        setExportedPath(null);
         translation.reset();
         // Fire-and-forget pre-warm: by the time the user clicks Translate, the
         // Argos pack should be installed (or the LLM client should be live).
@@ -80,7 +84,7 @@ function Workspace() {
         description: (e as Error).message,
       });
     }
-  }, [setOriginalPath, setTranslatedPath, translation]);
+  }, [setOriginalPath, setTranslatedPath, setExportedPath, translation]);
 
   const handleTranslate = useCallback(() => {
     if (!originalPath) return;
@@ -102,14 +106,14 @@ function Workspace() {
         onPickFile={handlePickFile}
         onTranslate={handleTranslate}
         onReTranslate={handleReTranslate}
-        translating={translation.state.status === "running"}
+        translating={isTranslationBusy(translation.state)}
         // Re-translate is available whenever a PDF is loaded and we're not
         // currently running — including from idle (just-opened previously-
         // translated file), error, or cancelled states. The previous
         // status==="done" gate forced users through a (potentially stale)
         // cache hit before they could force-fresh.
         canReTranslate={
-          !!originalPath && translation.state.status !== "running"
+          !!originalPath && !isTranslationBusy(translation.state)
         }
       />
       <div className="relative flex-1 overflow-hidden">
