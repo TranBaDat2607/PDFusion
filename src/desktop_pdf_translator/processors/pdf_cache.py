@@ -63,15 +63,21 @@ def _make_cache_key(
     model: Optional[str],
     pipeline_version: str,
 ) -> str:
-    # Source language deliberately excluded from the key. Output bytes for a
-    # given (file_hash, target_lang, service, model) are independent of what
-    # the user picked as `source_lang` — Argos forces auto→en, LLMs auto-
-    # detect from content, neither uses the source-lang hint to change output.
-    # Keying on it would create separate entries for "auto" vs "en" on the
-    # same English PDF and miss valid hits when the user switches the dropdown.
-    # `lang_in` accepted for API stability / debug logs only.
-    del lang_in  # noqa: F841 — intentionally unused
-    payload = f"{file_hash}|{lang_out}|{service}|{model or ''}|{pipeline_version}"
+    # Source language IS part of the key. It used to be excluded, on the
+    # premise that output bytes are independent of what the user picked as
+    # `source_lang`. That held only because the API pinned every request to
+    # `auto` (issue #12) — with the dropdown now reaching the pipeline, the
+    # LLM system prompts name the source explicitly
+    # (`LANGUAGE_DISPLAY_NAMES.get(self.lang_in)` in openai/gemini/anthropic
+    # translators), so "auto" and "en" can produce different bytes and must not
+    # collide on one entry.
+    #
+    # No PIPELINE_VERSION bump accompanies this: adding a field to the payload
+    # already changes every key, so pre-existing entries simply stop matching
+    # and get LRU-evicted.
+    payload = (
+        f"{file_hash}|{lang_in}|{lang_out}|{service}|{model or ''}|{pipeline_version}"
+    )
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
