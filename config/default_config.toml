@@ -20,8 +20,7 @@ min_text_length = 5
 model = "argostranslate"
 
 [gui]
-window_width = 1200
-window_height = 800
+# No window geometry: tauri-plugin-window-state persists size/position itself.
 theme = "system"
 show_advanced_options = false
 auto_preview = true

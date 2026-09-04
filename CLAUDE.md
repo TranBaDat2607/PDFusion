@@ -345,8 +345,10 @@ BabelDOC drives chunking, layout, and PDF reassembly; it delegates the actual te
 
 ## Tauri shell details
 
-- **Plugins enabled**: `opener` (open external URLs), `dialog` (file picker), `shell`, `fs` (allow reading `*.pdf`).
-- **Window**: 1400×900 default, min 1024×700.
+- **Plugins enabled**: `opener` (open external URLs), `dialog` (file picker), `shell`, `fs` (allow reading `*.pdf`), `single-instance`, `window-state`.
+- **Single instance**: registered **first**, before every other plugin — a second launch has to be turned away before the rest of the app builds, or you get two windows, two sidecars, and two writers on one `chroma_db` + SQLite WAL set. Its callback focuses the existing window and, if the second launch named a PDF, emits `pdfusion://open-file` so that document opens in the running app. The *first* launch's own argv is read by the `initial_file_argument` command; `App.tsx` handles both through the same `openDocument`.
+- **Window**: 1400×900 default, min 1024×700 — then `tauri-plugin-window-state` restores whatever the user last left. `GUISettings.window_width/height` were deleted with it: they predate the Tauri migration and nothing ever read them.
+- **Boot screen** (`components/StartupScreen.tsx`): app-level copy ("Starting PDFusion…"), a Retry and a "Show logs folder" button. Retry calls `restart_app`, which relaunches the process rather than re-spawning the sidecar — the handle is a `OnceCell` set once per process, so re-entering that lifecycle would mean two spawn paths and a window with two Python processes. The `PDFUSION_PYTHON` hint is behind `import.meta.env.DEV`; it describes this repo's dev setup and means nothing to someone who installed the `.msi`.
 - **CSP**: currently `null` for dev. Tighten before bundling for distribution.
 - **Sidecar lifecycle** is wired in `lib.rs::run()`'s `setup` and the `RunEvent::ExitRequested` handler kills the child process.
 - **Sidecar cwd & writable paths**: the child is spawned with cwd = `%LOCALAPPDATA%\PDFusion\` (`sidecar::appdata_dir`), **not** the install dir (`C:\Program Files\PDFusion\` is read-only for non-admins → `WinError 5` on any relative-path write). `lib.rs::setup` pre-creates the AppData subdir layout (`sidecar::ensure_appdata_layout`) before spawn so Python subsystems don't race on first-run `mkdir`.
@@ -423,6 +425,9 @@ Application logs are written to `~/AppData/Local/PDFusion/logs/app.log`.
 
   # Frontend (vitest, node environment — no jsdom)
   cd desktop && pnpm test          # src/**/*.test.ts
+
+  # Rust shell (argv parsing in lib.rs — the only Rust tests so far)
+  cd desktop/src-tauri && cargo test
   ```
 
   Both Python suites avoid importing `routes/translation.py` → BabelDOC →

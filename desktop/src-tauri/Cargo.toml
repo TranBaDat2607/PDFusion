@@ -18,6 +18,11 @@ tauri-plugin-opener = "2"
 tauri-plugin-dialog = "2"
 tauri-plugin-shell = "2"
 tauri-plugin-fs = "2"
+# Desktop-app basics. `single-instance` must be registered before any other
+# plugin (see lib.rs) so a second launch is short-circuited before the rest of
+# the app — and a second sidecar — comes up.
+tauri-plugin-single-instance = "2"
+tauri-plugin-window-state = "2"
 
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

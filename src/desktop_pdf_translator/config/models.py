@@ -96,10 +96,16 @@ class TranslationSettings(BaseModel):
     min_text_length: int = Field(5, ge=0, description="Minimum text length to translate")
 
 class GUISettings(BaseModel):
-    """GUI-specific settings."""
-    
-    window_width: int = Field(1200, ge=800, description="Default window width")
-    window_height: int = Field(800, ge=600, description="Default window height")
+    """GUI-specific settings.
+
+    No window geometry here. `tauri-plugin-window-state` persists size,
+    position and maximized state itself. The `window_width` / `window_height`
+    fields that used to live here were left over from the PySide6 GUI and
+    nothing ever read them, so the window opened at `tauri.conf.json`'s
+    1400×900 every time regardless. Config files that still carry them load
+    fine — pydantic ignores unknown keys by default.
+    """
+
     theme: Literal["light", "dark", "system"] = Field("system", description="UI theme")
     show_advanced_options: bool = Field(False, description="Show advanced translation options")
     auto_preview: bool = Field(True, description="Auto-preview translations")
