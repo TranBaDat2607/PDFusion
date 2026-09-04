@@ -7,7 +7,11 @@ import { Progress } from "@/components/ui/progress";
 import { TranslatedFileActions } from "@/components/translation/TranslatedFileActions";
 import { isTranslationBusy, type TranslationState } from "@/hooks/useTranslation";
 import { useAppStore } from "@/lib/store";
-import { pagesReady, pagesRemaining } from "@/lib/translation-progress";
+import {
+  pagesReady,
+  pagesRemaining,
+  pluralizePages,
+} from "@/lib/translation-progress";
 
 interface ProgressOverlayProps {
   state: TranslationState;
@@ -126,8 +130,8 @@ export function ProgressOverlay({
               {chunkProgress && (
                 <span className="font-medium text-primary">
                   {totalPages != null
-                    ? `${donePages} of ${totalPages} page${totalPages === 1 ? "" : "s"} translated`
-                    : `${donePages} page${donePages === 1 ? "" : "s"} translated`}
+                    ? `${donePages} of ${pluralizePages(totalPages)} translated`
+                    : `${pluralizePages(donePages)} translated`}
                 </span>
               )}
               {smoothEta != null && smoothEta > 0 && (
@@ -135,7 +139,7 @@ export function ProgressOverlay({
                   <Clock className="h-3 w-3" />~{formatEta(smoothEta)} remaining
                   {pagesLeft != null && pagesLeft > 0 && (
                     <span className="opacity-70">
-                      &middot; {pagesLeft} page{pagesLeft === 1 ? "" : "s"} left
+                      &middot; {pluralizePages(pagesLeft)} left
                     </span>
                   )}
                 </span>

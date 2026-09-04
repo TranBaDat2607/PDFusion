@@ -9,6 +9,8 @@ import {
   applyChunkReady,
   describeChunk,
   pagesReady,
+  pluralizePages,
+  type ChunkReadyLike,
 } from "@/lib/translation-progress";
 
 interface ProgressUpdate {
@@ -32,11 +34,10 @@ interface CompletionPayload {
   target_lang?: string | null;
 }
 
-interface ChunkReadyPayload {
-  chunk_index: number;
-  total_chunks: number;
-  pages_in_chunk: [number, number];
-  total_pages?: number | null;
+// `ChunkReadyLike` is the accumulator's view of this same payload. Extending
+// it keeps a new wire field declared once instead of in two files that have to
+// be edited together.
+interface ChunkReadyPayload extends ChunkReadyLike {
   rolling_pdf_path: string;
   progress_percent: number;
   elapsed_seconds?: number | null;
@@ -257,7 +258,7 @@ export function useTranslation() {
                 // one, which names the same pages.
                 stage: c.cache_hit ? "Loaded from cache" : s.stage,
                 message: c.cache_hit
-                  ? `All ${donePages} page${donePages === 1 ? "" : "s"} ready`
+                  ? `All ${pluralizePages(donePages)} ready`
                   : describeChunk(c),
                 etaSeconds: c.eta_seconds ?? null,
                 etaAnchorAt:

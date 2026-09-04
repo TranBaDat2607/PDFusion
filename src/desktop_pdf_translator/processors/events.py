@@ -85,8 +85,15 @@ class ErrorEvent(ProcessingEvent):
 
 @dataclass
 class ChunkReadyEvent(ProcessingEvent):
-    """A chunk of the source PDF has finished translating; the rolling
-    merged PDF on disk now contains pages 1..pages_in_chunk[1]."""
+    """A chunk of the source PDF has finished translating.
+
+    `rolling_pdf_path` is always a *full-length* document:
+    `_rebuild_sparse_rolling_pdf` fills the finished slots with translated
+    chunks and the rest with the original pages, so the viewer keeps its
+    scroll position. Chunks are scheduled nearest the reader's page first, so
+    `chunk_index` is not a completion count and `pages_in_chunk` names only
+    the pages *this* chunk covers — never a range starting at page 1 (#15).
+    """
 
     chunk_index: int
     total_chunks: int

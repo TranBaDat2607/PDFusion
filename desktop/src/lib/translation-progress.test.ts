@@ -6,6 +6,7 @@ import {
   describeChunk,
   pagesRemaining,
   pagesReady,
+  pluralizePages,
   type ChunkProgress,
   type ChunkReadyLike,
 } from "./translation-progress";
@@ -126,5 +127,16 @@ describe("describeChunk", () => {
   // claiming 29 pages that hadn't been started.
   it("never claims pages before the chunk's own range", () => {
     expect(describeChunk(page(30))).not.toContain("1–");
+  });
+});
+
+describe("pluralizePages", () => {
+  it("keeps the noun singular for one page", () => {
+    expect(pluralizePages(1)).toBe("1 page");
+  });
+
+  it("pluralizes everything else, zero included", () => {
+    expect(pluralizePages(0)).toBe("0 pages");
+    expect(pluralizePages(50)).toBe("50 pages");
   });
 });

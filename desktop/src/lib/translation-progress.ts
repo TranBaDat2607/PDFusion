@@ -73,6 +73,13 @@ export function pagesRemaining(progress: ChunkProgress): number | null {
   return Math.max(0, progress.totalPages - pagesReady(progress));
 }
 
+/** "1 page" / "3 pages". The overlay and the chunk messages all need the
+ *  count and its noun together; spelling the branch out at each call site is
+ *  how one of them ends up saying "1 pages". */
+export function pluralizePages(count: number): string {
+  return `${count} page${count === 1 ? "" : "s"}`;
+}
+
 /**
  * What just finished — the chunk's own pages, not a running range. Saying
  * "Pages 1–30" for the chunk covering page 30 claims 29 pages that haven't

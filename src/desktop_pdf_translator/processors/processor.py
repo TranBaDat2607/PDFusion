@@ -961,6 +961,12 @@ class PDFProcessor:
                     # alone silently dropped the other two pages of an Argos
                     # 3-page chunk, and reads like a running total even though
                     # chunks complete in priority order, not 1..N.
+                    # No "of {page_count}" here for the same reason: the overlay
+                    # renders the accumulated "N of M pages translated" directly
+                    # below this line, and a second fraction describing a single
+                    # out-of-order chunk reads as a rival progress count.
+                    # Client-side counterpart: `describeChunk` in
+                    # `desktop/src/lib/translation-progress.ts`.
                     pages_label = (
                         f"Page {page_range[0]}"
                         if page_range[0] == page_range[1]
@@ -971,7 +977,7 @@ class PDFProcessor:
                         timestamp=time.time(),
                         session_id=self.session_id,
                         data={},
-                        stage=f"{pages_label} of {file_metadata.page_count} ready",
+                        stage=f"{pages_label} ready",
                         current_step=3,
                         total_steps=4,
                         progress_percent=global_progress,
