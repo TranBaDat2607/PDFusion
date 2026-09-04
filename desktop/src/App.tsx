@@ -1,5 +1,7 @@
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { toast } from "sonner";
 
@@ -79,6 +81,31 @@ function Workspace() {
     [config],
   );
 
+  const openDocument = useCallback(
+    (path: string) => {
+      setOriginalPath(path);
+      setTranslatedPath(null);
+      // The saved copy belongs to the *previous* document — keeping it would
+      // make the toolbar offer "Open" on an unrelated file.
+      setExportedPath(null);
+      translation.reset();
+      // Fire-and-forget pre-warm: by the time the user clicks Translate, the
+      // Argos pack should be installed (or the LLM client should be live).
+      // Carries the current selection — an empty body warms the configured
+      // default, which is the wrong backend once the user has changed the
+      // dropdowns. Errors are intentionally swallowed: this is a UX
+      // optimization, never a correctness gate.
+      void api
+        .post("/translate/prewarm", {
+          source_lang: selection.sourceLang,
+          target_lang: selection.targetLang,
+          service: selection.service,
+        })
+        .catch(() => undefined);
+    },
+    [setOriginalPath, setTranslatedPath, setExportedPath, translation, selection],
+  );
+
   const handlePickFile = useCallback(async () => {
     try {
       const selected = await openDialog({
@@ -87,32 +114,53 @@ function Workspace() {
         filters: [{ name: "PDF documents", extensions: ["pdf"] }],
       });
       if (typeof selected === "string") {
-        setOriginalPath(selected);
-        setTranslatedPath(null);
-        // The saved copy belongs to the *previous* document — keeping it would
-        // make the toolbar offer "Open" on an unrelated file.
-        setExportedPath(null);
-        translation.reset();
-        // Fire-and-forget pre-warm: by the time the user clicks Translate, the
-        // Argos pack should be installed (or the LLM client should be live).
-        // Carries the current selection — an empty body warms the configured
-        // default, which is the wrong backend once the user has changed the
-        // dropdowns. Errors are intentionally swallowed: this is a UX
-        // optimization, never a correctness gate.
-        void api
-          .post("/translate/prewarm", {
-            source_lang: selection.sourceLang,
-            target_lang: selection.targetLang,
-            service: selection.service,
-          })
-          .catch(() => undefined);
+        openDocument(selected);
       }
     } catch (e) {
       toast.error("Could not open file picker", {
         description: (e as Error).message,
       });
     }
-  }, [setOriginalPath, setTranslatedPath, setExportedPath, translation, selection]);
+  }, [openDocument]);
+
+  // `openDocument` is rebuilt whenever the toolbar selection changes, but the
+  // listener below must be registered exactly once — re-running that effect
+  // would re-open the command-line document on every dropdown change. The ref
+  // keeps the handler current without making it a dependency.
+  const openDocumentRef = useRef(openDocument);
+  openDocumentRef.current = openDocument;
+
+  // A PDF named on the command line — `pdfusion.exe paper.pdf`, or a second
+  // launch that the single-instance guard turned away and forwarded here
+  // instead of starting another app. Both land on the same handler.
+  useEffect(() => {
+    let cancelled = false;
+    let unlisten: (() => void) | undefined;
+
+    void (async () => {
+      try {
+        // Subscribe *before* asking for our own argv. Tauri does not buffer
+        // events, so anything emitted before this resolves is dropped — and
+        // the gap is exactly when a second launch is most likely to arrive,
+        // since the user is already double-clicking a PDF.
+        const un = await listen<string>("pdfusion://open-file", (event) => {
+          if (!cancelled) openDocumentRef.current(event.payload);
+        });
+        if (cancelled) un();
+        else unlisten = un;
+
+        const initial = await invoke<string | null>("initial_file_argument");
+        if (!cancelled && initial) openDocumentRef.current(initial);
+      } catch {
+        // No shell (plain `pnpm dev` in a browser tab) — nothing to open.
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
+  }, []);
 
   const handleTranslate = useCallback(() => {
     if (!originalPath) return;
