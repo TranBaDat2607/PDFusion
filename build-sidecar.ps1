@@ -67,14 +67,40 @@ if (-not (Test-Path $SpecPath)) {
     throw "Spec file not found at $SpecPath"
 }
 
-# Make sure pyinstaller is available in the active Python env.
-$pyinstaller = Get-Command pyinstaller -ErrorAction SilentlyContinue
-if (-not $pyinstaller) {
-    throw "pyinstaller not found on PATH. Activate the pdfusion conda env and run: pip install pyinstaller"
+# Resolve PyInstaller. `pyinstaller` on PATH is the happy path, but it is not
+# reachable on the one path that matters most: Tauri's `beforeBundleCommand`
+# spawns a bare `powershell.exe` that does not inherit a conda-activated PATH,
+# so `pnpm tauri build` -- the documented way to build the installer -- always
+# arrived here with the env's Scripts dir missing and threw. Fall back to the
+# interpreter PDFUSION_PYTHON already names: it is a persistent user env var
+# that `sidecar.rs::locate_python` reads too, so it survives however the shell
+# was launched.
+$PyExe  = $null
+$PyArgs = @()
+
+$pyinstallerCmd = Get-Command pyinstaller -ErrorAction SilentlyContinue
+if ($pyinstallerCmd) {
+    $PyExe = $pyinstallerCmd.Source
+}
+elseif ($env:PDFUSION_PYTHON -and (Test-Path $env:PDFUSION_PYTHON)) {
+    Write-Host "==> pyinstaller not on PATH; using PDFUSION_PYTHON -m PyInstaller" -ForegroundColor Yellow
+    $PyExe  = $env:PDFUSION_PYTHON
+    $PyArgs = @("-m", "PyInstaller")
+}
+else {
+    throw "pyinstaller not found on PATH, and PDFUSION_PYTHON is unset or does not exist. Activate the pdfusion conda env and run: pip install pyinstaller -- or set PDFUSION_PYTHON to that env's python.exe."
 }
 
 # Run PyInstaller. --clean wipes build/, --noconfirm overwrites dist/ silently.
-& pyinstaller $SpecPath --clean --noconfirm
+# --distpath/--workpath are not optional niceties: PyInstaller defaults both to
+# paths relative to the *current directory*, and Tauri runs beforeBundleCommand
+# from desktop/. Without them the onedir tree lands in desktop/dist/ -- which is
+# `frontendDist`, so a ~1 GB copy of the Python runtime would be bundled into
+# the installer as frontend assets -- while $DistDir below still points at the
+# repo root and the script throws "PyInstaller output missing".
+& $PyExe @PyArgs $SpecPath --clean --noconfirm `
+    --distpath (Join-Path $RepoRoot "dist") `
+    --workpath (Join-Path $RepoRoot "build")
 
 if (-not (Test-Path (Join-Path $DistDir "pdfusion-sidecar.exe"))) {
     throw "PyInstaller output missing: $DistDir\pdfusion-sidecar.exe"

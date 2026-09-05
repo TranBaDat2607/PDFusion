@@ -30,6 +30,7 @@ import uvicorn
 from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from .. import __version__
 from ..config import TranslationService, get_settings
 from .auth import init_token, require_token
 from .routes import config as config_routes
@@ -231,7 +232,12 @@ def create_app() -> FastAPI:
 
     @app.get("/health", response_model=HealthResponse)
     async def health() -> HealthResponse:  # noqa: D401 — endpoint
-        return HealthResponse(version=settings.version)
+        # The package constant, not `settings.version`. `ConfigManager` persists
+        # the whole model (`settings.dict()`), so every config.toml already on
+        # disk carries the version that shipped with it — and a stored value
+        # shadows the model default forever. Reporting it would mean /health
+        # announcing 1.0.0 from a 1.0.6 build on every upgraded install.
+        return HealthResponse(version=__version__)
 
     # Authenticated routes
     app.include_router(config_routes.router)

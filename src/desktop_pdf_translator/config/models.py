@@ -146,7 +146,7 @@ class AppSettings(BaseModel):
     rag: RAGSettings = Field(default_factory=RAGSettings)
 
     # Application metadata
-    version: str = Field("1.0.0", description="Application version")
+    version: str = Field("1.0.6", description="Application version")
     debug_mode: bool = Field(False, description="Enable debug logging")
     
     @validator('translation')

@@ -51,5 +51,5 @@ enabled = false
 auto_process_documents = true
 
 # Application metadata
-version = "1.0.0"
+version = "1.0.6"
 debug_mode = false

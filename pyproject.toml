@@ -1,6 +1,6 @@
 [project]
 name = "pdfusion"
-version = "1.0.0"
+version = "1.0.6"
 description = "Professional PDF Translation Application with AI-powered Q&A and Vietnamese optimization"
 authors = [
     {name = "PDFusion Team", email = "contact@pdfusion.dev"}
