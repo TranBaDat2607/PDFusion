@@ -163,7 +163,12 @@ datas += [("config/default_config.toml", "config")]
 # checkout the build silently omits it and the runtime falls back to the
 # network download path, so this is fully optional.
 import os as _os
-_argos_pack = "assets/argos/translate-en_vi.argosmodel"
+# SPECPATH, not a bare relative path. PyInstaller resolves `scripts` and `datas`
+# against the spec's directory, but plain Python like the exists() check below
+# runs against the *current* directory -- and Tauri's beforeBundleCommand builds
+# from desktop/. A relative literal here silently reports the pack as missing
+# even when it is sitting in the checkout.
+_argos_pack = _os.path.join(SPECPATH, "assets", "argos", "translate-en_vi.argosmodel")
 if _os.path.exists(_argos_pack):
     datas += [(_argos_pack, "argos_pack")]
 else:
@@ -299,7 +304,14 @@ excludes = [
 
 a = Analysis(
     ["main.py"],
-    pathex=["src"],
+    # Absolute via SPECPATH. `pathex` is resolved against the *current*
+    # directory (unlike the scripts list above and `datas`, which PyInstaller
+    # resolves against the spec's own directory), and Tauri's
+    # beforeBundleCommand builds from desktop/. A bare "src" therefore pointed
+    # at desktop/src, which does not exist -- so desktop_pdf_translator was
+    # silently left out of the bundle and the sidecar died at startup with
+    # "ModuleNotFoundError: No module named 'desktop_pdf_translator'".
+    pathex=[_os.path.join(SPECPATH, "src")],
     binaries=[],
     datas=datas,
     hiddenimports=hiddenimports,
@@ -311,7 +323,14 @@ a = Analysis(
     win_private_assemblies=False,
     cipher=block_cipher,
     noarchive=False,
-    optimize=2,
+    # 1 (-O: drop asserts), never 2 (-OO: also drop docstrings). numpy builds
+    # real API surface out of docstrings at import time -- `add_docstring` is
+    # handed the stripped `None` and raises
+    # "TypeError: argument docstring of add_docstring should be a str"
+    # from numpy/_core/overrides.py, killing the sidecar before it prints
+    # READY. The Rust shell then reports a startup failure with no log line,
+    # because the crash happens before logging is configured.
+    optimize=1,
 )
 
 pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
