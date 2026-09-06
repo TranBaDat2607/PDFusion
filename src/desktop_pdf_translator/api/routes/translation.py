@@ -1,17 +1,22 @@
-"""Translation endpoints — start a job, stream progress, cancel."""
+"""Translation endpoints — start a job, stream progress, cancel.
+
+`PDFProcessor` and `TranslatorFactory` are imported inside the handlers that
+use them: between them they load BabelDOC and three provider SDKs, and this
+module is imported while the sidecar is still trying to print READY.
+"""
+
+from __future__ import annotations
 
 import asyncio
 import logging
 import threading
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sse_starlette.sse import EventSourceResponse
 
 from ...config import TranslationService, get_settings
-from ...processors.events import EventType
-from ...processors.processor import PDFProcessor
-from ...translators import TranslatorFactory
 from ...translators.capabilities import (
     resolve_effective_service,
     resolve_languages,
@@ -25,6 +30,9 @@ from ..schemas import (
     PrewarmResponse,
     TranslateRequest,
 )
+
+if TYPE_CHECKING:
+    from ...processors.processor import PDFProcessor
 
 logger = logging.getLogger(__name__)
 
@@ -47,6 +55,17 @@ async def _run_translation(job_id: str, payload: TranslateRequest) -> None:
     registry = get_registry()
     job = registry.get(job_id)
     if job is None:
+        return
+
+    # A broken BabelDOC install used to stop the sidecar from starting at all.
+    # Now that the import happens here, it has to reach the job's error event —
+    # otherwise the SSE stream gets no terminal event and the overlay hangs.
+    try:
+        from ...processors.events import EventType
+        from ...processors.processor import PDFProcessor
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("Translation engine unavailable")
+        await job.finish("error", {"message": str(exc)})
         return
 
     file_path = Path(payload.file_path)
@@ -195,6 +214,8 @@ def _warm_translator(
     endpoint returns immediately even when Argos has to download its ~80 MB
     pack. Returns (ok, message); a failed warm-up must NOT be recorded as
     warm so the next /prewarm can retry (e.g. transient network failure)."""
+    from ...translators.factory import TranslatorFactory
+
     try:
         translator = TranslatorFactory.create_translator(
             service=service, lang_in=lang_in, lang_out=lang_out

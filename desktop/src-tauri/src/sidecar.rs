@@ -25,6 +25,20 @@ use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::{Child, Command};
 use tokio::time::{sleep, Instant};
 
+/// How long the shell waits for the sidecar's READY line.
+///
+/// Generous because what it covers is not Python work: the bundled sidecar is a
+/// PyInstaller one-dir build, so before `main()` runs at all the bootloader has
+/// to page in thousands of files past Defender's on-access scanner. The Python
+/// side of startup is well under a second (see `api/server.py`'s docstring), and
+/// no fix on that side shortens a first-launch cold scan.
+const READY_TIMEOUT: Duration = Duration::from_secs(90);
+
+/// How long `/auth/ping` gets to answer once READY has been printed. Covers the
+/// FastAPI lifespan: the orphan-temp-dir sweep and decrypting the stored API
+/// keys, both of which touch a possibly-cold disk.
+const HEALTH_TIMEOUT: Duration = Duration::from_secs(30);
+
 #[derive(Debug)]
 pub enum SidecarError {
     PythonNotFound,
@@ -395,7 +409,7 @@ pub async fn spawn(app: AppHandle) -> Result<SidecarInfo, SidecarError> {
         });
     }
 
-    let deadline = Instant::now() + Duration::from_secs(30);
+    let deadline = Instant::now() + READY_TIMEOUT;
     let info = loop {
         tokio::select! {
             // A silent-but-alive child never produces a line or an exit, so
@@ -455,7 +469,7 @@ async fn health_check(port: u16, token: &str) -> Result<(), SidecarError> {
         .build()
         .map_err(|e| SidecarError::Health(e.to_string()))?;
 
-    let deadline = Instant::now() + Duration::from_secs(15);
+    let deadline = Instant::now() + HEALTH_TIMEOUT;
     loop {
         let resp = client
             .get(format!("http://127.0.0.1:{port}/auth/ping"))

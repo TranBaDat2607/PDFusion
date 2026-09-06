@@ -12,7 +12,7 @@ from ...config import (
     get_config_manager,
     get_settings,
 )
-from ...translators import TranslatorFactory, get_translation_cache
+from ...translators.translation_cache import get_translation_cache
 from ...translators.capabilities import (
     LANGUAGE_LABELS,
     SERVICE_LABELS,
@@ -59,6 +59,8 @@ async def _credentials_work(
     """
 
     def probe() -> tuple[bool, str]:
+        from ...translators.factory import TranslatorFactory
+
         kwargs = {"api_key": service_config.get("api_key")}
         # Only override the model when we have one: passing `model=None`
         # replaces the backend's own default with None.
@@ -190,6 +192,8 @@ async def update_config(payload: ConfigUpdateRequest) -> ConfigResponse:
 @router.post("/validate", response_model=ValidateResponse)
 async def validate_credentials(payload: ValidateRequest) -> ValidateResponse:
     """Spin up a translator instance with the supplied credentials and validate."""
+    from ...translators.factory import TranslatorFactory
+
     # Argos has no API key — short-circuit and report the install state.
     if payload.service == TranslationService.ARGOS:
         try:

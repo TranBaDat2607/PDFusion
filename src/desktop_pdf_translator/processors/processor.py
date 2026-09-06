@@ -20,7 +20,7 @@ from babeldoc.format.pdf.translation_config import TranslationConfig as BabelDOC
 from babeldoc.format.pdf.translation_config import WatermarkOutputMode as BabelDOCWatermarkMode
 
 from ..config import get_settings, FileMetadata, LanguageCode, TranslationService
-from ..translators import TranslatorFactory
+from ..translators.factory import TranslatorFactory
 from ..translators.argos_translator import ArgosTranslator
 from ..translators.base import describe_fatal_error
 from ..translators.capabilities import resolve_effective_service, resolve_languages

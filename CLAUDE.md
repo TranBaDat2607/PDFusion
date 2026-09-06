@@ -118,6 +118,53 @@ READY port=54213 token=Yd7Hf...G3
 ```
 The token is then forwarded to the webview via the `sidecar://ready` Tauri event and used as the `Authorization: Bearer` header on every fetch from the React side.
 
+The port comes from a socket the sidecar **binds and keeps**
+(`server.py:_bind_socket`), handed straight to
+`uvicorn.Server(...).run(sockets=[sock])`. Picking a port by binding, reading
+`getsockname()`, closing, and letting uvicorn re-bind left a window where
+something else could take it.
+
+### Import cost is a startup budget
+
+`sidecar.rs` gives the READY line **90 s** (`READY_TIMEOUT`) and then
+`/auth/ping` **30 s** (`HEALTH_TIMEOUT`). Those are sized for the PyInstaller
+one-dir bootloader paging thousands of files past Defender on a first launch —
+*not* for Python work. The Python side of startup is ~0.7 s and has to stay
+there.
+
+It got there by one rule, applied everywhere:
+
+> **A package `__init__.py` re-exports only names that are free to import.**
+
+That rule is load-bearing rather than stylistic, because importing a submodule
+runs its parent's `__init__`. `processors/pdf_cache.py` is pure `sqlite3` +
+`hashlib`, yet used to cost 4.9 s — `processors/__init__.py` did
+`from .processor import PDFProcessor`, which is BabelDOC. Same shape in
+`translators/__init__.py` (3.2 s of provider SDKs via `factory`) and
+`api/__init__.py` (`from .server import create_app`, i.e. everything). So
+`api/` and `rag/` re-export nothing at all; `processors/` keeps `events` and
+`exceptions`; `translators/` keeps `base` and `translation_cache`.
+
+The rest follows from it. BabelDOC and the RAG stack are imported inside the
+handlers that use them (`routes/translation.py:_run_translation`,
+`routes/rag.py:_build_chain`), with `from __future__ import annotations` +
+`TYPE_CHECKING` so the type annotations still name them. `create_app()` is
+called *after* READY is printed. Importing `api.server` went from **16.3 s to
+0.7 s**, and RAG — off by default — no longer costs most users torch at all.
+
+Two consequences worth keeping in mind:
+
+- **The first Translate click would now pay BabelDOC's ~5 s.** It doesn't,
+  because `_lifespan` starts an `engine-warm` daemon thread that imports
+  `processors.processor` after READY, next to the existing `argos-prewarm`
+  thread. Startup no longer *waits* on that import; it still *does* it.
+- **PyInstaller is fine with this.** Its modulegraph walks bytecode including
+  function bodies, so a function-level `from x.y import Z` is still statically
+  visible and `pdfusion-sidecar.spec` needs no new `hiddenimports`. Only truly
+  dynamic imports (`importlib.import_module(<variable>)`) need an entry there.
+
+`tests/test_sidecar_boot.py` fails if any of this regresses.
+
 ### Module layout
 
 | Path | Responsibility |
@@ -530,7 +577,8 @@ of any file logger added later.
   python -m pytest tests           # test_file_export.py, test_pdf_export_api.py,
                                    # test_translate_language_contract.py,
                                    # test_translation_failure_reporting.py,
-                                   # test_config_security.py, test_cors_origins.py
+                                   # test_config_security.py, test_cors_origins.py,
+                                   # test_sidecar_boot.py
 
   # Frontend (vitest, node environment — no jsdom)
   cd desktop && pnpm test          # src/**/*.test.ts
@@ -539,22 +587,18 @@ of any file logger added later.
   cd desktop/src-tauri && cargo test
   ```
 
-  Importing **anything** under `desktop_pdf_translator.api` costs ~13s: the
-  package `__init__` does `from .server import create_app`, and `server.py`
-  imports `routes/translation.py` → BabelDOC → torch. Avoiding `create_app()`
-  is not enough to dodge it — `test_pdf_export_api.py` mounts `routes/pdf.py`'s
-  router on a bare `FastAPI()` and still pays, because it imports `api.auth`.
-  `test_cors_origins.py` pays the same toll (it needs the real
-  `_allowed_origins`), which is why it's a separate file rather than folded into
-  `test_config_security.py` — that one and
-  `test_translate_language_contract.py` stay on `config/`, `utils/`,
-  `api/schemas.py`, `translators/capabilities.py` and `processors/pdf_cache.py`,
-  all pure decisions, and run in a fraction of a second. Keep new tests on that
-  side of the line where you can, and don't move a cheap suite onto the
-  expensive one. The frontend suite runs in the
-  `node` environment: the logic under test takes its Tauri/sidecar
-  collaborators as arguments (`lib/export-pdf.ts`) or is pure
-  (`lib/translate-request.ts`), so no DOM or testing-library is needed.
+  The whole Python suite runs in about a second, and that is now a property the
+  suite defends rather than a happy accident. It used to cost ~13s, because
+  importing **anything** under `desktop_pdf_translator.api` pulled in BabelDOC
+  and torch; see "Import cost is a startup budget" above for the rule that
+  fixed it. `test_sidecar_boot.py` is the guard — it asserts in a subprocess
+  that importing `api.server` leaves torch, chromadb, sentence-transformers,
+  BabelDOC, sklearn, camelot and transformers out of `sys.modules`. If it goes
+  red, the desktop app's startup is what broke; the slow suite is only the
+  symptom you notice first. The frontend suite runs in the `node` environment:
+  the logic under test takes its Tauri/sidecar collaborators as arguments
+  (`lib/export-pdf.ts`) or is pure (`lib/translate-request.ts`), so no DOM or
+  testing-library is needed.
 - **Python lint/format** tools are declared in `pyproject.toml [project.optional-dependencies].dev` (black line-length 88, isort with black profile, flake8, mypy) but the project has **no** pre-commit, no Makefile, and no CI. Run them manually if you want: `black src/ && isort src/`.
 - **TypeScript** is checked by `pnpm build` (which runs `tsc` before `vite build`). There is no separate lint step (no ESLint config).
 - **No CI**: `.github/workflows/` does not exist. All checks are local.

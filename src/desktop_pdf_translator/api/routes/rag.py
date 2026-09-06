@@ -1,27 +1,34 @@
-"""RAG endpoints — index a PDF, ask a question, stream events."""
+"""RAG endpoints — index a PDF, ask a question, stream events.
+
+The `rag` package loads torch, chromadb, sentence-transformers and camelot
+(~10 s). RAG is off by default, so most users never need any of it — every
+import of it below lives inside the handler that needs it, and the sidecar
+boots without paying for it.
+"""
+
+from __future__ import annotations
 
 import asyncio
 import logging
 import time
 from pathlib import Path
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sse_starlette.sse import EventSourceResponse
 
-from ...rag.document_processor import ScientificPDFProcessor
-from ...rag.rag_chain import EnhancedRAGChain
-from ...rag.vector_store import ChromaDBManager
 from ..auth import require_token
 from ..jobs import Job, get_registry, serialize_sse_event
 from ..schemas import AskRequest, IndexRequest, JobAccepted
+
+if TYPE_CHECKING:
+    from ...rag.rag_chain import EnhancedRAGChain
+    from ...rag.vector_store import ChromaDBManager
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/rag", tags=["rag"], dependencies=[Depends(require_token)])
 
-# Lazily initialized singletons. The RAG stack is heavy (loads embedding models, etc.)
-# so we only instantiate on first use.
 _vector_store: Optional[ChromaDBManager] = None
 _rag_chain: Optional[EnhancedRAGChain] = None
 _init_lock = asyncio.Lock()
@@ -29,6 +36,9 @@ _init_lock = asyncio.Lock()
 
 def _build_chain() -> EnhancedRAGChain:
     """Blocking: constructs ChromaDB + loads the SentenceTransformer model."""
+    from ...rag.rag_chain import EnhancedRAGChain
+    from ...rag.vector_store import ChromaDBManager
+
     global _vector_store, _rag_chain
     _vector_store = ChromaDBManager()
     _rag_chain = EnhancedRAGChain(_vector_store)
@@ -61,6 +71,10 @@ async def _run_index(job: Job, payload: IndexRequest) -> None:
     document_id = payload.document_id or file_path.stem
 
     try:
+        # Inside the try so a failed import reaches the job's error event —
+        # without a terminal SSE event the chat panel waits forever.
+        from ...rag.document_processor import ScientificPDFProcessor
+
         store = await _get_store()
         await job.emit("progress", {"stage": "Checking cache", "progress": 5})
         existing = await store.search_by_document(document_id)
