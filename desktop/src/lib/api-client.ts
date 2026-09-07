@@ -28,6 +28,12 @@ export function waitForSidecar(): Promise<SidecarInfo> {
   return new Promise((resolve) => waiters.push(resolve));
 }
 
+// waiters is always empty here — it only accumulates before the first
+// setSidecar call, which drains it immediately.
+export function resetSidecar() {
+  sidecar = null;
+}
+
 // ---------------------------------------------------------------------------
 // HTTP wrapper
 // ---------------------------------------------------------------------------

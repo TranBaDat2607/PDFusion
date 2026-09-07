@@ -189,6 +189,45 @@ Two consequences worth keeping in mind:
 
 `tests/test_sidecar_boot.py` fails if any of this regresses.
 
+### Sidecar supervision
+
+READY isn't the end of the sidecar's lifecycle — two things watch it after
+that, both in `sidecar.rs`:
+
+- A background task polls the child every `SUPERVISOR_POLL_INTERVAL` (250 ms)
+  via `try_wait()`. An exit it didn't expect emits `sidecar://exited { code }`.
+  What makes it "didn't expect": `SidecarHandle` carries a `shutting_down`
+  `AtomicBool`, and `shutdown()` sets it **before** taking the child out of the
+  mutex — that ordering is what stops an intentional kill (`restart_app`,
+  `RunEvent::ExitRequested`) from being reported as a crash. Reversing it would
+  open a window where the poller observes "child gone" without yet observing
+  "on purpose."
+- The child is confined to a Windows Job Object with
+  `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` (`confine_to_job_object`), so it dies
+  with this process no matter how this process dies — crash, Task Manager,
+  anything short of the OS itself going down. The job handle is **never
+  closed**: `KILL_ON_JOB_CLOSE` fires when the *last* handle to the job
+  closes, so leaking it for the process's lifetime is what ties the child's
+  life to ours. Both the poll and the job assignment are best-effort — neither
+  can fail sidecar startup.
+
+On the frontend, `useSidecar.ts` reacts to `sidecar://exited` by calling the
+existing `restart_app` command — a full relaunch, not an in-place respawn, for
+the same `OnceCell` reason `restart_app` itself documents. Whether it actually
+does that is gated by `lib/sidecar-recovery.ts`'s `shouldAutoRestart`: a 60 s
+cooldown recorded under a `localStorage` key, not in-memory state, because
+`app.restart()` tears down the whole JS context a module or React variable
+would otherwise live in. That timestamp is **never cleared by a successful
+`ready()`** — only elapsed time clears it. Clearing it on ready was the bug in
+the first version of this: a sidecar that crashes on every boot would
+relaunch, reach ready, wipe its own cooldown marker, and crash-loop forever
+with no way to ever reach the manual "stopped unexpectedly" screen. Leaving it
+to expire on its own still gives an unrelated crash days later a fresh
+attempt. A separate, one-shot `SIDECAR_RESTART_TOAST_KEY` — set right before
+the restart, consumed and cleared the next time `ready()` runs — is what tells
+the user their session just got reset, without reusing (and thereby
+corrupting) the cooldown key for that purpose.
+
 ### Module layout
 
 | Path | Responsibility |

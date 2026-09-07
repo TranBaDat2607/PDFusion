@@ -5,7 +5,10 @@ import { AlertTriangle, FileText, FolderOpen, Loader2, RotateCcw } from "lucide-
 import { Button } from "@/components/ui/button";
 
 interface StartupScreenProps {
-  state: { status: "starting" } | { status: "error"; message: string };
+  state:
+    | { status: "starting" }
+    | { status: "error"; message: string }
+    | { status: "crashed"; code: number | null };
 }
 
 /**
@@ -128,6 +131,21 @@ export function StartupScreen({ state }: StartupScreenProps) {
               <pre className="w-full whitespace-pre-wrap break-words rounded-md border border-destructive/30 bg-destructive/5 p-3 text-left text-xs text-destructive">
                 {state.message}
               </pre>
+              {actions}
+              {devHint}
+            </div>
+          )}
+          {state.status === "crashed" && (
+            <div className="flex flex-col items-center gap-3">
+              <p className="flex items-center gap-2 text-sm text-destructive">
+                <AlertTriangle className="h-4 w-4" />
+                PDFusion's background process stopped unexpectedly
+              </p>
+              <p className="text-xs text-muted-foreground">
+                It crashed again shortly after restarting, so automatic
+                recovery has been paused.
+                {state.code !== null && ` (exit code ${state.code})`}
+              </p>
               {actions}
               {devHint}
             </div>
