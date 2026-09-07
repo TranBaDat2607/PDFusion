@@ -12,6 +12,7 @@ logs.txt
 # build-sidecar.ps1 / contributors fetch them locally before building the MSI.
 # See pdfusion-sidecar.spec for runtime resolution.
 /assets/argos/*.argosmodel
+/assets/babeldoc/*.zip
 # Distribution / packaging
 .Python
 build/

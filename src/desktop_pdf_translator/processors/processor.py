@@ -37,6 +37,7 @@ from .pdf_cache import compute_file_hash, get_pdf_cache, is_cacheable_artifact
 from .exceptions import (
     ProcessingError,
     BabelDOCError,
+    babeldoc_chunk_error,
     FileValidationError,
     ConfigurationError,
     TranslationProcessError,
@@ -954,10 +955,13 @@ class PDFProcessor:
                     if err is not None:
                         if isinstance(err, BabelDOCError):
                             raise err
-                        raise BabelDOCError(
-                            f"BabelDOC processing error in chunk {idx + 1}: {err}",
-                            original_error=err,
-                        )
+                        if isinstance(err, SystemExit):
+                            logger.error(
+                                "Chunk %d aborted by BabelDOC exit(%s) — engine assets unavailable",
+                                idx + 1,
+                                err.code,
+                            )
+                        raise babeldoc_chunk_error(idx + 1, err)
 
                     _, page_range = chunks[idx]
                     rolling_path = (

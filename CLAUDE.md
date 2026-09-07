@@ -189,6 +189,78 @@ Two consequences worth keeping in mind:
 
 `tests/test_sidecar_boot.py` fails if any of this regresses.
 
+### First-run engine setup
+
+A translation needs ~290 MB that no wheel carries: BabelDOC's DocLayout ONNX
+model, a table-detection model, 34 embedding fonts, 146 cmaps and a tiktoken
+encoding (cached in `~/.cache/babeldoc`), plus the Argos en→vi pack. Before
+this existed they were fetched implicitly, from inside `TranslationConfig`
+construction on the first chunk of the first job, behind an overlay that said
+"Initializing translator" — and offline the user was told
+**`BabelDOC processing error in chunk 1: 1`**.
+
+That string is the shape of the whole problem. **Every failure in BabelDOC's
+asset layer is `exit(1)`** — no message, no type. `run_one_chunk` catches
+`BaseException`, and the multiplexer interpolated it: `str(SystemExit(1))` is
+`"1"`. `processors/exceptions.py:babeldoc_chunk_error` is where that is now
+translated into a sentence, and it deliberately drops `original_error` —
+`BabelDOCError.__str__` appends it and the job layer sends `str(exc)`, so
+carrying the `SystemExit` through would staple the `1` back on the end.
+
+`engine_assets.py` is the single source of truth for "installed", consulted by
+the setup flow, the `POST /translate` pre-flight and that error message, so the
+three cannot disagree. Two things about it:
+
+- **It asks less of a job than of setup.** `engine_status()` counts the whole
+  183-entry manifest, because that is what an offline-first install means.
+  `engine_ready()` — the pre-flight — requires only the layout model
+  (`_CORE_ASSET`). Fonts and cmaps are fetched per document and per language, so
+  every install predating this flow has a partial cache that has been working
+  fine; requiring the full set before a job may start would refuse work those
+  machines have been doing for months.
+- **It counts by `stat`, never by hash.** BabelDOC's own `verify_file` hashes
+  every file, and the set is ~210 MB. This runs on every `POST /translate`.
+  Integrity stays BabelDOC's job — it re-verifies and re-downloads what it
+  doesn't like. A zero-byte file (an interrupted download) does not count.
+
+`api/routes/setup.py` installs them, and is **the one long job in the sidecar
+that is polled rather than streamed.** `api/jobs.py`'s `stream()` discards a job
+the moment its consumer detaches, which is right for a translate and wrong here:
+the install is a process-wide singleton running for minutes, so a webview reload
+would lose the only handle to it and the next Install click would start a second
+download into the same cache directory. `GET /setup/status` re-attaches for
+free. Two more rules it keeps:
+
+- **Never call BabelDOC's sync wrappers** (`warmup()`,
+  `restore_offline_assets_package()`). They run the coroutine through
+  `assets.py:run_in_another_thread`, where `threading.excepthook` swallows
+  `SystemExit` and the call returns `None` — the failure resurfaces much later
+  as a `TypeError` unpacking that `None`. Only the `_async` variants, under an
+  `asyncio.run` of our own, inside a `try` that names `SystemExit`.
+- **Progress is observed, not reported.** Neither BabelDOC's downloaders nor
+  `argostranslate`'s expose a hook, so the percentage is how much of the
+  manifest has appeared on disk, and the phase is a noun the install thread
+  writes as it moves (`_Phase.noun`, plain assignment — one writer, one reader).
+
+Nothing in `engine_assets.py` or `routes/setup.py` imports babeldoc or
+argostranslate at module level; both are on the boot path, and
+`tests/test_sidecar_boot.py` covers both.
+
+On the frontend, `App.tsx`'s `EngineGate` sits between the sidecar gate and the
+workspace. It is also where a mid-session 409 lands: `useTranslation` sets
+`engineSetupRequired` in the store, which overrides a previous "Not now" — the
+user has just asked for the one thing the assets are for. The skip marker is a
+`pdfusion.*` localStorage key behind pure helpers in `lib/engine-setup.ts`, the
+same convention as `sidecar-recovery.ts`. Reading a PDF never waits on any of
+this; only translating does.
+
+Consequence for the boot threads: **pre-warm may materialize the pack, never
+download it.** `server.py:_should_prewarm_argos` and
+`routes/translation.py:_warm_translator` are both gated on `argos_pack_ready()`.
+They fire at boot and on document open, with nothing on screen that could report
+an 80 MB download or its failure — installing is the setup flow's job, because
+that is the surface the user can watch.
+
 ### Sidecar supervision
 
 READY isn't the end of the sidecar's lifecycle — two things watch it after
@@ -247,6 +319,9 @@ corrupting) the cooldown key for that purpose.
 | `desktop/src/lib/store.ts` | Zustand store for UI state |
 | `desktop/src/lib/export-pdf.ts` | Pure save-flow logic + path helpers (deps injected, so it's unit-testable) |
 | `desktop/src/hooks/` | `useSidecar`, `useConfig`, `useTranslation`, `useRagIndex`, `useRagAsk`, `useExportTranslated` |
+| `desktop/src/components/setup/` | `SetupScreen` (first-run engine install) |
+| `desktop/src/lib/engine-setup.ts` | Pure: the skip marker and whether the setup screen is due |
+| `src/desktop_pdf_translator/engine_assets.py` | What "the offline engine is installed" means; no heavy imports |
 | `src/desktop_pdf_translator/api/server.py` | FastAPI app + uvicorn entry + port discovery |
 | `src/desktop_pdf_translator/api/auth.py` | Bearer-token middleware |
 | `src/desktop_pdf_translator/api/jobs.py` | In-memory job registry + asyncio.Queue per job for SSE |
@@ -273,7 +348,9 @@ All routes (except `GET /health`) require `Authorization: Bearer <token>`.
 | GET | `/config/options` | Static dropdown data (languages, services, models) + `supported_pairs` per service (`null` = unrestricted) |
 | GET | `/config/cache` | Paragraph-cache stats (entries, hit rate, size) |
 | DELETE | `/config/cache?scope=all\|expired` | Clear/GC the paragraph-level translation cache |
-| POST | `/translate` | Start translation job → returns `{ job_id }`. `source_lang` / `target_lang` / `service` are `None`-defaulted (config applies); an unsupported pair is refused with **422** before the job is created. `bypass_cache: bool` forces a full re-translate (used by the "Re-translate" button). There is deliberately **no `output_dir`** — output always lands in a per-job `%TEMP%` dir that the cleanup paths know about |
+| GET | `/setup/status` | Which engine assets are installed, plus the running install's phase and the last one's error. Stat calls only — polled twice a second during an install |
+| POST | `/setup/engine` | Start installing the engine assets, or report the one already running; answers with the same body as `/setup/status` |
+| POST | `/translate` | Start translation job → returns `{ job_id }`. `source_lang` / `target_lang` / `service` are `None`-defaulted (config applies); an unsupported pair is refused with **422** and a missing engine with **409**, both before the job is created. `bypass_cache: bool` forces a full re-translate (used by the "Re-translate" button). There is deliberately **no `output_dir`** — output always lands in a per-job `%TEMP%` dir that the cleanup paths know about |
 | GET | `/translate/{job_id}/events` | SSE: `progress`, `chunk_ready`, `paragraph_translated`, `done`, `error`, `cancelled`. **`chunk_ready` arrives in priority order, not page order** — nearest the viewer's page first — so `chunk_index` is not a completion count and `pages_in_chunk[1]` is not a running total. Accumulate with `lib/translation-progress.ts`; page totals come from `total_pages` (`total_chunks` is not a page count — Argos runs 3-page chunks) |
 | POST | `/translate/{job_id}/cancel` | Cancel an in-flight translation |
 | POST | `/rag/index` | Index a PDF into ChromaDB → returns `{ job_id }` |
@@ -293,6 +370,11 @@ Long-running endpoints (translate, index, ask) follow the same pattern:
 4. A terminal event (`done`, `error`, or `cancelled`) closes the stream.
 
 This replaces the previous `QThread + new asyncio loop` pattern from the PySide6 GUI.
+
+**`/setup/engine` is the one exception**, and the reason is step 3: `stream()`
+discards the job as soon as its consumer detaches, so a client that reloads
+mid-job can never re-attach. That is fine for a per-click translate and not for
+a process-wide install that runs for minutes — see "First-run engine setup".
 
 ### Translation output lifecycle — nothing the pipeline writes is permanent
 
@@ -559,17 +641,26 @@ BabelDOC drives chunking, layout, and PDF reassembly; it delegates the actual te
 ## Building the desktop installer
 
 ```powershell
-# 1. Build the standalone sidecar (PyInstaller, one-dir).
+# 1. Stage the engine assets the installer ships (~290 MB into assets/).
+#    Network + several minutes; skips whatever is already staged. Omit this
+#    and the build still succeeds — it prints a WARN per missing asset and the
+#    app downloads them on first run instead.
+conda activate pdfusion
+./fetch-offline-assets.ps1
+
+# 2. Build the standalone sidecar (PyInstaller, one-dir).
 #    Output: dist/pdfusion-sidecar/{pdfusion-sidecar.exe, _internal/}
 #    Then staged into desktop/src-tauri/binaries/.
-conda activate pdfusion
 pip install -e ".[dev]"          # ensures pyinstaller is available
 ./build-sidecar.ps1
 
-# 2. Build the Tauri installer.
+# 3. Build the Tauri installer.
 #    tauri.conf.json's beforeBundleCommand also re-runs build-sidecar.ps1 so
-#    step 1 is technically optional, but doing it first lets you sanity-check
+#    step 2 is technically optional, but doing it first lets you sanity-check
 #    the bundled sidecar in isolation before the slow Tauri bundle step.
+#    `fetch-offline-assets.ps1` is NOT wired into that hook: it needs the
+#    network, and a bundle step that silently downloads a third of a gigabyte
+#    is the problem this staging exists to fix.
 cd desktop
 pnpm tauri build
 # → desktop/src-tauri/target/release/bundle/msi/PDFusion_0.1.0_x64_en-US.msi
@@ -598,9 +689,25 @@ native .pyd + bundled package data). The `_internal/` tree is staged at
 renamed `pdfusion-sidecar.exe` — which is what PyInstaller's onedir
 bootloader requires to find `python313.dll` et al. First build is slow (~10-20 min) and
 the resulting .msi is large (~500 MB-1 GB) because we bundle the full
-chromadb + sentence-transformers + babeldoc stack. ML model weights and
-the Argos en→vi pack are **not** bundled; they download lazily on first
-use to `~/.cache/huggingface` and the argostranslate user dir respectively.
+chromadb + sentence-transformers + babeldoc stack.
+
+On top of that, `fetch-offline-assets.ps1` stages two runtime asset sets that
+the spec bundles when present (`_internal/argos_pack/`,
+`_internal/babeldoc_assets/`) and warns about when absent:
+
+| Staged path | What | Consumed by |
+|---|---|---|
+| `assets/argos/translate-en_vi.argosmodel` | Argos en→vi pack, ~80 MB | `argos_translator.py:_find_bundled_pack` |
+| `assets/babeldoc/offline_assets_<tag>.zip` | BabelDOC layout models, fonts, cmaps, ~210 MB | `engine_assets.py:bundled_babeldoc_zip` |
+
+Both are gitignored. `<tag>` is a hash of BabelDOC's own asset manifest, so the
+zip is only valid for the babeldoc version it was built against — re-run the
+script after bumping babeldoc. A stale zip is not an error: it simply isn't the
+file `restore_offline_assets_package_async` looks for, and setup downloads
+instead.
+
+The HuggingFace embedding model for RAG chat (~470 MB) is still **not** bundled
+and still downloads on first use to `~/.cache/huggingface`.
 
 Hidden-import additions for chromadb / babeldoc / etc. live in
 `pdfusion-sidecar.spec`. Extend that file (then rerun `build-sidecar.ps1`)
@@ -641,7 +748,8 @@ of any file logger added later.
                                    # test_translate_language_contract.py,
                                    # test_translation_failure_reporting.py,
                                    # test_config_security.py, test_cors_origins.py,
-                                   # test_sidecar_boot.py
+                                   # test_sidecar_boot.py, test_engine_assets.py,
+                                   # test_setup_api.py, test_translate_preflight.py
 
   # Frontend (vitest, node environment — no jsdom)
   cd desktop && pnpm test          # src/**/*.test.ts
@@ -675,7 +783,10 @@ of any file logger added later.
 - **More Argos language pairs** — the offline backend ships en→vi only. Adding
   a pair means shipping/downloading its pack, then extending `SUPPORTED_PAIRS`
   in `translators/capabilities.py`.
-- **Pre-bundled ML assets** (HuggingFace embedding model + Argos en→vi pack) — currently both download on first use. Bundle them later for true offline-first.
+- **Pre-bundled ML assets for RAG** — the HuggingFace embedding model (~470 MB)
+  still downloads on first Chat use, with no progress and no preflight. The
+  translation side of that problem is solved (see "First-run engine setup");
+  Chat's half of issue #21 is deliberately left for a follow-up.
 - **Auto-save preference** — saving a translation is an explicit action (Save dialog). A "always save `<name>_vi.pdf` beside the source" setting was proposed in issue #11 but deliberately not built: it needs a config field, a Settings control, and an overwrite policy for repeat runs.
 
 ## Removed (legacy)

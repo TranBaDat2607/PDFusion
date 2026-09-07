@@ -24,12 +24,41 @@ import urllib.error
 
 import pytest
 
+from desktop_pdf_translator.processors.exceptions import babeldoc_chunk_error
 from desktop_pdf_translator.processors.pdf_cache import is_cacheable_artifact
 from desktop_pdf_translator.translators.base import (
     BaseTranslator,
     describe_fatal_error,
     is_fatal_translation_error,
 )
+
+
+# ---------------------------------------------------------------------------
+# What a dead chunk tells the user (#21)
+# ---------------------------------------------------------------------------
+
+
+def test_an_asset_failure_is_not_reported_as_the_number_one():
+    """`exit(1)` inside BabelDOC's asset layer arrives as `SystemExit(1)`, and
+    the old formatter interpolated it: "BabelDOC processing error in chunk 1:
+    1". That string was the entire user-facing symptom of #21."""
+    error = babeldoc_chunk_error(1, SystemExit(1))
+    assert str(error) != "BabelDOC processing error in chunk 1: 1"
+    assert "1" not in str(error).split(".")[0]
+    assert "internet" in str(error)
+
+
+def test_the_asset_sentence_is_not_followed_by_the_exit_code():
+    """`BabelDOCError.__str__` appends `original_error`, and the job layer sends
+    `str(exc)` — so carrying the SystemExit through would put the "1" back on
+    the end of a sentence written to replace it."""
+    assert not str(babeldoc_chunk_error(1, SystemExit(1))).endswith("1")
+
+
+def test_an_ordinary_chunk_failure_still_names_its_chunk():
+    error = babeldoc_chunk_error(4, ValueError("bad xref"))
+    assert "chunk 4" in str(error)
+    assert "bad xref" in str(error)
 
 
 # ---------------------------------------------------------------------------

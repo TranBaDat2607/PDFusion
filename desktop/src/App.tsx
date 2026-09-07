@@ -11,13 +11,16 @@ import { ContextBar } from "@/components/layout/ContextBar";
 import { MainLayout } from "@/components/layout/MainLayout";
 import { ProgressOverlay } from "@/components/translation/ProgressOverlay";
 import { SettingsSheet } from "@/components/settings/SettingsSheet";
+import { SetupScreen } from "@/components/setup/SetupScreen";
 import { StartupScreen } from "@/components/StartupScreen";
 import { ThemeProvider } from "@/components/theme-provider";
 import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { useConfig } from "@/hooks/useConfig";
+import { useEngineSetup } from "@/hooks/useEngineSetup";
 import { useSidecar } from "@/hooks/useSidecar";
 import { isTranslationBusy, useTranslation } from "@/hooks/useTranslation";
+import { readSkipped, shouldShowSetup } from "@/lib/engine-setup";
 import { useAppStore } from "@/lib/store";
 import { api } from "@/lib/api-client";
 
@@ -48,6 +51,57 @@ function Shell() {
 
   if (sidecar.status !== "ready") {
     return <StartupScreen state={sidecar} />;
+  }
+
+  return <EngineGate />;
+}
+
+/**
+ * The second boot gate: the sidecar is up, but the ~290 MB of layout models,
+ * fonts and language packs a translation needs may not be on disk yet.
+ *
+ * It sits between the sidecar gate and the workspace rather than inside the
+ * workspace because it is also the mid-session destination for a Translate that
+ * came back 409 — `engineSetupRequired` in the store. One screen, one place it
+ * can be rendered from.
+ */
+function EngineGate() {
+  const setup = useEngineSetup();
+  const required = useAppStore((s) => s.engineSetupRequired);
+  const setRequired = useAppStore((s) => s.setEngineSetupRequired);
+  // Read once: this only changes through the Not now button below, which
+  // updates both localStorage and this copy.
+  const [skipped, setSkipped] = useState(readSkipped);
+
+  const engineReady = setup.state.engine?.ready ?? false;
+  // Evaluated here rather than left to the effect, so a completed install
+  // doesn't render the setup screen for one more frame before the store catches
+  // up.
+  const forced = required && !engineReady;
+
+  useEffect(() => {
+    if (required && engineReady) setRequired(false);
+  }, [required, engineReady, setRequired]);
+
+  // The status probe is stat calls, so this is a frame or two — but it is still
+  // "the app hasn't finished starting", and that already has a screen.
+  if (setup.state.probing && !forced) {
+    return <StartupScreen state={{ status: "starting" }} />;
+  }
+
+  if (shouldShowSetup(setup.state.engine, skipped, forced)) {
+    return (
+      <SetupScreen
+        state={setup.state}
+        forced={forced}
+        onInstall={() => void setup.install()}
+        onSkip={() => {
+          setup.skip();
+          setSkipped(true);
+          setRequired(false);
+        }}
+      />
+    );
   }
 
   return <Workspace />;

@@ -17,6 +17,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sse_starlette.sse import EventSourceResponse
 
 from ...config import TranslationService, get_settings
+from ...engine_assets import MISSING_ASSETS_MESSAGE, argos_pack_ready, engine_ready
 from ...translators.capabilities import (
     resolve_effective_service,
     resolve_languages,
@@ -169,6 +170,19 @@ async def start_translation(payload: TranslateRequest) -> JobAccepted:
     if reason:
         raise HTTPException(status_code=422, detail=reason)
 
+    # Second pre-flight: the engine's own assets. Without the layout model,
+    # BabelDOC calls `exit(1)` from inside chunk 1 and the user is told
+    # "BabelDOC processing error in chunk 1: 1" — minutes in, with a partial
+    # artifact on disk. 409 rather than the 422 above so the frontend can tell
+    # "this pair can't be translated" from "run setup first" and reopen the
+    # setup screen for the second.
+    #
+    # Off the event loop: the first call imports `babeldoc.const`, and a click
+    # that lands while the `engine-warm` thread is running contends with it for
+    # the GIL. Every relocated BabelDOC import in this file follows that rule.
+    if not await asyncio.to_thread(engine_ready, effective_service.value):
+        raise HTTPException(status_code=409, detail=MISSING_ASSETS_MESSAGE)
+
     registry = get_registry()
     job = await registry.create()
     job.task = asyncio.create_task(_run_translation(job.job_id, payload))
@@ -241,12 +255,13 @@ def _warm_translator(
         translator = TranslatorFactory.create_translator(
             service=service, lang_in=lang_in, lang_out=lang_out
         )
-        # Argos: kicks off pack install via translate's preamble. We do not
-        # actually call translate() here — _ensure_en_vi_installed is invoked
-        # from `validate_configuration` too, and is fast once installed.
+        # Argos: materialize the pack so the first paragraph doesn't. Only
+        # when it is already on disk or bundled — pre-warm fires on document
+        # open, with nothing on screen that could report an 80 MB download or
+        # its failure. Installing it is the setup flow's job.
         try:
             from ...translators.argos_translator import _ensure_en_vi_installed
-            if service == TranslationService.ARGOS:
+            if service == TranslationService.ARGOS and argos_pack_ready():
                 _ensure_en_vi_installed()
         except Exception:
             pass

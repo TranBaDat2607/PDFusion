@@ -162,6 +162,7 @@ datas += [("config/default_config.toml", "config")]
 # resolves it via sys._MEIPASS at runtime. If the asset is missing from the
 # checkout the build silently omits it and the runtime falls back to the
 # network download path, so this is fully optional.
+import glob as _glob
 import os as _os
 # SPECPATH, not a bare relative path. PyInstaller resolves `scripts` and `datas`
 # against the spec's directory, but plain Python like the exists() check below
@@ -174,8 +175,29 @@ if _os.path.exists(_argos_pack):
 else:
     print(
         f"WARN: {_argos_pack} not found — bundled exe will download Argos "
-        "pack on first translate. Copy the pack into assets/argos/ to "
+        "pack on first translate. Run ./fetch-offline-assets.ps1 to "
         "ship an offline-first installer."
+    )
+
+# BabelDOC's layout models, embedding fonts and cmaps, pre-packaged as its own
+# offline-assets zip. `api/routes/setup.py` restores it into ~/.cache/babeldoc
+# on first run instead of pulling ~210 MB from GitHub mirrors; without it the
+# app downloads (see engine_assets.bundled_babeldoc_zip). Same optionality as
+# the Argos pack above — absent is a WARN, not a build failure.
+#
+# The filename carries a hash of BabelDOC's asset manifest, so glob rather than
+# name it: a zip built against a different babeldoc version simply won't match
+# what restore_offline_assets_package_async looks for, and the runtime falls
+# back to downloading.
+_babeldoc_assets_dir = _os.path.join(SPECPATH, "assets", "babeldoc")
+_babeldoc_zips = _glob.glob(_os.path.join(_babeldoc_assets_dir, "offline_assets_*.zip"))
+if _babeldoc_zips:
+    datas += [(sorted(_babeldoc_zips)[0], "babeldoc_assets")]
+else:
+    print(
+        f"WARN: no offline_assets_*.zip in {_babeldoc_assets_dir} — bundled exe "
+        "will download BabelDOC's ~210 MB of layout models and fonts on first "
+        "run. Run ./fetch-offline-assets.ps1 to ship an offline-first installer."
     )
 
 
