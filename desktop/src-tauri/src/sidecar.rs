@@ -14,13 +14,14 @@
 use std::borrow::Cow;
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
-use std::process::Stdio;
+use std::process::{ExitStatus, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 use std::time::Duration;
 
 use once_cell::sync::OnceCell;
 use serde::Serialize;
-use tauri::{AppHandle, Manager};
+use tauri::{AppHandle, Emitter, Manager};
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::{Child, Command};
 use tokio::time::{sleep, Instant};
@@ -38,6 +39,9 @@ const READY_TIMEOUT: Duration = Duration::from_secs(90);
 /// FastAPI lifespan: the orphan-temp-dir sweep and decrypting the stored API
 /// keys, both of which touch a possibly-cold disk.
 const HEALTH_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// How often the post-boot supervisor polls the child for an unrequested exit.
+const SUPERVISOR_POLL_INTERVAL: Duration = Duration::from_millis(250);
 
 #[derive(Debug)]
 pub enum SidecarError {
@@ -79,16 +83,24 @@ pub struct SidecarInfo {
     pub token: String,
 }
 
+#[derive(Debug, Clone, Serialize)]
+struct ExitedPayload {
+    code: Option<i32>,
+}
+
 pub struct SidecarHandle {
     pub info: SidecarInfo,
     child: Mutex<Option<Child>>,
+    shutting_down: AtomicBool,
 }
 
 impl SidecarHandle {
     pub fn shutdown(&self) {
+        // Set before taking the child so the supervisor can never observe
+        // "child gone" without also observing "on purpose."
+        self.shutting_down.store(true, Ordering::SeqCst);
         if let Ok(mut guard) = self.child.lock() {
             if let Some(mut child) = guard.take() {
-                // start_kill is non-blocking; the OS handles teardown.
                 let _ = child.start_kill();
             }
         }
@@ -379,6 +391,73 @@ fn build_command(app: &AppHandle) -> Result<Command, SidecarError> {
     Ok(cmd)
 }
 
+/// Ties the child's lifetime to ours: if this process dies for any reason —
+/// crash, Task Manager, anything short of the OS itself going down — Windows
+/// tears the child down with it instead of orphaning it. Best-effort: a
+/// failure here is logged and otherwise ignored, never fatal to startup.
+#[cfg(windows)]
+fn confine_to_job_object(child: &Child) {
+    use windows_sys::Win32::System::JobObjects::{
+        AssignProcessToJobObject, CreateJobObjectW, JobObjectExtendedLimitInformation,
+        SetInformationJobObject, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
+        JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+    };
+
+    let Some(raw) = child.raw_handle() else {
+        log::warn!("Sidecar job confinement skipped: no process handle");
+        return;
+    };
+
+    unsafe {
+        let job = CreateJobObjectW(std::ptr::null(), std::ptr::null());
+        if job.is_null() {
+            log::warn!("Sidecar job confinement skipped: CreateJobObjectW failed");
+            return;
+        }
+
+        let mut info = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
+        info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+
+        let configured = SetInformationJobObject(
+            job,
+            JobObjectExtendedLimitInformation,
+            &info as *const _ as *const _,
+            std::mem::size_of_val(&info) as u32,
+        );
+        if configured == 0 || AssignProcessToJobObject(job, raw) == 0 {
+            log::warn!("Sidecar job confinement failed; it may outlive this app if killed abnormally");
+        }
+        // `job` is deliberately never closed: JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+        // fires when the last handle to it closes, so leaking it for the rest
+        // of this process's life is what ties the child's life to ours.
+    }
+}
+
+/// Polls `child` until it exits and reports the exit status, unless
+/// `shutting_down` says we're the ones who killed it. `None` covers both
+/// "it hasn't exited" — impossible to reach since this only returns once the
+/// child is gone — and "we already know why," e.g. `shutdown()` having taken
+/// the child out from under this loop.
+async fn unexpected_exit(
+    child: &Mutex<Option<Child>>,
+    shutting_down: &AtomicBool,
+    poll_interval: Duration,
+) -> Option<ExitStatus> {
+    loop {
+        sleep(poll_interval).await;
+        let status = match child.lock() {
+            Ok(mut guard) => match guard.as_mut() {
+                Some(c) => c.try_wait().ok().flatten(),
+                None => return None,
+            },
+            Err(_) => return None,
+        };
+        if let Some(status) = status {
+            return (!shutting_down.load(Ordering::SeqCst)).then_some(status);
+        }
+    }
+}
+
 /// Spawn the sidecar and block until it reports `READY`. Returns once `/auth/ping`
 /// answers OK. Stores the handle in the global so other code can read it.
 pub async fn spawn(app: AppHandle) -> Result<SidecarInfo, SidecarError> {
@@ -390,6 +469,9 @@ pub async fn spawn(app: AppHandle) -> Result<SidecarInfo, SidecarError> {
     command.creation_flags(0x0800_0000);
 
     let mut child = command.spawn()?;
+
+    #[cfg(windows)]
+    confine_to_job_object(&child);
 
     let stdout = child
         .stdout
@@ -455,10 +537,25 @@ pub async fn spawn(app: AppHandle) -> Result<SidecarInfo, SidecarError> {
     let handle = SidecarHandle {
         info: info.clone(),
         child: Mutex::new(Some(child)),
+        shutting_down: AtomicBool::new(false),
     };
     SIDECAR
         .set(handle)
         .map_err(|_| SidecarError::Health("sidecar handle already set".into()))?;
+
+    tokio::spawn(async move {
+        let handle = SIDECAR.get().expect("just set above");
+        let status = unexpected_exit(
+            &handle.child,
+            &handle.shutting_down,
+            SUPERVISOR_POLL_INTERVAL,
+        )
+        .await;
+        if let Some(status) = status {
+            log::warn!("Sidecar exited unexpectedly: {status}");
+            let _ = app.emit("sidecar://exited", ExitedPayload { code: status.code() });
+        }
+    });
 
     Ok(info)
 }
@@ -492,7 +589,10 @@ async fn health_check(port: u16, token: &str) -> Result<(), SidecarError> {
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_ready_line, redact_ready_line};
+    use super::{parse_ready_line, redact_ready_line, unexpected_exit, Command};
+    use std::sync::atomic::AtomicBool;
+    use std::sync::Mutex;
+    use std::time::Duration;
 
     #[test]
     fn ready_line_is_logged_without_its_token() {
@@ -526,5 +626,35 @@ mod tests {
         let line = "READY token=Yd7HfSuperSecretG3";
         let err = parse_ready_line(line).expect_err("no port, so it must fail");
         assert!(!format!("{err}").contains("Yd7HfSuperSecretG3"));
+    }
+
+    #[tokio::test]
+    async fn a_crash_that_was_not_requested_is_reported_with_its_exit_code() {
+        let child = Command::new("cmd")
+            .args(["/C", "exit", "3"])
+            .spawn()
+            .expect("spawn cmd");
+        let child = Mutex::new(Some(child));
+        let shutting_down = AtomicBool::new(false);
+
+        let status = unexpected_exit(&child, &shutting_down, Duration::from_millis(10)).await;
+
+        assert_eq!(status.and_then(|s| s.code()), Some(3));
+    }
+
+    #[tokio::test]
+    async fn a_shutdown_that_already_took_the_child_produces_no_report() {
+        let child = Command::new("cmd")
+            .args(["/C", "exit", "3"])
+            .spawn()
+            .expect("spawn cmd");
+        let child = Mutex::new(Some(child));
+        let shutting_down = AtomicBool::new(true);
+        // Mirrors what `shutdown()` does before the supervisor's next poll tick.
+        child.lock().unwrap().take();
+
+        let status = unexpected_exit(&child, &shutting_down, Duration::from_millis(10)).await;
+
+        assert!(status.is_none());
     }
 }
