@@ -1,9 +1,12 @@
 """HTTP-level tests for `POST /pdf/export`.
 
 The app is assembled from the `pdf` router alone rather than via
-`create_app()`: the full app imports `routes/translation.py`, which drags in
-BabelDOC + torch and turns a millisecond test run into a minute-long one. The
-router object under test is the same one `create_app()` mounts.
+`create_app()`, which keeps the test to the surface it is about — no lifespan,
+no CORS, no other routers. It used to be a cost decision too: `create_app()`
+imports `routes/translation.py`, which dragged in BabelDOC + torch and turned a
+millisecond run into a minute-long one. That is no longer true (see
+`test_sidecar_boot.py`), so mounting the full app would now be merely broader,
+not slow. The router object under test is the same one `create_app()` mounts.
 """
 
 from __future__ import annotations

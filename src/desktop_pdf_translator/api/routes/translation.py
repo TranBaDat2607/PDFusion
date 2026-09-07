@@ -51,18 +51,39 @@ def _build_cancel_payload(processor: PDFProcessor, file_path: Path) -> dict:
     }
 
 
+def _load_engine() -> tuple[type, type]:
+    """Import BabelDOC and hand back `(EventType, PDFProcessor)`.
+
+    Blocking, and not cheaply so: 5-25 s on a cold interpreter, depending on
+    what else is contending for the GIL. `_lifespan`'s `engine-warm` thread
+    normally absorbs it before the user can click anything, but a click that
+    beats that thread — or a warm-up that failed, which it does silently —
+    lands here instead. Callers must run it off the event loop.
+    """
+    from ...processors.events import EventType
+    from ...processors.processor import PDFProcessor
+
+    return EventType, PDFProcessor
+
+
 async def _run_translation(job_id: str, payload: TranslateRequest) -> None:
     registry = get_registry()
     job = registry.get(job_id)
     if job is None:
         return
 
-    # A broken BabelDOC install used to stop the sidecar from starting at all.
-    # Now that the import happens here, it has to reach the job's error event —
-    # otherwise the SSE stream gets no terminal event and the overlay hangs.
+    # In a thread, because the import blocks: run on the event loop it freezes
+    # every other request for its duration — health checks, `/pdf/file` for
+    # pdf.js, and any concurrent job's SSE stream. Measured at 18.9 s when a
+    # Translate click beat the `engine-warm` thread, and the POST that started
+    # this job did not return until it finished.
+    #
+    # Still inside a try. A broken BabelDOC install used to stop the sidecar
+    # from starting at all; now that the import happens here, it has to reach
+    # the job's error event — otherwise the SSE stream gets no terminal event
+    # and the overlay hangs.
     try:
-        from ...processors.events import EventType
-        from ...processors.processor import PDFProcessor
+        EventType, PDFProcessor = await asyncio.to_thread(_load_engine)
     except Exception as exc:  # noqa: BLE001
         logger.exception("Translation engine unavailable")
         await job.finish("error", {"message": str(exc)})

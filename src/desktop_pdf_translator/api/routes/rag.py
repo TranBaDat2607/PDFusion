@@ -45,6 +45,17 @@ def _build_chain() -> EnhancedRAGChain:
     return _rag_chain
 
 
+def _load_document_processor() -> type:
+    """Import the scientific-PDF processor (fitz + camelot + pdfplumber, ~4 s).
+
+    Blocking, for the same reason `_build_chain` is, and reached the same way —
+    only ever through `asyncio.to_thread`.
+    """
+    from ...rag.document_processor import ScientificPDFProcessor
+
+    return ScientificPDFProcessor
+
+
 async def _get_chain() -> EnhancedRAGChain:
     async with _init_lock:
         if _rag_chain is None:
@@ -71,10 +82,6 @@ async def _run_index(job: Job, payload: IndexRequest) -> None:
     document_id = payload.document_id or file_path.stem
 
     try:
-        # Inside the try so a failed import reaches the job's error event —
-        # without a terminal SSE event the chat panel waits forever.
-        from ...rag.document_processor import ScientificPDFProcessor
-
         store = await _get_store()
         await job.emit("progress", {"stage": "Checking cache", "progress": 5})
         existing = await store.search_by_document(document_id)
@@ -87,6 +94,12 @@ async def _run_index(job: Job, payload: IndexRequest) -> None:
             return
 
         await job.emit("progress", {"stage": "Extracting text", "progress": 20})
+        # Imported here rather than at the top of the job: the already-indexed
+        # branch above returns without ever needing it. Off the event loop for
+        # the same reason the extraction below is, and inside the try so a
+        # failure still reaches the job's error event — without a terminal SSE
+        # event the chat panel waits forever.
+        ScientificPDFProcessor = await asyncio.to_thread(_load_document_processor)
         processor = ScientificPDFProcessor()
         # Blocking fitz/camelot/pdfplumber work — keep it off the event loop.
         chunks = await asyncio.to_thread(processor.process_pdf, file_path)

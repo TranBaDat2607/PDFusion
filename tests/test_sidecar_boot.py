@@ -50,9 +50,12 @@ def _run_probe(code: str) -> str:
     "module",
     [
         "desktop_pdf_translator.api.server",
-        # The route module that made `pdf_cache` and `translation_cache`
-        # expensive by association: both are pure sqlite3, but importing either
-        # runs a package __init__ that used to pull in BabelDOC and the SDKs.
+        # The route module that made `translation_cache` expensive by
+        # association: it is pure sqlite3, but importing it runs
+        # `translators/__init__.py`, which used to pull in the provider SDKs.
+        # `processors/__init__.py` is covered by the `api.server` case above,
+        # which reaches `processors.pdf_cache` — the same shape, and the one
+        # that cost 4.9 s.
         "desktop_pdf_translator.api.routes.config",
     ],
 )

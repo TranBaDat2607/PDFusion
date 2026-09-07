@@ -34,6 +34,7 @@ from pathlib import Path
 import uvicorn
 from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from uvicorn.main import STARTUP_FAILURE
 
 from .. import __version__
 from ..config import TranslationService, get_settings
@@ -101,9 +102,16 @@ def _prewarm_argos() -> None:
 def _warm_translation_engine() -> None:
     """Import BabelDOC in the background so the first Translate click is warm.
 
-    It costs ~5 s, and it used to be paid before READY — which is what put the
-    handshake up against the Tauri shell's deadline. Paying it here keeps the
-    engine ready without gating startup on it.
+    It costs 5-25 s — the wide end when the interpreter is cold and the
+    `argos-prewarm` thread is contending for the GIL, which it now genuinely
+    does: before the imports moved, that thread found everything already
+    resolved. It used to be paid before READY, which is what put the handshake
+    up against the Tauri shell's deadline. Paying it here keeps the engine ready
+    without gating startup on it.
+
+    A Translate click can still beat this thread, so the job path imports
+    BabelDOC in a thread of its own rather than assuming this one won the race
+    (`routes/translation.py:_load_engine`).
     """
     started = time.perf_counter()
     try:
@@ -281,14 +289,22 @@ def create_app() -> FastAPI:
 
 
 def _bind_socket() -> tuple[socket.socket, int]:
-    """Claim an ephemeral loopback port and keep holding it.
+    """Claim an ephemeral loopback port, start listening, and keep holding it.
 
     The socket is handed straight to uvicorn, so nothing else can take the port
     between the announcement and the server coming up. Picking a port by
     binding, closing and letting uvicorn re-bind left exactly that window open.
+
+    `listen()` here rather than leaving it to uvicorn, because READY is printed
+    before `create_app()` and the lifespan run: a client that connects in that
+    gap lands in the backlog and is served a moment later, instead of taking a
+    connection refused it would have to know to retry. `asyncio`'s
+    `create_server(sock=...)` calls `listen()` again when uvicorn starts, which
+    only resets the backlog on an already-listening socket.
     """
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     sock.bind(("127.0.0.1", 0))
+    sock.listen()
     return sock, sock.getsockname()[1]
 
 
@@ -313,7 +329,17 @@ def main() -> None:
         log_level="info",
         access_log=False,
     )
-    uvicorn.Server(config).run(sockets=[sock])
+    server = uvicorn.Server(config)
+    server.run(sockets=[sock])
+
+    # `uvicorn.run()` ends with this; `Server.run()` does not. A lifespan that
+    # raises — a corrupt config.toml making get_settings() throw, say — sets
+    # should_exit and returns normally, so without the check the process reports
+    # success on a startup failure. READY has already been printed by then, so
+    # the shell would otherwise only find out by waiting out its whole health
+    # timeout and blaming /auth/ping.
+    if not server.started:
+        sys.exit(STARTUP_FAILURE)
 
 
 if __name__ == "__main__":
