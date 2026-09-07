@@ -9,7 +9,7 @@ import json
 from datetime import datetime
 
 from ..config import TranslationService, get_settings
-from ..translators import TranslatorFactory
+from ..translators.factory import TranslatorFactory
 from .vector_store import ChromaDBManager
 from .reference_manager import ReferenceManager
 

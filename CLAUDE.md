@@ -118,6 +118,77 @@ READY port=54213 token=Yd7Hf...G3
 ```
 The token is then forwarded to the webview via the `sidecar://ready` Tauri event and used as the `Authorization: Bearer` header on every fetch from the React side.
 
+The port comes from a socket the sidecar **binds, listens on, and keeps**
+(`server.py:_bind_socket`), handed straight to
+`uvicorn.Server(...).run(sockets=[sock])`. Picking a port by binding, reading
+`getsockname()`, closing, and letting uvicorn re-bind left a window where
+something else could take it. It `listen()`s there rather than leaving that to
+uvicorn because READY is printed *before* `create_app()` and the lifespan run —
+a client connecting in that gap should queue in the backlog, not take a
+connection refused it has to know to retry.
+
+Dropping to `uvicorn.Server(...).run()` also drops the tail `uvicorn.run()` has:
+`if not server.started: sys.exit(STARTUP_FAILURE)`. `main()` repeats it. Without
+it a lifespan that raises returns normally and the process exits **0** — and
+since READY has already been printed, the shell would only notice by waiting out
+its whole `HEALTH_TIMEOUT` and blaming `/auth/ping`.
+
+### Import cost is a startup budget
+
+`sidecar.rs` gives the READY line **90 s** (`READY_TIMEOUT`) and then
+`/auth/ping` **30 s** (`HEALTH_TIMEOUT`). Those are sized for the PyInstaller
+one-dir bootloader paging thousands of files past Defender on a first launch —
+*not* for Python work. The Python side of startup is ~0.7 s and has to stay
+there.
+
+It got there by one rule, applied everywhere:
+
+> **A package `__init__.py` re-exports only names that are free to import.**
+
+That rule is load-bearing rather than stylistic, because importing a submodule
+runs its parent's `__init__`. `processors/pdf_cache.py` is pure `sqlite3` +
+`hashlib`, yet used to cost 4.9 s — `processors/__init__.py` did
+`from .processor import PDFProcessor`, which is BabelDOC. Same shape in
+`translators/__init__.py` (3.2 s of provider SDKs via `factory`) and
+`api/__init__.py` (`from .server import create_app`, i.e. everything). So
+`api/` and `rag/` re-export nothing at all; `processors/` keeps `events` and
+`exceptions`; `translators/` keeps `base` and `translation_cache`.
+
+The rest follows from it. BabelDOC and the RAG stack are imported inside the
+handlers that use them (`routes/translation.py:_run_translation`,
+`routes/rag.py:_build_chain`), with `from __future__ import annotations` +
+`TYPE_CHECKING` so the type annotations still name them. `create_app()` is
+called *after* READY is printed. Importing `api.server` went from **16.3 s to
+0.7 s**, and RAG — off by default — no longer costs most users torch at all.
+
+Two consequences worth keeping in mind:
+
+- **The first Translate click would now pay BabelDOC's import.** Mostly it
+  doesn't, because `_lifespan` starts an `engine-warm` daemon thread that
+  imports `processors.processor` after READY, next to the existing
+  `argos-prewarm` thread. Startup no longer *waits* on that import; it still
+  *does* it. Budget **5-25 s**, not the 5 s a warm machine suggests — the two
+  threads now genuinely contend for the GIL, where before the moved imports the
+  prewarm thread found everything already resolved.
+- **A click can still beat that thread, so every relocated import runs off the
+  event loop.** These are *blocking* imports inside `async def` handlers: on the
+  loop they freeze the whole sidecar — health checks, `/pdf/file` for pdf.js,
+  every other job's SSE stream — for their full duration. Measured before the
+  fix: a Translate click during the warm window took **18.9 s** to return its
+  `job_id`, and `/health` (33 ms idle) answered once in the next 40 s. So
+  `routes/translation.py:_load_engine` and `routes/rag.py:_load_document_processor`
+  exist only to be called through `await asyncio.to_thread(...)`, the same way
+  `_build_chain` already was. Each stays inside the `try` that reports through
+  `job.finish("error", ...)`: with the import on the job path, an `ImportError`
+  that once stopped the sidecar from starting is now a per-job failure, and
+  without a terminal SSE event the overlay waits forever.
+- **PyInstaller is fine with this.** Its modulegraph walks bytecode including
+  function bodies, so a function-level `from x.y import Z` is still statically
+  visible and `pdfusion-sidecar.spec` needs no new `hiddenimports`. Only truly
+  dynamic imports (`importlib.import_module(<variable>)`) need an entry there.
+
+`tests/test_sidecar_boot.py` fails if any of this regresses.
+
 ### Module layout
 
 | Path | Responsibility |
@@ -436,7 +507,7 @@ BabelDOC drives chunking, layout, and PDF reassembly; it delegates the actual te
 - **Plugins enabled**: `opener` (open external URLs), `dialog` (file picker), `single-instance` and `window-state` — that's all. `shell` and `fs` were registered but never imported by `desktop/src`; PDFs reach the viewer over HTTP from the sidecar, and Save/Open/Reveal go through the app commands in `lib.rs`. Don't re-add a plugin "just in case": every one widens what an injected script can invoke. Same reasoning inside a plugin: the capability grants `opener:allow-open-url` + `opener:allow-default-urls` rather than `opener:default`, because that set also carries `allow-reveal-item-in-dir` — a second, unvalidated route to the reveal that `reveal_path_in_file_manager` exists to gate. The app commands call the plugin's **Rust** API (`app.opener()`), which capabilities don't apply to, so narrowing the webview's grant costs nothing. The two new plugins cost nothing there either: `single-instance` has no JS API at all, and `window-state`'s (`saveWindowState` / `restoreState`) is left ungranted — save and restore happen in Rust on window create and on exit, so the webview never needs to ask.
 - **Single instance**: registered **first**, before every other plugin — a second launch has to be turned away before the rest of the app builds, or you get two windows, two sidecars, and two writers on one `chroma_db` + SQLite WAL set. Its callback focuses the existing window and, if the second launch named a PDF, emits `pdfusion://open-file` so that document opens in the running app. The *first* launch's own argv is read by the `initial_file_argument` command; `App.tsx` handles both through the same `openDocument`.
 - **Window**: 1400×900 default, min 1024×700 — then `tauri-plugin-window-state` restores whatever the user last left. `GUISettings.window_width/height` were deleted with it: they predate the Tauri migration and nothing ever read them. `withGlobalTauri` is off — `__TAURI_INTERNALS__` (which `lib/tauri-ready.ts` waits on) is injected regardless; the flag only adds the legacy `window.__TAURI__` global.
-- **Boot screen** (`components/StartupScreen.tsx`): app-level copy ("Starting PDFusion…"), a Retry and a "Show logs folder" button. Retry calls `restart_app`, which relaunches the process rather than re-spawning the sidecar — the handle is a `OnceCell` set once per process, so re-entering that lifecycle would mean two spawn paths and a window with two Python processes. `restart_app` has to repeat the exit work by hand (`save_window_state`, `cleanup_translate_temp_dirs`): `AppHandle::restart` routes through `RunEvent::ExitRequested` **only when called off the main thread**, and a synchronous command handler runs on it, so it takes the `cleanup_before_exit` branch — resource tables cleared, windows hidden, nothing else. The `ExitRequested` arm in `lib.rs` and `window-state`'s own `RunEvent::Exit` hook both stay silent. Anything added to the exit path has to be added there too. The `PDFUSION_PYTHON` hint is behind `import.meta.env.DEV`; it describes this repo's dev setup and means nothing to someone who installed the `.msi`.
+- **Boot screen** (`components/StartupScreen.tsx`): app-level copy ("Starting PDFusion…"), a Retry and a "Show logs folder" button. Those two are offered in the `error` branch **and**, after `SLOW_START_MS` (15 s), in `starting` — otherwise a sidecar that never comes up leaves the user on a bare spinner for the full `READY_TIMEOUT` + `HEALTH_TIMEOUT`, which is two minutes. A healthy boot reaches READY in about a second, so anything still spinning at that mark is already abnormal. Retry calls `restart_app`, which relaunches the process rather than re-spawning the sidecar — the handle is a `OnceCell` set once per process, so re-entering that lifecycle would mean two spawn paths and a window with two Python processes. `restart_app` has to repeat the exit work by hand (`save_window_state`, `cleanup_translate_temp_dirs`): `AppHandle::restart` routes through `RunEvent::ExitRequested` **only when called off the main thread**, and a synchronous command handler runs on it, so it takes the `cleanup_before_exit` branch — resource tables cleared, windows hidden, nothing else. The `ExitRequested` arm in `lib.rs` and `window-state`'s own `RunEvent::Exit` hook both stay silent. Anything added to the exit path has to be added there too. The `PDFUSION_PYTHON` hint is behind `import.meta.env.DEV`; it describes this repo's dev setup and means nothing to someone who installed the `.msi`.
 - **CSP**: set in `tauri.conf.json` — `default-src 'self'` with `connect-src` widened to `http://127.0.0.1:*` (the sidecar) plus Tauri's IPC origin, `worker-src blob:` (pdf.js), and `style-src 'unsafe-inline'` (Tailwind's runtime styles). Tauri nonces its own init script, so `script-src` stays at `'self'`. It applies to the bundled app only — in `pnpm tauri dev` the page is served by Vite, which Tauri doesn't inject headers into, so **a CSP break shows up first in `pnpm tauri build`**, not in dev.
 - **CORS / dev origins**: the sidecar's allowlist (`server.py:_allowed_origins`) is exactly Tauri's custom-protocol origins, plus Vite's `localhost:1420` **only in dev**. Which one applies is a two-sided handshake: the shell sets `PDFUSION_DEV_ORIGINS` to `"1"`/`"0"` from `cfg!(debug_assertions)` (`sidecar.rs:dev_origins_flag`), on both spawn paths. The sidecar must **not** decide this from `sys.frozen` alone — frozen means "PyInstaller built it", not "shipped app", and discovery prefers a staged `binaries/*.exe` over local Python, so after `build-sidecar.ps1` a `pnpm tauri dev` run pairs a *frozen* sidecar with a *Vite-hosted* webview. Getting that wrong rejects every request the app makes (preflights → `400 Disallowed CORS origin`) and looks exactly like the sidecar failing to start. `sys.frozen` remains the fallback for a sidecar started without the shell. Don't swap `debug_assertions` for `tauri::is_dev()`: that's `!cfg!(feature = "custom-protocol")` and this crate declares no `[features]`, so it's `true` even in a release bundle.
 - **Sidecar lifecycle** is wired in `lib.rs::run()`'s `setup` and the `RunEvent::ExitRequested` handler kills the child process.
@@ -530,7 +601,8 @@ of any file logger added later.
   python -m pytest tests           # test_file_export.py, test_pdf_export_api.py,
                                    # test_translate_language_contract.py,
                                    # test_translation_failure_reporting.py,
-                                   # test_config_security.py, test_cors_origins.py
+                                   # test_config_security.py, test_cors_origins.py,
+                                   # test_sidecar_boot.py
 
   # Frontend (vitest, node environment — no jsdom)
   cd desktop && pnpm test          # src/**/*.test.ts
@@ -539,22 +611,18 @@ of any file logger added later.
   cd desktop/src-tauri && cargo test
   ```
 
-  Importing **anything** under `desktop_pdf_translator.api` costs ~13s: the
-  package `__init__` does `from .server import create_app`, and `server.py`
-  imports `routes/translation.py` → BabelDOC → torch. Avoiding `create_app()`
-  is not enough to dodge it — `test_pdf_export_api.py` mounts `routes/pdf.py`'s
-  router on a bare `FastAPI()` and still pays, because it imports `api.auth`.
-  `test_cors_origins.py` pays the same toll (it needs the real
-  `_allowed_origins`), which is why it's a separate file rather than folded into
-  `test_config_security.py` — that one and
-  `test_translate_language_contract.py` stay on `config/`, `utils/`,
-  `api/schemas.py`, `translators/capabilities.py` and `processors/pdf_cache.py`,
-  all pure decisions, and run in a fraction of a second. Keep new tests on that
-  side of the line where you can, and don't move a cheap suite onto the
-  expensive one. The frontend suite runs in the
-  `node` environment: the logic under test takes its Tauri/sidecar
-  collaborators as arguments (`lib/export-pdf.ts`) or is pure
-  (`lib/translate-request.ts`), so no DOM or testing-library is needed.
+  The whole Python suite runs in about a second, and that is now a property the
+  suite defends rather than a happy accident. It used to cost ~13s, because
+  importing **anything** under `desktop_pdf_translator.api` pulled in BabelDOC
+  and torch; see "Import cost is a startup budget" above for the rule that
+  fixed it. `test_sidecar_boot.py` is the guard — it asserts in a subprocess
+  that importing `api.server` leaves torch, chromadb, sentence-transformers,
+  BabelDOC, sklearn, camelot and transformers out of `sys.modules`. If it goes
+  red, the desktop app's startup is what broke; the slow suite is only the
+  symptom you notice first. The frontend suite runs in the `node` environment:
+  the logic under test takes its Tauri/sidecar collaborators as arguments
+  (`lib/export-pdf.ts`) or is pure (`lib/translate-request.ts`), so no DOM or
+  testing-library is needed.
 - **Python lint/format** tools are declared in `pyproject.toml [project.optional-dependencies].dev` (black line-length 88, isort with black profile, flake8, mypy) but the project has **no** pre-commit, no Makefile, and no CI. Run them manually if you want: `black src/ && isort src/`.
 - **TypeScript** is checked by `pnpm build` (which runs `tsc` before `vite build`). There is no separate lint step (no ESLint config).
 - **No CI**: `.github/workflows/` does not exist. All checks are local.

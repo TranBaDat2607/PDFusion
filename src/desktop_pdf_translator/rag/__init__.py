@@ -1,25 +1,12 @@
+"""RAG (Retrieval-Augmented Generation) module for PDFusion.
+
+Q&A over translated PDFs using ChromaDB-backed retrieval and LLM synthesis,
+with scientific-PDF layout preservation, multi-modal embeddings and
+page-anchored references.
+
+Nothing is re-exported: every member of this package reaches torch, chromadb or
+camelot, and RAG is off by default, so the sidecar must be able to boot without
+paying for any of it. Import from the submodule at the call site.
 """
-RAG (Retrieval-Augmented Generation) module for PDFusion.
-
-Provides Q&A over translated PDFs using ChromaDB-backed retrieval and LLM synthesis.
-
-Features:
-- Scientific PDF processing with layout preservation
-- Multi-modal embeddings (text, equations, tables, figures)
-- Reference system with page navigation
-- Vietnamese language optimization
-"""
-
-from .document_processor import ScientificPDFProcessor
-from .vector_store import ChromaDBManager
-from .rag_chain import EnhancedRAGChain
-from .reference_manager import ReferenceManager
-
-__all__ = [
-    'ScientificPDFProcessor',
-    'ChromaDBManager',
-    'EnhancedRAGChain',
-    'ReferenceManager'
-]
 
 __version__ = "1.0.6"

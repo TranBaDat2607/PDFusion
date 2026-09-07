@@ -10,6 +10,11 @@ prints a single line to stdout for the parent process (Tauri) to parse:
     READY port=<int> token=<urlsafe>
 
 Any process that can read this stdout line can talk to the sidecar.
+
+Everything on the path to that line has to stay cheap — the Tauri shell gives
+up if it doesn't arrive. BabelDOC and the RAG stack are therefore imported
+inside the handlers that need them, never by a route module or a package
+`__init__`; `tests/test_sidecar_boot.py` fails if that regresses.
 """
 
 from __future__ import annotations
@@ -29,6 +34,7 @@ from pathlib import Path
 import uvicorn
 from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from uvicorn.main import STARTUP_FAILURE
 
 from .. import __version__
 from ..config import TranslationService, get_settings
@@ -93,6 +99,29 @@ def _prewarm_argos() -> None:
         logger.warning("Argos pre-warm failed (non-fatal): %s", exc)
 
 
+def _warm_translation_engine() -> None:
+    """Import BabelDOC in the background so the first Translate click is warm.
+
+    It costs 5-25 s — the wide end when the interpreter is cold and the
+    `argos-prewarm` thread is contending for the GIL, which it now genuinely
+    does: before the imports moved, that thread found everything already
+    resolved. It used to be paid before READY, which is what put the handshake
+    up against the Tauri shell's deadline. Paying it here keeps the engine ready
+    without gating startup on it.
+
+    A Translate click can still beat this thread, so the job path imports
+    BabelDOC in a thread of its own rather than assuming this one won the race
+    (`routes/translation.py:_load_engine`).
+    """
+    started = time.perf_counter()
+    try:
+        from ..processors import processor  # noqa: F401
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Translation engine warm-up failed (non-fatal): %s", exc)
+        return
+    logger.info("Translation engine warm in %.1fs", time.perf_counter() - started)
+
+
 def _sweep_orphan_translate_dirs(max_age_seconds: int = 3600) -> int:
     """Remove `pdfusion-translate-*` dirs left behind by a prior sidecar that
     crashed or was killed before its next-job cleanup could fire.
@@ -150,6 +179,11 @@ async def _lifespan(app: FastAPI):
     if cleaned:
         logger.info("Cleaned %d orphan translate temp dirs", cleaned)
     settings = get_settings()  # warm the singleton (loads .env, decrypts keys)
+    threading.Thread(
+        target=_warm_translation_engine,
+        name="engine-warm",
+        daemon=True,
+    ).start()
     if _should_prewarm_argos(settings):
         threading.Thread(
             target=_prewarm_argos,
@@ -254,12 +288,24 @@ def create_app() -> FastAPI:
     return app
 
 
-def _pick_port() -> int:
-    """Reserve an ephemeral loopback port. Small race window between close()
-    and uvicorn binding, but acceptable on Windows for localhost."""
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        s.bind(("127.0.0.1", 0))
-        return s.getsockname()[1]
+def _bind_socket() -> tuple[socket.socket, int]:
+    """Claim an ephemeral loopback port, start listening, and keep holding it.
+
+    The socket is handed straight to uvicorn, so nothing else can take the port
+    between the announcement and the server coming up. Picking a port by
+    binding, closing and letting uvicorn re-bind left exactly that window open.
+
+    `listen()` here rather than leaving it to uvicorn, because READY is printed
+    before `create_app()` and the lifespan run: a client that connects in that
+    gap lands in the backlog and is served a moment later, instead of taking a
+    connection refused it would have to know to retry. `asyncio`'s
+    `create_server(sock=...)` calls `listen()` again when uvicorn starts, which
+    only resets the backlog on an already-listening socket.
+    """
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    sock.bind(("127.0.0.1", 0))
+    sock.listen()
+    return sock, sock.getsockname()[1]
 
 
 def main() -> None:
@@ -270,20 +316,30 @@ def main() -> None:
     )
 
     token = init_token()
-    port = _pick_port()
+    sock, port = _bind_socket()
 
     # Single-line handshake for the parent process. Flushed immediately so
     # Tauri can read it before any other output.
     print(f"READY port={port} token={token}", flush=True)
 
-    app = create_app()
-    uvicorn.run(
-        app,
+    config = uvicorn.Config(
+        create_app(),
         host="127.0.0.1",
         port=port,
         log_level="info",
         access_log=False,
     )
+    server = uvicorn.Server(config)
+    server.run(sockets=[sock])
+
+    # `uvicorn.run()` ends with this; `Server.run()` does not. A lifespan that
+    # raises — a corrupt config.toml making get_settings() throw, say — sets
+    # should_exit and returns normally, so without the check the process reports
+    # success on a startup failure. READY has already been printed by then, so
+    # the shell would otherwise only find out by waiting out its whole health
+    # timeout and blaming /auth/ping.
+    if not server.started:
+        sys.exit(STARTUP_FAILURE)
 
 
 if __name__ == "__main__":

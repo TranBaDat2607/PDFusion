@@ -1,11 +1,11 @@
 """Which origins the sidecar's CORS allowlist accepts (#17).
 
-Kept out of `test_config_security.py` on purpose: that suite imports only
-`config/` + `utils/` and runs in a fraction of a second, while anything under
-`desktop_pdf_translator.api` drags in BabelDOC + torch via the package
-`__init__`. `test_pdf_export_api.py` already pays that cost in the same run, so
-this file adds no wall-clock time — but it would slow the encryption suite down
-by ~13s if folded into it.
+Kept out of `test_config_security.py` for topic, not cost. It used to be for
+cost: importing anything under `desktop_pdf_translator.api` dragged in BabelDOC
+and torch via the package `__init__`, so folding this into the encryption suite
+would have added ~13s to it. That is fixed — `api/__init__.py` re-exports
+nothing and the heavy imports live in the handlers that need them, guarded by
+`test_sidecar_boot.py`.
 
 The rule under test is a two-sided handshake: the Tauri shell sets
 `PDFUSION_DEV_ORIGINS` (`sidecar.rs:dev_origins_flag`) and the sidecar honours
