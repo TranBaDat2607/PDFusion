@@ -197,6 +197,13 @@ export function useTranslation() {
           toast.error("Can't translate this combination", {
             description: message,
           });
+        } else if (e instanceof ApiError && e.status === 409) {
+          // The engine's assets aren't on disk. Nothing in the overlay can fix
+          // that, so hand the user to the screen that can.
+          toast.error("Set up the translation engine first", {
+            description: message,
+          });
+          useAppStore.getState().setEngineSetupRequired(true);
         }
         setState({ ...INITIAL, status: "error", error: message });
         return;

@@ -68,6 +68,12 @@ interface AppState {
   activeTranslationJob: string | null;
   setActiveTranslationJob: (id: string | null) => void;
 
+  /** A translate was refused with 409 because the offline engine's assets
+   *  aren't installed. Re-opens the first-run setup screen over the
+   *  workspace — the overlay can't resolve that, and the setup screen can. */
+  engineSetupRequired: boolean;
+  setEngineSetupRequired: (required: boolean) => void;
+
   /** Streaming-translate chunk progress. Set as chunks complete; reset on
    *  new translation start or when the job ends. Accumulated by
    *  `lib/translation-progress.ts` — chunks land in priority order, so this
@@ -117,6 +123,9 @@ export const useAppStore = create<AppState>((set) => ({
   activeTranslationJob: null,
   setActiveTranslationJob: (activeTranslationJob) =>
     set({ activeTranslationJob }),
+
+  engineSetupRequired: false,
+  setEngineSetupRequired: (engineSetupRequired) => set({ engineSetupRequired }),
 
   chunkProgress: null,
   setChunkProgress: (chunkProgress) => set({ chunkProgress }),

@@ -219,8 +219,8 @@ function ArgosTab() {
         </div>
         <p className="text-sm text-muted-foreground leading-relaxed">
           Argos Translate runs entirely on your machine. No API key, no usage
-          fees, no data leaves your computer. Used automatically when no LLM
-          key is configured.
+          fees, no data leaves your computer once the engine is installed. Used
+          automatically when no LLM key is configured.
         </p>
         <div className="flex flex-wrap items-center gap-2 text-xs">
           <span className="rounded-md bg-background px-2 py-1 font-mono text-muted-foreground">
@@ -231,8 +231,8 @@ function ArgosTab() {
           </span>
         </div>
         <p className="text-xs text-muted-foreground">
-          The language pack (~80 MB) downloads automatically the first time you
-          translate.
+          The language pack (~80 MB) is installed by PDFusion's one-time setup
+          step, from the copy included with the app where there is one.
         </p>
       </div>
 

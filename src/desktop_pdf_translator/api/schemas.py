@@ -176,6 +176,40 @@ class CacheClearResponse(BaseModel):
 
 
 # ---------------------------------------------------------------------------
+# Offline engine setup
+# ---------------------------------------------------------------------------
+
+
+class EngineAssetGroup(BaseModel):
+    id: str
+    label: str
+    ready: bool
+    present: int
+    total: int
+    detail: str
+
+
+class EngineInstallState(BaseModel):
+    """The install that `POST /setup/engine` starts, as `GET /setup/status`
+    reports it. Polled rather than streamed — see `api/routes/setup.py`."""
+
+    running: bool
+    stage: Optional[str] = None
+    # The last install's failure, kept after it finishes so a client that was
+    # not watching still finds out why nothing was installed.
+    error: Optional[str] = None
+
+
+class EngineStatusResponse(BaseModel):
+    ready: bool
+    groups: List[EngineAssetGroup]
+    # True when the installer shipped the assets, so setup is a local unzip
+    # rather than a download. The setup screen words its button from this.
+    bundled: bool
+    install: EngineInstallState
+
+
+# ---------------------------------------------------------------------------
 # RAG
 # ---------------------------------------------------------------------------
 

@@ -2,6 +2,8 @@
 Custom exceptions for PDF processing pipeline.
 """
 
+from ..engine_assets import describe_asset_failure
+
 
 class ProcessingError(Exception):
     """Base class for all processing-related errors."""
@@ -32,6 +34,27 @@ class BabelDOCError(ProcessingError):
         if self.original_error:
             return f"{base_msg} - Original error: {self.original_error}"
         return base_msg
+
+
+def babeldoc_chunk_error(index: int, error: BaseException) -> BabelDOCError:
+    """The error a failed BabelDOC chunk becomes, given whatever it died of.
+
+    BabelDOC's asset layer reports every failure by calling `exit(1)`, so what
+    arrives here when a model or font can't be fetched is a bare `SystemExit(1)`
+    — `str()` of which is ``1``. Handing that to the generic formatter produced
+    the entire user-facing symptom of issue #21: "BabelDOC processing error in
+    chunk 1: 1".
+
+    `original_error` is deliberately left unset on that branch. `__str__`
+    appends it and the job layer sends `str(exc)`, so passing the `SystemExit`
+    through would staple the ``1`` back onto the end of the sentence.
+    """
+    if isinstance(error, SystemExit):
+        return BabelDOCError(describe_asset_failure())
+    return BabelDOCError(
+        f"BabelDOC processing error in chunk {index}: {error}",
+        original_error=error,
+    )
 
 
 class TranslationProcessError(ProcessingError):

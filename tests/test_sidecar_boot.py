@@ -57,6 +57,13 @@ def _run_probe(code: str) -> str:
         # which reaches `processors.pdf_cache` — the same shape, and the one
         # that cost 4.9 s.
         "desktop_pdf_translator.api.routes.config",
+        # The setup route exists to install BabelDOC's assets, so it is the
+        # module most likely to import babeldoc at the top by accident. Its
+        # helper, `engine_assets`, is on the boot path via the /translate
+        # pre-flight, and every babeldoc/argostranslate import in both lives
+        # inside a function for exactly this reason.
+        "desktop_pdf_translator.api.routes.setup",
+        "desktop_pdf_translator.engine_assets",
     ],
 )
 def test_boot_path_does_not_import_the_heavy_stack(module: str) -> None:

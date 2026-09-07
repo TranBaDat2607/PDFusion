@@ -42,6 +42,7 @@ from .auth import init_token, require_token
 from .routes import config as config_routes
 from .routes import pdf as pdf_routes
 from .routes import rag as rag_routes
+from .routes import setup as setup_routes
 from .routes import translation as translation_routes
 from .schemas import HealthResponse
 
@@ -53,9 +54,18 @@ def _should_prewarm_argos(settings) -> bool:
 
     - Preferred service is Argos → yes.
     - No LLM API key configured anywhere → Argos is the inevitable fallback.
-    Otherwise skip so LLM-only users don't pay the ~80MB pack download or the
-    extra RAM for the CTranslate2 model.
+    Otherwise skip so LLM-only users don't pay the extra RAM for the
+    CTranslate2 model.
+
+    Gated on the pack already being available either way. Pre-warming is a
+    background convenience; it must never be what starts an 80 MB download, at
+    boot, with no UI attached to report it or fail it. Installing the pack is
+    the setup flow's job (`api/routes/setup.py`), which the user can watch.
     """
+    from ..engine_assets import argos_pack_ready
+
+    if not argos_pack_ready():
+        return False
     if settings.translation.preferred_service == TranslationService.ARGOS:
         return True
     any_llm_key = any(
@@ -72,9 +82,11 @@ def _should_prewarm_argos(settings) -> bool:
 def _prewarm_argos() -> None:
     """Best-effort warmup so the first user click doesn't pay cold-start.
 
-    Materializes the language pack (downloads ~80 MB if first run), applies
-    our `argostranslate.settings` overrides, and forces the CTranslate2
-    Translator + tokenizer + sentencizer to load.
+    Materializes the language pack, applies our `argostranslate.settings`
+    overrides, and forces the CTranslate2 Translator + tokenizer + sentencizer
+    to load. Only ever reached when the pack is already on disk or bundled
+    (`_should_prewarm_argos`), so `_ensure_en_vi_installed` here is a local
+    install at worst, never a download.
 
     Implementation note: do NOT use `translate("warmup string")` — that path
     short-circuits on the SQLite cache, defeating the warmup entirely on the
@@ -277,6 +289,7 @@ def create_app() -> FastAPI:
     app.include_router(config_routes.router)
     app.include_router(translation_routes.router)
     app.include_router(rag_routes.router)
+    app.include_router(setup_routes.router)
     app.include_router(pdf_routes.router)
 
     # Authenticated catch-all health (so Tauri's `wait_for_health` can also
