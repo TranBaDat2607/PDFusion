@@ -3,7 +3,7 @@ OpenAI translator implementation with Vietnamese optimization.
 """
 
 import logging
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict
 
 from openai import OpenAI
 

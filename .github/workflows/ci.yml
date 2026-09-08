@@ -1,0 +1,151 @@
+name: CI
+
+# Everything runs on Windows. PDFusion is a Windows desktop app: the key store
+# is DPAPI, the sidecar is located through `%LOCALAPPDATA%`, and the Tauri
+# shell confines its child to a Job Object. A Linux runner would be cheaper and
+# would skip or mis-test all three.
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PYTHON_VERSION: "3.11"
+  NODE_VERSION: "22"
+
+jobs:
+  python:
+    name: ruff + pytest
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            pyproject.toml
+
+      # `requirements.txt`, not `pip install -e .`: the two are deliberately
+      # not in lockstep (see CLAUDE.md), and `tests/test_sidecar_boot.py`
+      # asserts that torch / chromadb / camelot & co. are *installed but not
+      # imported* at boot — a partial install turns that guard into a pass for
+      # the wrong reason.
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install -e ".[dev]"
+
+      - name: Lint
+        run: python -m ruff check src tests
+
+      - name: Test
+        run: python -m pytest tests
+
+      # The smoke tests spawn a real sidecar, so they are excluded from the
+      # default run (`addopts` in pyproject.toml) and asked for by name here.
+      # Without a built exe the frozen-mode parameter skips itself; the
+      # source-mode one still covers the READY handshake and bearer auth.
+      - name: Sidecar smoke test (source mode)
+        run: python -m pytest tests -m smoke
+
+  desktop:
+    name: tsc + vitest + cargo
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      # Pinned rather than taken from `packageManager` (package.json has no
+      # such field). Bump alongside the local toolchain — `pnpm-workspace.yaml`
+      # uses the `allowBuilds` key, which older pnpm does not understand.
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+          cache-dependency-path: desktop/pnpm-lock.yaml
+
+      - name: Install dependencies
+        working-directory: desktop
+        run: pnpm install --frozen-lockfile
+
+      - name: Test
+        working-directory: desktop
+        run: pnpm test
+
+      # `pnpm build` is `tsc && vite build`, so this is the TypeScript gate as
+      # well as the thing that produces `desktop/dist/` — which the Tauri crate
+      # needs to exist before it will compile (`frontendDist` in
+      # tauri.conf.json).
+      - name: Build frontend
+        working-directory: desktop
+        run: pnpm build
+
+      # Tauri's build script validates `externalBin` and `resources` at compile
+      # time, so the crate does not build on a fresh checkout until a sidecar
+      # is staged. `-Stub` drops zero-byte placeholders, which is all `cargo
+      # check` needs and takes seconds instead of the ~15 min PyInstaller run.
+      - name: Stage sidecar stubs
+        run: ./build-sidecar.ps1 -Stub
+        shell: pwsh
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: desktop/src-tauri
+
+      - name: cargo check
+        working-directory: desktop/src-tauri
+        run: cargo check --all-targets
+
+      - name: cargo test
+        working-directory: desktop/src-tauri
+        run: cargo test
+
+  # The real PyInstaller build, which is the only thing that can catch a
+  # `ModuleNotFoundError` from the spec's `excludes` list. It costs 10-20
+  # minutes and downloads ~290 MB of engine assets, so it is not a PR gate —
+  # run it before cutting an installer, or when the spec / dependency set
+  # changes.
+  frozen-sidecar:
+    name: PyInstaller sidecar smoke test
+    runs-on: windows-latest
+    timeout-minutes: 90
+    if: github.event_name == 'workflow_dispatch'
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            pyproject.toml
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install -e ".[dev]"
+
+      - name: Build the sidecar
+        run: ./build-sidecar.ps1
+        shell: pwsh
+
+      - name: Smoke test the built exe
+        run: python -m pytest tests -m smoke

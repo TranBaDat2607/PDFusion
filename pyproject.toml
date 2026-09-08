@@ -72,6 +72,9 @@ dev = [
     "isort>=5.12.0",
     "flake8>=6.0.0",
     "mypy>=1.0.0",
+    # The linter CI actually runs; black/isort/flake8/mypy stay available for
+    # local use but are not gates.
+    "ruff>=0.14.0",
     # Bundle the sidecar into a standalone .exe for the desktop installer.
     "pyinstaller>=6.10",
 ]
@@ -121,9 +124,30 @@ target-version = ['py310']
 profile = "black"
 line_length = 88
 
+[tool.ruff]
+line-length = 88
+target-version = "py310"
+extend-exclude = ["dist", "build", "desktop/src-tauri"]
+
+# Ruff's default rule set: pycodestyle errors (E4/E7/E9) and pyflakes (F).
+# Deliberately not widened. The point of the gate is to catch the class of
+# thing that breaks a build — an undefined name, a syntax error, a dead import
+# that hides a real one — and a gate nobody can keep green stops being a gate.
+# Line length in particular is left to `black`, which is not wired into CI:
+# reflowing the existing prose comments would bury every real diff.
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 # `tests/conftest.py` also prepends src/ to sys.path, so the suite runs from a
 # bare checkout with no editable install.
 pythonpath = ["src"]
-addopts = "-q"
+# `-m "not smoke"` keeps the default run in-process, which is what makes the
+# whole suite finish in about a second. The smoke tests spawn real sidecar
+# processes and cost tens of seconds; run them with `-m smoke` (CI does, in a
+# job of its own).
+addopts = "-q -m 'not smoke'"
+markers = [
+    "smoke: spawns a real sidecar process; excluded from the default run",
+]

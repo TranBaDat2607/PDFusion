@@ -6,8 +6,18 @@ sibling module such as `processors.pdf_cache`. Import it from
 `processors.processor` at the call site instead.
 """
 
-from .exceptions import *
-from .events import *
+from .events import (
+    CompletionEvent,
+    ErrorEvent,
+    ProcessingEvent,
+    ProgressEvent,
+)
+from .exceptions import (
+    BabelDOCError,
+    FileValidationError,
+    ProcessingError,
+    TranslationProcessError,
+)
 
 __all__ = [
     "ProcessingError",

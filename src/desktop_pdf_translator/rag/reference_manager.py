@@ -5,7 +5,6 @@ Provides clickable references that can jump to specific PDF pages or open web li
 
 import logging
 from typing import Dict, Any, Optional, Callable, List, Tuple
-from pathlib import Path
 import webbrowser
 from dataclasses import dataclass
 

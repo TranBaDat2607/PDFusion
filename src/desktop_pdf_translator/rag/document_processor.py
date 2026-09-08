@@ -5,7 +5,7 @@ Handles equations, tables, figures, and complex scientific content.
 
 import logging
 from pathlib import Path
-from typing import List, Dict, Any, Optional, Tuple
+from typing import List, Dict, Any, Tuple
 
 import fitz  # PyMuPDF
 
@@ -300,7 +300,6 @@ class ScientificPDFProcessor:
         # This is a basic implementation - can be enhanced with ML models
         
         text_dict = page.get_text("dict")
-        potential_tables = []
         
         # Look for text patterns that suggest tables
         for block in text_dict.get("blocks", []):

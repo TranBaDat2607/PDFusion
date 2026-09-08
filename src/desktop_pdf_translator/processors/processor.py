@@ -40,7 +40,6 @@ from .exceptions import (
     BabelDOCError,
     babeldoc_chunk_error,
     FileValidationError,
-    ConfigurationError,
     TranslationProcessError,
 )
 
