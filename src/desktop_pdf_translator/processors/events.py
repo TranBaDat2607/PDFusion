@@ -175,6 +175,10 @@ class CompletionEvent(ProcessingEvent):
     # Such a run is never written to the PDF cache.
     failed_paragraphs: int = 0
     total_paragraphs: int = 0
+    # Total 429/5xx retry attempts across the whole document (one translator
+    # instance serves every chunk). Not a distinct-paragraph count — one
+    # paragraph retried three times adds 3.
+    retry_count: int = 0
 
     def __post_init__(self):
         """Initialize event data from attributes."""
@@ -189,4 +193,5 @@ class CompletionEvent(ProcessingEvent):
             "target_lang": self.target_lang,
             "failed_paragraphs": self.failed_paragraphs,
             "total_paragraphs": self.total_paragraphs,
+            "retry_count": self.retry_count,
         }

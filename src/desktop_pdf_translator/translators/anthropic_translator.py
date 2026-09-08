@@ -39,8 +39,11 @@ class AnthropicTranslator(BaseTranslator):
         self.temperature = kwargs.get("temperature", 0.3)
         self.max_tokens = kwargs.get("max_tokens", 4000)
         self.base_url = kwargs.get("base_url")
+        self.max_qps = kwargs.get("max_qps")
 
-        client_kwargs = {"api_key": self.api_key}
+        # max_retries=0: the SDK's own retry loop bypasses _call_with_backoff's
+        # rate limiter, so its attempts don't count against the shared budget.
+        client_kwargs = {"api_key": self.api_key, "max_retries": 0}
         if self.base_url:
             client_kwargs["base_url"] = self.base_url
         self.client = anthropic.Anthropic(**client_kwargs)

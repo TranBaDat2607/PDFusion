@@ -98,7 +98,7 @@ class TranslationCancelled(Exception):
     the rate limiter or a retry backoff. Not a translation failure."""
 
 
-_MAX_RETRIES = 5
+_MAX_RETRIES = 6
 _RETRY_BASE_DELAY_S = 1.0
 _RETRY_MAX_DELAY_S = 20.0
 
@@ -232,7 +232,7 @@ class BaseTranslator(ABC):
         waiting on the limiter or a backoff; re-raises the last error once
         the retry budget is exhausted.
         """
-        limiter = get_rate_limiter(service)
+        limiter = get_rate_limiter(service, qps=getattr(self, "max_qps", None))
         attempt = 0
         while True:
             if not limiter.acquire(cancel_event=self._cancel_event):

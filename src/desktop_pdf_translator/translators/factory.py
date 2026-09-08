@@ -91,13 +91,15 @@ class TranslatorFactory:
                 "model": settings.openai.model,
                 "temperature": settings.openai.temperature,
                 "max_tokens": settings.openai.max_tokens,
-                "base_url": settings.openai.base_url
+                "base_url": settings.openai.base_url,
+                "max_qps": settings.openai.max_qps,
             }
         elif service == TranslationService.GEMINI:
             return {
                 "api_key": settings.gemini.api_key,
                 "model": settings.gemini.model,
-                "temperature": settings.gemini.temperature
+                "temperature": settings.gemini.temperature,
+                "max_qps": settings.gemini.max_qps,
             }
         elif service == TranslationService.ANTHROPIC:
             return {
@@ -106,6 +108,7 @@ class TranslatorFactory:
                 "temperature": settings.anthropic.temperature,
                 "max_tokens": settings.anthropic.max_tokens,
                 "base_url": settings.anthropic.base_url,
+                "max_qps": settings.anthropic.max_qps,
             }
         elif service == TranslationService.ARGOS:
             # Argos has no credentials and no per-call config.

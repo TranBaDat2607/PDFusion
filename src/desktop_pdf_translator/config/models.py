@@ -34,6 +34,10 @@ class OpenAISettings(BaseModel):
     base_url: Optional[str] = Field(None, description="Custom API base URL")
     temperature: float = Field(0.3, ge=0.0, le=2.0, description="Translation creativity")
     max_tokens: Optional[int] = Field(None, description="Maximum tokens per request")
+    max_qps: Optional[float] = Field(
+        None, ge=0.1, le=200.0,
+        description="Requests/sec cap shared across every concurrent job. None = built-in default",
+    )
 
 
 class GeminiSettings(BaseModel):
@@ -42,6 +46,10 @@ class GeminiSettings(BaseModel):
     api_key: Optional[str] = Field(None, description="Google AI API key")
     model: str = Field("gemini-1.5-flash", description="Gemini model to use")
     temperature: float = Field(0.3, ge=0.0, le=1.0, description="Translation creativity")
+    max_qps: Optional[float] = Field(
+        None, ge=0.1, le=200.0,
+        description="Requests/sec cap shared across every concurrent job. None = built-in default",
+    )
 
 
 class AnthropicSettings(BaseModel):
@@ -52,6 +60,10 @@ class AnthropicSettings(BaseModel):
     base_url: Optional[str] = Field(None, description="Custom API base URL")
     temperature: float = Field(0.3, ge=0.0, le=1.0, description="Translation creativity")
     max_tokens: int = Field(4000, ge=1, description="Maximum tokens per request")
+    max_qps: Optional[float] = Field(
+        None, ge=0.1, le=200.0,
+        description="Requests/sec cap shared across every concurrent job. None = built-in default",
+    )
 
 
 class ArgosSettings(BaseModel):

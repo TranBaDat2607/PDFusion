@@ -490,6 +490,7 @@ class PDFProcessor:
             self._failed_paragraphs = 0
             self._fatal_translation_error = None
             self._service_name = translation_service.value
+            self._cancel_event.clear()
 
             translator = TranslatorFactory.create_translator(
                 service=translation_service,
@@ -615,6 +616,7 @@ class PDFProcessor:
                 total_paragraphs=max(
                     translator.translate_call_count, self._failed_paragraphs
                 ),
+                retry_count=translator.retry_count,
             )
             
         except ProcessingError as e:

@@ -33,12 +33,17 @@ class GeminiTranslator(BaseTranslator):
 
         self.model_name = kwargs.get("model", "gemini-pro")
         self.temperature = kwargs.get("temperature", 0.3)
+        self.max_qps = kwargs.get("max_qps")
 
         self.client = genai.Client(api_key=self.api_key)
         self.generation_config = genai_types.GenerateContentConfig(
             temperature=self.temperature,
             max_output_tokens=4000,
             candidate_count=1,
+            # Without this, google-genai passes no timeout to httpx at all —
+            # a hung call would block this worker thread indefinitely, past
+            # what a cancel check before/after the call can catch.
+            http_options=genai_types.HttpOptions(timeout=30_000),
             safety_settings=[
                 genai_types.SafetySetting(category="HARM_CATEGORY_HARASSMENT",        threshold="BLOCK_MEDIUM_AND_ABOVE"),
                 genai_types.SafetySetting(category="HARM_CATEGORY_HATE_SPEECH",       threshold="BLOCK_MEDIUM_AND_ABOVE"),

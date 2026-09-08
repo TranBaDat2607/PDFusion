@@ -9,8 +9,17 @@ import time
 from typing import Dict, Optional
 
 # Requests/sec sustained per service, shared by every translator instance and
-# BabelDOC worker thread across every concurrent job.
-_DEFAULT_QPS = 4.0
+# BabelDOC worker thread across every concurrent job. Provider limits vary by
+# roughly two orders of magnitude across accounts/tiers (e.g. Anthropic's
+# entry tier is ~0.83 QPS, OpenAI's higher tiers reach ~80+), so these are
+# conservative starting points, not measured ceilings — overridable per
+# service via `<service>.max_qps` in settings.
+_DEFAULT_QPS_BY_SERVICE: Dict[str, float] = {
+    "openai": 5.0,
+    "gemini": 5.0,
+    "anthropic": 1.0,
+}
+_FALLBACK_QPS = 4.0
 
 # Poll granularity while acquire() is blocked, so a cancelled wait returns
 # quickly instead of sleeping out the full computed delay.
@@ -51,20 +60,41 @@ class TokenBucketRateLimiter:
             else:
                 time.sleep(slice_)
 
+    def set_rate(self, rate: float, capacity: Optional[float] = None) -> None:
+        """Change the sustained rate (and burst capacity) of an
+        already-constructed limiter, so a config change takes effect on the
+        next job without a sidecar restart."""
+        with self._lock:
+            self._refill_locked()
+            self._rate = rate
+            self._capacity = capacity if capacity is not None else rate
+            self._tokens = min(self._tokens, self._capacity)
+
 
 _LIMITERS: Dict[str, TokenBucketRateLimiter] = {}
 _LIMITERS_LOCK = threading.Lock()
 
 
 def get_rate_limiter(service: str, qps: Optional[float] = None) -> TokenBucketRateLimiter:
-    """Process-wide singleton per service name, constructed lazily."""
+    """Process-wide singleton per service name, constructed lazily.
+
+    `qps=None` uses `_DEFAULT_QPS_BY_SERVICE[service]`. An explicit `qps` on
+    an already-constructed limiter updates its rate in place, so a settings
+    change is picked up by the next call rather than only the first ever
+    construction.
+    """
+    default = _DEFAULT_QPS_BY_SERVICE.get(service, _FALLBACK_QPS)
     limiter = _LIMITERS.get(service)
     if limiter is not None:
+        if qps is not None:
+            limiter.set_rate(qps)
         return limiter
     with _LIMITERS_LOCK:
         limiter = _LIMITERS.get(service)
         if limiter is not None:
+            if qps is not None:
+                limiter.set_rate(qps)
             return limiter
-        limiter = TokenBucketRateLimiter(qps if qps is not None else _DEFAULT_QPS)
+        limiter = TokenBucketRateLimiter(qps if qps is not None else default)
         _LIMITERS[service] = limiter
         return limiter

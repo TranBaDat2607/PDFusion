@@ -74,6 +74,27 @@ def test_get_rate_limiter_is_a_singleton_per_service():
     assert get_rate_limiter("resilience-test-b") is not get_rate_limiter("resilience-test-c")
 
 
+def test_unknown_services_get_the_fallback_default():
+    limiter = get_rate_limiter("resilience-unknown-service")
+    assert limiter._rate == 4.0
+
+
+def test_an_explicit_qps_updates_an_existing_limiter_in_place():
+    """A settings change must reach the *next* job without a sidecar
+    restart — the qps argument is a no-op past construction otherwise."""
+    limiter = get_rate_limiter("resilience-test-override", qps=2.0)
+    assert limiter._rate == 2.0
+    same = get_rate_limiter("resilience-test-override", qps=9.0)
+    assert same is limiter
+    assert limiter._rate == 9.0
+
+
+def test_set_rate_never_exceeds_the_new_capacity():
+    limiter = TokenBucketRateLimiter(rate=10.0, capacity=10.0)
+    limiter.set_rate(1.0)
+    assert limiter._tokens <= 1.0
+
+
 # ---------------------------------------------------------------------------
 # BaseTranslator cancellation + backoff plumbing
 # ---------------------------------------------------------------------------
@@ -160,3 +181,54 @@ def test_cancelling_mid_backoff_stops_retrying(monkeypatch):
     translator._request = always_429
     assert translator.translate("hello") == "hello"
     assert attempts["n"] == 1
+
+
+# ---------------------------------------------------------------------------
+# SDK clients must not retry on their own — their attempts would bypass the
+# shared rate limiter entirely.
+# ---------------------------------------------------------------------------
+
+
+def test_openai_client_disables_its_own_retries():
+    from desktop_pdf_translator.translators.openai_translator import OpenAITranslator
+
+    translator = OpenAITranslator(lang_in="en", lang_out="vi", api_key="sk-test")
+    assert translator.client.max_retries == 0
+
+
+def test_anthropic_client_disables_its_own_retries():
+    from desktop_pdf_translator.translators.anthropic_translator import AnthropicTranslator
+
+    translator = AnthropicTranslator(lang_in="en", lang_out="vi", api_key="sk-ant-test")
+    assert translator.client.max_retries == 0
+
+
+def test_max_qps_is_read_from_kwargs():
+    from desktop_pdf_translator.translators.openai_translator import OpenAITranslator
+
+    translator = OpenAITranslator(
+        lang_in="en", lang_out="vi", api_key="sk-test", max_qps=12.5
+    )
+    assert translator.max_qps == 12.5
+
+
+# ---------------------------------------------------------------------------
+# CompletionEvent surfaces retry_count (#22's third checklist item)
+# ---------------------------------------------------------------------------
+
+
+def test_completion_event_carries_the_retry_count():
+    import time
+
+    from desktop_pdf_translator.processors.events import CompletionEvent, EventType
+
+    event = CompletionEvent(
+        type=EventType.FINISH,
+        timestamp=time.time(),
+        session_id="s",
+        data={},
+        success=True,
+        retry_count=3,
+    )
+    assert event.retry_count == 3
+    assert event.data["retry_count"] == 3

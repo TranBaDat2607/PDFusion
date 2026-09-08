@@ -34,8 +34,11 @@ class OpenAITranslator(BaseTranslator):
         self.temperature = kwargs.get("temperature", 0.3)
         self.max_tokens = kwargs.get("max_tokens", 4000)
         self.base_url = kwargs.get("base_url")
+        self.max_qps = kwargs.get("max_qps")
 
-        self.client = OpenAI(api_key=self.api_key, base_url=self.base_url)
+        # max_retries=0: the SDK's own retry loop bypasses _call_with_backoff's
+        # rate limiter, so its attempts don't count against the shared budget.
+        self.client = OpenAI(api_key=self.api_key, base_url=self.base_url, max_retries=0)
 
         logger.info(f"OpenAI translator configured with model: {self.model}")
     
