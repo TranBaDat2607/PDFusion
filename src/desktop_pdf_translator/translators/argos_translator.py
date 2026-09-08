@@ -354,6 +354,8 @@ class ArgosTranslator(BaseTranslator):
 
     def translate(self, text: str, **kwargs) -> str:
         self._note_translate_call()
+        if self.is_cancelled():
+            return text
 
         # Step 1 — raw input handed to translate().
         _debug.record(

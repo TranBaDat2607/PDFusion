@@ -7,7 +7,7 @@ from typing import Optional, List, Dict, Any
 
 from openai import OpenAI
 
-from .base import BaseTranslator, LANGUAGE_DISPLAY_NAMES
+from .base import BaseTranslator, LANGUAGE_DISPLAY_NAMES, TranslationCancelled
 from .translation_cache import llm_cache_get as _llm_cache_get, llm_cache_set as _llm_cache_set
 
 
@@ -41,6 +41,8 @@ class OpenAITranslator(BaseTranslator):
     
     def translate(self, text: str, **kwargs) -> str:
         self._note_translate_call()
+        if self.is_cancelled():
+            return text
 
         try:
             processed_text = self._preprocess_text(text)
@@ -52,12 +54,15 @@ class OpenAITranslator(BaseTranslator):
                 self._fire_paragraph_callback(processed_text, cached)
                 return cached
 
-            response = self.client.chat.completions.create(
-                model=self.model,
-                messages=self._create_translation_prompt(processed_text),
-                temperature=self.temperature,
-                max_tokens=self.max_tokens,
-                timeout=30,
+            response = self._call_with_backoff(
+                "openai",
+                lambda: self.client.chat.completions.create(
+                    model=self.model,
+                    messages=self._create_translation_prompt(processed_text),
+                    temperature=self.temperature,
+                    max_tokens=self.max_tokens,
+                    timeout=30,
+                ),
             )
             content = response.choices[0].message.content
             translated_text = (content or "").strip()
@@ -73,6 +78,8 @@ class OpenAITranslator(BaseTranslator):
             self._fire_paragraph_callback(processed_text, result)
             return result
 
+        except TranslationCancelled:
+            return text
         except Exception as e:
             return self._handle_translation_error(e, text)
 

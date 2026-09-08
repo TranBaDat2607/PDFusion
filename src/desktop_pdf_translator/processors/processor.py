@@ -228,7 +228,13 @@ class PDFProcessor:
         self._failed_paragraphs: int = 0
         self._fatal_translation_error: Optional[str] = None
         self._events_queue: Optional[asyncio.Queue] = None
-    
+        # Checked by every translator at the top of translate(); set by
+        # cancel() so in-flight paragraph calls stop making new LLM requests.
+        self._cancel_event = threading.Event()
+
+    def cancel(self) -> None:
+        self._cancel_event.set()
+
     async def process_pdf(
         self,
         file_path: Path,
@@ -491,6 +497,7 @@ class PDFProcessor:
                 lang_out=target_lang,
                 on_paragraph_translated=self._handle_paragraph,
                 on_translation_failed=self._handle_translation_failure,
+                cancel_event=self._cancel_event,
             )
             
             yield ProgressEvent(
@@ -1249,9 +1256,10 @@ class PDFProcessor:
             # Set to generate only monolingual PDF without dual version
             no_dual=True,      # Don't generate dual-language PDF
             no_mono=False,     # Generate monolingual PDF (the translated version)
-            # Argos runs locally — there is no remote rate limit to respect,
-            # and BabelDOC's RateLimiter would otherwise inject ~250ms of dead
-            # time per paragraph. LLMs still need qps=4 to avoid 429s.
+            # This value is inert: BabelDOC only applies it through a limiter
+            # that's wired up from its own CLI entry point, which we never
+            # call. The real, process-wide LLM throttle is
+            # translators/rate_limiter.py, applied inside translate() itself.
             qps=10_000 if is_argos else 4,
             formular_font_pattern=None,
             formular_char_pattern=None,

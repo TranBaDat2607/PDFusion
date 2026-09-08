@@ -3,12 +3,15 @@ Base translator interface compatible with BabelDOC.
 """
 
 import logging
+import random
 import re
 import threading
+import time
 from abc import ABC, abstractmethod
-from typing import Dict, Optional, Any
+from typing import Callable, Dict, Optional, Any
 
 from ..config import LanguageCode
+from .rate_limiter import get_rate_limiter
 
 
 logger = logging.getLogger(__name__)
@@ -81,6 +84,25 @@ def is_fatal_translation_error(error: BaseException) -> bool:
     return any(marker in message for marker in _FATAL_MESSAGE_MARKERS)
 
 
+def is_retryable_translation_error(error: BaseException) -> bool:
+    """A 429 or 5xx — worth one more attempt after a backoff. The range check
+    (not a fixed set) also catches Anthropic's 529 "overloaded"."""
+    status = _status_code_of(error)
+    if status is None:
+        return False
+    return status == 429 or 500 <= status < 600
+
+
+class TranslationCancelled(Exception):
+    """The job's cancel flag fired while `_call_with_backoff` was waiting on
+    the rate limiter or a retry backoff. Not a translation failure."""
+
+
+_MAX_RETRIES = 5
+_RETRY_BASE_DELAY_S = 1.0
+_RETRY_MAX_DELAY_S = 20.0
+
+
 def describe_fatal_error(service_name: str, error: BaseException) -> str:
     """The sentence the user sees when a fatal failure stops a job.
 
@@ -131,6 +153,9 @@ class BaseTranslator(ABC):
                     failure that will repeat for every remaining paragraph
                     (see `is_fatal_translation_error`). The processor counts
                     these and aborts the job on a fatal one.
+                  cancel_event: Optional[threading.Event]
+                    Checked at the top of translate(); when set, the
+                    translator returns source text without calling out.
         """
         self.lang_in = self._normalize_language_code(lang_in)
         self.lang_out = self._normalize_language_code(lang_out)
@@ -145,6 +170,7 @@ class BaseTranslator(ABC):
         self._counter_lock = threading.Lock()
         self.translate_call_count = 0
         self.failed_translations = 0
+        self.retry_count = 0
 
         # Pop the cross-cutting callbacks before passing the rest to the
         # subclass setup so backends don't need to thread them through their
@@ -153,6 +179,9 @@ class BaseTranslator(ABC):
             "on_paragraph_translated", None
         )
         self._on_translation_failed = kwargs.pop("on_translation_failed", None)
+        self._cancel_event: Optional[threading.Event] = kwargs.pop(
+            "cancel_event", None
+        )
 
         # Initialize translator-specific settings
         self._setup_translator(**kwargs)
@@ -182,6 +211,52 @@ class BaseTranslator(ABC):
         with self._counter_lock:
             self.translate_call_count += 1
             return self.translate_call_count
+
+    def is_cancelled(self) -> bool:
+        return self._cancel_event is not None and self._cancel_event.is_set()
+
+    def _sleep_or_cancel(self, seconds: float) -> bool:
+        """Sleep up to `seconds`, waking early if cancelled. Returns True if
+        cancelled during the sleep."""
+        if self._cancel_event is None:
+            time.sleep(seconds)
+            return False
+        return self._cancel_event.wait(timeout=seconds)
+
+    def _call_with_backoff(self, service: str, request: Callable[[], Any]) -> Any:
+        """Run a blocking SDK call behind the shared per-service rate limiter,
+        retrying on 429/5xx with jittered exponential backoff. Fatal errors
+        (401/403) and anything else propagate immediately.
+
+        Raises TranslationCancelled if the job's cancel flag fires while
+        waiting on the limiter or a backoff; re-raises the last error once
+        the retry budget is exhausted.
+        """
+        limiter = get_rate_limiter(service)
+        attempt = 0
+        while True:
+            if not limiter.acquire(cancel_event=self._cancel_event):
+                raise TranslationCancelled()
+            try:
+                return request()
+            except Exception as error:
+                if self.is_cancelled():
+                    raise TranslationCancelled() from error
+                if is_fatal_translation_error(error) or not is_retryable_translation_error(error):
+                    raise
+                attempt += 1
+                if attempt > _MAX_RETRIES:
+                    raise
+                delay = min(_RETRY_BASE_DELAY_S * (2 ** (attempt - 1)), _RETRY_MAX_DELAY_S)
+                delay = delay / 2 + random.uniform(0, delay / 2)
+                with self._counter_lock:
+                    self.retry_count += 1
+                logger.warning(
+                    "%s request failed (attempt %d/%d), retrying in %.1fs: %s",
+                    service, attempt, _MAX_RETRIES, delay, error,
+                )
+                if self._sleep_or_cancel(delay):
+                    raise TranslationCancelled() from error
 
     def _fire_failure_callback(self, error: BaseException, fatal: bool) -> None:
         """Best-effort: report a failed paragraph. Same contract as

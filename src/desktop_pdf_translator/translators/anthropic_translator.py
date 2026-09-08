@@ -12,7 +12,7 @@ from typing import List, Dict
 
 import anthropic
 
-from .base import BaseTranslator, LANGUAGE_DISPLAY_NAMES
+from .base import BaseTranslator, LANGUAGE_DISPLAY_NAMES, TranslationCancelled
 from .translation_cache import llm_cache_get as _llm_cache_get, llm_cache_set as _llm_cache_set
 
 
@@ -49,6 +49,8 @@ class AnthropicTranslator(BaseTranslator):
 
     def translate(self, text: str, **kwargs) -> str:
         self._note_translate_call()
+        if self.is_cancelled():
+            return text
 
         try:
             processed_text = self._preprocess_text(text)
@@ -62,13 +64,16 @@ class AnthropicTranslator(BaseTranslator):
 
             system_prompt, user_prompt = self._create_translation_prompt(processed_text)
 
-            response = self.client.messages.create(
-                model=self.model,
-                max_tokens=self.max_tokens,
-                temperature=self.temperature,
-                system=system_prompt,
-                messages=[{"role": "user", "content": user_prompt}],
-                timeout=30,
+            response = self._call_with_backoff(
+                "anthropic",
+                lambda: self.client.messages.create(
+                    model=self.model,
+                    max_tokens=self.max_tokens,
+                    temperature=self.temperature,
+                    system=system_prompt,
+                    messages=[{"role": "user", "content": user_prompt}],
+                    timeout=30,
+                ),
             )
 
             translated_text = "".join(
@@ -89,6 +94,8 @@ class AnthropicTranslator(BaseTranslator):
             self._fire_paragraph_callback(processed_text, result)
             return result
 
+        except TranslationCancelled:
+            return text
         except Exception as e:
             return self._handle_translation_error(e, text)
 
