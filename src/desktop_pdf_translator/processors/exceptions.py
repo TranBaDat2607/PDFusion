@@ -93,7 +93,7 @@ class ConfigurationError(ProcessingError):
         return self.__class__, (self.message, self.config_section, self.details)
 
 
-class TimeoutError(ProcessingError):
+class ProcessingTimeoutError(ProcessingError):
     """Processing timeout error."""
     
     def __init__(self, message: str, timeout_seconds: float = None, details: str = None):

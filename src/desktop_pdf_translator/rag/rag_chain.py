@@ -11,7 +11,6 @@ from datetime import datetime
 from ..config import TranslationService, get_settings
 from ..translators.factory import TranslatorFactory
 from .vector_store import ChromaDBManager
-from .reference_manager import ReferenceManager
 
 logger = logging.getLogger(__name__)
 
@@ -49,7 +48,6 @@ class EnhancedRAGChain:
 
     def __init__(self, vector_store: ChromaDBManager):
         self.vector_store = vector_store
-        self.reference_manager = ReferenceManager()
         self.settings = get_settings()
 
         self.translator = None

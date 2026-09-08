@@ -168,7 +168,7 @@ class ConfigManager:
         tmp_file = self.config_file.with_name(self.config_file.name + ".tmp")
         try:
             # Convert to dict and format for TOML
-            config_dict = settings.dict()
+            config_dict = settings.model_dump()
 
             # Prepare sensitive data (API keys) for storage
             config_dict = self._remove_sensitive_data(config_dict)
@@ -387,7 +387,7 @@ class ConfigManager:
         """
         try:
             # Get current settings as dict
-            current_dict = self.settings.dict()
+            current_dict = self.settings.model_dump()
             
             # Update with provided values
             self._deep_merge(current_dict, kwargs)
@@ -422,7 +422,7 @@ class ConfigManager:
             True if exported successfully, False otherwise
         """
         try:
-            config_dict = self.settings.dict()
+            config_dict = self.settings.model_dump()
             config_dict = self._remove_sensitive_data(config_dict)
             config_dict = self._clean_none_values(config_dict)
             

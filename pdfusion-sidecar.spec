@@ -36,10 +36,9 @@ hiddenimports = [
     "uvicorn.lifespan.on",
     "uvicorn.lifespan.off",
 
-    # FastAPI / SSE / forms
+    # FastAPI / SSE
     "sse_starlette",
     "sse_starlette.sse",
-    "python_multipart",
 
     # pydantic v2 stack
     "pydantic_settings",
@@ -151,10 +150,6 @@ for pkg in (
         datas += copy_metadata(pkg)
     except Exception:  # noqa: BLE001 — best-effort; package may not be installed locally
         pass
-
-# Default configuration TOML — the ConfigManager reads this at startup as a
-# fallback when no user config exists yet.
-datas += [("config/default_config.toml", "config")]
 
 # Argos en→vi language pack pre-bundled so the bundled exe doesn't have to
 # download ~80 MB on first translate. The pack lives under

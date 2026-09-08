@@ -11,8 +11,7 @@ Windows desktop app for translating PDFs (default target: Vietnamese) while pres
 - **Rust** (rustup, cargo) — for the Tauri shell
 - **Microsoft Visual C++ Build Tools 2022/2026** — required by the Rust MSVC linker on Windows
 - **WebView2 Runtime** — ships with Windows 11; install separately on Windows 10
-- **Ghostscript** — required by BabelDOC for PDF processing
-- **Tesseract OCR** — optional, only for scanned PDFs
+- **Ghostscript** — optional, only needed by Camelot for table extraction during RAG indexing (pdfplumber fallback runs without it)
 
 ## Setup
 
@@ -22,14 +21,15 @@ Windows desktop app for translating PDFs (default target: Vietnamese) while pres
 conda create -n pdfusion python=3.11.14
 conda activate pdfusion
 pip install -r requirements.txt
-# Optional extras:
-pip install "pdfusion[rag]"        # RAG chat
-pip install "pdfusion[advanced]"   # OCR + table extraction
+# Optional extras (editable install — the package isn't published to PyPI):
+pip install -e ".[rag]"        # RAG chat
+pip install -e ".[advanced]"   # table extraction
 ```
 
-> The conda env on this machine is named `pdfusion` (single `f`). If you create
-> it under a different name, set `PDFUSION_PYTHON` to the env's `python.exe`
-> path before launching the desktop app.
+> These examples name the env `pdfusion`; `pdfusion-env` also works out of the
+> box (the Tauri shell auto-detects either name). If you use something else,
+> set `PDFUSION_PYTHON` to the env's `python.exe` path before launching the
+> desktop app.
 
 ### 2. Tauri / React frontend (one-time)
 
@@ -109,7 +109,7 @@ The Tauri bundler auto-runs `build-sidecar.ps1` (via `tauri.conf.json`'s
 
 Output:
 ```
-desktop/src-tauri/target/release/bundle/msi/PDFusion_0.1.0_x64_en-US.msi
+desktop/src-tauri/target/release/bundle/msi/PDFusion_<version>_x64_en-US.msi
 ```
 
 Notes:
