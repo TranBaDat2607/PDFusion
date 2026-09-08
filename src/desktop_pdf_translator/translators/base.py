@@ -3,12 +3,15 @@ Base translator interface compatible with BabelDOC.
 """
 
 import logging
+import random
 import re
 import threading
+import time
 from abc import ABC, abstractmethod
-from typing import Dict, Optional, Any
+from typing import Callable, Dict, Optional, Any
 
 from ..config import LanguageCode
+from .rate_limiter import default_qps_for, get_rate_limiter
 
 
 logger = logging.getLogger(__name__)
@@ -81,6 +84,53 @@ def is_fatal_translation_error(error: BaseException) -> bool:
     return any(marker in message for marker in _FATAL_MESSAGE_MARKERS)
 
 
+# Transport failures worth another attempt. With `max_retries=0` on the SDK
+# clients these carry no status code, so they are the whole signal for what
+# the SDKs used to retry themselves.
+#
+# Matched by class *name* along the MRO — never `isinstance`, because this
+# module has to import with none of the provider SDKs (nor httpx) installed,
+# so the classes cannot be referenced. Two base names cover every case, and
+# walking the MRO rather than testing the concrete class is what makes that
+# true:
+#
+#   APIConnectionError — openai and anthropic funnel every transport failure
+#     into it (their `except Exception` fallback in `_base_client`), and both
+#     SDKs' `APITimeoutError` subclasses it.
+#   TransportError — google-genai does *not* wrap, so raw httpx exceptions
+#     arrive here. ConnectError, ReadError, WriteError, NetworkError,
+#     ProxyError, CloseError, RemoteProtocolError and the four Timeout
+#     classes all derive from it.
+#
+# Listing the leaf names instead missed the five httpx classes with no
+# "Timeout"/"Connect" in their name, which on Gemini meant a socket-level
+# read failure was still an immediately-lost paragraph.
+_RETRYABLE_ERROR_NAMES = frozenset({"APIConnectionError", "TransportError"})
+
+
+def is_retryable_translation_error(error: BaseException) -> bool:
+    """A 429, 5xx, or a transient connection/timeout failure — worth one
+    more attempt after a backoff. The status range (not a fixed set) also
+    catches Anthropic's 529 "overloaded"; 408/409 are included alongside
+    429 since some providers use them for the same "try again" meaning."""
+    if any(cls.__name__ in _RETRYABLE_ERROR_NAMES for cls in type(error).__mro__):
+        return True
+    status = _status_code_of(error)
+    if status is None:
+        return False
+    return status in (408, 409, 429) or 500 <= status < 600
+
+
+class TranslationCancelled(Exception):
+    """The job's cancel flag fired while `_call_with_backoff` was waiting on
+    the rate limiter or a retry backoff. Not a translation failure."""
+
+
+_MAX_RETRIES = 6
+_RETRY_BASE_DELAY_S = 1.0
+_RETRY_MAX_DELAY_S = 20.0
+
+
 def describe_fatal_error(service_name: str, error: BaseException) -> str:
     """The sentence the user sees when a fatal failure stops a job.
 
@@ -112,6 +162,11 @@ class BaseTranslator(ABC):
     - Must support language attributes: lang_in, lang_out
     """
 
+    # Overridden by LLM backends (a plain class attribute, or set as
+    # self._SERVICE_NAME inside _setup_translator for a per-instance value).
+    # None means "no shared rate limiter" — Argos and any non-LLM backend.
+    _SERVICE_NAME: Optional[str] = None
+
     def __init__(self, lang_in: str, lang_out: str, **kwargs):
         """Initialize translator with language configuration.
 
@@ -131,6 +186,12 @@ class BaseTranslator(ABC):
                     failure that will repeat for every remaining paragraph
                     (see `is_fatal_translation_error`). The processor counts
                     these and aborts the job on a fatal one.
+                  cancel_event: Optional[threading.Event]
+                    Checked at the top of translate(); when set, the
+                    translator returns source text without calling out.
+                  max_qps: Optional[float]
+                    Overrides the shared rate limiter's default for this
+                    backend's service. None keeps the built-in default.
         """
         self.lang_in = self._normalize_language_code(lang_in)
         self.lang_out = self._normalize_language_code(lang_out)
@@ -145,6 +206,7 @@ class BaseTranslator(ABC):
         self._counter_lock = threading.Lock()
         self.translate_call_count = 0
         self.failed_translations = 0
+        self.retry_count = 0
 
         # Pop the cross-cutting callbacks before passing the rest to the
         # subclass setup so backends don't need to thread them through their
@@ -153,9 +215,32 @@ class BaseTranslator(ABC):
             "on_paragraph_translated", None
         )
         self._on_translation_failed = kwargs.pop("on_translation_failed", None)
+        self._cancel_event: Optional[threading.Event] = kwargs.pop(
+            "cancel_event", None
+        )
+        self.max_qps: Optional[float] = kwargs.pop("max_qps", None)
 
         # Initialize translator-specific settings
         self._setup_translator(**kwargs)
+
+        # Applied once at construction, not per-call: max_qps is fixed for
+        # this instance's lifetime, so re-applying it on every translate()
+        # would just take the limiter's lock to write the same value back.
+        #
+        # Applied unconditionally, resolving None to the built-in default,
+        # because the limiter outlives the translator. Skipping the call when
+        # max_qps is None would let a *cleared* override survive: raise the
+        # rate once, delete the line from config.toml, and the sidecar keeps
+        # running at the raised rate until it restarts.
+        if self._SERVICE_NAME is not None:
+            get_rate_limiter(
+                self._SERVICE_NAME,
+                qps=(
+                    self.max_qps
+                    if self.max_qps is not None
+                    else default_qps_for(self._SERVICE_NAME)
+                ),
+            )
 
         logger.info(f"Initialized {self.__class__.__name__} translator: {self.lang_in} -> {self.lang_out}")
 
@@ -182,6 +267,67 @@ class BaseTranslator(ABC):
         with self._counter_lock:
             self.translate_call_count += 1
             return self.translate_call_count
+
+    def is_cancelled(self) -> bool:
+        return self._cancel_event is not None and self._cancel_event.is_set()
+
+    def _sleep_or_cancel(self, seconds: float) -> bool:
+        """Sleep up to `seconds`, waking early if cancelled. Returns True if
+        cancelled during the sleep."""
+        if self._cancel_event is None:
+            time.sleep(seconds)
+            return False
+        return self._cancel_event.wait(timeout=seconds)
+
+    def _call_with_backoff(self, request: Callable[[], Any]) -> Any:
+        """Run a blocking SDK call behind self._SERVICE_NAME's shared rate
+        limiter, retrying on 429/5xx/timeout/connection errors with jittered
+        exponential backoff. Fatal errors (401/403) and anything else
+        propagate immediately.
+
+        Raises TranslationCancelled if the job's cancel flag fires while
+        waiting on the limiter or a backoff; re-raises the last error once
+        the retry budget is exhausted.
+        """
+        # `_SERVICE_NAME is None` means this backend opts out of the shared
+        # limiter (Argos, and anything else non-LLM). It has to be handled
+        # here rather than passed through: `get_rate_limiter(None)` would
+        # cheerfully build a real `None`-keyed bucket at the fallback rate and
+        # share it between every backend that never named a service.
+        limiter = (
+            get_rate_limiter(self._SERVICE_NAME)
+            if self._SERVICE_NAME is not None
+            else None
+        )
+        attempt = 0
+        while True:
+            if limiter is None:
+                # No token to wait on, so check the flag the acquire would
+                # otherwise have observed.
+                if self.is_cancelled():
+                    raise TranslationCancelled()
+            elif not limiter.acquire(cancel_event=self._cancel_event):
+                raise TranslationCancelled()
+            try:
+                return request()
+            except Exception as error:
+                if self.is_cancelled():
+                    raise TranslationCancelled() from error
+                if is_fatal_translation_error(error) or not is_retryable_translation_error(error):
+                    raise
+                attempt += 1
+                if attempt > _MAX_RETRIES:
+                    raise
+                delay = min(_RETRY_BASE_DELAY_S * (2 ** (attempt - 1)), _RETRY_MAX_DELAY_S)
+                delay = delay / 2 + random.uniform(0, delay / 2)
+                with self._counter_lock:
+                    self.retry_count += 1
+                logger.warning(
+                    "%s request failed (attempt %d/%d), retrying in %.1fs: %s",
+                    self._SERVICE_NAME, attempt, _MAX_RETRIES, delay, error,
+                )
+                if self._sleep_or_cancel(delay):
+                    raise TranslationCancelled() from error
 
     def _fire_failure_callback(self, error: BaseException, fatal: bool) -> None:
         """Best-effort: report a failed paragraph. Same contract as

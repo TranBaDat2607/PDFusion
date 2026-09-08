@@ -12,7 +12,7 @@ from typing import List, Dict
 
 import anthropic
 
-from .base import BaseTranslator, LANGUAGE_DISPLAY_NAMES
+from .base import BaseTranslator, LANGUAGE_DISPLAY_NAMES, TranslationCancelled
 from .translation_cache import llm_cache_get as _llm_cache_get, llm_cache_set as _llm_cache_set
 
 
@@ -27,6 +27,8 @@ class AnthropicTranslator(BaseTranslator):
     Claude Opus / Sonnet / Haiku 4.x model families.
     """
 
+    _SERVICE_NAME = "anthropic"
+
     def __init__(self, lang_in: str, lang_out: str, **kwargs):
         super().__init__(lang_in, lang_out, **kwargs)
 
@@ -40,7 +42,9 @@ class AnthropicTranslator(BaseTranslator):
         self.max_tokens = kwargs.get("max_tokens", 4000)
         self.base_url = kwargs.get("base_url")
 
-        client_kwargs = {"api_key": self.api_key}
+        # max_retries=0: the SDK's own retry loop bypasses _call_with_backoff's
+        # rate limiter, so its attempts don't count against the shared budget.
+        client_kwargs = {"api_key": self.api_key, "max_retries": 0}
         if self.base_url:
             client_kwargs["base_url"] = self.base_url
         self.client = anthropic.Anthropic(**client_kwargs)
@@ -49,6 +53,8 @@ class AnthropicTranslator(BaseTranslator):
 
     def translate(self, text: str, **kwargs) -> str:
         self._note_translate_call()
+        if self.is_cancelled():
+            return text
 
         try:
             processed_text = self._preprocess_text(text)
@@ -62,13 +68,15 @@ class AnthropicTranslator(BaseTranslator):
 
             system_prompt, user_prompt = self._create_translation_prompt(processed_text)
 
-            response = self.client.messages.create(
-                model=self.model,
-                max_tokens=self.max_tokens,
-                temperature=self.temperature,
-                system=system_prompt,
-                messages=[{"role": "user", "content": user_prompt}],
-                timeout=30,
+            response = self._call_with_backoff(
+                lambda: self.client.messages.create(
+                    model=self.model,
+                    max_tokens=self.max_tokens,
+                    temperature=self.temperature,
+                    system=system_prompt,
+                    messages=[{"role": "user", "content": user_prompt}],
+                    timeout=30,
+                ),
             )
 
             translated_text = "".join(
@@ -89,6 +97,8 @@ class AnthropicTranslator(BaseTranslator):
             self._fire_paragraph_callback(processed_text, result)
             return result
 
+        except TranslationCancelled:
+            return text
         except Exception as e:
             return self._handle_translation_error(e, text)
 

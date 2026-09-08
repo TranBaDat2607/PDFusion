@@ -38,12 +38,29 @@ api_key = "${OPENAI_API_KEY}"
 model = "gpt-4"
 temperature = 0.3
 max_tokens = 4000
+# Requests/sec cap shared across every concurrent job, against this key.
+# Built-in default is a conservative 5 — raise it if your account's tier
+# allows more (uncomment to override):
+# max_qps = 5.0
 
 [gemini]
-# API key should be set via environment variable GEMINI_API_KEY  
+# API key should be set via environment variable GEMINI_API_KEY
 api_key = "${GEMINI_API_KEY}"
 model = "gemini-pro"
 temperature = 0.3
+# Same cap as openai.max_qps above (built-in default: 5.0).
+# max_qps = 5.0
+
+[anthropic]
+# Uncomment to configure Anthropic; api_key can also come from the
+# ANTHROPIC_API_KEY environment variable.
+# api_key = "${ANTHROPIC_API_KEY}"
+# model = "claude-sonnet-4-6"
+# temperature = 0.3
+# max_tokens = 4000
+# Built-in default is 1.0 — sized for the ~50 RPM entry tier. Raise it if
+# your account is on a higher tier (e.g. ~16.7 for a ~1000 RPM tier):
+# max_qps = 1.0
 
 [rag]
 # RAG (Retrieval-Augmented Generation) settings

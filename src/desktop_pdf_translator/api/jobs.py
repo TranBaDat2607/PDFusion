@@ -46,6 +46,15 @@ class Job:
 
     def cancel(self) -> None:
         self.cancelled = True
+        # Opaque, like `processor.reprioritize(...)` above — stops in-flight
+        # translate() calls without jobs.py depending on PDFProcessor.
+        # Best-effort: a raise here must not skip the task cancel below.
+        try:
+            processor_cancel = getattr(self.processor, "cancel", None)
+            if callable(processor_cancel):
+                processor_cancel()
+        except Exception:
+            logger.warning("Job %s: processor.cancel() failed", self.job_id, exc_info=True)
         if self.task and not self.task.done():
             self.task.cancel()
 
