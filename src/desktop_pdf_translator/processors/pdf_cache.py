@@ -181,13 +181,36 @@ class PDFTranslationCache:
                     original_filename TEXT NOT NULL,
                     cached_at TEXT NOT NULL,
                     last_used TEXT,
+                    last_used_seq INTEGER NOT NULL DEFAULT 0,
                     hit_count INTEGER DEFAULT 0,
                     file_size_bytes INTEGER NOT NULL
                 )
                 """
             )
+            # Added after `last_used` (a wall-clock string) turned out unfit
+            # for ordering eviction: two writes close enough together — a
+            # `store()` immediately followed by a `lookup()`'s refresh, as
+            # happens in a burst of cache activity — can land the same
+            # `datetime.now()` value on a coarser clock (observed on GitHub
+            # Actions' Windows runners), and a tie between "just touched" and
+            # "never touched" breaks arbitrarily. `last_used_seq` is a
+            # monotonic counter with no such tie, ever. Existing rows default
+            # to 0 and sort arbitrarily among themselves exactly once, until
+            # each is touched — a one-time, best-effort degrade for installs
+            # upgrading into this column, not a regression from before.
+            try:
+                conn.execute(
+                    "ALTER TABLE pdf_translations "
+                    "ADD COLUMN last_used_seq INTEGER NOT NULL DEFAULT 0"
+                )
+            except sqlite3.OperationalError:
+                pass  # column already exists
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_pdf_last_used ON pdf_translations(last_used)"
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_pdf_last_used_seq "
+                "ON pdf_translations(last_used_seq)"
             )
             conn.commit()
 
@@ -251,7 +274,9 @@ class PDFTranslationCache:
                 with self._write_lock:
                     conn.execute(
                         "UPDATE pdf_translations SET hit_count = hit_count + 1, "
-                        "last_used = ? WHERE cache_key = ?",
+                        "last_used = ?, last_used_seq = "
+                        "(SELECT COALESCE(MAX(last_used_seq), 0) + 1 FROM pdf_translations) "
+                        "WHERE cache_key = ?",
                         (now, key),
                     )
                     conn.commit()
@@ -343,8 +368,10 @@ class PDFTranslationCache:
                     INSERT OR REPLACE INTO pdf_translations
                     (cache_key, file_hash, source_lang, target_lang, service,
                      model, pipeline_version, cached_path, original_filename,
-                     cached_at, last_used, hit_count, file_size_bytes)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)
+                     cached_at, last_used, last_used_seq, hit_count, file_size_bytes)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                            (SELECT COALESCE(MAX(last_used_seq), 0) + 1 FROM pdf_translations),
+                            0, ?)
                     """,
                     (
                         key, file_hash, source_lang, target_lang, service,
@@ -398,7 +425,7 @@ class PDFTranslationCache:
                 return
             rows = conn.execute(
                 "SELECT cache_key, cached_path, file_size_bytes FROM pdf_translations "
-                "ORDER BY COALESCE(last_used, cached_at) ASC"
+                "ORDER BY last_used_seq ASC"
             ).fetchall()
             to_remove: list[tuple[str, str]] = []
             for row in rows:
