@@ -38,6 +38,7 @@ from uvicorn.main import STARTUP_FAILURE
 
 from .. import __version__
 from ..config import TranslationService, get_settings
+from ..utils import configure_logging
 from .auth import init_token, require_token
 from .routes import config as config_routes
 from .routes import pdf as pdf_routes
@@ -347,11 +348,12 @@ def _bind_socket() -> tuple[socket.socket, int]:
 
 
 def main() -> None:
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-        stream=sys.stderr,
-    )
+    # Shared with main.py's entry point (see utils/logging_setup.py) — this is
+    # what makes `python -m desktop_pdf_translator.api.server` (the dev path
+    # `pnpm tauri dev` actually spawns) and the `pdfusion-sidecar` console
+    # script (pyproject.toml) get the same rotating app.log that the bundled
+    # exe already got via main.py. See #26.
+    configure_logging()
 
     token = init_token()
     sock, port = _bind_socket()

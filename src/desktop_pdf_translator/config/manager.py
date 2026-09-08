@@ -11,7 +11,7 @@ import tomlkit
 from pydantic import ValidationError
 
 from .models import AppSettings
-from ..utils import DPAPI_PREFIX, encrypt_api_key, decrypt_api_key, is_encrypted
+from ..utils import DPAPI_PREFIX, encrypt_api_key, decrypt_api_key, is_encrypted, appdata_dir
 
 # Try to import python-dotenv for .env file support
 from dotenv import load_dotenv
@@ -34,8 +34,7 @@ class ConfigManager:
             config_dir: Directory for configuration files. Defaults to user config dir.
         """
         if config_dir is None:
-            # Default to user's AppData directory on Windows
-            self.config_dir = Path.home() / "AppData" / "Local" / "PDFusion"
+            self.config_dir = appdata_dir()
         else:
             self.config_dir = Path(config_dir)
         

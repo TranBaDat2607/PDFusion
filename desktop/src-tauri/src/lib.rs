@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 
 use serde::Serialize;
 use tauri::{Emitter, Manager, RunEvent};
+use tauri_plugin_log::{RotationStrategy, Target, TargetKind};
 use tauri_plugin_opener::OpenerExt;
 use tauri_plugin_window_state::{AppHandleExt, StateFlags};
 
@@ -111,12 +112,14 @@ fn first_pdf_argument<I: IntoIterator<Item = String>>(args: I) -> Option<String>
     })
 }
 
-/// Open the folder the sidecar logs into.
+/// Open the folder the sidecar and the shell log into.
 ///
-/// The *folder*, not `app.log`: whether that file exists depends on how the
-/// sidecar was launched (see #26), and `ensure_appdata_layout` guarantees the
-/// directory. Takes no argument — the path is derived here, so there is
-/// nothing for a caller to point somewhere else.
+/// The *folder*, not a specific file: `shell.log` is written unconditionally
+/// on every launch (`tauri_plugin_log`, registered below), but whether
+/// `app.log` exists yet still depends on the Python side having logged
+/// something, and `ensure_appdata_layout` only guarantees the directory.
+/// Takes no argument — the path is derived here, so there is nothing for a
+/// caller to point somewhere else.
 #[tauri::command]
 fn open_logs_folder(app: tauri::AppHandle) -> Result<(), String> {
     let dir: PathBuf = sidecar::appdata_dir().join("logs");
@@ -157,8 +160,6 @@ fn restart_app(app: tauri::AppHandle) {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    let _ = env_logger::try_init();
-
     tauri::Builder::default()
         // Must come first: a second launch has to be turned away before the
         // rest of the app builds. Two windows means two sidecars sharing one
@@ -175,6 +176,25 @@ pub fn run() {
                 let _ = app.emit(OPEN_FILE_EVENT, path);
             }
         }))
+        // Replaces the old bare `env_logger::try_init()`, which only ever
+        // wrote to a terminal a release build doesn't have
+        // (`windows_subsystem = "windows"`) — nothing reached a file (#26).
+        // Stdout keeps `pnpm tauri dev`'s terminal output unchanged; Folder
+        // writes `shell.log` next to the Python sidecar's `app.log`, in the
+        // same directory `open_logs_folder` below already opens. The plugin
+        // creates that directory itself if it doesn't exist yet.
+        .plugin(
+            tauri_plugin_log::Builder::new()
+                .target(Target::new(TargetKind::Stdout))
+                .target(Target::new(TargetKind::Folder {
+                    path: sidecar::appdata_dir().join("logs"),
+                    file_name: Some("shell".into()),
+                }))
+                .level(log::LevelFilter::Info)
+                .max_file_size(5 * 1024 * 1024) // 5 MB, mirrors app.log's cap
+                .rotation_strategy(RotationStrategy::KeepSome(5)) // + 5 backups
+                .build(),
+        )
         // Restores size/position/maximized state from the previous run, and
         // saves them on exit. Replaces the `GUISettings.window_width/height`
         // fields, which nothing ever read.

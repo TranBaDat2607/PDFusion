@@ -23,24 +23,17 @@ def _bootstrap_path() -> None:
         sys.path.insert(0, str(src))
 
 
-def _setup_logging() -> None:
-    log_dir = Path.home() / "AppData" / "Local" / "PDFusion" / "logs"
-    log_dir.mkdir(parents=True, exist_ok=True)
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-        handlers=[
-            logging.FileHandler(log_dir / "app.log"),
-            logging.StreamHandler(sys.stderr),
-        ],
-    )
-    for noisy in ("urllib3", "requests", "uvicorn.access"):
-        logging.getLogger(noisy).setLevel(logging.WARNING)
-
-
 def main() -> int:
     _bootstrap_path()
-    _setup_logging()
+
+    # Configured here (before importing server.py) so that even an import
+    # failure in server.py — e.g. a PyInstaller `.spec` excludes gap — lands
+    # in app.log rather than a windowed app's nonexistent stderr. server.py's
+    # own main() calls the same function; force=True makes the second call a
+    # harmless no-op re-application of the same handlers. See #26.
+    from desktop_pdf_translator.utils import configure_logging
+
+    configure_logging()
     print(
         "Starting PDFusion sidecar standalone. For the full desktop UI run "
         "`pnpm tauri dev` from the desktop/ folder.",

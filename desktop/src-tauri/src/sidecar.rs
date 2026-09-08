@@ -186,16 +186,15 @@ fn project_root() -> Option<PathBuf> {
 /// between a local process and the sidecar's API — so it should not be printed
 /// at all, wherever the printing happens to land.
 ///
-/// Where it lands today: `log::info!` here goes to `env_logger`, which
-/// `lib.rs::run` initialises with no target of its own, so it writes to *this*
-/// process's stderr — the `pnpm tauri dev` terminal, and any CI/console capture
-/// of it. A release build discards that stream (`main.rs` sets
-/// `windows_subsystem = "windows"`, so there's no console attached). It does
-/// **not** reach `~/AppData/Local/PDFusion/logs/app.log`: that file is written
-/// by the Python child (`main.py::_setup_logging`), and the token never goes
-/// through Python's `logging` — `server.py::main` `print`s it to stdout.
-/// Redacting here keeps it out of dev terminals now and out of any file logger
-/// added later.
+/// Where it lands today: `log::info!` here goes to `tauri_plugin_log`
+/// (`lib.rs::run`), which writes both to *this* process's stdout — the
+/// `pnpm tauri dev` terminal, and any CI/console capture of it — and to
+/// `~/AppData/Local/PDFusion/logs/shell.log`. It does **not** reach
+/// `~/AppData/Local/PDFusion/logs/app.log`: that file is written by the
+/// Python child (`utils/logging_setup.py::configure_logging`), and the token
+/// never goes through Python's `logging` — `server.py::main` `print`s it to
+/// stdout. Redacting here keeps it out of both the dev terminal and
+/// `shell.log`, not just the terminal.
 fn redact_ready_line(line: &str) -> Cow<'_, str> {
     if !line.starts_with("READY ") {
         return Cow::Borrowed(line);

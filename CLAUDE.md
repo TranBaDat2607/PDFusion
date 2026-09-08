@@ -344,7 +344,7 @@ corrupting) the cooldown key for that purpose.
 | `src/desktop_pdf_translator/translators/` | `BaseTranslator`, OpenAI/Gemini/Anthropic/Argos + `TranslatorFactory` |
 | `src/desktop_pdf_translator/translators/rate_limiter.py` | Process-wide token-bucket QPS limiter, one singleton per LLM service |
 | `src/desktop_pdf_translator/rag/` | ChromaDB + `EnhancedRAGChain` (deep-search/web-research was dropped in `35bca2c`) |
-| `src/desktop_pdf_translator/utils/` | API key encryption; `file_export.py` (durable copy of a translated PDF) |
+| `src/desktop_pdf_translator/utils/` | API key encryption; `file_export.py` (durable copy of a translated PDF); `logging_setup.py` (shared rotating `app.log` config); `paths.py` (`appdata_dir()`/`logs_dir()`) |
 | `src/desktop_pdf_translator/translators/translation_cache.py` | Persistent **paragraph-level** SQLite cache (singleton `get_translation_cache()`) |
 | `src/desktop_pdf_translator/processors/pdf_cache.py` | Persistent **whole-PDF** SQLite cache (singleton `get_pdf_cache()`) |
 | `src/desktop_pdf_translator/processors/doc_layout_cache.py` | Process-wide DocLayout-YOLO model, loaded once (`get_shared_doc_layout_model()`) |
@@ -796,25 +796,34 @@ when the bundled exe raises `ModuleNotFoundError` at startup.
 
 ## Logs
 
-Two log streams, and they don't meet — worth knowing before hunting for a line
-that isn't there:
+Both streams land in `~/AppData/Local/PDFusion/logs/`, rotating at 5 MB with 5
+backups kept:
 
-- **Python sidecar** → `~/AppData/Local/PDFusion/logs/app.log`, but only via
-  `main.py::_setup_logging` (the `pdfusion-sidecar` console script, i.e. the
-  bundled build or a hand-run `python main.py`). Launched the dev way
-  (`python -m desktop_pdf_translator.api.server`, which is what `pnpm tauri dev`
-  does), `server.py::main` configures logging to **stderr only** — nothing
-  reaches `app.log`.
-- **Rust shell** → stderr, always. `lib.rs::run` calls a bare
-  `env_logger::try_init()` with no file target, so `log::info!`/`warn!` — including
-  the `[sidecar stdout]` / `[sidecar stderr]` relays — land in the `pnpm tauri dev`
-  terminal and are **discarded in a release build** (`main.rs` sets
-  `windows_subsystem = "windows"`, so there's no console). None of it is in
-  `app.log`.
+- **Python sidecar** → `app.log`, via `utils/logging_setup.py::configure_logging`
+  — one shared, `RotatingFileHandler`-backed setup called from all three ways
+  the sidecar can start: `main.py` (the bundled `pdfusion-sidecar.exe`, and a
+  hand-run `python main.py`), `python -m desktop_pdf_translator.api.server`
+  (what `pnpm tauri dev` actually spawns), and the `pdfusion-sidecar` console
+  script (`server.py::main` directly, via `pyproject.toml`'s
+  `[project.scripts]`). `main.py` calls it before importing `server.py`, so an
+  import failure there still lands in `app.log` rather than a windowed app's
+  nonexistent stderr; `server.py::main` calls the same function, and
+  `force=True` on `logging.basicConfig` makes that second call — when both run
+  in one process — a harmless no-op re-application of the same handlers.
+- **Rust shell** → `shell.log`, via `tauri_plugin_log` (`lib.rs::run`),
+  default level `info`, plus a stdout target so `log::info!`/`warn!` —
+  including the `[sidecar stdout]` / `[sidecar stderr]` relays — still show up
+  in the `pnpm tauri dev` terminal. This replaced a bare `env_logger::try_init()`
+  with no file target, which meant a release build (`main.rs` sets
+  `windows_subsystem = "windows"`, so there's no console) discarded that
+  stream entirely — "Sidecar failed to start" had nowhere to go.
+
+The boot-error screen's "Show logs folder" button (`open_logs_folder` in
+`lib.rs`) opens this directory regardless of which file(s) exist yet.
 
 The sidecar's bearer token is `print`ed to stdout, not logged, so it was never in
-`app.log`; `sidecar.rs:redact_ready_line` keeps it out of the shell's stderr and
-of any file logger added later.
+`app.log`; `sidecar.rs:redact_ready_line` keeps it out of both the dev terminal
+and `shell.log`.
 
 ## Tests and code quality
 
