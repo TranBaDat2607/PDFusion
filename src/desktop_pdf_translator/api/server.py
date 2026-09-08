@@ -122,15 +122,37 @@ def _warm_translation_engine() -> None:
     up against the Tauri shell's deadline. Paying it here keeps the engine ready
     without gating startup on it.
 
+    The layout-model load is gated on `babeldoc_core_ready()` for the same
+    reason `_should_prewarm_argos` gates on `argos_pack_ready()`:
+    `DocLayoutModel.load_available()` *downloads* the ONNX model when it isn't
+    cached, and this thread has no UI attached to report that or to fail it.
+    Worse, `babeldoc.assets.download_file` writes in place with no temp +
+    rename, so racing the setup flow's own download of the same path can leave
+    a corrupt file that `verify_file` then unlinks. Installing is the setup
+    flow's job (`api/routes/setup.py`), which the user can watch; this thread
+    only ever warms what is already on disk.
+
+    Importing BabelDOC is still unconditional — it touches no assets, and it is
+    the larger half of the cold-start cost.
+
     A Translate click can still beat this thread, so the job path imports
     BabelDOC in a thread of its own rather than assuming this one won the race
     (`routes/translation.py:_load_engine`).
     """
     started = time.perf_counter()
     try:
+        from ..engine_assets import babeldoc_core_ready
         from ..processors import processor  # noqa: F401
-        from ..processors.doc_layout_cache import get_shared_doc_layout_model
-        get_shared_doc_layout_model()
+
+        if babeldoc_core_ready():
+            from ..processors.doc_layout_cache import get_shared_doc_layout_model
+
+            get_shared_doc_layout_model()
+        else:
+            logger.info(
+                "Translation engine warm-up: layout model not installed yet, "
+                "leaving it to the setup flow"
+            )
     except Exception as exc:  # noqa: BLE001
         logger.warning("Translation engine warm-up failed (non-fatal): %s", exc)
         return

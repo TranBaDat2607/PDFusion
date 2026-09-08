@@ -169,7 +169,9 @@ Two consequences worth keeping in mind:
   `argos-prewarm` thread. Startup no longer *waits* on that import; it still
   *does* it. Budget **5-25 s**, not the 5 s a warm machine suggests — the two
   threads now genuinely contend for the GIL, where before the moved imports the
-  prewarm thread found everything already resolved.
+  prewarm thread found everything already resolved. That thread also loads the
+  DocLayout model into `doc_layout_cache` (another ~3 s), but only when the
+  asset is already on disk — see "Loading the layout model once" below.
 - **A click can still beat that thread, so every relocated import runs off the
   event loop.** These are *blocking* imports inside `async def` handlers: on the
   loop they freeze the whole sidecar — health checks, `/pdf/file` for pdf.js,
@@ -254,12 +256,22 @@ user has just asked for the one thing the assets are for. The skip marker is a
 same convention as `sidecar-recovery.ts`. Reading a PDF never waits on any of
 this; only translating does.
 
-Consequence for the boot threads: **pre-warm may materialize the pack, never
-download it.** `server.py:_should_prewarm_argos` and
-`routes/translation.py:_warm_translator` are both gated on `argos_pack_ready()`.
-They fire at boot and on document open, with nothing on screen that could report
-an 80 MB download or its failure — installing is the setup flow's job, because
-that is the surface the user can watch.
+Consequence for the boot threads: **pre-warm may materialize an asset, never
+download one.** `server.py:_should_prewarm_argos` and
+`routes/translation.py:_warm_translator` are gated on `argos_pack_ready()`;
+`server.py:_warm_translation_engine` is gated on `babeldoc_core_ready()` before
+it touches the layout model. They fire at boot and on document open, with
+nothing on screen that could report a download or its failure — installing is
+the setup flow's job, because that is the surface the user can watch.
+
+The layout model is the newer half of that rule and the easier one to get
+wrong, because the download hides one call down: `DocLayoutModel.load_available()`
+→ `assets.get_doclayout_onnx_model_path()`, which fetches whenever `verify_file`
+fails. Ungated it doesn't merely download unattended — `babeldoc.assets.download_file`
+writes **in place**, with no temp + rename, and unlinks the file when the hash
+doesn't match, so a boot-thread download racing the setup flow's download of
+the same path can destroy the copy the user is watching a progress bar for.
+`tests/test_engine_warm_gate.py` covers both directions.
 
 ### Sidecar supervision
 
@@ -334,6 +346,7 @@ corrupting) the cooldown key for that purpose.
 | `src/desktop_pdf_translator/utils/` | API key encryption; `file_export.py` (durable copy of a translated PDF) |
 | `src/desktop_pdf_translator/translators/translation_cache.py` | Persistent **paragraph-level** SQLite cache (singleton `get_translation_cache()`) |
 | `src/desktop_pdf_translator/processors/pdf_cache.py` | Persistent **whole-PDF** SQLite cache (singleton `get_pdf_cache()`) |
+| `src/desktop_pdf_translator/processors/doc_layout_cache.py` | Process-wide DocLayout-YOLO model, loaded once (`get_shared_doc_layout_model()`) |
 
 ### HTTP API (sidecar)
 
@@ -418,8 +431,9 @@ Three non-obvious invariants in this area, each with a test:
    `useTranslation.ts`.
 2. **`cancelling` is a real status, not "cancelled early".** `cancel()` can't
    wait for the backend (a chunk mid-flight can't be hard-killed), and its
-   drain runs `cleanup_partial_artifacts()`, which unlinks all but the newest
-   rolling PDF. So `TranslationState.status` has a `cancelling` state covering
+   drain runs `cleanup_partial_artifacts()`, which at its default `keep=1`
+   unlinks all but the newest rolling PDF (mid-run the pipeline passes
+   `keep=2` — see "Loading the layout model once"). So `TranslationState.status` has a `cancelling` state covering
    the window until the terminal SSE event. Anything that touches the artifact
    must gate on `isTranslationBusy()`, never on `status === "running"`.
 3. **`export_pdf(protect=...)` refuses to overwrite the opened document.** The
@@ -430,6 +444,61 @@ Three non-obvious invariants in this area, each with a test:
    Skipping the suffix when the stem "looks translated" guesses intent from a
    filename (`chapter_vi.pdf` is a Roman numeral) and manufactures exactly that
    collision.
+
+### Loading the layout model once, and what that does *not* fix
+
+BabelDOC reloads the DocLayout-YOLO ONNX model on every `TranslationConfig`
+whose `doc_layout_model` is `None` (`format/pdf/translation_config.py:290-293`)
+— it has no cache of its own. The pipeline builds one config per chunk, so a
+50-page LLM run paid ~3-4 s × 50 for a model that never changes, *on the event
+loop*, freezing every SSE stream and `/health` with it.
+`processors/doc_layout_cache.py` holds it once per process behind
+double-checked locking, and every fetch goes through `asyncio.to_thread`.
+
+**Sharing one instance across concurrent sub-jobs is safe, and that is a
+property of `OnnxModel`, not a general one.** `handle_document` takes
+`self.lock` only around the PyMuPDF rasterization; `predict()` reads
+`self._names`/`self._stride` and calls `InferenceSession.run`, which onnxruntime
+supports concurrently on one session. Nothing else in babeldoc touches the
+object — `il_creater`, `layout_parser` and `add_debug_information` only ever
+call `handle_document`, and `init_font_mapper` (the one thing babeldoc's own
+CLI attaches per-config, `main.py:730`) exists on `RpcDocLayoutModel`, not on
+`OnnxModel`. Swap the model class and re-check all four before assuming this
+still holds. One consequence: that lock is now process-wide, so page
+rasterization serializes across in-flight chunks where it used to be per-chunk.
+Negligible against ~3-4 s, but it is a real new serialization point.
+
+A failed load leaves the module global `None` rather than caching the failure,
+so the next chunk retries; `run_one_chunk`'s `except BaseException` still routes
+it into `babeldoc_chunk_error`.
+
+**What this does not fix, and the reason `_PAGES_PER_CHUNK_ARGOS` is a live
+question.** The layout model was never the largest per-chunk fixed cost.
+`FontMapper.__init__` sha3_256-verifies and loads **all 34 embedding fonts
+(~250 MB)** for `lang_out`, and nothing memoizes it — not `fontmap.py`, not
+`assets.py`. BabelDOC constructs one per stage: `ILCreater`, `ParagraphFinder`,
+`StylesAndFormulas`, `ILTranslator`, `Typesetting`, `PDFCreater`. Measured
+against the installed babeldoc on a warm cache: **1.02 s per `FontMapper`, ≈6 s
+per chunk**, none of which this cache touches. So "the reload is fixed" is not
+on its own a reason to shrink a chunk — shrinking one multiplies ~6 s by the
+extra chunks it creates, and on the Argos path (`_MAX_PARALLEL_CHUNKS_ARGOS = 2`)
+that can outweigh what the cache saves. Measure an end-to-end Argos run before
+touching `_PAGES_PER_CHUNK_ARGOS`; the constant's real justification is
+per-chunk fixed overhead in general, not the ONNX reload specifically.
+
+**Rolling-PDF pruning keeps two files, not one.** `cleanup_partial_artifacts`
+runs after every chunk now, not only on cancel, so a long run no longer piles
+up all N versions. Its `keep` defaults to 1 (the cancel path's "leave the
+partial result as the sole survivor"), but the per-chunk call passes **2**. The
+order per chunk is rebuild `v{N}` → prune → emit `chunk_ready(v{N})`, so at the
+unlink the webview is still showing `v{N-1}` and pdf.js may still be issuing
+range requests against it — `/pdf/file` advertises `Accept-Ranges` and
+`FileResponse` opens and closes the file per request, so it is deletable
+between ranges and the viewer renders the 404 as an error. Keeping one
+superseded version still bounds disk at two files. (On Windows the unlink
+usually loses that race and just logs, which is what makes the symptom
+intermittent rather than absent — do not read "it works here" as "the ordering
+is safe".)
 
 ### Language selection and backend capabilities
 
@@ -760,7 +829,8 @@ of any file logger added later.
                                    # test_translation_failure_reporting.py,
                                    # test_config_security.py, test_cors_origins.py,
                                    # test_sidecar_boot.py, test_engine_assets.py,
-                                   # test_setup_api.py, test_translate_preflight.py
+                                   # test_setup_api.py, test_translate_preflight.py,
+                                   # test_doc_layout_cache.py, test_engine_warm_gate.py
 
   # Frontend (vitest, node environment — no jsdom)
   cd desktop && pnpm test          # src/**/*.test.ts

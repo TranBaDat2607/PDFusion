@@ -988,8 +988,10 @@ class PDFProcessor:
                         chunks=chunks,
                         chunk_results=chunk_results,
                     )
-                    # Keep at most one superseded rolling version on disk.
-                    await asyncio.to_thread(self.cleanup_partial_artifacts)
+                    # Bound disk usage during the run. keep=2, not 1: the
+                    # viewer is still on v{N-1} until it processes the
+                    # chunk_ready below — see cleanup_partial_artifacts.
+                    await asyncio.to_thread(self.cleanup_partial_artifacts, 2)
 
                     global_progress = 50.0 + chunk_weight * completed_count
 
@@ -1372,19 +1374,32 @@ class PDFProcessor:
         rolling = self._sorted_rolling_pdfs(self._output_dir, self._input_stem)
         return rolling[-1] if rolling else None
 
-    def cleanup_partial_artifacts(self) -> None:
-        """Remove older rolling-PDF versions, keeping only the latest. Called
-        after every chunk completes (to bound disk usage during a normal
-        run) and again on cancellation (to leave the user's partial result as
-        the sole survivor). Best-effort — file lock errors on Windows
-        (PyMuPDF may still hold a handle from a worker thread that hasn't
-        unwound yet, or the viewer may still be reading the version being
-        superseded) are logged, not raised; a leftover file is retried on the
-        next chunk or swept later."""
+    def cleanup_partial_artifacts(self, keep: int = 1) -> None:
+        """Remove older rolling-PDF versions, keeping the newest `keep`.
+
+        Called after every chunk completes (to bound disk usage during a
+        normal run) and again on cancellation (to leave the user's partial
+        result as the sole survivor).
+
+        **`keep=2` is the right value mid-run, not 1.** The order per chunk is
+        rebuild `v{N}` → prune → emit `chunk_ready(v{N})`, so at the moment of
+        the unlink the webview is still displaying `v{N-1}` and pdf.js may
+        still be issuing range requests for it (`/pdf/file` advertises
+        `Accept-Ranges`, and `FileResponse` opens and closes the file per
+        request — so it is deletable between ranges, and the viewer gets a 404
+        it renders as an error). Keeping one superseded version bounds disk at
+        two files and lets the viewer finish reading the one it is on.
+
+        Best-effort — file lock errors on Windows (PyMuPDF may still hold a
+        handle from a worker thread that hasn't unwound yet, or the viewer may
+        have the file open for a range request) are logged, not raised; a
+        leftover file is retried on the next chunk or swept later.
+        """
         if self._output_dir is None or self._input_stem is None:
             return
+        keep = max(1, keep)
         versions = self._sorted_rolling_pdfs(self._output_dir, self._input_stem)
-        for stale in versions[:-1]:
+        for stale in versions[:-keep]:
             try:
                 stale.unlink()
             except OSError as exc:
