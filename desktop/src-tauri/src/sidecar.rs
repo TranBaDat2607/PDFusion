@@ -148,15 +148,24 @@ fn locate_python() -> Result<PathBuf, SidecarError> {
             return Ok(p);
         }
     }
-    // Common conda env path on Windows
+    // Common conda env locations on Windows. `pdfusion` is the name used in
+    // the project's setup docs; `pdfusion-env` is accepted too since nothing
+    // enforces one canonical name across machines. Anything else needs
+    // PDFUSION_PYTHON.
+    const CONDA_DISTS: [&str; 2] = ["anaconda3", "miniconda3"];
+    const ENV_NAMES: [&str; 2] = ["pdfusion", "pdfusion-env"];
     if let Ok(home) = std::env::var("USERPROFILE") {
-        let candidate = PathBuf::from(&home).join("anaconda3/envs/pdfusion/python.exe");
-        if candidate.exists() {
-            return Ok(candidate);
-        }
-        let candidate2 = PathBuf::from(&home).join("miniconda3/envs/pdfusion/python.exe");
-        if candidate2.exists() {
-            return Ok(candidate2);
+        for dist in CONDA_DISTS {
+            for env_name in ENV_NAMES {
+                let candidate = PathBuf::from(&home)
+                    .join(dist)
+                    .join("envs")
+                    .join(env_name)
+                    .join("python.exe");
+                if candidate.exists() {
+                    return Ok(candidate);
+                }
+            }
         }
     }
     // Fall back to PATH

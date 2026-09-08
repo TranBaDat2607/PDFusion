@@ -27,9 +27,10 @@ python main.py          # equivalent to: pdfusion-sidecar (console script from p
 # → prints `READY port=<n> token=<n>` on stdout; OpenAPI docs at http://127.0.0.1:<n>/docs
 ```
 
-> The local conda env is named `pdfusion` (single `f`). The Tauri shell looks
-> for `~/anaconda3/envs/pdfusion/python.exe` by default; override with the
-> `PDFUSION_PYTHON` environment variable if your env lives elsewhere.
+> The examples above name the env `pdfusion`; the Tauri shell also auto-detects
+> `pdfusion-env` under `~/anaconda3/envs/` or `~/miniconda3/envs/`. Neither name
+> is required — set `PDFUSION_PYTHON` to your env's `python.exe` path if you
+> used something else.
 
 **External system dependencies:**
 - Ghostscript (optional — only needed by Camelot for table extraction during RAG indexing; pdfplumber fallback runs without it)
@@ -716,7 +717,7 @@ BabelDOC drives chunking, layout, and PDF reassembly; it delegates the actual te
 - **Per-job translation output** is a throwaway `%TEMP%\pdfusion-translate-<rand>\` dir (not a persistent `translated_pdfs/`). It's wiped three ways: by the next job, by the Tauri `ExitRequested` handler (`sidecar::cleanup_translate_temp_dirs`), and by the FastAPI lifespan orphan sweep on sidecar startup (`server.py:_sweep_orphan_translate_dirs`, only dirs older than 1h). Persistent translated PDFs live in the whole-PDF cache instead.
 - **Sidecar discovery** order (see `desktop/src-tauri/src/sidecar.rs`):
   1. **Bundled exe** — `pdfusion-sidecar-<triple>.exe` resolved via `BaseDirectory::Resource`. This is what end users hit (shipped via `bundle.externalBin` in `tauri.conf.json`).
-  2. **Dev fallback** — Python interpreter chain: `PDFUSION_PYTHON` env var → `~/anaconda3/envs/pdfusion/python.exe` → `~/miniconda3/envs/pdfusion/python.exe` → `python` on PATH, then `python -m desktop_pdf_translator.api.server` with `PYTHONPATH=<root>/src`.
+  2. **Dev fallback** — Python interpreter chain: `PDFUSION_PYTHON` env var → `~/anaconda3/envs/{pdfusion,pdfusion-env}/python.exe` → `~/miniconda3/envs/{pdfusion,pdfusion-env}/python.exe` → `python` on PATH, then `python -m desktop_pdf_translator.api.server` with `PYTHONPATH=<root>/src`.
 
 ## Building the desktop installer
 
@@ -743,7 +744,7 @@ pip install -e ".[dev]"          # ensures pyinstaller is available
 #    is the problem this staging exists to fix.
 cd desktop
 pnpm tauri build
-# → desktop/src-tauri/target/release/bundle/msi/PDFusion_0.1.0_x64_en-US.msi
+# → desktop/src-tauri/target/release/bundle/msi/PDFusion_<version>_x64_en-US.msi
 ```
 
 > **Dev-mode bootstrap caveat**: Tauri's build script validates `externalBin`
@@ -767,7 +768,7 @@ native .pyd + bundled package data). The `_internal/` tree is staged at
 `desktop/src-tauri/_internal/` (not inside `binaries/`) so that Tauri's
 `resources` glob installs it at `<install>/_internal/`, sibling to the
 renamed `pdfusion-sidecar.exe` — which is what PyInstaller's onedir
-bootloader requires to find `python313.dll` et al. First build is slow (~10-20 min) and
+bootloader requires to find `pythonXYZ.dll` (e.g. `python311.dll` for this project's Python 3.11) et al. First build is slow (~10-20 min) and
 the resulting .msi is large (~500 MB-1 GB) because we bundle the full
 chromadb + sentence-transformers + babeldoc stack.
 

@@ -6,7 +6,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Optional, Literal
 
-from pydantic import BaseModel, Field, validator
+from pydantic import BaseModel, Field, field_validator
 
 class LanguageCode(str, Enum):
     """Supported language codes with Vietnamese priority."""
@@ -158,10 +158,10 @@ class AppSettings(BaseModel):
     rag: RAGSettings = Field(default_factory=RAGSettings)
 
     # Application metadata
-    version: str = Field("1.0.6", description="Application version")
     debug_mode: bool = Field(False, description="Enable debug logging")
-    
-    @validator('translation')
+
+    @field_validator('translation')
+    @classmethod
     def validate_translation_settings(cls, v):
         """Validate translation settings for Vietnamese priority."""
         if v.default_target_lang == LanguageCode.AUTO:
@@ -173,22 +173,22 @@ class AppSettings(BaseModel):
         if self.translation.preferred_service == TranslationService.OPENAI:
             return {
                 "service": "openai",
-                "config": self.openai.dict()
+                "config": self.openai.model_dump()
             }
         elif self.translation.preferred_service == TranslationService.GEMINI:
             return {
                 "service": "gemini",
-                "config": self.gemini.dict()
+                "config": self.gemini.model_dump()
             }
         elif self.translation.preferred_service == TranslationService.ANTHROPIC:
             return {
                 "service": "anthropic",
-                "config": self.anthropic.dict()
+                "config": self.anthropic.model_dump()
             }
         elif self.translation.preferred_service == TranslationService.ARGOS:
             return {
                 "service": "argos",
-                "config": self.argos.dict()
+                "config": self.argos.model_dump()
             }
         else:
             raise ValueError(f"Unsupported service: {self.translation.preferred_service}")
@@ -223,13 +223,8 @@ class AppSettings(BaseModel):
 
 class FileMetadata(BaseModel):
     """Metadata for processed PDF files."""
-    
+
     original_path: Path
     filename: str
     file_size_mb: float
     page_count: int
-    source_language: Optional[LanguageCode] = None
-    target_language: Optional[LanguageCode] = None
-    service_used: Optional[TranslationService] = None
-    processing_time_seconds: Optional[float] = None
-    translation_quality_score: Optional[float] = None

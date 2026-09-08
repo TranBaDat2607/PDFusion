@@ -99,10 +99,10 @@ async def get_config() -> ConfigResponse:
         gemini=_mask(s.gemini),
         anthropic=_mask(s.anthropic),
         argos=_mask(s.argos),
-        translation=s.translation.dict(),
-        rag=s.rag.dict(),
-        gui=s.gui.dict(),
-        processing=s.processing.dict(),
+        translation=s.translation.model_dump(),
+        rag=s.rag.model_dump(),
+        gui=s.gui.model_dump(),
+        processing=s.processing.model_dump(),
         debug_mode=s.debug_mode,
     )
 
@@ -110,7 +110,7 @@ async def get_config() -> ConfigResponse:
 @router.put("", response_model=ConfigResponse)
 async def update_config(payload: ConfigUpdateRequest) -> ConfigResponse:
     mgr = get_config_manager()
-    current = mgr.settings.dict()
+    current = mgr.settings.model_dump()
 
     # Track which LLM services received a non-empty key in *this* PUT, so we
     # can auto-promote the user's preferred_service from Argos to that LLM

@@ -38,7 +38,8 @@ $StageDir       = Join-Path $SrcTauriDir "binaries"
 $StagedExe      = Join-Path $StageDir "pdfusion-sidecar-$Triple.exe"
 # _internal/ must install SIBLING to the renamed externalBin exe at install
 # time (PyInstaller's onedir bootloader hardcodes a sibling lookup for
-# python313.dll, base_library.zip, etc.). Tauri's `externalBin` renames the
+# pythonXYZ.dll — e.g. python311.dll for this project's Python 3.11 —
+# base_library.zip, etc.). Tauri's `externalBin` renames the
 # exe to drop the triple and drops it at the install root, but `resources`
 # globs preserve their path from src-tauri/. So we stage _internal/ directly
 # under src-tauri/ (not under binaries/) and tauri.conf.json ships it as

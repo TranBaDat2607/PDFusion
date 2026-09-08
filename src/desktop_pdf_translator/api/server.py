@@ -285,10 +285,9 @@ def _allowed_origins() -> list[str]:
 
 
 def create_app() -> FastAPI:
-    settings = get_settings()
     app = FastAPI(
         title="PDFusion sidecar",
-        version=settings.version,
+        version=__version__,
         lifespan=_lifespan,
     )
 
@@ -303,11 +302,12 @@ def create_app() -> FastAPI:
 
     @app.get("/health", response_model=HealthResponse)
     async def health() -> HealthResponse:  # noqa: D401 — endpoint
-        # The package constant, not `settings.version`. `ConfigManager` persists
-        # the whole model (`settings.dict()`), so every config.toml already on
-        # disk carries the version that shipped with it — and a stored value
-        # shadows the model default forever. Reporting it would mean /health
-        # announcing 1.0.0 from a 1.0.6 build on every upgraded install.
+        # `AppSettings.version` was removed in #25: `ConfigManager` persisted
+        # the whole model, so a stored value would have shadowed the model
+        # default forever, freezing every upgraded install's `/health` at
+        # whatever build first wrote its config.toml. `__version__` is the
+        # single source of truth now, and `create_app()`'s FastAPI `version=`
+        # reads the same constant.
         return HealthResponse(version=__version__)
 
     # Authenticated routes
