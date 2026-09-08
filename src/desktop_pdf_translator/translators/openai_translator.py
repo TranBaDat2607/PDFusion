@@ -22,6 +22,8 @@ class OpenAITranslator(BaseTranslator):
     for Vietnamese language translations.
     """
 
+    _SERVICE_NAME = "openai"
+
     def __init__(self, lang_in: str, lang_out: str, **kwargs):
         super().__init__(lang_in, lang_out, **kwargs)
 
@@ -34,7 +36,6 @@ class OpenAITranslator(BaseTranslator):
         self.temperature = kwargs.get("temperature", 0.3)
         self.max_tokens = kwargs.get("max_tokens", 4000)
         self.base_url = kwargs.get("base_url")
-        self.max_qps = kwargs.get("max_qps")
 
         # max_retries=0: the SDK's own retry loop bypasses _call_with_backoff's
         # rate limiter, so its attempts don't count against the shared budget.
@@ -58,7 +59,6 @@ class OpenAITranslator(BaseTranslator):
                 return cached
 
             response = self._call_with_backoff(
-                "openai",
                 lambda: self.client.chat.completions.create(
                     model=self.model,
                     messages=self._create_translation_prompt(processed_text),

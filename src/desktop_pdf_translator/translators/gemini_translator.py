@@ -23,6 +23,8 @@ class GeminiTranslator(BaseTranslator):
     for Vietnamese language translations.
     """
 
+    _SERVICE_NAME = "gemini"
+
     def __init__(self, lang_in: str, lang_out: str, **kwargs):
         super().__init__(lang_in, lang_out, **kwargs)
 
@@ -33,17 +35,19 @@ class GeminiTranslator(BaseTranslator):
 
         self.model_name = kwargs.get("model", "gemini-pro")
         self.temperature = kwargs.get("temperature", 0.3)
-        self.max_qps = kwargs.get("max_qps")
 
-        self.client = genai.Client(api_key=self.api_key)
+        # Set once here rather than per-GenerateContentConfig so it also
+        # covers generate() (RAG answer synthesis) — without it, google-genai
+        # passes no timeout to httpx at all, and a hung call blocks this
+        # worker thread indefinitely, past what a cancel check can catch.
+        self.client = genai.Client(
+            api_key=self.api_key,
+            http_options=genai_types.HttpOptions(timeout=30_000),
+        )
         self.generation_config = genai_types.GenerateContentConfig(
             temperature=self.temperature,
             max_output_tokens=4000,
             candidate_count=1,
-            # Without this, google-genai passes no timeout to httpx at all —
-            # a hung call would block this worker thread indefinitely, past
-            # what a cancel check before/after the call can catch.
-            http_options=genai_types.HttpOptions(timeout=30_000),
             safety_settings=[
                 genai_types.SafetySetting(category="HARM_CATEGORY_HARASSMENT",        threshold="BLOCK_MEDIUM_AND_ABOVE"),
                 genai_types.SafetySetting(category="HARM_CATEGORY_HATE_SPEECH",       threshold="BLOCK_MEDIUM_AND_ABOVE"),
@@ -70,7 +74,6 @@ class GeminiTranslator(BaseTranslator):
                 return cached
 
             response = self._call_with_backoff(
-                "gemini",
                 lambda: self.client.models.generate_content(
                     model=self.model_name,
                     contents=self._create_translation_prompt(processed_text),

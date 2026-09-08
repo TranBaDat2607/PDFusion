@@ -84,13 +84,28 @@ def is_fatal_translation_error(error: BaseException) -> bool:
     return any(marker in message for marker in _FATAL_MESSAGE_MARKERS)
 
 
+_RETRYABLE_ERROR_NAMES = frozenset({
+    # SDK-level connection/timeout wrappers. With max_retries=0 on the SDK
+    # clients, these are the only signal left for what the SDK used to
+    # retry itself — matched by name, not isinstance, since base.py must
+    # import without the SDKs installed.
+    "APITimeoutError", "APIConnectionError",
+    "ConnectError", "ConnectTimeout", "ReadTimeout", "WriteTimeout",
+    "PoolTimeout", "RemoteProtocolError",
+})
+
+
 def is_retryable_translation_error(error: BaseException) -> bool:
-    """A 429 or 5xx — worth one more attempt after a backoff. The range check
-    (not a fixed set) also catches Anthropic's 529 "overloaded"."""
+    """A 429, 5xx, or a transient connection/timeout failure — worth one
+    more attempt after a backoff. The status range (not a fixed set) also
+    catches Anthropic's 529 "overloaded"; 408/409 are included alongside
+    429 since some providers use them for the same "try again" meaning."""
+    if type(error).__name__ in _RETRYABLE_ERROR_NAMES:
+        return True
     status = _status_code_of(error)
     if status is None:
         return False
-    return status == 429 or 500 <= status < 600
+    return status in (408, 409, 429) or 500 <= status < 600
 
 
 class TranslationCancelled(Exception):
@@ -134,6 +149,11 @@ class BaseTranslator(ABC):
     - Must support language attributes: lang_in, lang_out
     """
 
+    # Overridden by LLM backends (a plain class attribute, or set as
+    # self._SERVICE_NAME inside _setup_translator for a per-instance value).
+    # None means "no shared rate limiter" — Argos and any non-LLM backend.
+    _SERVICE_NAME: Optional[str] = None
+
     def __init__(self, lang_in: str, lang_out: str, **kwargs):
         """Initialize translator with language configuration.
 
@@ -156,6 +176,9 @@ class BaseTranslator(ABC):
                   cancel_event: Optional[threading.Event]
                     Checked at the top of translate(); when set, the
                     translator returns source text without calling out.
+                  max_qps: Optional[float]
+                    Overrides the shared rate limiter's default for this
+                    backend's service. None keeps the built-in default.
         """
         self.lang_in = self._normalize_language_code(lang_in)
         self.lang_out = self._normalize_language_code(lang_out)
@@ -182,9 +205,16 @@ class BaseTranslator(ABC):
         self._cancel_event: Optional[threading.Event] = kwargs.pop(
             "cancel_event", None
         )
+        self.max_qps: Optional[float] = kwargs.pop("max_qps", None)
 
         # Initialize translator-specific settings
         self._setup_translator(**kwargs)
+
+        # Applied once at construction, not per-call: max_qps is fixed for
+        # this instance's lifetime, so re-applying it on every translate()
+        # would just take the limiter's lock to write the same value back.
+        if self.max_qps is not None and self._SERVICE_NAME is not None:
+            get_rate_limiter(self._SERVICE_NAME, qps=self.max_qps)
 
         logger.info(f"Initialized {self.__class__.__name__} translator: {self.lang_in} -> {self.lang_out}")
 
@@ -223,16 +253,17 @@ class BaseTranslator(ABC):
             return False
         return self._cancel_event.wait(timeout=seconds)
 
-    def _call_with_backoff(self, service: str, request: Callable[[], Any]) -> Any:
-        """Run a blocking SDK call behind the shared per-service rate limiter,
-        retrying on 429/5xx with jittered exponential backoff. Fatal errors
-        (401/403) and anything else propagate immediately.
+    def _call_with_backoff(self, request: Callable[[], Any]) -> Any:
+        """Run a blocking SDK call behind self._SERVICE_NAME's shared rate
+        limiter, retrying on 429/5xx/timeout/connection errors with jittered
+        exponential backoff. Fatal errors (401/403) and anything else
+        propagate immediately.
 
         Raises TranslationCancelled if the job's cancel flag fires while
         waiting on the limiter or a backoff; re-raises the last error once
         the retry budget is exhausted.
         """
-        limiter = get_rate_limiter(service, qps=getattr(self, "max_qps", None))
+        limiter = get_rate_limiter(self._SERVICE_NAME)
         attempt = 0
         while True:
             if not limiter.acquire(cancel_event=self._cancel_event):
@@ -253,7 +284,7 @@ class BaseTranslator(ABC):
                     self.retry_count += 1
                 logger.warning(
                     "%s request failed (attempt %d/%d), retrying in %.1fs: %s",
-                    service, attempt, _MAX_RETRIES, delay, error,
+                    self._SERVICE_NAME, attempt, _MAX_RETRIES, delay, error,
                 )
                 if self._sleep_or_cancel(delay):
                     raise TranslationCancelled() from error

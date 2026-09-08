@@ -27,6 +27,8 @@ class AnthropicTranslator(BaseTranslator):
     Claude Opus / Sonnet / Haiku 4.x model families.
     """
 
+    _SERVICE_NAME = "anthropic"
+
     def __init__(self, lang_in: str, lang_out: str, **kwargs):
         super().__init__(lang_in, lang_out, **kwargs)
 
@@ -39,7 +41,6 @@ class AnthropicTranslator(BaseTranslator):
         self.temperature = kwargs.get("temperature", 0.3)
         self.max_tokens = kwargs.get("max_tokens", 4000)
         self.base_url = kwargs.get("base_url")
-        self.max_qps = kwargs.get("max_qps")
 
         # max_retries=0: the SDK's own retry loop bypasses _call_with_backoff's
         # rate limiter, so its attempts don't count against the shared budget.
@@ -68,7 +69,6 @@ class AnthropicTranslator(BaseTranslator):
             system_prompt, user_prompt = self._create_translation_prompt(processed_text)
 
             response = self._call_with_backoff(
-                "anthropic",
                 lambda: self.client.messages.create(
                     model=self.model,
                     max_tokens=self.max_tokens,

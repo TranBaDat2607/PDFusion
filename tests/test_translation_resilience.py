@@ -34,7 +34,7 @@ class _SdkError(Exception):
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("status", [429, 500, 502, 503, 504, 529])
+@pytest.mark.parametrize("status", [408, 409, 429, 500, 502, 503, 504, 529])
 def test_rate_limits_and_outages_are_retryable(status):
     assert is_retryable_translation_error(_SdkError("x", status)) is True
 
@@ -46,6 +46,31 @@ def test_client_errors_are_not_retryable(status):
 
 def test_errors_without_a_status_are_not_retryable():
     assert is_retryable_translation_error(ValueError("boom")) is False
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "APITimeoutError", "APIConnectionError",
+        "ConnectError", "ConnectTimeout", "ReadTimeout", "WriteTimeout",
+        "PoolTimeout", "RemoteProtocolError",
+    ],
+)
+def test_connection_and_timeout_errors_are_retryable_by_name(name):
+    """With max_retries=0 on the SDK clients, these are the only signal left
+    for what the SDK used to retry on its own — matched by name (no status,
+    no isinstance) since these classes don't subclass a builtin we could
+    catch without importing the SDK."""
+    error_cls = type(name, (Exception,), {})
+    assert is_retryable_translation_error(error_cls("transient")) is True
+
+
+def test_real_sdk_timeout_errors_are_retryable():
+    import anthropic
+    import openai
+
+    assert is_retryable_translation_error(openai.APITimeoutError(request=None)) is True
+    assert is_retryable_translation_error(anthropic.APIConnectionError(request=None)) is True
 
 
 # ---------------------------------------------------------------------------
@@ -102,14 +127,14 @@ def test_set_rate_never_exceeds_the_new_capacity():
 
 class _ResilientStub(BaseTranslator):
     def _setup_translator(self, **kwargs):
-        self._service = kwargs.get("service", "resilience-stub")
+        self._SERVICE_NAME = kwargs.get("service", "resilience-stub")
 
     def translate(self, text: str) -> str:
         self._note_translate_call()
         if self.is_cancelled():
             return text
         try:
-            return self._call_with_backoff(self._service, self._request)
+            return self._call_with_backoff(self._request)
         except TranslationCancelled:
             return text
         except Exception as e:
@@ -203,13 +228,24 @@ def test_anthropic_client_disables_its_own_retries():
     assert translator.client.max_retries == 0
 
 
-def test_max_qps_is_read_from_kwargs():
+def test_max_qps_is_popped_by_the_base_class():
     from desktop_pdf_translator.translators.openai_translator import OpenAITranslator
 
     translator = OpenAITranslator(
         lang_in="en", lang_out="vi", api_key="sk-test", max_qps=12.5
     )
     assert translator.max_qps == 12.5
+
+
+def test_max_qps_primes_the_shared_limiter_at_construction():
+    """Applied once, at construction — not re-applied on every translate()
+    call, which would take the limiter's lock to rewrite the same value."""
+    from desktop_pdf_translator.translators.anthropic_translator import AnthropicTranslator
+
+    AnthropicTranslator(
+        lang_in="en", lang_out="vi", api_key="sk-ant-test", max_qps=17.0
+    )
+    assert get_rate_limiter("anthropic")._rate == 17.0
 
 
 # ---------------------------------------------------------------------------
