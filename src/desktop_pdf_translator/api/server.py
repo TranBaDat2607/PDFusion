@@ -112,7 +112,8 @@ def _prewarm_argos() -> None:
 
 
 def _warm_translation_engine() -> None:
-    """Import BabelDOC in the background so the first Translate click is warm.
+    """Import BabelDOC and load its layout model in the background so the
+    first Translate click is warm.
 
     It costs 5-25 s — the wide end when the interpreter is cold and the
     `argos-prewarm` thread is contending for the GIL, which it now genuinely
@@ -128,6 +129,8 @@ def _warm_translation_engine() -> None:
     started = time.perf_counter()
     try:
         from ..processors import processor  # noqa: F401
+        from ..processors.doc_layout_cache import get_shared_doc_layout_model
+        get_shared_doc_layout_model()
     except Exception as exc:  # noqa: BLE001
         logger.warning("Translation engine warm-up failed (non-fatal): %s", exc)
         return

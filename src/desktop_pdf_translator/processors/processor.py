@@ -33,6 +33,7 @@ from .events import (
     ParagraphTranslatedEvent,
     EventType,
 )
+from .doc_layout_cache import get_shared_doc_layout_model
 from .pdf_cache import compute_file_hash, get_pdf_cache, is_cacheable_artifact
 from .exceptions import (
     ProcessingError,
@@ -115,13 +116,12 @@ def _schedule_temp_cleanup(path: Path) -> None:
 # below, this gives the user the maximum streaming feel.
 _PAGES_PER_CHUNK = 1
 
-# Argos-only: pages per chunk when translating offline. BabelDOC reloads the
-# DocLayoutYOLO ONNX model on every chunk (~3-4s each), so 1-page chunks pay
-# that cost N times for an N-page PDF. With Argos, translation throughput is
-# fast enough that the layout-model reload dominates per-chunk overhead — so
-# we trade a little streaming granularity for big wins on overhead. The user
-# still sees pages appear in groups of 3 with the rolling viewer.
-_PAGES_PER_CHUNK_ARGOS = 3
+# Argos-only: pages per chunk when translating offline. Previously 3, to
+# amortize BabelDOC's DocLayoutYOLO ONNX reload (~3-4s) over more pages per
+# chunk. The reload now happens once per process (see `doc_layout_cache.py`),
+# so that cost no longer recurs per chunk — Argos gets the same 1-page
+# streaming granularity as the LLM path.
+_PAGES_PER_CHUNK_ARGOS = 1
 
 # Argos-only cap on parallel chunks. Each in-flight BabelDOC sub-job peaks at
 # ~9 GB RAM on an academic paper (DocLayoutYOLO + IR + font maps). Four
@@ -178,8 +178,7 @@ def _effective_parallel_chunks(settings, translator=None) -> int:
 
 
 def _effective_pages_per_chunk(translator) -> int:
-    """Chunk size in pages. Argos uses larger chunks to amortize BabelDOC's
-    per-chunk DocLayoutYOLO ONNX reload cost over more pages."""
+    """Chunk size in pages."""
     if isinstance(translator, ArgosTranslator):
         return _PAGES_PER_CHUNK_ARGOS
     return _PAGES_PER_CHUNK
@@ -315,7 +314,7 @@ class PDFProcessor:
                 message=f"Validating {file_path.name}"
             )
             
-            file_metadata = await self._validate_file(file_path)
+            file_metadata = await asyncio.to_thread(self._validate_file, file_path)
 
             yield ProgressEvent(
                 type=EventType.PROGRESS_UPDATE,
@@ -674,7 +673,7 @@ class PDFProcessor:
         service a request will really run on."""
         return resolve_effective_service(self.settings, requested)
 
-    async def _validate_file(self, file_path: Path) -> FileMetadata:
+    def _validate_file(self, file_path: Path) -> FileMetadata:
         """Validate PDF file and extract metadata."""
         try:
             if not file_path.exists():
@@ -771,8 +770,9 @@ class PDFProcessor:
             chunks_in_dir.mkdir(parents=True, exist_ok=True)
             chunks_out_root.mkdir(parents=True, exist_ok=True)
 
-            chunks = self._split_input_into_chunks(
-                file_path, chunks_in_dir, pages_per_chunk=pages_per_chunk
+            chunks = await asyncio.to_thread(
+                self._split_input_into_chunks,
+                file_path, chunks_in_dir, pages_per_chunk=pages_per_chunk,
             )
             total_chunks = len(chunks)
             logger.info(
@@ -827,8 +827,9 @@ class PDFProcessor:
                 try:
                     chunk_out_dir = chunks_out_root / f"chunk_{idx:03d}"
                     chunk_out_dir.mkdir(parents=True, exist_ok=True)
+                    doc_layout_model = await asyncio.to_thread(get_shared_doc_layout_model)
                     config = self._create_babeldoc_config(
-                        chunk_path, translator, chunk_out_dir
+                        chunk_path, translator, chunk_out_dir, doc_layout_model
                     )
                     logger.info(
                         "Chunk %d/%d (page %d): BabelDOC pipeline start",
@@ -987,6 +988,8 @@ class PDFProcessor:
                         chunks=chunks,
                         chunk_results=chunk_results,
                     )
+                    # Keep at most one superseded rolling version on disk.
+                    await asyncio.to_thread(self.cleanup_partial_artifacts)
 
                     global_progress = 50.0 + chunk_weight * completed_count
 
@@ -1219,7 +1222,7 @@ class PDFProcessor:
             src.close()
             merged.close()
 
-    def _create_babeldoc_config(self, file_path: Path, translator, output_dir: Path):
+    def _create_babeldoc_config(self, file_path: Path, translator, output_dir: Path, doc_layout_model):
         """Create BabelDOC configuration."""
         # Get settings for additional parameters
         translation_settings = self.settings.translation
@@ -1249,7 +1252,7 @@ class PDFProcessor:
             input_file=file_path,
             lang_in=translator.lang_in,
             lang_out=translator.lang_out,
-            doc_layout_model=None,  # Use None like in the reference project
+            doc_layout_model=doc_layout_model,  # process-wide cache, see doc_layout_cache.py
             output_dir=output_dir,
             debug=False,  # Explicitly disable debug mode to prevent bounding boxes
             # Additional parameters from the reference project
@@ -1370,10 +1373,14 @@ class PDFProcessor:
         return rolling[-1] if rolling else None
 
     def cleanup_partial_artifacts(self) -> None:
-        """Remove older rolling-PDF versions, keeping only the latest as the
-        user's partial result. Best-effort — file lock errors on Windows
+        """Remove older rolling-PDF versions, keeping only the latest. Called
+        after every chunk completes (to bound disk usage during a normal
+        run) and again on cancellation (to leave the user's partial result as
+        the sole survivor). Best-effort — file lock errors on Windows
         (PyMuPDF may still hold a handle from a worker thread that hasn't
-        unwound yet) are logged, not raised."""
+        unwound yet, or the viewer may still be reading the version being
+        superseded) are logged, not raised; a leftover file is retried on the
+        next chunk or swept later."""
         if self._output_dir is None or self._input_stem is None:
             return
         versions = self._sorted_rolling_pdfs(self._output_dir, self._input_stem)
