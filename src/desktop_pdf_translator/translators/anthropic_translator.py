@@ -8,7 +8,6 @@ placeholders), so this class plugs in the same way OpenAITranslator/GeminiTransl
 """
 
 import logging
-from typing import List, Dict
 
 import anthropic
 

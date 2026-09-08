@@ -30,17 +30,19 @@ if not hasattr(np, "int_"):
 if not hasattr(np, "uint"):
     np.uint = np.uint64
 
-# Disable posthog specifically
-import posthog
+# These imports are deliberately below the environment/NumPy shims above:
+# chromadb reads the telemetry variables and the `np.float_` aliases at import
+# time, so hoisting them to the top of the file re-breaks both. Hence the
+# blanket E402 waivers rather than a reordering.
+import posthog  # noqa: E402
+
 posthog.disabled = True
 
 # Import chromadb (telemetry already disabled via environment variables)
-import chromadb
-
-from chromadb.config import Settings
-from chromadb import EmbeddingFunction, Embeddings
-
-from sentence_transformers import SentenceTransformer
+import chromadb  # noqa: E402
+from chromadb import EmbeddingFunction, Embeddings  # noqa: E402
+from chromadb.config import Settings  # noqa: E402
+from sentence_transformers import SentenceTransformer  # noqa: E402
 
 logger = logging.getLogger(__name__)
 

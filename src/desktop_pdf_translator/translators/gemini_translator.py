@@ -3,7 +3,7 @@ Google Gemini translator implementation with Vietnamese optimization.
 """
 
 import logging
-from typing import Optional, List, Dict, Any
+from typing import Optional
 
 from google import genai
 from google.genai import types as genai_types

@@ -243,8 +243,8 @@ def _ensure_en_vi_installed() -> None:
         import argostranslate.translate
 
         installed = argostranslate.translate.get_installed_languages()
-        from_lang = next((l for l in installed if l.code == "en"), None)
-        to_lang = next((l for l in installed if l.code == "vi"), None)
+        from_lang = next((lang for lang in installed if lang.code == "en"), None)
+        to_lang = next((lang for lang in installed if lang.code == "vi"), None)
         if from_lang and to_lang and from_lang.get_translation(to_lang) is not None:
             _en_vi_ready = True
             return
@@ -513,8 +513,8 @@ class ArgosTranslator(BaseTranslator):
             import argostranslate.translate as _argos_translate
 
             installed = _argos_translate.get_installed_languages()
-            from_lang = next((l for l in installed if l.code == "en"), None)
-            to_lang = next((l for l in installed if l.code == "vi"), None)
+            from_lang = next((lang for lang in installed if lang.code == "en"), None)
+            to_lang = next((lang for lang in installed if lang.code == "vi"), None)
             if from_lang is None or to_lang is None:
                 raise RuntimeError(
                     "Argos en/vi languages not installed — "
@@ -768,8 +768,8 @@ class ArgosTranslator(BaseTranslator):
         # Pack may already be on disk from a previous run.
         try:
             installed = argostranslate.translate.get_installed_languages()
-            from_lang = next((l for l in installed if l.code == "en"), None)
-            to_lang = next((l for l in installed if l.code == "vi"), None)
+            from_lang = next((lang for lang in installed if lang.code == "en"), None)
+            to_lang = next((lang for lang in installed if lang.code == "vi"), None)
             if from_lang and to_lang and from_lang.get_translation(to_lang):
                 return True, "Argos en→vi installed"
         except Exception:
