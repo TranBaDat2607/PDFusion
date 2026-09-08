@@ -75,6 +75,12 @@ _LIMITERS: Dict[str, TokenBucketRateLimiter] = {}
 _LIMITERS_LOCK = threading.Lock()
 
 
+def default_qps_for(service: str) -> float:
+    """The built-in rate for `service` — what its limiter runs at when no
+    `<service>.max_qps` override is configured."""
+    return _DEFAULT_QPS_BY_SERVICE.get(service, _FALLBACK_QPS)
+
+
 def get_rate_limiter(service: str, qps: Optional[float] = None) -> TokenBucketRateLimiter:
     """Process-wide singleton per service name, constructed lazily.
 
@@ -83,7 +89,7 @@ def get_rate_limiter(service: str, qps: Optional[float] = None) -> TokenBucketRa
     change is picked up by the next call rather than only the first ever
     construction.
     """
-    default = _DEFAULT_QPS_BY_SERVICE.get(service, _FALLBACK_QPS)
+    default = default_qps_for(service)
     limiter = _LIMITERS.get(service)
     if limiter is not None:
         if qps is not None:

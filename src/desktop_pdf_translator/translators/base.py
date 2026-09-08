@@ -11,7 +11,7 @@ from abc import ABC, abstractmethod
 from typing import Callable, Dict, Optional, Any
 
 from ..config import LanguageCode
-from .rate_limiter import get_rate_limiter
+from .rate_limiter import default_qps_for, get_rate_limiter
 
 
 logger = logging.getLogger(__name__)
@@ -84,15 +84,28 @@ def is_fatal_translation_error(error: BaseException) -> bool:
     return any(marker in message for marker in _FATAL_MESSAGE_MARKERS)
 
 
-_RETRYABLE_ERROR_NAMES = frozenset({
-    # SDK-level connection/timeout wrappers. With max_retries=0 on the SDK
-    # clients, these are the only signal left for what the SDK used to
-    # retry itself — matched by name, not isinstance, since base.py must
-    # import without the SDKs installed.
-    "APITimeoutError", "APIConnectionError",
-    "ConnectError", "ConnectTimeout", "ReadTimeout", "WriteTimeout",
-    "PoolTimeout", "RemoteProtocolError",
-})
+# Transport failures worth another attempt. With `max_retries=0` on the SDK
+# clients these carry no status code, so they are the whole signal for what
+# the SDKs used to retry themselves.
+#
+# Matched by class *name* along the MRO — never `isinstance`, because this
+# module has to import with none of the provider SDKs (nor httpx) installed,
+# so the classes cannot be referenced. Two base names cover every case, and
+# walking the MRO rather than testing the concrete class is what makes that
+# true:
+#
+#   APIConnectionError — openai and anthropic funnel every transport failure
+#     into it (their `except Exception` fallback in `_base_client`), and both
+#     SDKs' `APITimeoutError` subclasses it.
+#   TransportError — google-genai does *not* wrap, so raw httpx exceptions
+#     arrive here. ConnectError, ReadError, WriteError, NetworkError,
+#     ProxyError, CloseError, RemoteProtocolError and the four Timeout
+#     classes all derive from it.
+#
+# Listing the leaf names instead missed the five httpx classes with no
+# "Timeout"/"Connect" in their name, which on Gemini meant a socket-level
+# read failure was still an immediately-lost paragraph.
+_RETRYABLE_ERROR_NAMES = frozenset({"APIConnectionError", "TransportError"})
 
 
 def is_retryable_translation_error(error: BaseException) -> bool:
@@ -100,7 +113,7 @@ def is_retryable_translation_error(error: BaseException) -> bool:
     more attempt after a backoff. The status range (not a fixed set) also
     catches Anthropic's 529 "overloaded"; 408/409 are included alongside
     429 since some providers use them for the same "try again" meaning."""
-    if type(error).__name__ in _RETRYABLE_ERROR_NAMES:
+    if any(cls.__name__ in _RETRYABLE_ERROR_NAMES for cls in type(error).__mro__):
         return True
     status = _status_code_of(error)
     if status is None:
@@ -213,8 +226,21 @@ class BaseTranslator(ABC):
         # Applied once at construction, not per-call: max_qps is fixed for
         # this instance's lifetime, so re-applying it on every translate()
         # would just take the limiter's lock to write the same value back.
-        if self.max_qps is not None and self._SERVICE_NAME is not None:
-            get_rate_limiter(self._SERVICE_NAME, qps=self.max_qps)
+        #
+        # Applied unconditionally, resolving None to the built-in default,
+        # because the limiter outlives the translator. Skipping the call when
+        # max_qps is None would let a *cleared* override survive: raise the
+        # rate once, delete the line from config.toml, and the sidecar keeps
+        # running at the raised rate until it restarts.
+        if self._SERVICE_NAME is not None:
+            get_rate_limiter(
+                self._SERVICE_NAME,
+                qps=(
+                    self.max_qps
+                    if self.max_qps is not None
+                    else default_qps_for(self._SERVICE_NAME)
+                ),
+            )
 
         logger.info(f"Initialized {self.__class__.__name__} translator: {self.lang_in} -> {self.lang_out}")
 
@@ -263,10 +289,24 @@ class BaseTranslator(ABC):
         waiting on the limiter or a backoff; re-raises the last error once
         the retry budget is exhausted.
         """
-        limiter = get_rate_limiter(self._SERVICE_NAME)
+        # `_SERVICE_NAME is None` means this backend opts out of the shared
+        # limiter (Argos, and anything else non-LLM). It has to be handled
+        # here rather than passed through: `get_rate_limiter(None)` would
+        # cheerfully build a real `None`-keyed bucket at the fallback rate and
+        # share it between every backend that never named a service.
+        limiter = (
+            get_rate_limiter(self._SERVICE_NAME)
+            if self._SERVICE_NAME is not None
+            else None
+        )
         attempt = 0
         while True:
-            if not limiter.acquire(cancel_event=self._cancel_event):
+            if limiter is None:
+                # No token to wait on, so check the flag the acquire would
+                # otherwise have observed.
+                if self.is_cancelled():
+                    raise TranslationCancelled()
+            elif not limiter.acquire(cancel_event=self._cancel_event):
                 raise TranslationCancelled()
             try:
                 return request()

@@ -11,7 +11,7 @@ import time
 
 import pytest
 
-from desktop_pdf_translator.translators import base
+from desktop_pdf_translator.translators import base, rate_limiter
 from desktop_pdf_translator.translators.base import (
     BaseTranslator,
     TranslationCancelled,
@@ -19,8 +19,19 @@ from desktop_pdf_translator.translators.base import (
 )
 from desktop_pdf_translator.translators.rate_limiter import (
     TokenBucketRateLimiter,
+    default_qps_for,
     get_rate_limiter,
 )
+
+
+@pytest.fixture(autouse=True)
+def _isolate_rate_limiters():
+    """`_LIMITERS` is a process-wide singleton registry, so a test that primes
+    a real service's rate would otherwise leak it into every test that ran
+    after it — and into any later assertion about a built-in default."""
+    rate_limiter._LIMITERS.clear()
+    yield
+    rate_limiter._LIMITERS.clear()
 
 
 class _SdkError(Exception):
@@ -51,26 +62,44 @@ def test_errors_without_a_status_are_not_retryable():
 @pytest.mark.parametrize(
     "name",
     [
-        "APITimeoutError", "APIConnectionError",
+        # Named for a timeout or a connect...
         "ConnectError", "ConnectTimeout", "ReadTimeout", "WriteTimeout",
         "PoolTimeout", "RemoteProtocolError",
+        # ...and the five that aren't, which a leaf-name match missed. On
+        # Gemini these reach us raw — google-genai, unlike openai/anthropic,
+        # doesn't wrap httpx transport failures into an SDK error.
+        "ReadError", "WriteError", "NetworkError", "ProxyError", "CloseError",
     ],
 )
-def test_connection_and_timeout_errors_are_retryable_by_name(name):
-    """With max_retries=0 on the SDK clients, these are the only signal left
-    for what the SDK used to retry on its own — matched by name (no status,
-    no isinstance) since these classes don't subclass a builtin we could
-    catch without importing the SDK."""
-    error_cls = type(name, (Exception,), {})
-    assert is_retryable_translation_error(error_cls("transient")) is True
+def test_httpx_transport_failures_are_retryable(name):
+    """Real httpx classes, not stand-ins: the match walks the MRO for
+    `TransportError`, so a synthetic `class ReadError(Exception)` would
+    prove nothing about the hierarchy this actually relies on."""
+    import httpx
+
+    assert is_retryable_translation_error(getattr(httpx, name)("transient")) is True
 
 
-def test_real_sdk_timeout_errors_are_retryable():
-    import anthropic
-    import openai
+@pytest.mark.parametrize("sdk", ["openai", "anthropic"])
+@pytest.mark.parametrize("name", ["APITimeoutError", "APIConnectionError"])
+def test_real_sdk_transport_errors_are_retryable(sdk, name):
+    """Both SDKs funnel every transport failure into `APIConnectionError`,
+    and their `APITimeoutError` subclasses it — so the MRO match covers both
+    with one name. With `max_retries=0` these are all that's left of the
+    retry the SDK used to do itself."""
+    import importlib
 
-    assert is_retryable_translation_error(openai.APITimeoutError(request=None)) is True
-    assert is_retryable_translation_error(anthropic.APIConnectionError(request=None)) is True
+    error_cls = getattr(importlib.import_module(sdk), name)
+    assert is_retryable_translation_error(error_cls(request=None)) is True
+
+
+def test_unrelated_exceptions_are_still_not_retryable():
+    """The MRO walk must not turn every no-status exception into a retry —
+    a bug in our own code should fail the paragraph, not be attempted seven
+    times."""
+    assert is_retryable_translation_error(ValueError("boom")) is False
+    assert is_retryable_translation_error(KeyError("missing")) is False
+    assert is_retryable_translation_error(RuntimeError("Gemini returned no candidates")) is False
 
 
 # ---------------------------------------------------------------------------
@@ -246,6 +275,54 @@ def test_max_qps_primes_the_shared_limiter_at_construction():
         lang_in="en", lang_out="vi", api_key="sk-ant-test", max_qps=17.0
     )
     assert get_rate_limiter("anthropic")._rate == 17.0
+
+
+def test_clearing_max_qps_restores_the_built_in_default():
+    """The limiter outlives the translator, so the rate has to be re-applied
+    unconditionally: a user who raises max_qps, hits 429s and then deletes
+    the line would otherwise keep the raised rate until the sidecar restarts."""
+    from desktop_pdf_translator.translators.anthropic_translator import AnthropicTranslator
+
+    AnthropicTranslator(
+        lang_in="en", lang_out="vi", api_key="sk-ant-test", max_qps=17.0
+    )
+    assert get_rate_limiter("anthropic")._rate == 17.0
+
+    # Next job, override removed from config.
+    AnthropicTranslator(lang_in="en", lang_out="vi", api_key="sk-ant-test")
+    assert get_rate_limiter("anthropic")._rate == default_qps_for("anthropic")
+
+
+def test_a_backend_without_a_service_name_uses_no_limiter():
+    """`_SERVICE_NAME = None` means "opt out", not "share an unnamed bucket
+    at the fallback rate with every other backend that never named one"."""
+    translator = _ResilientStub(lang_in="en", lang_out="vi", service=None)
+    translator._request = lambda: "ok"
+
+    assert translator.translate("hello") == "ok"
+    assert None not in rate_limiter._LIMITERS
+    assert rate_limiter._LIMITERS == {}
+
+
+def test_a_backend_without_a_service_name_still_honours_cancel():
+    """Losing the limiter must not lose the cancel check that rode on its
+    acquire() — the top-of-translate() check alone can't catch a cancel that
+    lands between paragraphs of a retry loop."""
+    cancel = threading.Event()
+    translator = _ResilientStub(
+        lang_in="en", lang_out="vi", service=None, cancel_event=cancel
+    )
+    calls = []
+
+    def request():
+        calls.append(1)
+        cancel.set()
+        raise _SdkError("slow down", 429)
+
+    translator._request = request
+    assert translator.translate("hello") == "hello"
+    assert calls == [1]
+    assert translator.failed_translations == 0
 
 
 # ---------------------------------------------------------------------------
