@@ -14,7 +14,7 @@ import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sse_starlette.sse import EventSourceResponse
 
 from ..auth import require_token
@@ -136,13 +136,15 @@ async def start_index(payload: IndexRequest) -> JobAccepted:
 
 
 @router.get("/index/{job_id}/events")
-async def stream_index_events(job_id: str) -> EventSourceResponse:
+async def stream_index_events(
+    job_id: str, last_seq: int = Query(0, ge=0)
+) -> EventSourceResponse:
     registry = get_registry()
     if registry.get(job_id) is None:
         raise HTTPException(status_code=404, detail="Unknown job_id")
 
     async def event_source():
-        async for event in registry.stream(job_id):
+        async for event in registry.stream(job_id, last_seq=last_seq):
             yield serialize_sse_event(event)
 
     return EventSourceResponse(event_source(), ping=15)
@@ -193,13 +195,15 @@ async def start_ask(payload: AskRequest) -> JobAccepted:
 
 
 @router.get("/ask/{job_id}/events")
-async def stream_ask_events(job_id: str) -> EventSourceResponse:
+async def stream_ask_events(
+    job_id: str, last_seq: int = Query(0, ge=0)
+) -> EventSourceResponse:
     registry = get_registry()
     if registry.get(job_id) is None:
         raise HTTPException(status_code=404, detail="Unknown job_id")
 
     async def event_source():
-        async for event in registry.stream(job_id):
+        async for event in registry.stream(job_id, last_seq=last_seq):
             yield serialize_sse_event(event)
 
     return EventSourceResponse(event_source(), ping=15)

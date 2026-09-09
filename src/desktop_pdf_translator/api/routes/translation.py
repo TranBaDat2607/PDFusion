@@ -13,7 +13,7 @@ import threading
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sse_starlette.sse import EventSourceResponse
 
 from ...config import TranslationService, get_settings
@@ -190,13 +190,15 @@ async def start_translation(payload: TranslateRequest) -> JobAccepted:
 
 
 @router.get("/{job_id}/events")
-async def stream_translation_events(job_id: str) -> EventSourceResponse:
+async def stream_translation_events(
+    job_id: str, last_seq: int = Query(0, ge=0)
+) -> EventSourceResponse:
     registry = get_registry()
     if registry.get(job_id) is None:
         raise HTTPException(status_code=404, detail="Unknown job_id")
 
     async def event_source():
-        async for event in registry.stream(job_id):
+        async for event in registry.stream(job_id, last_seq=last_seq):
             yield serialize_sse_event(event)
 
     return EventSourceResponse(event_source(), ping=15)

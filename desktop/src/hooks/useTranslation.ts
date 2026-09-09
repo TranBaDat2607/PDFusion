@@ -3,7 +3,7 @@ import { toast } from "sonner";
 
 import { ApiError, api } from "@/lib/api-client";
 import type { components } from "@/lib/api-types";
-import { streamEvents } from "@/lib/sse";
+import { streamJobEvents } from "@/lib/sse";
 import { useAppStore } from "@/lib/store";
 import { buildTranslateBody } from "@/lib/translate-request";
 import {
@@ -179,7 +179,7 @@ export function useTranslation() {
       abortRef.current = controller;
 
       try {
-        await streamEvents<
+        await streamJobEvents<
           | ProgressUpdate
           | CompletionPayload
           | ChunkReadyPayload
@@ -187,7 +187,8 @@ export function useTranslation() {
           | CancelPayload
           | JobErrorPayload
         >({
-          path: `/translate/${jobId}/events`,
+          buildPath: (lastEventId) =>
+            `/translate/${jobId}/events${lastEventId ? `?last_seq=${lastEventId}` : ""}`,
           signal: controller.signal,
           onEvent: ({ type, data }) => {
             if (type === "progress") {

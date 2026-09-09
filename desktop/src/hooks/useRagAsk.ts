@@ -3,7 +3,7 @@ import { useCallback, useRef, useState } from "react";
 import { api } from "@/lib/api-client";
 import type { components } from "@/lib/api-types";
 import { buildAskBody } from "@/lib/ask-request";
-import { streamEvents } from "@/lib/sse";
+import { streamJobEvents } from "@/lib/sse";
 
 export interface ActionEvent {
   id: number;
@@ -72,8 +72,9 @@ export function useRagAsk() {
     abortRef.current = controller;
 
     try {
-      await streamEvents({
-        path: `/rag/ask/${jobId}/events`,
+      await streamJobEvents({
+        buildPath: (lastEventId) =>
+          `/rag/ask/${jobId}/events${lastEventId ? `?last_seq=${lastEventId}` : ""}`,
         signal: controller.signal,
         onEvent: ({ type, data }) => {
           if (type === "progress") {
