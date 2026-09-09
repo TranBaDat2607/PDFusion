@@ -1,0 +1,15 @@
+# Generated artifacts that must be byte-reproducible across platforms.
+#
+# openapi-typescript writes plain "\n" — it does not do Windows newline
+# translation the way Python's text-mode file writes do. On a Windows CI
+# runner (git's default core.autocrlf=true converts LF blobs to CRLF on
+# checkout), that mismatch made `check:api-types` in api/lib/openapi.json's
+# CI job report "not up-to-date" even when the content was byte-identical to
+# what a fresh `generate:api-types` produces — it's a raw file comparison,
+# not a `git diff`, so it isn't shielded by git's autocrlf normalization the
+# way the openapi.json <-> `git diff --exit-code` check is. Pin both
+# generated files to LF so the checked-out copy always matches what the
+# generators themselves write, regardless of the checkout platform's
+# autocrlf setting.
+desktop/src/lib/openapi.json text eol=lf
+desktop/src/lib/api-types.d.ts text eol=lf
