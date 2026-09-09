@@ -2,81 +2,21 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 
 import { api } from "@/lib/api-client";
+import type { components } from "@/lib/api-types";
 
-export type ServiceCode = "openai" | "gemini" | "anthropic" | "argos";
-
-export interface ServiceConfig {
-  has_key: boolean;
-  model: string;
-}
-
-export interface ConfigResponse {
-  openai: ServiceConfig;
-  gemini: ServiceConfig;
-  anthropic: ServiceConfig;
-  argos: ServiceConfig;
-  translation: {
-    default_source_lang: string;
-    default_target_lang: string;
-    preferred_service: ServiceCode;
-    max_pages: number;
-    max_file_size_mb: number;
-    cache_translations?: boolean;
-    cache_ttl_days?: number;
-    cache_max_size_mb?: number;
-    cache_translated_pdfs?: boolean;
-    pdf_cache_max_size_mb?: number;
-  };
-  rag: { enabled: boolean };
-  // No `deep_search` section: deep search / web research were removed in
-  // `35bca2c` and `AppSettings` has had no such field since.
-  gui: Record<string, unknown>;
-  processing?: {
-    max_workers?: number;
-    max_parallel_chunks?: number;
-    timeout_seconds?: number;
-  };
-  debug_mode: boolean;
-}
-
-export interface LanguageOption {
-  code: string;
-  label: string;
-}
-
-export interface ServiceOption {
-  code: ServiceCode;
-  label: string;
-  models: string[];
-  /** `[source, target]` pairs this backend can produce, or `null` when it has
-   *  no restriction. Auto-source aliases are already expanded server-side —
-   *  see `translators/capabilities.py:supported_pairs_for`. */
-  supported_pairs: string[][] | null;
-}
-
-export interface OptionsResponse {
-  languages: LanguageOption[];
-  services: ServiceOption[];
-}
-
-export interface ConfigUpdate {
-  openai?: { api_key?: string | null; model?: string };
-  gemini?: { api_key?: string | null; model?: string };
-  anthropic?: { api_key?: string | null; model?: string };
-  // Argos has no key/model to update — intentionally absent.
-  preferred_service?: ServiceCode;
-  default_source_lang?: string;
-  default_target_lang?: string;
-  rag_enabled?: boolean;
-  max_parallel_chunks?: number;
-  cache_translations?: boolean;
-  cache_translated_pdfs?: boolean;
-}
-
-export interface ValidateResponse {
-  valid: boolean;
-  message: string;
-}
+// Generated from `api/schemas.py` (see `desktop/src/lib/openapi.json` /
+// `api-types.d.ts`) instead of hand-copied. Three of these had already
+// drifted from the backend in production before this existed: language
+// fields silently never sent, `pdf_references` vs. `pdf_sources` (#13), and a
+// dead `deep_search`/web-research pair of fields (#14) — see issue #27.
+export type ServiceCode = components["schemas"]["TranslationService"];
+export type ServiceConfig = components["schemas"]["APIKeyMaskedSettings"];
+export type ConfigResponse = components["schemas"]["ConfigResponse"];
+export type LanguageOption = components["schemas"]["LanguageOption"];
+export type ServiceOption = components["schemas"]["ServiceOption"];
+export type OptionsResponse = components["schemas"]["OptionsResponse"];
+export type ConfigUpdate = components["schemas"]["ConfigUpdateRequest"];
+export type ValidateResponse = components["schemas"]["ValidateResponse"];
 
 export function useConfig() {
   return useQuery({

@@ -17,6 +17,7 @@ import {
 } from "@/components/ui/tooltip";
 import { useConfig, useOptions, useUpdateConfig } from "@/hooks/useConfig";
 import { api } from "@/lib/api-client";
+import type { components } from "@/lib/api-types";
 import { basename } from "@/lib/export-pdf";
 import { effectiveService, isPairSupported } from "@/lib/translate-request";
 import { useAppStore } from "@/lib/store";
@@ -111,7 +112,15 @@ export function ContextBar({
         <Select
           value={sourceLang}
           onValueChange={(v) => {
-            update.mutate({ default_source_lang: v });
+            // `l.code` is `options.languages[].code: string` — a plain
+            // string in the schema, since GET /config/options is generic
+            // dropdown data. Every value actually comes from `LanguageCode`
+            // on the backend (`routes/config.py:get_options`), so this is a
+            // real "wider type, narrower runtime guarantee" boundary cast,
+            // not an escape from the same drift this issue closes elsewhere.
+            update.mutate({
+              default_source_lang: v as components["schemas"]["LanguageCode"],
+            });
             prewarm({ source_lang: v, target_lang: targetLang, service });
           }}
         >
@@ -130,7 +139,9 @@ export function ContextBar({
         <Select
           value={targetLang}
           onValueChange={(v) => {
-            update.mutate({ default_target_lang: v });
+            update.mutate({
+              default_target_lang: v as components["schemas"]["LanguageCode"],
+            });
             prewarm({ source_lang: sourceLang, target_lang: v, service });
           }}
         >

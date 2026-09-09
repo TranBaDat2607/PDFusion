@@ -12,15 +12,26 @@
  * changed nothing (#14).
  */
 
+import type { components } from "@/lib/api-types";
+
 export interface AskBodyInput {
   question: string;
   /** `null` asks across every indexed document. */
   documentId: string | null;
 }
 
-export function buildAskBody(input: AskBodyInput): Record<string, unknown> {
+export function buildAskBody(
+  input: AskBodyInput,
+): components["schemas"]["AskRequest"] {
   return {
     question: input.question,
     document_id: input.documentId,
+    // `AskRequest.max_pdf_sources` has a server-side default (5) and could be
+    // omitted on the wire, but openapi-typescript marks a field with a
+    // concrete (non-null) default as always-present in the generated type,
+    // since that's the right read for *response* fields — the majority of
+    // what's generated here. Spelling out the same default the backend would
+    // apply anyway keeps this request body's behavior identical either way.
+    max_pdf_sources: 5,
   };
 }

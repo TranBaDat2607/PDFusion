@@ -7,29 +7,11 @@
  * shape as `sidecar-recovery.ts`.
  */
 
-export interface EngineAssetGroup {
-  id: string;
-  label: string;
-  ready: boolean;
-  present: number;
-  total: number;
-  detail: string;
-}
+import type { components } from "@/lib/api-types";
 
-export interface EngineInstallState {
-  running: boolean;
-  stage: string | null;
-  /** The last install's failure, kept after it ends. */
-  error: string | null;
-}
-
-export interface EngineStatus {
-  ready: boolean;
-  groups: EngineAssetGroup[];
-  /** The installer shipped the assets, so setup is a local unzip. */
-  bundled: boolean;
-  install: EngineInstallState;
-}
+export type EngineAssetGroup = components["schemas"]["EngineAssetGroup"];
+export type EngineInstallState = components["schemas"]["EngineInstallState"];
+export type EngineStatus = components["schemas"]["EngineStatusResponse"];
 
 export const ENGINE_SETUP_SKIPPED_KEY = "pdfusion.engine-setup-skipped";
 

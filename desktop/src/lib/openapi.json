@@ -1,0 +1,2860 @@
+{
+  "components": {
+    "schemas": {
+      "APIKeyMaskedSettings": {
+        "description": "Service config with the API key masked. The frontend never sees real keys.",
+        "properties": {
+          "extra": {
+            "additionalProperties": true,
+            "title": "Extra",
+            "type": "object"
+          },
+          "has_key": {
+            "title": "Has Key",
+            "type": "boolean"
+          },
+          "model": {
+            "title": "Model",
+            "type": "string"
+          }
+        },
+        "required": [
+          "has_key",
+          "model"
+        ],
+        "title": "APIKeyMaskedSettings",
+        "type": "object"
+      },
+      "AskProgressPayload": {
+        "properties": {
+          "message": {
+            "title": "Message",
+            "type": "string"
+          },
+          "progress": {
+            "title": "Progress",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "message",
+          "progress"
+        ],
+        "title": "AskProgressPayload",
+        "type": "object"
+      },
+      "AskRequest": {
+        "properties": {
+          "document_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Document Id"
+          },
+          "max_pdf_sources": {
+            "default": 5,
+            "title": "Max Pdf Sources",
+            "type": "integer"
+          },
+          "question": {
+            "title": "Question",
+            "type": "string"
+          }
+        },
+        "required": [
+          "question"
+        ],
+        "title": "AskRequest",
+        "type": "object"
+      },
+      "AskResultPayload": {
+        "description": "The `answer` and `done` payload for `/rag/ask/{job_id}/events` \u2014 the\ndict `EnhancedRAGChain.answer_question` returns, verbatim.\n\nDeliberately loose: `answer_question`'s success path and its own internal\nexception handler return genuinely different shapes \u2014 different\n`quality_metrics` keys (`total_sources` vs. `confidence`/`completeness`),\nand `processing_time`/`sources_used`/`timestamp` absent on the exception\npath, `error` present only there. This models the real union rather than\nunifying two shapes that are inconsistent in the running code.\n`elapsed_seconds` is added by `_run_ask` only for the `done` event, never\nfor `answer`.",
+        "properties": {
+          "answer": {
+            "title": "Answer",
+            "type": "string"
+          },
+          "elapsed_seconds": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Elapsed Seconds"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Error"
+          },
+          "pdf_references": {
+            "items": {
+              "$ref": "#/components/schemas/PdfReferencePayload"
+            },
+            "title": "Pdf References",
+            "type": "array"
+          },
+          "processing_time": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Processing Time"
+          },
+          "quality_metrics": {
+            "additionalProperties": {
+              "type": "number"
+            },
+            "title": "Quality Metrics",
+            "type": "object"
+          },
+          "sources_used": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "type": "integer"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Sources Used"
+          },
+          "timestamp": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Timestamp"
+          }
+        },
+        "required": [
+          "answer"
+        ],
+        "title": "AskResultPayload",
+        "type": "object"
+      },
+      "CacheClearResponse": {
+        "properties": {
+          "removed": {
+            "title": "Removed",
+            "type": "integer"
+          },
+          "scope": {
+            "title": "Scope",
+            "type": "string"
+          }
+        },
+        "required": [
+          "removed",
+          "scope"
+        ],
+        "title": "CacheClearResponse",
+        "type": "object"
+      },
+      "CacheStatsResponse": {
+        "properties": {
+          "active": {
+            "default": 0,
+            "title": "Active",
+            "type": "integer"
+          },
+          "by_service": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "title": "By Service",
+            "type": "object"
+          },
+          "cache_dir": {
+            "default": "",
+            "title": "Cache Dir",
+            "type": "string"
+          },
+          "entries": {
+            "default": 0,
+            "title": "Entries",
+            "type": "integer"
+          },
+          "expired": {
+            "default": 0,
+            "title": "Expired",
+            "type": "integer"
+          },
+          "hit_rate": {
+            "default": 0.0,
+            "title": "Hit Rate",
+            "type": "number"
+          },
+          "hits": {
+            "default": 0,
+            "title": "Hits",
+            "type": "integer"
+          },
+          "max_size_mb": {
+            "default": 500.0,
+            "title": "Max Size Mb",
+            "type": "number"
+          },
+          "misses": {
+            "default": 0,
+            "title": "Misses",
+            "type": "integer"
+          },
+          "size_mb": {
+            "default": 0.0,
+            "title": "Size Mb",
+            "type": "number"
+          },
+          "ttl_days": {
+            "default": 30,
+            "title": "Ttl Days",
+            "type": "integer"
+          }
+        },
+        "title": "CacheStatsResponse",
+        "type": "object"
+      },
+      "CancelPayload": {
+        "description": "The terminal `cancelled` event for `/translate/{job_id}/events`\n(`_build_cancel_payload`, `api/routes/translation.py`).",
+        "properties": {
+          "original_file": {
+            "title": "Original File",
+            "type": "string"
+          },
+          "translated_file": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Translated File"
+          }
+        },
+        "required": [
+          "original_file"
+        ],
+        "title": "CancelPayload",
+        "type": "object"
+      },
+      "ChunkReadyEventPayload": {
+        "description": "`ChunkReadyEvent.to_dict()` \u2014 the `chunk_ready` SSE event.",
+        "properties": {
+          "cache_hit": {
+            "default": false,
+            "title": "Cache Hit",
+            "type": "boolean"
+          },
+          "cached_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Cached At"
+          },
+          "chunk_index": {
+            "title": "Chunk Index",
+            "type": "integer"
+          },
+          "elapsed_seconds": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Elapsed Seconds"
+          },
+          "eta_seconds": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Eta Seconds"
+          },
+          "pages_in_chunk": {
+            "maxItems": 2,
+            "minItems": 2,
+            "prefixItems": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "integer"
+              }
+            ],
+            "title": "Pages In Chunk",
+            "type": "array"
+          },
+          "pages_per_second": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Pages Per Second"
+          },
+          "progress_percent": {
+            "title": "Progress Percent",
+            "type": "number"
+          },
+          "rolling_pdf_path": {
+            "title": "Rolling Pdf Path",
+            "type": "string"
+          },
+          "total_chunks": {
+            "title": "Total Chunks",
+            "type": "integer"
+          },
+          "total_pages": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Total Pages"
+          }
+        },
+        "required": [
+          "chunk_index",
+          "total_chunks",
+          "pages_in_chunk",
+          "rolling_pdf_path",
+          "progress_percent"
+        ],
+        "title": "ChunkReadyEventPayload",
+        "type": "object"
+      },
+      "CompletionEventPayload": {
+        "description": "`CompletionEvent.to_dict()` \u2014 the terminal `done` payload for\n`/translate/{job_id}/events`. Every field is Optional (mirroring the\ndataclass's own defaults) because `_run_translation` falls back to\n`job.finish(\"done\", {})` if `EventType.FINISH` was never observed.",
+        "properties": {
+          "cache_hit": {
+            "default": false,
+            "title": "Cache Hit",
+            "type": "boolean"
+          },
+          "cached_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Cached At"
+          },
+          "failed_paragraphs": {
+            "default": 0,
+            "title": "Failed Paragraphs",
+            "type": "integer"
+          },
+          "original_file": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Original File"
+          },
+          "pages_processed": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Pages Processed"
+          },
+          "processing_time_seconds": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Processing Time Seconds"
+          },
+          "retry_count": {
+            "default": 0,
+            "title": "Retry Count",
+            "type": "integer"
+          },
+          "success": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Success"
+          },
+          "target_lang": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Target Lang"
+          },
+          "total_paragraphs": {
+            "default": 0,
+            "title": "Total Paragraphs",
+            "type": "integer"
+          },
+          "translated_file": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Translated File"
+          }
+        },
+        "title": "CompletionEventPayload",
+        "type": "object"
+      },
+      "ConfigResponse": {
+        "properties": {
+          "anthropic": {
+            "$ref": "#/components/schemas/APIKeyMaskedSettings"
+          },
+          "argos": {
+            "$ref": "#/components/schemas/APIKeyMaskedSettings"
+          },
+          "debug_mode": {
+            "title": "Debug Mode",
+            "type": "boolean"
+          },
+          "gemini": {
+            "$ref": "#/components/schemas/APIKeyMaskedSettings"
+          },
+          "gui": {
+            "$ref": "#/components/schemas/GUISettings"
+          },
+          "openai": {
+            "$ref": "#/components/schemas/APIKeyMaskedSettings"
+          },
+          "processing": {
+            "$ref": "#/components/schemas/ProcessingSettings"
+          },
+          "rag": {
+            "$ref": "#/components/schemas/RAGSettings"
+          },
+          "translation": {
+            "$ref": "#/components/schemas/TranslationSettings"
+          }
+        },
+        "required": [
+          "openai",
+          "gemini",
+          "anthropic",
+          "argos",
+          "translation",
+          "rag",
+          "gui",
+          "processing",
+          "debug_mode"
+        ],
+        "title": "ConfigResponse",
+        "type": "object"
+      },
+      "ConfigUpdateRequest": {
+        "properties": {
+          "anthropic": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ServiceCredentialUpdate"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "cache_translated_pdfs": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cache Translated Pdfs"
+          },
+          "cache_translations": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cache Translations"
+          },
+          "default_source_lang": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/LanguageCode"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "default_target_lang": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/LanguageCode"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "gemini": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ServiceCredentialUpdate"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "max_parallel_chunks": {
+            "anyOf": [
+              {
+                "maximum": 16.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Parallel Chunks"
+          },
+          "openai": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ServiceCredentialUpdate"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "preferred_service": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TranslationService"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "rag_enabled": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rag Enabled"
+          }
+        },
+        "title": "ConfigUpdateRequest",
+        "type": "object"
+      },
+      "EmptyPayload": {
+        "description": "The terminal `cancelled` event on both RAG streams \u2014 `api/routes/rag.py`\nsends a literal `{}` for it today.",
+        "properties": {},
+        "title": "EmptyPayload",
+        "type": "object"
+      },
+      "EngineAssetGroup": {
+        "properties": {
+          "detail": {
+            "title": "Detail",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "present": {
+            "title": "Present",
+            "type": "integer"
+          },
+          "ready": {
+            "title": "Ready",
+            "type": "boolean"
+          },
+          "total": {
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "label",
+          "ready",
+          "present",
+          "total",
+          "detail"
+        ],
+        "title": "EngineAssetGroup",
+        "type": "object"
+      },
+      "EngineInstallState": {
+        "description": "The install that `POST /setup/engine` starts, as `GET /setup/status`\nreports it. Polled rather than streamed \u2014 see `api/routes/setup.py`.",
+        "properties": {
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "running": {
+            "title": "Running",
+            "type": "boolean"
+          },
+          "stage": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Stage"
+          }
+        },
+        "required": [
+          "running"
+        ],
+        "title": "EngineInstallState",
+        "type": "object"
+      },
+      "EngineStatusResponse": {
+        "properties": {
+          "bundled": {
+            "title": "Bundled",
+            "type": "boolean"
+          },
+          "groups": {
+            "items": {
+              "$ref": "#/components/schemas/EngineAssetGroup"
+            },
+            "title": "Groups",
+            "type": "array"
+          },
+          "install": {
+            "$ref": "#/components/schemas/EngineInstallState"
+          },
+          "ready": {
+            "title": "Ready",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "ready",
+          "groups",
+          "bundled",
+          "install"
+        ],
+        "title": "EngineStatusResponse",
+        "type": "object"
+      },
+      "ExportPdfRequest": {
+        "description": "Save a translated PDF to a permanent location the user picked.\n\n`source_path` is whatever the translation job reported (a rolling file in\nthe per-job temp dir, or a cache materialization); `destination_path` comes\nstraight from the native Save dialog.",
+        "properties": {
+          "destination_path": {
+            "title": "Destination Path",
+            "type": "string"
+          },
+          "protect_path": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Protect Path"
+          },
+          "source_path": {
+            "title": "Source Path",
+            "type": "string"
+          }
+        },
+        "required": [
+          "source_path",
+          "destination_path"
+        ],
+        "title": "ExportPdfRequest",
+        "type": "object"
+      },
+      "ExportPdfResponse": {
+        "properties": {
+          "bytes_written": {
+            "title": "Bytes Written",
+            "type": "integer"
+          },
+          "saved_path": {
+            "title": "Saved Path",
+            "type": "string"
+          }
+        },
+        "required": [
+          "saved_path",
+          "bytes_written"
+        ],
+        "title": "ExportPdfResponse",
+        "type": "object"
+      },
+      "GUISettings": {
+        "description": "GUI-specific settings.\n\nNo window geometry here. `tauri-plugin-window-state` persists size,\nposition and maximized state itself. The `window_width` / `window_height`\nfields that used to live here were left over from the PySide6 GUI and\nnothing ever read them, so the window opened at `tauri.conf.json`'s\n1400\u00d7900 every time regardless. Config files that still carry them load\nfine \u2014 pydantic ignores unknown keys by default.",
+        "properties": {
+          "auto_preview": {
+            "default": true,
+            "description": "Auto-preview translations",
+            "title": "Auto Preview",
+            "type": "boolean"
+          },
+          "show_advanced_options": {
+            "default": false,
+            "description": "Show advanced translation options",
+            "title": "Show Advanced Options",
+            "type": "boolean"
+          },
+          "theme": {
+            "default": "system",
+            "description": "UI theme",
+            "enum": [
+              "light",
+              "dark",
+              "system"
+            ],
+            "title": "Theme",
+            "type": "string"
+          },
+          "vietnamese_font_priority": {
+            "default": true,
+            "description": "Prioritize Vietnamese fonts",
+            "title": "Vietnamese Font Priority",
+            "type": "boolean"
+          }
+        },
+        "title": "GUISettings",
+        "type": "object"
+      },
+      "HTTPValidationError": {
+        "properties": {
+          "detail": {
+            "items": {
+              "$ref": "#/components/schemas/ValidationError"
+            },
+            "title": "Detail",
+            "type": "array"
+          }
+        },
+        "title": "HTTPValidationError",
+        "type": "object"
+      },
+      "HealthResponse": {
+        "properties": {
+          "status": {
+            "default": "ok",
+            "title": "Status",
+            "type": "string"
+          },
+          "version": {
+            "title": "Version",
+            "type": "string"
+          }
+        },
+        "required": [
+          "version"
+        ],
+        "title": "HealthResponse",
+        "type": "object"
+      },
+      "IndexDonePayload": {
+        "properties": {
+          "cached": {
+            "title": "Cached",
+            "type": "boolean"
+          },
+          "chunks": {
+            "title": "Chunks",
+            "type": "integer"
+          },
+          "document_id": {
+            "title": "Document Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "document_id",
+          "chunks",
+          "cached"
+        ],
+        "title": "IndexDonePayload",
+        "type": "object"
+      },
+      "IndexProgressPayload": {
+        "description": "`progress` events from `_run_index`. `chunks` is only sent from two of\nthe three call sites.",
+        "properties": {
+          "chunks": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Chunks"
+          },
+          "progress": {
+            "title": "Progress",
+            "type": "integer"
+          },
+          "stage": {
+            "title": "Stage",
+            "type": "string"
+          }
+        },
+        "required": [
+          "stage",
+          "progress"
+        ],
+        "title": "IndexProgressPayload",
+        "type": "object"
+      },
+      "IndexRequest": {
+        "properties": {
+          "document_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Document Id"
+          },
+          "file_path": {
+            "title": "File Path",
+            "type": "string"
+          }
+        },
+        "required": [
+          "file_path"
+        ],
+        "title": "IndexRequest",
+        "type": "object"
+      },
+      "JobAccepted": {
+        "properties": {
+          "job_id": {
+            "title": "Job Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "job_id"
+        ],
+        "title": "JobAccepted",
+        "type": "object"
+      },
+      "JobErrorPayload": {
+        "description": "The terminal `error` event on all three SSE streams \u2014 an uncaught\nexception in the job worker. Every caller in `api/jobs.py`'s consumers\nonly ever passes `{\"message\": str(exc)}`.",
+        "properties": {
+          "message": {
+            "title": "Message",
+            "type": "string"
+          }
+        },
+        "required": [
+          "message"
+        ],
+        "title": "JobErrorPayload",
+        "type": "object"
+      },
+      "LanguageCode": {
+        "description": "Supported language codes with Vietnamese priority.",
+        "enum": [
+          "auto",
+          "vi",
+          "en",
+          "ja",
+          "zh-cn",
+          "zh-tw"
+        ],
+        "title": "LanguageCode",
+        "type": "string"
+      },
+      "LanguageOption": {
+        "properties": {
+          "code": {
+            "title": "Code",
+            "type": "string"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "label"
+        ],
+        "title": "LanguageOption",
+        "type": "object"
+      },
+      "OptionsResponse": {
+        "properties": {
+          "languages": {
+            "items": {
+              "$ref": "#/components/schemas/LanguageOption"
+            },
+            "title": "Languages",
+            "type": "array"
+          },
+          "services": {
+            "items": {
+              "$ref": "#/components/schemas/ServiceOption"
+            },
+            "title": "Services",
+            "type": "array"
+          }
+        },
+        "required": [
+          "languages",
+          "services"
+        ],
+        "title": "OptionsResponse",
+        "type": "object"
+      },
+      "ParagraphTranslatedEventPayload": {
+        "description": "`ParagraphTranslatedEvent.to_dict()` \u2014 the `paragraph_translated` event.",
+        "properties": {
+          "paragraphs_seen": {
+            "title": "Paragraphs Seen",
+            "type": "integer"
+          },
+          "service": {
+            "title": "Service",
+            "type": "string"
+          },
+          "source_preview": {
+            "title": "Source Preview",
+            "type": "string"
+          },
+          "target_preview": {
+            "title": "Target Preview",
+            "type": "string"
+          }
+        },
+        "required": [
+          "source_preview",
+          "target_preview",
+          "paragraphs_seen",
+          "service"
+        ],
+        "title": "ParagraphTranslatedEventPayload",
+        "type": "object"
+      },
+      "PdfReferencePayload": {
+        "description": "One entry of `AskResultPayload.pdf_references`\n(`rag_chain._create_pdf_references`). `page` is 1-indexed, or `None` when\nthe chunk has no usable page \u2014 see `rag_chain._display_page`.",
+        "properties": {
+          "bbox": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "number"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Bbox"
+          },
+          "chunk_id": {
+            "title": "Chunk Id",
+            "type": "string"
+          },
+          "confidence": {
+            "title": "Confidence",
+            "type": "number"
+          },
+          "document_id": {
+            "title": "Document Id",
+            "type": "string"
+          },
+          "document_path": {
+            "title": "Document Path",
+            "type": "string"
+          },
+          "has_equations": {
+            "default": false,
+            "title": "Has Equations",
+            "type": "boolean"
+          },
+          "has_figures": {
+            "default": false,
+            "title": "Has Figures",
+            "type": "boolean"
+          },
+          "has_tables": {
+            "default": false,
+            "title": "Has Tables",
+            "type": "boolean"
+          },
+          "page": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Page"
+          },
+          "text": {
+            "title": "Text",
+            "type": "string"
+          },
+          "type": {
+            "default": "pdf",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "text",
+          "confidence",
+          "document_id",
+          "document_path",
+          "chunk_id"
+        ],
+        "title": "PdfReferencePayload",
+        "type": "object"
+      },
+      "PrewarmRequest": {
+        "description": "Fire-and-forget request to warm a translator before the user clicks\nTranslate. For Argos this triggers the en\u2192vi pack install. For LLMs it\ninstantiates the SDK client so the first translate() call avoids cold-start.",
+        "properties": {
+          "service": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TranslationService"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "source_lang": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/LanguageCode"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "target_lang": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/LanguageCode"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "title": "PrewarmRequest",
+        "type": "object"
+      },
+      "PrewarmResponse": {
+        "properties": {
+          "cached": {
+            "title": "Cached",
+            "type": "boolean"
+          },
+          "message": {
+            "title": "Message",
+            "type": "string"
+          },
+          "service": {
+            "title": "Service",
+            "type": "string"
+          },
+          "warmed": {
+            "title": "Warmed",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "service",
+          "warmed",
+          "cached",
+          "message"
+        ],
+        "title": "PrewarmResponse",
+        "type": "object"
+      },
+      "ProcessingSettings": {
+        "description": "PDF processing settings.",
+        "properties": {
+          "backup_originals": {
+            "default": true,
+            "description": "Keep backup of original files",
+            "title": "Backup Originals",
+            "type": "boolean"
+          },
+          "max_parallel_chunks": {
+            "default": 0,
+            "description": "BabelDOC sub-jobs in flight at once. 0 = auto (cpu // 2, clamped to 2-8)",
+            "maximum": 16.0,
+            "minimum": 0.0,
+            "title": "Max Parallel Chunks",
+            "type": "integer"
+          },
+          "max_workers": {
+            "default": 4,
+            "description": "Maximum parallel workers",
+            "maximum": 8.0,
+            "minimum": 1.0,
+            "title": "Max Workers",
+            "type": "integer"
+          },
+          "quality_check": {
+            "default": true,
+            "description": "Enable translation quality checks",
+            "title": "Quality Check",
+            "type": "boolean"
+          },
+          "timeout_seconds": {
+            "default": 300,
+            "description": "Processing timeout",
+            "maximum": 3600.0,
+            "minimum": 30.0,
+            "title": "Timeout Seconds",
+            "type": "integer"
+          }
+        },
+        "title": "ProcessingSettings",
+        "type": "object"
+      },
+      "ProgressEventPayload": {
+        "description": "`ProgressEvent.to_dict()` \u2014 most `progress` SSE events on\n`/translate/{job_id}/events`.",
+        "properties": {
+          "current_step": {
+            "title": "Current Step",
+            "type": "integer"
+          },
+          "message": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Message"
+          },
+          "progress_percent": {
+            "title": "Progress Percent",
+            "type": "number"
+          },
+          "stage": {
+            "title": "Stage",
+            "type": "string"
+          },
+          "total_steps": {
+            "title": "Total Steps",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "stage",
+          "current_step",
+          "total_steps",
+          "progress_percent"
+        ],
+        "title": "ProgressEventPayload",
+        "type": "object"
+      },
+      "RAGSettings": {
+        "description": "RAG (Retrieval-Augmented Generation) settings.",
+        "properties": {
+          "auto_process_documents": {
+            "default": true,
+            "description": "Auto-process documents for RAG",
+            "title": "Auto Process Documents",
+            "type": "boolean"
+          },
+          "enabled": {
+            "default": false,
+            "description": "Enable RAG functionality",
+            "title": "Enabled",
+            "type": "boolean"
+          }
+        },
+        "title": "RAGSettings",
+        "type": "object"
+      },
+      "ServiceCredentialUpdate": {
+        "description": "Update payload for one service. `api_key=None` means leave unchanged;\n`api_key=\"\"` means clear it.",
+        "properties": {
+          "api_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Api Key"
+          },
+          "model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model"
+          }
+        },
+        "title": "ServiceCredentialUpdate",
+        "type": "object"
+      },
+      "ServiceOption": {
+        "properties": {
+          "code": {
+            "title": "Code",
+            "type": "string"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "models": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Models",
+            "type": "array"
+          },
+          "supported_pairs": {
+            "anyOf": [
+              {
+                "items": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Supported Pairs"
+          }
+        },
+        "required": [
+          "code",
+          "label",
+          "models"
+        ],
+        "title": "ServiceOption",
+        "type": "object"
+      },
+      "TranslateRequest": {
+        "properties": {
+          "bypass_cache": {
+            "default": false,
+            "description": "Skip the PDF-level cache lookup for this run (forces a fresh translation)",
+            "title": "Bypass Cache",
+            "type": "boolean"
+          },
+          "file_path": {
+            "title": "File Path",
+            "type": "string"
+          },
+          "service": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TranslationService"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "source_lang": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/LanguageCode"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "target_lang": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/LanguageCode"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "visible_page": {
+            "default": 1,
+            "description": "1-indexed page the viewer is currently showing; seeds the priority queue",
+            "minimum": 1.0,
+            "title": "Visible Page",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "file_path"
+        ],
+        "title": "TranslateRequest",
+        "type": "object"
+      },
+      "TranslationService": {
+        "description": "Supported translation services.",
+        "enum": [
+          "openai",
+          "gemini",
+          "anthropic",
+          "argos"
+        ],
+        "title": "TranslationService",
+        "type": "string"
+      },
+      "TranslationSettings": {
+        "description": "Translation-specific settings.",
+        "properties": {
+          "cache_max_size_mb": {
+            "default": 500.0,
+            "description": "Soft cap for translation cache size (MB)",
+            "maximum": 5000.0,
+            "minimum": 10.0,
+            "title": "Cache Max Size Mb",
+            "type": "number"
+          },
+          "cache_translated_pdfs": {
+            "default": true,
+            "description": "Enable PDF-level translation cache (skip re-translating identical PDFs)",
+            "title": "Cache Translated Pdfs",
+            "type": "boolean"
+          },
+          "cache_translations": {
+            "default": true,
+            "description": "Enable translation caching",
+            "title": "Cache Translations",
+            "type": "boolean"
+          },
+          "cache_ttl_days": {
+            "default": 30,
+            "description": "Days before cached translations expire",
+            "maximum": 365.0,
+            "minimum": 1.0,
+            "title": "Cache Ttl Days",
+            "type": "integer"
+          },
+          "default_source_lang": {
+            "$ref": "#/components/schemas/LanguageCode",
+            "default": "auto",
+            "description": "Default source language"
+          },
+          "default_target_lang": {
+            "$ref": "#/components/schemas/LanguageCode",
+            "default": "vi",
+            "description": "Default target language (Vietnamese priority)"
+          },
+          "max_file_size_mb": {
+            "default": 50.0,
+            "description": "Maximum file size in MB",
+            "maximum": 200.0,
+            "minimum": 1.0,
+            "title": "Max File Size Mb",
+            "type": "number"
+          },
+          "max_pages": {
+            "default": 50,
+            "description": "Maximum pages per PDF",
+            "maximum": 100.0,
+            "minimum": 1.0,
+            "title": "Max Pages",
+            "type": "integer"
+          },
+          "min_text_length": {
+            "default": 5,
+            "description": "Minimum text length to translate",
+            "minimum": 0.0,
+            "title": "Min Text Length",
+            "type": "integer"
+          },
+          "pdf_cache_max_size_mb": {
+            "default": 1000.0,
+            "description": "Soft cap for the translated-PDF cache; oldest entries are LRU-evicted past this",
+            "maximum": 20000.0,
+            "minimum": 100.0,
+            "title": "Pdf Cache Max Size Mb",
+            "type": "number"
+          },
+          "preferred_service": {
+            "$ref": "#/components/schemas/TranslationService",
+            "default": "argos",
+            "description": "Preferred translation service"
+          },
+          "preserve_formatting": {
+            "default": true,
+            "description": "Preserve PDF formatting",
+            "title": "Preserve Formatting",
+            "type": "boolean"
+          }
+        },
+        "title": "TranslationSettings",
+        "type": "object"
+      },
+      "ValidateRequest": {
+        "properties": {
+          "api_key": {
+            "title": "Api Key",
+            "type": "string"
+          },
+          "model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model"
+          },
+          "service": {
+            "$ref": "#/components/schemas/TranslationService"
+          }
+        },
+        "required": [
+          "service",
+          "api_key"
+        ],
+        "title": "ValidateRequest",
+        "type": "object"
+      },
+      "ValidateResponse": {
+        "properties": {
+          "message": {
+            "title": "Message",
+            "type": "string"
+          },
+          "valid": {
+            "title": "Valid",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "valid",
+          "message"
+        ],
+        "title": "ValidateResponse",
+        "type": "object"
+      },
+      "ValidationError": {
+        "properties": {
+          "loc": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            "title": "Location",
+            "type": "array"
+          },
+          "msg": {
+            "title": "Message",
+            "type": "string"
+          },
+          "type": {
+            "title": "Error Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "loc",
+          "msg",
+          "type"
+        ],
+        "title": "ValidationError",
+        "type": "object"
+      }
+    }
+  },
+  "info": {
+    "title": "PDFusion sidecar",
+    "version": "1.0.6"
+  },
+  "openapi": "3.1.0",
+  "paths": {
+    "/auth/ping": {
+      "get": {
+        "operationId": "auth_ping_auth_ping_get",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Auth Ping Auth Ping Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Auth Ping"
+      }
+    },
+    "/config": {
+      "get": {
+        "operationId": "get_config_config_get",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConfigResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Config",
+        "tags": [
+          "config"
+        ]
+      },
+      "put": {
+        "operationId": "update_config_config_put",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ConfigUpdateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConfigResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Update Config",
+        "tags": [
+          "config"
+        ]
+      }
+    },
+    "/config/cache": {
+      "delete": {
+        "description": "Clear the on-disk translation caches.\n\n`scope=expired` only reaps stale entries; `scope=all` wipes everything\n(e.g. when the user changes models). `target` picks which cache:\n`paragraph` (default, backward compatible), `pdf` (whole-PDF cache), or\n`all` (both). The PDF cache has no TTL, so `scope=expired` doesn't touch it.",
+        "operationId": "clear_cache_config_cache_delete",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "scope",
+            "required": false,
+            "schema": {
+              "default": "all",
+              "title": "Scope",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "target",
+            "required": false,
+            "schema": {
+              "default": "paragraph",
+              "title": "Target",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CacheClearResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Clear Cache",
+        "tags": [
+          "config"
+        ]
+      },
+      "get": {
+        "operationId": "get_cache_stats_config_cache_get",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CacheStatsResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Cache Stats",
+        "tags": [
+          "config"
+        ]
+      }
+    },
+    "/config/options": {
+      "get": {
+        "operationId": "get_options_config_options_get",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OptionsResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Options",
+        "tags": [
+          "config"
+        ]
+      }
+    },
+    "/config/validate": {
+      "post": {
+        "description": "Spin up a translator instance with the supplied credentials and validate.",
+        "operationId": "validate_credentials_config_validate_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ValidateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ValidateResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Validate Credentials",
+        "tags": [
+          "config"
+        ]
+      }
+    },
+    "/health": {
+      "get": {
+        "operationId": "health_health_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HealthResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Health"
+      }
+    },
+    "/pdf/export": {
+      "post": {
+        "description": "Copy a translated PDF to a permanent, user-chosen location.\n\nThe frontend picks `destination_path` with the native Save dialog, so the\nuser has already agreed to the location (and to overwriting, if the file\nexists). All we do here is make a durable copy \u2014 everything the pipeline\nitself produces lives in a temp dir or an evictable cache.\n\nRuns on a worker thread: a large PDF copy would otherwise stall the event\nloop and stutter any in-flight SSE stream.",
+        "operationId": "export_translated_pdf_pdf_export_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ExportPdfRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExportPdfResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Export Translated Pdf",
+        "tags": [
+          "pdf"
+        ]
+      }
+    },
+    "/pdf/file": {
+      "get": {
+        "operationId": "stream_pdf_pdf_file_get",
+        "parameters": [
+          {
+            "description": "Absolute path to the PDF",
+            "in": "query",
+            "name": "path",
+            "required": true,
+            "schema": {
+              "description": "Absolute path to the PDF",
+              "title": "Path",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Stream Pdf",
+        "tags": [
+          "pdf"
+        ]
+      }
+    },
+    "/rag/ask": {
+      "post": {
+        "operationId": "start_ask_rag_ask_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AskRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobAccepted"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Start Ask",
+        "tags": [
+          "rag"
+        ]
+      }
+    },
+    "/rag/ask/{job_id}/events": {
+      "get": {
+        "operationId": "stream_ask_events_rag_ask__job_id__events_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "job_id",
+            "required": true,
+            "schema": {
+              "title": "Job Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "text/event-stream": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/AskProgressPayload"
+                    },
+                    {
+                      "$ref": "#/components/schemas/AskResultPayload"
+                    },
+                    {
+                      "$ref": "#/components/schemas/JobErrorPayload"
+                    },
+                    {
+                      "$ref": "#/components/schemas/EmptyPayload"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Stream Ask Events",
+        "tags": [
+          "rag"
+        ]
+      }
+    },
+    "/rag/document/{document_id}": {
+      "delete": {
+        "operationId": "delete_document_rag_document__document_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "document_id",
+            "required": true,
+            "schema": {
+              "title": "Document Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Delete Document",
+        "tags": [
+          "rag"
+        ]
+      }
+    },
+    "/rag/index": {
+      "post": {
+        "operationId": "start_index_rag_index_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/IndexRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobAccepted"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Start Index",
+        "tags": [
+          "rag"
+        ]
+      }
+    },
+    "/rag/index/{job_id}/events": {
+      "get": {
+        "operationId": "stream_index_events_rag_index__job_id__events_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "job_id",
+            "required": true,
+            "schema": {
+              "title": "Job Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "text/event-stream": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/IndexProgressPayload"
+                    },
+                    {
+                      "$ref": "#/components/schemas/IndexDonePayload"
+                    },
+                    {
+                      "$ref": "#/components/schemas/JobErrorPayload"
+                    },
+                    {
+                      "$ref": "#/components/schemas/EmptyPayload"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Stream Index Events",
+        "tags": [
+          "rag"
+        ]
+      }
+    },
+    "/setup/engine": {
+      "post": {
+        "description": "Start an install, or report the one already running.\n\nNever starts a second: two downloads writing the same cache paths is how a\nhalf-written font ends up passing an existence check.",
+        "operationId": "start_setup_setup_engine_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EngineStatusResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Start Setup",
+        "tags": [
+          "setup"
+        ]
+      }
+    },
+    "/setup/status": {
+      "get": {
+        "operationId": "read_status_setup_status_get",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EngineStatusResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Read Status",
+        "tags": [
+          "setup"
+        ]
+      }
+    },
+    "/translate": {
+      "post": {
+        "operationId": "start_translation_translate_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TranslateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobAccepted"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Start Translation",
+        "tags": [
+          "translation"
+        ]
+      }
+    },
+    "/translate/prewarm": {
+      "post": {
+        "operationId": "prewarm_translate_prewarm_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PrewarmRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PrewarmResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Prewarm",
+        "tags": [
+          "translation"
+        ]
+      }
+    },
+    "/translate/{job_id}/cancel": {
+      "post": {
+        "operationId": "cancel_translation_translate__job_id__cancel_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "job_id",
+            "required": true,
+            "schema": {
+              "title": "Job Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Cancel Translation",
+        "tags": [
+          "translation"
+        ]
+      }
+    },
+    "/translate/{job_id}/events": {
+      "get": {
+        "operationId": "stream_translation_events_translate__job_id__events_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "job_id",
+            "required": true,
+            "schema": {
+              "title": "Job Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "text/event-stream": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/ProgressEventPayload"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ChunkReadyEventPayload"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ParagraphTranslatedEventPayload"
+                    },
+                    {
+                      "$ref": "#/components/schemas/CompletionEventPayload"
+                    },
+                    {
+                      "$ref": "#/components/schemas/JobErrorPayload"
+                    },
+                    {
+                      "$ref": "#/components/schemas/CancelPayload"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Stream Translation Events",
+        "tags": [
+          "translation"
+        ]
+      }
+    },
+    "/translate/{job_id}/reprioritize": {
+      "post": {
+        "description": "Update the priority anchor as the user scrolls. Pending chunks closest\nto `visible_page` will be picked next. In-flight chunks finish; this is\nbest-effort. Silently no-ops if the job has already finished.",
+        "operationId": "reprioritize_translation_translate__job_id__reprioritize_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "job_id",
+            "required": true,
+            "schema": {
+              "title": "Job Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "visible_page",
+            "required": true,
+            "schema": {
+              "title": "Visible Page",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Reprioritize Translation",
+        "tags": [
+          "translation"
+        ]
+      }
+    }
+  }
+}

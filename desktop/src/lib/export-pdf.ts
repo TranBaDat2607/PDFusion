@@ -12,6 +12,8 @@
  * Tauri runtime or a DOM.
  */
 
+import type { components } from "@/lib/api-types";
+
 // ---------------------------------------------------------------------------
 // Path helpers — the sidecar hands us Windows paths, but dev-mode/tests may
 // use POSIX ones, so everything here handles both separators.
@@ -85,10 +87,7 @@ export function suggestedExportPath(
 // Orchestration
 // ---------------------------------------------------------------------------
 
-export interface ExportedFile {
-  saved_path: string;
-  bytes_written: number;
-}
+export type ExportedFile = components["schemas"]["ExportPdfResponse"];
 
 export interface ExportDeps {
   /** Native Save dialog. Resolves to `null` when the user cancels. */

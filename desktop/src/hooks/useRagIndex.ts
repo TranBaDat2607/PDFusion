@@ -1,6 +1,7 @@
 import { useCallback, useRef, useState } from "react";
 
 import { api } from "@/lib/api-client";
+import type { components } from "@/lib/api-types";
 import { streamEvents } from "@/lib/sse";
 
 export interface IndexState {
@@ -47,14 +48,14 @@ export function useRagIndex() {
         signal: controller.signal,
         onEvent: ({ type, data }) => {
           if (type === "progress") {
-            const p = data as { stage?: string; progress?: number };
+            const p = data as components["schemas"]["IndexProgressPayload"];
             setState((s) => ({
               ...s,
               stage: p.stage ?? s.stage,
               progress: p.progress ?? s.progress,
             }));
           } else if (type === "done") {
-            const c = data as { document_id: string; chunks: number };
+            const c = data as components["schemas"]["IndexDonePayload"];
             setState({
               status: "ready",
               stage: "Ready",
@@ -63,7 +64,7 @@ export function useRagIndex() {
               chunks: c.chunks,
             });
           } else if (type === "error") {
-            const e = data as { message: string };
+            const e = data as components["schemas"]["JobErrorPayload"];
             setState((s) => ({ ...s, status: "error", error: e.message }));
           }
         },

@@ -15,6 +15,7 @@
  */
 
 import type { ConfigResponse, OptionsResponse, ServiceCode } from "@/hooks/useConfig";
+import type { components } from "@/lib/api-types";
 
 export interface TranslateBodyInput {
   filePath: string;
@@ -28,18 +29,35 @@ export interface TranslateBodyInput {
   service?: string | null;
 }
 
-export function buildTranslateBody(
-  input: TranslateBodyInput,
-): Record<string, unknown> {
-  const body: Record<string, unknown> = {
+type TranslateRequest = components["schemas"]["TranslateRequest"];
+
+export function buildTranslateBody(input: TranslateBodyInput): TranslateRequest {
+  // `sourceLang`/`targetLang`/`service` arrive as plain strings — the toolbar
+  // dropdowns and the config values feeding them are typed loosely all the
+  // way up (`LanguageOption.code`/`ServiceOption.code` are plain `string` in
+  // `api/schemas.py` too, since GET /config/options is generic dropdown
+  // data) — but every real value does come from `LanguageCode`/
+  // `TranslationService` on the backend, so narrowing here is a boundary
+  // cast, not an escape from the request's real contract.
+  //
+  // The three are genuinely omitted (not sent as `undefined`) when unset:
+  // conditionally spreading them, rather than always assigning the key, keeps
+  // this observable — see translate-request.test.ts's "omits unset languages"
+  // case, which checks for the key's absence, not just an undefined value.
+  return {
     file_path: input.filePath,
     visible_page: input.visiblePage,
     bypass_cache: input.bypassCache ?? false,
+    ...(input.sourceLang
+      ? { source_lang: input.sourceLang as TranslateRequest["source_lang"] }
+      : {}),
+    ...(input.targetLang
+      ? { target_lang: input.targetLang as TranslateRequest["target_lang"] }
+      : {}),
+    ...(input.service
+      ? { service: input.service as TranslateRequest["service"] }
+      : {}),
   };
-  if (input.sourceLang) body.source_lang = input.sourceLang;
-  if (input.targetLang) body.target_lang = input.targetLang;
-  if (input.service) body.service = input.service;
-  return body;
 }
 
 /**

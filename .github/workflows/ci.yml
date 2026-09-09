@@ -51,6 +51,15 @@ jobs:
       - name: Test
         run: python -m pytest tests
 
+      # Two separate steps, deliberately: a multi-line `run: |` block only
+      # checks the *last* command's exit code, so a broken export script
+      # followed by a no-op `git diff` would report green.
+      - name: Regenerate OpenAPI schema
+        run: python -m desktop_pdf_translator.api.export_openapi --output desktop/src/lib/openapi.json
+
+      - name: Verify committed OpenAPI schema is up to date
+        run: git diff --exit-code -- desktop/src/lib/openapi.json
+
       # The smoke tests spawn a real sidecar, so they are excluded from the
       # default run (`addopts` in pyproject.toml) and asked for by name here.
       # Without a built exe the frozen-mode parameter skips itself; the
@@ -85,6 +94,13 @@ jobs:
       - name: Test
         working-directory: desktop
         run: pnpm test
+
+      # Must run before `pnpm build`: `generate:api-types` is a `pnpm build`
+      # prestep, so building first would overwrite api-types.d.ts with fresh
+      # output before `--check` ever compared it against the committed one.
+      - name: Verify generated API types are up to date
+        working-directory: desktop
+        run: pnpm run check:api-types
 
       # `pnpm build` is `tsc && vite build`, so this is the TypeScript gate as
       # well as the thing that produces `desktop/dist/` — which the Tauri crate

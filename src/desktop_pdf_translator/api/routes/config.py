@@ -99,10 +99,13 @@ async def get_config() -> ConfigResponse:
         gemini=_mask(s.gemini),
         anthropic=_mask(s.anthropic),
         argos=_mask(s.argos),
-        translation=s.translation.model_dump(),
-        rag=s.rag.model_dump(),
-        gui=s.gui.model_dump(),
-        processing=s.processing.model_dump(),
+        # Pass the settings objects straight through — ConfigResponse's fields
+        # are now real nested models, not Dict[str, Any], so there's nothing
+        # left for model_dump() to do here. Same wire format either way.
+        translation=s.translation,
+        rag=s.rag,
+        gui=s.gui,
+        processing=s.processing,
         debug_mode=s.debug_mode,
     )
 
