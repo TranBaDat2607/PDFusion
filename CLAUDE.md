@@ -227,12 +227,16 @@ three cannot disagree. Two things about it:
   doesn't like. A zero-byte file (an interrupted download) does not count.
 
 `api/routes/setup.py` installs them, and is **the one long job in the sidecar
-that is polled rather than streamed.** `api/jobs.py`'s `stream()` discards a job
-the moment its consumer detaches, which is right for a translate and wrong here:
-the install is a process-wide singleton running for minutes, so a webview reload
-would lose the only handle to it and the next Install click would start a second
-download into the same cache directory. `GET /setup/status` re-attaches for
-free. Two more rules it keeps:
+that is polled rather than streamed.** Every other long job gets a `job_id`
+that survives a dropped SSE connection and can be reattached to (see
+"Long-running jobs (SSE pattern)") — installing the engine can't use that
+model at all, because it isn't a job with an id: it's a process-wide
+singleton, one cache directory being written by at most one download,
+regardless of how many browser tabs or reloads ask about it. A webview
+reload has nothing to reattach *to* by `job_id`, so the next Install click
+would start a second download into the same cache directory unless
+something reattaches for it. `GET /setup/status` does that for free. Two
+more rules it keeps:
 
 - **Never call BabelDOC's sync wrappers** (`warmup()`,
   `restore_offline_assets_package()`). They run the coroutine through
@@ -433,7 +437,7 @@ knowing about:
   become real nested models (`TranslationSettings` etc., `config/models.py`)
   instead of `Dict[str, Any]` — left loose, the generated type would have
   erased exactly the fields this issue was about.
-- `streamEvents<T>`'s `data as X` casts in the hooks don't disappear —
+- `streamJobEvents<T>`'s `data as X` casts in the hooks don't disappear —
   `SseEvent.type` is a bare `string`, not a discriminant on `T`, so narrowing
   an SSE union still needs an assertion. What changed is that `X` is
   generated, not hand-maintained.
@@ -442,16 +446,38 @@ knowing about:
 
 Long-running endpoints (translate, index, ask) follow the same pattern:
 1. `POST /resource` returns `{ job_id }` immediately.
-2. The actual work runs in a background asyncio task that pushes events into an `asyncio.Queue` keyed by `job_id`.
-3. `GET /resource/{job_id}/events` opens an SSE stream that drains that queue.
+2. The actual work runs in a background asyncio task that appends events to
+   the job's `history` (`api/jobs.py`) and wakes anyone waiting on it.
+3. `GET /resource/{job_id}/events` opens an SSE stream that replays whatever
+   in `history` is newer than the `last_seq` query param (default 0), then
+   tails live events the same way.
 4. A terminal event (`done`, `error`, or `cancelled`) closes the stream.
 
 This replaces the previous `QThread + new asyncio loop` pattern from the PySide6 GUI.
 
-**`/setup/engine` is the one exception**, and the reason is step 3: `stream()`
-discards the job as soon as its consumer detaches, so a client that reloads
-mid-job can never re-attach. That is fine for a per-click translate and not for
-a process-wide install that runs for minutes — see "First-run engine setup".
+**A job survives a dropped SSE connection** — a webview reload, a network
+blip — instead of being discarded the moment its consumer detaches (issue
+#28). State lives entirely in the shared `Job`, not a per-consumer queue, so
+a reattaching `GET .../events?last_seq=N` picks up exactly what it missed
+and `/cancel` keeps working on a job nobody is currently streaming. Only
+`_sweep_stale_locked` ever frees a job — once it has had no live worker and
+no fresh terminal event for `_JOB_TTL_SECONDS` (an hour). A finished job's
+small event history is left to linger for that whole window by design (a
+reattach might still be coming); `finish()` drops the heavy `processor`
+handle immediately so that cost stays small regardless. On the frontend,
+`lib/sse.ts`'s `streamJobEvents` is what actually reconnects —
+`useTranslation`/`useRagIndex`/`useRagAsk` all go through it instead of the
+lower-level `streamEvents`, so a transient drop within the same page load is
+invisible rather than surfacing as "stream ended unexpectedly". That only
+covers *that* window: nothing persists the active job id across a full page
+reload (there's no stored handle to reattach with afterward), and there's no
+job-history table or "Recent" list yet — both remain open, see issue #28.
+
+**`/setup/engine` is still the one exception**, but no longer for that
+reason: it isn't that the registry mishandles a dropped connection (it
+doesn't, anymore) — it's that the install has no `job_id` at all to reattach
+*to*, being a process-wide singleton rather than a per-request job. See
+"First-run engine setup".
 
 ### Translation output lifecycle — nothing the pipeline writes is permanent
 

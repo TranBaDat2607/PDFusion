@@ -1549,7 +1549,9 @@ export interface operations {
     };
     stream_ask_events_rag_ask__job_id__events_get: {
         parameters: {
-            query?: never;
+            query?: {
+                last_seq?: number;
+            };
             header?: {
                 authorization?: string | null;
             };
@@ -1648,7 +1650,9 @@ export interface operations {
     };
     stream_index_events_rag_index__job_id__events_get: {
         parameters: {
-            query?: never;
+            query?: {
+                last_seq?: number;
+            };
             header?: {
                 authorization?: string | null;
             };
@@ -1844,7 +1848,9 @@ export interface operations {
     };
     stream_translation_events_translate__job_id__events_get: {
         parameters: {
-            query?: never;
+            query?: {
+                last_seq?: number;
+            };
             header?: {
                 authorization?: string | null;
             };

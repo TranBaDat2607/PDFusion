@@ -2,7 +2,7 @@ import { useCallback, useRef, useState } from "react";
 
 import { api } from "@/lib/api-client";
 import type { components } from "@/lib/api-types";
-import { streamEvents } from "@/lib/sse";
+import { streamJobEvents } from "@/lib/sse";
 
 export interface IndexState {
   status: "idle" | "indexing" | "ready" | "error";
@@ -43,8 +43,9 @@ export function useRagIndex() {
     abortRef.current = controller;
 
     try {
-      await streamEvents({
-        path: `/rag/index/${jobId}/events`,
+      await streamJobEvents({
+        buildPath: (lastEventId) =>
+          `/rag/index/${jobId}/events${lastEventId ? `?last_seq=${lastEventId}` : ""}`,
         signal: controller.signal,
         onEvent: ({ type, data }) => {
           if (type === "progress") {

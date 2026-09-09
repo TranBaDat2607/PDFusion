@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { resetSidecar, setSidecar } from "./api-client";
-import { streamEvents, type SseEvent } from "./sse";
+import { streamEvents, streamJobEvents, type SseEvent } from "./sse";
 
 /**
  * The sidecar's SSE wire format, parsed by hand.
@@ -46,6 +46,63 @@ function respondWith(
     body: init.ok === false ? null : bodyFrom(chunks),
   };
   const fetchMock = vi.fn(async () => response as unknown as Response);
+  vi.stubGlobal("fetch", fetchMock);
+  return fetchMock;
+}
+
+/** A response whose body errors right after the connection opens — a
+ *  transport failure mid-read, not a rejected `fetch()` call. */
+function respondWithFailingBody(error: Error) {
+  const body = new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.error(error);
+    },
+  });
+  const fetchMock = vi.fn(
+    async () =>
+      ({
+        ok: true,
+        status: 200,
+        statusText: "OK",
+        body,
+      }) as unknown as Response,
+  );
+  vi.stubGlobal("fetch", fetchMock);
+  return fetchMock;
+}
+
+/** Each `fetch` call consumes the next scripted response in order — either a
+ *  chunk list (a normal stream) or an `Error` (the body fails mid-read, like
+ *  `respondWithFailingBody`). Used to script `streamJobEvents`' successive
+ *  connection attempts. */
+function respondWithSequence(responses: Array<string[] | Error>) {
+  let call = 0;
+  const fetchMock = vi.fn(async () => {
+    const next = responses[call];
+    call += 1;
+    if (next === undefined) {
+      throw new Error("respondWithSequence: ran out of scripted responses");
+    }
+    if (next instanceof Error) {
+      const body = new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.error(next);
+        },
+      });
+      return {
+        ok: true,
+        status: 200,
+        statusText: "OK",
+        body,
+      } as unknown as Response;
+    }
+    return {
+      ok: true,
+      status: 200,
+      statusText: "OK",
+      body: bodyFrom(next),
+    } as unknown as Response;
+  });
   vi.stubGlobal("fetch", fetchMock);
   return fetchMock;
 }
@@ -151,8 +208,28 @@ describe("framing", () => {
   });
 
   it("ignores fields it has no use for", async () => {
-    const events = await collect(['id: 7\nretry: 3000\nevent: done\ndata: {}\n\n']);
+    const events = await collect(['retry: 3000\nevent: done\ndata: {}\n\n']);
     expect(events).toEqual([{ type: "done", data: {} }]);
+  });
+
+  it("captures the id field", async () => {
+    /** `api/jobs.py` sends the event's sequence number here on every real
+     * event — `streamJobEvents` reconnects from it as `last_seq`. */
+    const events = await collect(['id: 7\nevent: done\ndata: {}\n\n']);
+    expect(events).toEqual([{ type: "done", id: "7", data: {} }]);
+  });
+
+  it("omits id when the event never set one", async () => {
+    const events = await collect(['event: done\ndata: {}\n\n']);
+    expect(events[0].id).toBeUndefined();
+  });
+
+  it("resets the id after each dispatch, like the event type", async () => {
+    const events = await collect([
+      'id: 1\ndata: a\n\n',
+      "data: b\n\n",
+    ]);
+    expect(events.map((e) => e.id)).toEqual(["1", undefined]);
   });
 
   it("dispatches a trailing event that never got its blank line", async () => {
@@ -222,26 +299,6 @@ describe("payloads", () => {
 });
 
 describe("cancellation and errors", () => {
-  function respondWithFailingBody(error: Error) {
-    const body = new ReadableStream<Uint8Array>({
-      start(controller) {
-        controller.error(error);
-      },
-    });
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(
-        async () =>
-          ({
-            ok: true,
-            status: 200,
-            statusText: "OK",
-            body,
-          }) as unknown as Response,
-      ),
-    );
-  }
-
   it("ends quietly when the stream is aborted mid-read", async () => {
     /** The hooks abort their stream on unmount and on Cancel. Surfacing that
      * as an error would put a spurious toast on every navigation, and the
@@ -297,5 +354,121 @@ describe("cancellation and errors", () => {
     });
     const [, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
     expect(init.signal).toBe(controller.signal);
+  });
+});
+
+describe("streamJobEvents", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("replays from the last seen id after a transient drop", async () => {
+    vi.useFakeTimers();
+    const encoder = new TextEncoder();
+    // `pull` rather than `start`: enqueuing then immediately erroring in
+    // `start()` discards the queued chunk before any `read()` can see it
+    // (erroring resets the queue). Delivering the chunk on the first pull
+    // and erroring only on the second — i.e. after the SSE loop has already
+    // consumed the first chunk and asked for the next one — is what a real
+    // "got one event, then the connection dropped" looks like.
+    let pullCount = 0;
+    const firstBody = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        pullCount += 1;
+        if (pullCount === 1) {
+          controller.enqueue(
+            encoder.encode('id: 1\nevent: progress\ndata: {"n": 1}\n\n'),
+          );
+        } else {
+          controller.error(new Error("connection reset"));
+        }
+      },
+    });
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        statusText: "OK",
+        body: firstBody,
+      } as unknown as Response)
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        statusText: "OK",
+        body: bodyFrom(["id: 2\nevent: done\ndata: {}\n\n"]),
+      } as unknown as Response);
+    vi.stubGlobal("fetch", fetchMock);
+
+    const paths: (string | null)[] = [];
+    const events: SseEvent[] = [];
+    const promise = streamJobEvents({
+      buildPath: (lastEventId) => {
+        paths.push(lastEventId);
+        return lastEventId ? `/x?last_seq=${lastEventId}` : "/x";
+      },
+      onEvent: (e) => events.push(e),
+    });
+
+    await vi.advanceTimersByTimeAsync(10_000);
+    await promise;
+
+    // The second attempt asks for everything after the last id the first
+    // attempt delivered — not from the start, and not from nothing.
+    expect(paths).toEqual([null, "1"]);
+    expect(events.map((e) => e.type)).toEqual(["progress", "done"]);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("stops reconnecting once a terminal event arrives", async () => {
+    const fetchMock = respondWith(["event: done\ndata: {}\n\n"]);
+    const events: SseEvent[] = [];
+    await streamJobEvents({
+      buildPath: () => "/x",
+      onEvent: (e) => events.push(e),
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(events.map((e) => e.type)).toEqual(["done"]);
+  });
+
+  it("exits cleanly when aborted mid-backoff", async () => {
+    vi.useFakeTimers();
+    const controller = new AbortController();
+    const fetchMock = respondWithFailingBody(new Error("connection reset"));
+
+    const promise = streamJobEvents({
+      buildPath: () => "/x",
+      onEvent: () => {},
+      signal: controller.signal,
+    });
+    // Let the failed first attempt run to completion — it should now be
+    // parked inside the backoff delay — before aborting.
+    await vi.advanceTimersByTimeAsync(0);
+    controller.abort();
+
+    await expect(promise).resolves.toBeUndefined();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("gives up after the max reconnect attempts and resolves without throwing", async () => {
+    vi.useFakeTimers();
+    // Every attempt opens and closes immediately with no events at all — a
+    // clean end with no terminal event, same as a connection that drops
+    // right away each time.
+    const fetchMock = respondWithSequence(
+      Array.from({ length: 6 }, () => [] as string[]),
+    );
+    const reconnectAttempts: number[] = [];
+
+    const promise = streamJobEvents({
+      buildPath: () => "/x",
+      onEvent: () => {},
+      onReconnecting: (attempt) => reconnectAttempts.push(attempt),
+    });
+    await vi.advanceTimersByTimeAsync(60_000);
+
+    await expect(promise).resolves.toBeUndefined();
+    expect(fetchMock).toHaveBeenCalledTimes(6); // 1 initial + 5 reconnects
+    expect(reconnectAttempts).toEqual([1, 2, 3, 4, 5]);
   });
 });
