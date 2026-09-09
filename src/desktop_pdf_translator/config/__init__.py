@@ -13,6 +13,7 @@ from .models import (
     TranslationSettings,
     GUISettings,
     ProcessingSettings,
+    RAGSettings,
     FileMetadata
 )
 from .manager import ConfigManager, get_config_manager, get_settings
@@ -29,6 +30,7 @@ __all__ = [
     "TranslationSettings",
     "GUISettings",
     "ProcessingSettings",
+    "RAGSettings",
     "FileMetadata",
 
     # Manager

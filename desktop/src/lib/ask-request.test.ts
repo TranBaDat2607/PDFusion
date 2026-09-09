@@ -6,13 +6,18 @@ describe("buildAskBody", () => {
   it("sends the question and the document to scope it to", () => {
     expect(
       buildAskBody({ question: "What is the ablation?", documentId: "paper" }),
-    ).toEqual({ question: "What is the ablation?", document_id: "paper" });
+    ).toEqual({
+      question: "What is the ablation?",
+      document_id: "paper",
+      max_pdf_sources: 5,
+    });
   });
 
   it("keeps a null document — that means 'every indexed document'", () => {
     expect(buildAskBody({ question: "hi", documentId: null })).toEqual({
       question: "hi",
       document_id: null,
+      max_pdf_sources: 5,
     });
   });
 
@@ -22,7 +27,11 @@ describe("buildAskBody", () => {
   // wired to one looks functional while doing nothing at all.
   it("sends nothing the sidecar's AskRequest doesn't declare", () => {
     const body = buildAskBody({ question: "hi", documentId: null });
-    expect(Object.keys(body).sort()).toEqual(["document_id", "question"]);
+    expect(Object.keys(body).sort()).toEqual([
+      "document_id",
+      "max_pdf_sources",
+      "question",
+    ]);
     expect(body).not.toHaveProperty("include_web_research");
     expect(body).not.toHaveProperty("use_deep_search");
   });

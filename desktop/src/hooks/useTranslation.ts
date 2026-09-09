@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 
 import { ApiError, api } from "@/lib/api-client";
+import type { components } from "@/lib/api-types";
 import { streamEvents } from "@/lib/sse";
 import { useAppStore } from "@/lib/store";
 import { buildTranslateBody } from "@/lib/translate-request";
@@ -10,54 +11,19 @@ import {
   describeChunk,
   pagesReady,
   pluralizePages,
-  type ChunkReadyLike,
 } from "@/lib/translation-progress";
 
-interface ProgressUpdate {
-  stage?: string;
-  progress_percent?: number;
-  message?: string;
-  current_step?: number;
-  total_steps?: number;
-}
-
-interface CompletionPayload {
-  success?: boolean;
-  translated_file?: string | null;
-  original_file?: string | null;
-  processing_time_seconds?: number | null;
-  pages_processed?: number | null;
-  cache_hit?: boolean;
-  cached_at?: string | null;
-  /** Language the run actually produced, straight from the processor. Names
-   *  the default file in the Save dialog — see `translationTargetLang`. */
-  target_lang?: string | null;
-  /** Paragraphs handed back as source text because the translator errored.
-   *  BabelDOC swallows those errors, so this count is the only evidence that
-   *  a "complete" translation is partly the original document. */
-  failed_paragraphs?: number;
-  total_paragraphs?: number;
-}
-
-// `ChunkReadyLike` is the accumulator's view of this same payload. Extending
-// it keeps a new wire field declared once instead of in two files that have to
-// be edited together.
-interface ChunkReadyPayload extends ChunkReadyLike {
-  rolling_pdf_path: string;
-  progress_percent: number;
-  elapsed_seconds?: number | null;
-  eta_seconds?: number | null;
-  pages_per_second?: number | null;
-  cache_hit?: boolean;
-  cached_at?: string | null;
-}
-
-interface ParagraphTranslatedPayload {
-  source_preview: string;
-  target_preview: string;
-  paragraphs_seen: number;
-  service: string;
-}
+// Generated from `api/sse_schemas.py` — see issue #27. `ChunkReadyPayload`
+// still satisfies `translation-progress.ts`'s `ChunkReadyLike` structurally
+// (both declare `pages_in_chunk` as a `[number, number]` tuple), so that pure
+// accumulator module needs no changes.
+type ProgressUpdate = components["schemas"]["ProgressEventPayload"];
+type CompletionPayload = components["schemas"]["CompletionEventPayload"];
+type ChunkReadyPayload = components["schemas"]["ChunkReadyEventPayload"];
+type ParagraphTranslatedPayload =
+  components["schemas"]["ParagraphTranslatedEventPayload"];
+type CancelPayload = components["schemas"]["CancelPayload"];
+type JobErrorPayload = components["schemas"]["JobErrorPayload"];
 
 export interface TranslationState {
   /** `cancelling` is the window between the user clicking Cancel and the
@@ -218,7 +184,8 @@ export function useTranslation() {
           | CompletionPayload
           | ChunkReadyPayload
           | ParagraphTranslatedPayload
-          | { message: string }
+          | CancelPayload
+          | JobErrorPayload
         >({
           path: `/translate/${jobId}/events`,
           signal: controller.signal,
@@ -303,7 +270,7 @@ export function useTranslation() {
                 totalParagraphs: c.total_paragraphs ?? 0,
               }));
             } else if (type === "cancelled") {
-              const c = data as CompletionPayload;
+              const c = data as CancelPayload;
               if (c.translated_file) {
                 adoptArtifact(c.translated_file);
               }
@@ -313,7 +280,7 @@ export function useTranslation() {
                 translatedPath: c.translated_file ?? s.translatedPath ?? null,
               }));
             } else if (type === "error") {
-              const e = data as { message: string };
+              const e = data as JobErrorPayload;
               setState((s) => ({ ...s, status: "error", error: e.message }));
             }
           },

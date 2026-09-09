@@ -5,7 +5,9 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "tsc && vite build",
+    "build": "pnpm run generate:api-types && tsc && vite build",
+    "generate:api-types": "openapi-typescript src/lib/openapi.json -o src/lib/api-types.d.ts",
+    "check:api-types": "openapi-typescript src/lib/openapi.json -o src/lib/api-types.d.ts --check",
     "preview": "vite preview",
     "test": "vitest run",
     "test:watch": "vitest",
@@ -49,6 +51,7 @@
     "@types/react": "^19.1.8",
     "@types/react-dom": "^19.1.6",
     "@vitejs/plugin-react": "^4.6.0",
+    "openapi-typescript": "^7.13.0",
     "typescript": "~5.8.3",
     "vite": "^7.0.4",
     "vitest": "^4.1.11"

@@ -4,7 +4,14 @@ from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, Field
 
-from ..config import LanguageCode, TranslationService
+from ..config import (
+    GUISettings,
+    LanguageCode,
+    ProcessingSettings,
+    RAGSettings,
+    TranslationService,
+    TranslationSettings,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -35,10 +42,15 @@ class ConfigResponse(BaseModel):
     gemini: APIKeyMaskedSettings
     anthropic: APIKeyMaskedSettings
     argos: APIKeyMaskedSettings
-    translation: Dict[str, Any]
-    rag: Dict[str, Any]
-    gui: Dict[str, Any]
-    processing: Dict[str, Any] = Field(default_factory=dict)
+    # Real nested settings models, not Dict[str, Any] — the latter would erase
+    # exactly the fields (default_source_lang, default_target_lang,
+    # preferred_service, ...) whose drift from the hand-written frontend types
+    # is what issue #27 is about. `routes/config.py` passes the settings
+    # objects straight through; the wire format is identical either way.
+    translation: TranslationSettings
+    rag: RAGSettings
+    gui: GUISettings
+    processing: ProcessingSettings
     debug_mode: bool
 
 

@@ -1,6 +1,7 @@
 import { useCallback, useRef, useState } from "react";
 
 import { api } from "@/lib/api-client";
+import type { components } from "@/lib/api-types";
 import { buildAskBody } from "@/lib/ask-request";
 import { streamEvents } from "@/lib/sse";
 
@@ -10,30 +11,19 @@ export interface ActionEvent {
   status: "running" | "done" | "failed";
 }
 
-/** One retrieved chunk from `rag_chain._create_pdf_references`. */
-export interface PdfReference {
-  text?: string;
-  /** 1-indexed — `rag_chain._display_page` converts at that boundary, so it
-   *  goes straight to `PdfViewer.scrollToPage`. `null` when the chunk has no
-   *  usable page; the sidecar sends that rather than guessing one. */
-  page?: number | null;
-}
-
 /**
- * The `answer` / `done` SSE payload from `POST /rag/ask`, narrowed to what the
- * UI reads — the sidecar also sends `quality_metrics`, `sources_used`,
- * `processing_time` and `timestamp`, so this is not a mirror of
- * `EnhancedRAGChain.answer_question` and shouldn't be maintained as one.
- *
- * The key is load-bearing: the chain has always returned `pdf_references`, and
- * this file declaring `pdf_sources` (alongside a `web_sources` branch left
- * over from the web research dropped in `35bca2c`) is what kept the reference
- * list empty (#13).
+ * Generated from `api/sse_schemas.py` (see issue #27) — previously hand-typed
+ * here, and it was exactly that hand-copy declaring `pdf_sources` (alongside a
+ * `web_sources` branch left over from the web research dropped in `35bca2c`)
+ * that kept the reference list permanently empty (#13): the chain has always
+ * returned `pdf_references`. `page` is 1-indexed — `rag_chain._display_page`
+ * converts at that boundary, so it goes straight to `PdfViewer.scrollToPage`;
+ * `null` when the chunk has no usable page.
  */
-export interface RagAnswer {
-  answer: string;
-  pdf_references?: PdfReference[];
-}
+export type PdfReference = components["schemas"]["PdfReferencePayload"];
+
+/** The `answer` / `done` SSE payload from `POST /rag/ask`. */
+export type RagAnswer = components["schemas"]["AskResultPayload"];
 
 export interface AskState {
   status: "idle" | "asking" | "done" | "error";
@@ -87,7 +77,7 @@ export function useRagAsk() {
         signal: controller.signal,
         onEvent: ({ type, data }) => {
           if (type === "progress") {
-            const p = data as { message?: string; progress?: number };
+            const p = data as components["schemas"]["AskProgressPayload"];
             setState((s) => ({
               ...s,
               message: p.message ?? s.message,
@@ -121,7 +111,7 @@ export function useRagAsk() {
               answer: s.answer ?? ans,
             }));
           } else if (type === "error") {
-            const e = data as { message: string };
+            const e = data as components["schemas"]["JobErrorPayload"];
             setState((s) => ({
               ...s,
               status: "error",
