@@ -5,90 +5,17 @@ Handles embeddings, indexing, and retrieval for RAG system.
 
 import asyncio
 import logging
-import os
 import json
 from pathlib import Path
 from typing import List, Dict, Any, Optional, Tuple
 from datetime import datetime
-import numpy as np
 
-# Disable ChromaDB telemetry to prevent errors
-os.environ["ANONYMIZED_TELEMETRY"] = "False"
-os.environ["CHROMA_SERVER_NOFILE"] = "1"
-os.environ["CHROMA_CLIENT_AUTH_PROVIDER"] = ""
-os.environ["CHROMA_CLIENT_AUTH_CREDENTIALS"] = ""
+import chromadb
+from chromadb.config import Settings
 
-# Additional telemetry disabling for newer versions
-os.environ["CHROMA_TELEMETRY_DISABLED"] = "True"
-os.environ["CHROMA_TELEMETRY"] = "False"
-
-# Fix NumPy 2.0 compatibility BEFORE importing chromadb
-if not hasattr(np, "float_"):
-    np.float_ = np.float64
-if not hasattr(np, "int_"):
-    np.int_ = np.int64
-if not hasattr(np, "uint"):
-    np.uint = np.uint64
-
-# These imports are deliberately below the environment/NumPy shims above:
-# chromadb reads the telemetry variables and the `np.float_` aliases at import
-# time, so hoisting them to the top of the file re-breaks both. Hence the
-# blanket E402 waivers rather than a reordering.
-import posthog  # noqa: E402
-
-posthog.disabled = True
-
-# Import chromadb (telemetry already disabled via environment variables)
-import chromadb  # noqa: E402
-from chromadb import EmbeddingFunction, Embeddings  # noqa: E402
-from chromadb.config import Settings  # noqa: E402
-from sentence_transformers import SentenceTransformer  # noqa: E402
+from .onnx_embeddings import OnnxEmbeddingFunction
 
 logger = logging.getLogger(__name__)
-
-
-class CustomEmbeddingFunction(EmbeddingFunction):
-    """Custom embedding function that follows ChromaDB interface."""
-    
-    def __init__(self, model_name: str = "paraphrase-multilingual-MiniLM-L12-v2"):
-        self.model_name = model_name
-        self.model = None
-        self._load_model()
-    
-    def _load_model(self):
-        """Load the embedding model."""
-        try:
-            self.model = SentenceTransformer(self.model_name)
-            logger.info(f"Loaded embedding model: {self.model_name}")
-        except Exception as e:
-            logger.error(f"Failed to load embedding model: {e}")
-            # Fallback to smaller model
-            try:
-                self.model = SentenceTransformer("all-MiniLM-L6-v2")
-                logger.info("Loaded fallback embedding model: all-MiniLM-L6-v2")
-            except Exception as e2:
-                logger.error(f"Failed to load fallback model: {e2}")
-                raise
-    
-    def __call__(self, input: List[str]) -> Embeddings:
-        """
-        Encode texts into embeddings following ChromaDB interface.
-        
-        Args:
-            input: List of text strings to encode
-            
-        Returns:
-            List of embedding vectors
-        """
-        if not self.model:
-            raise RuntimeError("Embedding model not loaded")
-        
-        try:
-            embeddings = self.model.encode(input, convert_to_numpy=True)
-            return embeddings.tolist()
-        except Exception as e:
-            logger.error(f"Text encoding failed: {e}")
-            raise
 
 
 class ChromaDBManager:
@@ -104,86 +31,32 @@ class ChromaDBManager:
         Args:
             persist_directory: Directory to persist the database
         """
-        # Set default persist directory
+        # `chroma_db_v2` rather than `chroma_db`: the 0.4-era directory is not
+        # readable by chromadb 1.x, and a document index is cheap to rebuild.
         if persist_directory is None:
-            persist_directory = Path.home() / "AppData" / "Local" / "PDFusion" / "chroma_db"
-        
+            persist_directory = Path.home() / "AppData" / "Local" / "PDFusion" / "chroma_db_v2"
+
         self.persist_directory = Path(persist_directory)
         self.persist_directory.mkdir(parents=True, exist_ok=True)
-        
-        # Initialize ChromaDB client with proper telemetry settings
-        try:
-            # Try with comprehensive settings first
-            self.client = chromadb.PersistentClient(
-                path=str(self.persist_directory),
-                settings=Settings(
-                    anonymized_telemetry=False,
-                    allow_reset=True,
-                    is_persistent=True,
-                    chroma_server_nofile=False  # Explicitly set to False for Windows
-                )
-            )
-            logger.info("ChromaDB initialized with full settings")
-        except Exception as e:
-            # Fallback with minimal settings if there are issues
-            logger.warning(f"Failed to initialize ChromaDB with full settings: {e}")
-            try:
-                self.client = chromadb.PersistentClient(
-                    path=str(self.persist_directory),
-                    settings=Settings(anonymized_telemetry=False)
-                )
-                logger.info("ChromaDB initialized with minimal settings")
-            except Exception as e2:
-                # Last resort - basic initialization
-                logger.warning(f"Failed with minimal settings, using basic initialization: {e2}")
-                self.client = chromadb.PersistentClient(path=str(self.persist_directory))
-        
-        # Initialize embedding function for ChromaDB
-        self.embedding_function = CustomEmbeddingFunction()
 
-        # Collection for PDF documents
-        self.collection = None
-        self._initialize_collection()
-        
+        self.client = chromadb.PersistentClient(
+            path=str(self.persist_directory),
+            settings=Settings(
+                anonymized_telemetry=False,
+                allow_reset=True,
+                is_persistent=True,
+            ),
+        )
+        self.embedding_function = OnnxEmbeddingFunction()
+
+        self.collection = self.client.get_or_create_collection(
+            name="pdf_documents",
+            embedding_function=self.embedding_function,
+            configuration={"hnsw": {"space": "cosine"}},
+        )
+
         logger.info(f"ChromaDB initialized at: {self.persist_directory}")
-    
-    def _initialize_collection(self):
-        """Initialize or get existing collection."""
-        collection_name = "pdf_documents"
-        
-        try:
-            # Try to get existing collection first
-            self.collection = self.client.get_collection(
-                name=collection_name,
-                embedding_function=self.embedding_function
-            )
-            logger.info(f"Loaded existing collection: {collection_name}")
-        except ValueError as e:
-            if "does not exist" in str(e).lower():
-                # Collection doesn't exist, create new one
-                try:
-                    self.collection = self.client.create_collection(
-                        name=collection_name,
-                        embedding_function=self.embedding_function,
-                        metadata={"hnsw:space": "cosine"}
-                    )
-                    logger.info(f"Created new collection: {collection_name}")
-                except ValueError as create_error:
-                    if "already exists" in str(create_error).lower():
-                        # Collection was created by another process, get it
-                        self.collection = self.client.get_collection(
-                            name=collection_name,
-                            embedding_function=self.embedding_function
-                        )
-                        logger.info(f"Retrieved existing collection: {collection_name}")
-                    else:
-                        raise create_error
-            else:
-                raise e
-        except Exception as e:
-            logger.error(f"Failed to initialize collection: {e}")
-            raise
-    
+
     async def add_document_chunks(self, chunks: List[Dict[str, Any]], 
                                 document_id: str, document_path: str) -> bool:
         """
@@ -475,7 +348,8 @@ class ChromaDBManager:
             query_words = query.lower().split()
 
             # Get all documents for keyword matching with filter
-            all_results = self.collection.get(
+            all_results = await asyncio.to_thread(
+                self.collection.get,
                 where=filter_metadata,
                 include=['documents', 'metadatas']
             )

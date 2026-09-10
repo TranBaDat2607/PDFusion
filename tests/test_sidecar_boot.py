@@ -23,10 +23,16 @@ import pytest
 
 _SRC = Path(__file__).resolve().parents[1] / "src"
 
+# `sentence_transformers` used to be here. It left with the switch to
+# rag/onnx_embeddings.py — it is no longer installed, and
+# test_every_forbidden_name_is_a_real_module requires every name here to be.
+# `torch`, `transformers` and `stanza` stay: argostranslate hard-requires
+# stanza==1.10.1, so pip still installs the whole chain into a dev/CI env even
+# though `pdfusion-sidecar.spec` excludes it from the shipped bundle.
 FORBIDDEN_AT_BOOT = (
     "torch",
     "chromadb",
-    "sentence_transformers",
+    "stanza",
     "babeldoc",
     "sklearn",
     "camelot",

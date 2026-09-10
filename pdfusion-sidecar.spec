@@ -44,13 +44,16 @@ hiddenimports = [
     "pydantic_settings",
 
     # chromadb dynamic backends
-    "chromadb.api.fastapi",
-    "chromadb.telemetry.product.posthog",
+    "chromadb.api.rust",
     "chromadb.db.impl.sqlite",
+    "chromadb.execution.executor.local",
+    "chromadb.segment.impl.manager.local",
     "chromadb.segment.impl.metadata.sqlite",
-    "chromadb.segment.impl.vector.local_hnsw",
-    "chromadb.segment.impl.vector.local_persistent_hnsw",
     "chromadb.utils.embedding_functions",
+
+    # RAG embeddings (rag/onnx_embeddings.py)
+    "onnxruntime",
+    "tokenizers",
 
     # Argos translate (lazy-imported inside argos_translator). Use the explicit
     # entries below as a fail-safe; the collect_submodules call further down
@@ -90,23 +93,14 @@ hiddenimports += collect_submodules("ctranslate2")
 # models, fewshot, utils) reached only at runtime — including from our own
 # code's CTranslate2 fast path. Pull the whole package in.
 hiddenimports += collect_submodules("argostranslate")
-# stanza is imported at the top of argostranslate.sbd. Without it, the whole
-# argostranslate.translate import chain raises ModuleNotFoundError on the
-# very first paragraph. The en→vi Argos pack ships its own stanza model
-# inside the language pack, so we don't need stanza's default model
-# downloads — just the package code on the import path.
-hiddenimports += collect_submodules("stanza")
-# transformers picks model-class modules at runtime based on the loaded model
-# config (e.g. `transformers.models.xlm_roberta.modeling_xlm_roberta` for the
-# default RAG embedding model). sentence-transformers triggers these on first
-# `embed()` call, so without them, RAG ask would fail at chat time.
-hiddenimports += collect_submodules("transformers")
+# MiniSBD is the sentence splitter argostranslate is pinned to
+# (argos_translator._configure_argos_settings), and the repacked en→vi pack
+# carries its 0.19 MB onnx model. It replaces stanza, which is excluded below.
+hiddenimports += collect_submodules("minisbd")
 # huggingface_hub has a `_LazyImporter` in its package __init__ that resolves
-# attributes through `importlib.import_module` — sentence-transformers + the
-# tokenizers hub calls hit it.
+# attributes through `importlib.import_module` — babeldoc's asset layer and
+# rag/onnx_embeddings.py's hf_hub_download both go through it.
 hiddenimports += collect_submodules("huggingface_hub")
-# sentence-transformers loads model backends dynamically.
-hiddenimports += collect_submodules("sentence_transformers")
 # chromadb has dynamic plugin loading throughout.
 hiddenimports += collect_submodules("chromadb")
 
@@ -118,16 +112,9 @@ hiddenimports += collect_submodules("chromadb")
 # package — those must be copied into the bundle or runtime calls will fail.
 datas = []
 datas += collect_data_files("babeldoc")
-# Stanza ships small per-module data (e.g. resource manifests) inside its
-# package. argostranslate's bundled en→vi pack supplies the actual NLP model
-# weights, but stanza still expects package data on disk at import time.
-datas += collect_data_files("stanza")
-
-# sentence-transformers / tokenizers / transformers have small package data
-# (tokenizer configs, vocab fallbacks) that they expect to find on disk.
-datas += collect_data_files("sentence_transformers")
+datas += collect_data_files("minisbd")
+# tokenizers has small package data (vocab fallbacks) it expects on disk.
 datas += collect_data_files("tokenizers")
-datas += collect_data_files("transformers", include_py_files=False)
 # tiktoken_ext.openai_public references encoding files that tiktoken downloads
 # on first use (cached under %LOCALAPPDATA%\tiktoken\). It still needs the
 # plugin .py files at import time, which collect_submodules handles, but bundle
@@ -140,7 +127,6 @@ for pkg in (
     "openai",
     "anthropic",
     "google-genai",
-    "sentence-transformers",
     "chromadb",
     "fastapi",
     "uvicorn",
@@ -244,7 +230,7 @@ excludes = [
     "feedfinder2",
     "sgmllib3k",
 
-    # --- LangChain dead weight (RAG uses chromadb + sentence-transformers directly) ---
+    # --- LangChain dead weight (RAG uses chromadb directly) ---
     "langchain",
     "langchain_community",
     "langchain_core",
@@ -269,10 +255,25 @@ excludes = [
     "underthesea_core",
     "python_crfsuite",
     "jieba",
-    # NOTE: `stanza` is intentionally NOT excluded here. It looks like a
-    # langchain transitive dep, but argostranslate.sbd does `import stanza`
-    # at module load — excluding it crashes Argos translation on every
-    # paragraph with `No module named 'stanza'`.
+
+    # --- The torch stack: ~590 MB, and nothing here needs it ---
+    # `argostranslate.sbd` does `import stanza` at module load and stanza
+    # imports torch, which is how a 466 MB tensor library ended up on the
+    # offline-translate path. Two changes let all of it go: the sentence
+    # splitter is pinned to MiniSBD (onnxruntime) and the shipped en→vi pack
+    # carries its model, and `translators/_sbd_compat.install_stanza_stub()`
+    # satisfies that unconditional import with an empty module. RAG embeddings
+    # moved to onnxruntime too (rag/onnx_embeddings.py), which is what freed
+    # transformers and sentence-transformers.
+    # `tests/test_sidecar_smoke.py` against the built exe is what proves this.
+    "stanza",
+    "torch",
+    "torchvision",
+    "torchaudio",
+    "transformers",
+    "sentence_transformers",
+    "accelerate",
+    "safetensors",
 
     # --- OCR libraries (not used by current pipeline) ---
     "rapidocr_onnxruntime",

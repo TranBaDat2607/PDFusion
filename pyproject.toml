@@ -76,15 +76,13 @@ dev = [
 
 # RAG and advanced features
 rag = [
-    # Vector database and embeddings
-    "chromadb>=0.4.15,<0.5.0",
-    "sentence-transformers>=2.3.0,<3.0.0",
-    "faiss-cpu>=1.7.4,<2.0.0",
-
-    # LangChain framework (reserved for future hybrid retrieval)
-    "langchain>=0.3.0,<0.4.0",
-    "langchain-community>=0.3.0,<0.4.0",
-    "rank-bm25>=0.2.2,<1.0.0",
+    # Vector database, and the ONNX embedding stack rag/onnx_embeddings.py runs
+    # on. langchain, faiss-cpu and rank-bm25 were listed here for a hybrid
+    # retrieval that was never built -- nothing under src/ imported them.
+    "chromadb>=1.5.0,<2.0.0",
+    "onnxruntime>=1.17.0,<2.0.0",
+    "tokenizers>=0.15.0,<1.0.0",
+    "huggingface-hub>=0.20.0,<1.0.0",
 ]
 
 # Advanced PDF processing

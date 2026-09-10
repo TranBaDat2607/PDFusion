@@ -79,9 +79,9 @@ python main.py
 This prints `READY port=<n> token=<n>` and then serves the FastAPI app on
 `http://127.0.0.1:<n>`. OpenAPI docs are at `http://127.0.0.1:<n>/docs`.
 
-## Building the Windows installer (.msi)
+## Building the Windows installer
 
-To produce a distributable `.msi` from a fresh clone:
+To produce a distributable per-user installer from a fresh clone:
 
 ```powershell
 # 1. Install Python deps + PyInstaller (not in requirements.txt — it's a dev extra).
@@ -89,12 +89,10 @@ conda activate pdfusion
 pip install -r requirements.txt
 pip install -e ".[dev]"          # or just: pip install pyinstaller
 
-# 2. (Optional but recommended) Drop the Argos en→vi language pack into
-#    assets/argos/ so the installer ships offline-ready. Without it, the app
-#    downloads ~80 MB on the user's first translate.
-#    Download translate-en_vi.argosmodel from:
-#      https://www.argosopentech.com/argospm/index/
-#    Place it at: assets/argos/translate-en_vi.argosmodel
+# 2. (Optional but recommended) Stage the ~290 MB of engine assets the
+#    installer ships, so it is offline-ready. Without this the app downloads
+#    them on the user's first translate instead.
+./fetch-offline-assets.ps1
 
 # 3. Install frontend deps and build.
 cd desktop
@@ -109,16 +107,39 @@ The Tauri bundler auto-runs `build-sidecar.ps1` (via `tauri.conf.json`'s
 
 Output:
 ```
-desktop/src-tauri/target/release/bundle/msi/PDFusion_<version>_x64_en-US.msi
+desktop/src-tauri/target/release/bundle/nsis/PDFusion_<version>_x64-setup.exe
 ```
 
 Notes:
+- **It installs per user** — under `%LOCALAPPDATA%\Programs\PDFusion`, with no
+  admin rights and no UAC prompt. NSIS is the only bundle target; the
+  per-machine WiX `.msi` was dropped, so re-add `"msi"` to `bundle.targets` if
+  you need one for an IT deployment.
 - **First build is slow** — ~10–20 min, because PyInstaller bundles the full
-  chromadb + sentence-transformers + babeldoc stack.
-- **The `.msi` is large** — ~500 MB to 1 GB. ML model weights download lazily
-  on first use to `~/.cache/huggingface`.
-- **The installer is unsigned** — Windows SmartScreen will warn on first
-  install. Code signing is out of scope for the current phase.
+  chromadb + babeldoc stack.
+- **The installer is large** — ~470 MB, most of which is the ~290 MB of engine
+  assets it ships so the app works offline on first run. The RAG embedding
+  weights (~470 MB) still download lazily on first Chat use to
+  `~/.cache/huggingface`.
+- **The installer is unsigned by default** — Windows SmartScreen will warn on
+  first install. See *Code signing* below.
+
+### Code signing
+
+`tauri.conf.json` carries the `digestAlgorithm` and `timestampUrl` half of the
+configuration; what it deliberately does not carry is a certificate. Supply one
+of the two and the release workflow signs:
+
+- **Azure Trusted Signing** (no cert to store, billed per month) — set the
+  repository secret `WINDOWS_SIGN_COMMAND` to the signing invocation, with `%1`
+  standing in for the file being signed. `.github/workflows/release.yml` passes
+  it through to `bundle.windows.signCommand`.
+- **An OV/EV certificate in the runner's store** — set
+  `bundle.windows.certificateThumbprint` instead.
+
+With neither set the workflow prints a warning and produces an unsigned
+installer, which is the current shipped state. SmartScreen keeps warning until
+one of them is configured.
 - **Dev iteration without a full PyInstaller build**: if you only want to
   hack on the React/Rust side and don't need a working bundled sidecar,
   run `./build-sidecar.ps1 -Stub` once to drop placeholder files so

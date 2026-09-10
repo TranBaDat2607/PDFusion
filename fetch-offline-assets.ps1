@@ -23,6 +23,11 @@
     step that silently downloads a third of a gigabyte is the problem, not the
     fix.
 
+    The Argos pack is also repacked in place: upstream ships a stanza sentence
+    tokenizer inside it, which is what drags torch into the bundle. It is
+    replaced with MiniSBD's onnxruntime model. That step is idempotent, so it
+    also fixes a pack staged before this existed.
+
 .NOTES
     <tag> is a hash of BabelDOC's own asset manifest, so the zip is only valid
     for the babeldoc version it was built against. Re-run this after bumping
@@ -61,8 +66,10 @@ Write-Host "==> Staging offline engine assets with $PyExe" -ForegroundColor Cyan
 
 $Script = @'
 import asyncio
+import os
 import shutil
 import sys
+import zipfile
 from pathlib import Path
 
 repo = Path(sys.argv[1])
@@ -126,8 +133,58 @@ def stage_argos() -> None:
     print(f"[argos]    staged {target.name} ({size_mb:.0f} MB)")
 
 
+def repack_argos_sbd() -> None:
+    # Upstream ships a stanza tokenizer inside the pack, and stanza loads torch
+    # checkpoints -- that one 0.63 MB file is what puts torch (466 MB) and
+    # transformers (119 MB) on the offline translate path. argostranslate reads
+    # sentence boundaries from a bundled `minisbd/*.onnx` when one is present,
+    # so swap the two: MiniSBD's en model is 0.19 MB of onnxruntime. Idempotent
+    # -- a pack already carrying minisbd and no stanza is left alone.
+    target = argos_dir / "translate-en_vi.argosmodel"
+    if not target.exists():
+        return
+
+    from minisbd.models import get_model_file
+
+    with zipfile.ZipFile(target) as zf:
+        names = zf.namelist()
+    if not names:
+        raise SystemExit(f"{target.name} is empty")
+    prefix = names[0].split("/")[0]
+    stanza_entries = [n for n in names if n.startswith(f"{prefix}/stanza/")]
+    has_minisbd = any(
+        n.startswith(f"{prefix}/minisbd/") and n.endswith(".onnx") for n in names
+    )
+    if has_minisbd and not stanza_entries:
+        print(f"[argos]    {target.name} already uses MiniSBD sentence splitting")
+        return
+
+    sbd_model = Path(get_model_file("en"))
+    before_mb = target.stat().st_size / 1024 / 1024
+    # Sibling staging file + os.replace, so an interrupted repack never leaves a
+    # half-written pack where a good one was.
+    staging = target.with_name(target.name + ".repack")
+    with zipfile.ZipFile(target) as src, zipfile.ZipFile(
+        staging, "w", zipfile.ZIP_DEFLATED
+    ) as dst:
+        for item in src.infolist():
+            if item.filename.startswith(f"{prefix}/stanza/"):
+                continue
+            dst.writestr(item, src.read(item.filename))
+        dst.write(sbd_model, f"{prefix}/minisbd/{sbd_model.name}")
+    os.replace(staging, target)
+
+    after_mb = target.stat().st_size / 1024 / 1024
+    print(
+        f"[argos]    repacked {target.name}: dropped {len(stanza_entries)} stanza "
+        f"entries, added minisbd/{sbd_model.name} "
+        f"({before_mb:.1f} -> {after_mb:.1f} MB)"
+    )
+
+
 stage_babeldoc()
 stage_argos()
+repack_argos_sbd()
 '@
 
 $forceFlag = if ($Force) { "1" } else { "0" }

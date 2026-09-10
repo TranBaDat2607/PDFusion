@@ -1,0 +1,121 @@
+name: Release
+
+# Builds the installer on a version tag and attaches it to a draft release.
+#
+# windows-latest for the same reasons ci.yml is: DPAPI key store, %LOCALAPPDATA%
+# sidecar lookup, Job Object confinement. Unlike ci.yml this is not a gate —
+# nothing here runs on a PR.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+env:
+  PYTHON_VERSION: "3.11"
+  NODE_VERSION: "22"
+
+jobs:
+  installer:
+    name: Build NSIS installer
+    runs-on: windows-latest
+    timeout-minutes: 120
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            pyproject.toml
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+          cache-dependency-path: desktop/pnpm-lock.yaml
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: desktop/src-tauri
+
+      # The bundle peaks around 8-11 GB and a windows-latest runner does not
+      # have much headroom. A cached target/debug is dead weight here.
+      - name: Reclaim disk
+        shell: pwsh
+        run: |
+          if (Test-Path desktop/src-tauri/target/debug) {
+            Remove-Item -Recurse -Force desktop/src-tauri/target/debug
+          }
+          Get-PSDrive C | Select-Object Used, Free
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install -e ".[dev]"
+
+      # ~290 MB of engine assets, deliberately not wired into
+      # beforeBundleCommand (see fetch-offline-assets.ps1). Without this the
+      # bundle still succeeds and the app downloads them on first run instead —
+      # which is exactly what shipping them is meant to avoid.
+      - name: Stage offline engine assets
+        shell: pwsh
+        run: ./fetch-offline-assets.ps1
+
+      - name: Install frontend dependencies
+        working-directory: desktop
+        run: pnpm install --frozen-lockfile
+
+      # Signing is opt-in: with no secret configured the installer is built
+      # unsigned and SmartScreen warns on first install, exactly as today.
+      # WINDOWS_SIGN_COMMAND is the Azure Trusted Signing / signtool invocation,
+      # with %1 standing in for the file being signed.
+      - name: Resolve signing configuration
+        id: signing
+        shell: pwsh
+        env:
+          SIGN_COMMAND: ${{ secrets.WINDOWS_SIGN_COMMAND }}
+        run: |
+          if ($env:SIGN_COMMAND) {
+            $cfg = @{ bundle = @{ windows = @{ signCommand = $env:SIGN_COMMAND } } } | ConvertTo-Json -Compress -Depth 5
+            "config=$cfg" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+            Write-Host "Signing enabled"
+          } else {
+            "config={}" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+            Write-Warning "WINDOWS_SIGN_COMMAND is not set - building an UNSIGNED installer"
+          }
+
+      # beforeBundleCommand runs build-sidecar.ps1 (PyInstaller, ~10-20 min).
+      - name: Build the installer
+        working-directory: desktop
+        run: pnpm tauri build --config '${{ steps.signing.outputs.config }}'
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pdfusion-nsis-installer
+          path: desktop/src-tauri/target/release/bundle/nsis/*-setup.exe
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Attach to a draft release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          draft: true
+          files: desktop/src-tauri/target/release/bundle/nsis/*-setup.exe
+          body: |
+            Per-user install — no admin rights required; installs under
+            `%LOCALAPPDATA%\Programs\PDFusion`.
+
+            See the commit log for ${{ github.ref_name }}.
