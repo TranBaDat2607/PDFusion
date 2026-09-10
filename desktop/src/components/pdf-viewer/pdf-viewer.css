@@ -1,0 +1,141 @@
+/*
+ * Page-slot and text-layer styles for PdfViewer.
+ *
+ * The `.textLayer` rules and `.hiddenCanvasElement` are copied from
+ * pdfjs-dist 5.7.284, web/pdf_viewer.css (the text layer block is at roughly
+ * lines 885-1027). They are copied rather than imported because that file is
+ * ~7k lines of viewer, editor and annotation styles, plus image url()s this
+ * app doesn't use.
+ *
+ * TextLayer's output only lays out under these rules. It sizes the layer as
+ * `var(--total-scale-factor) * <page width in points>px`, and positions every
+ * span through `--font-height`, `--scale-x` and `--rotate`. Re-check this file
+ * against the new pdf_viewer.css whenever pdfjs-dist is bumped.
+ */
+
+/* One page slot. `--scale-factor` is set inline to the viewer's zoom, so a zoom
+   step rescales the text layer in the same frame as the slot itself. */
+.pdf-page {
+  --user-unit: 1;
+  --total-scale-factor: calc(var(--scale-factor, 1) * var(--user-unit));
+  --scale-round-x: 1px;
+  --scale-round-y: 1px;
+}
+
+/* A rendered page stretches to its slot. Between a zoom step and the re-render
+   after it, the old bitmap is shown scaled rather than not at all. */
+.pdf-page-canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  transition: opacity 180ms ease-out;
+}
+
+/* TextLayer measures text on a canvas it appends to <body>. */
+.hiddenCanvasElement {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 0;
+  height: 0;
+  display: none;
+}
+
+.textLayer {
+  color-scheme: only light;
+
+  position: absolute;
+  text-align: initial;
+  inset: 0;
+  overflow: clip;
+  opacity: 1;
+  line-height: 1;
+  -webkit-text-size-adjust: none;
+  text-size-adjust: none;
+  forced-color-adjust: none;
+  transform-origin: 0 0;
+  caret-color: CanvasText;
+  z-index: 0;
+
+  --min-font-size: 1;
+  --text-scale-factor: calc(var(--total-scale-factor) * var(--min-font-size));
+  --min-font-size-inv: calc(1 / var(--min-font-size));
+}
+
+.textLayer :is(span, br) {
+  color: transparent;
+  position: absolute;
+  white-space: pre;
+  cursor: text;
+  transform-origin: 0% 0%;
+}
+
+.textLayer > :not(.markedContent),
+.textLayer .markedContent span:not(.markedContent) {
+  z-index: 1;
+
+  --font-height: 0;
+  font-size: calc(var(--text-scale-factor) * var(--font-height));
+
+  --scale-x: 1;
+  --rotate: 0deg;
+  transform: rotate(var(--rotate)) scaleX(var(--scale-x))
+    scale(var(--min-font-size-inv));
+}
+
+.textLayer .markedContent {
+  display: contents;
+}
+
+.textLayer span[role="img"] {
+  user-select: none;
+  cursor: default;
+}
+
+/* Find matches: the app's green rather than pdf.js's magenta. The page is
+   white in both themes, so one colour serves both. */
+.textLayer .highlight {
+  --highlight-bg-color: color-mix(in oklch, var(--primary) 35%, transparent);
+  --highlight-selected-bg-color: color-mix(
+    in oklch,
+    var(--primary) 70%,
+    transparent
+  );
+
+  margin: -1px;
+  padding: 1px;
+  background-color: var(--highlight-bg-color);
+  border-radius: 4px;
+}
+
+/* A highlight nested inside a text span, which is how every highlight here is
+   painted, must not inherit the spans' absolute positioning. */
+.textLayer .highlight.appended {
+  position: initial;
+}
+
+.textLayer .highlight.selected {
+  background-color: var(--highlight-selected-bg-color);
+}
+
+.textLayer ::selection {
+  background: color-mix(in oklch, var(--primary) 35%, transparent);
+}
+
+.textLayer br::selection {
+  background: transparent;
+}
+
+.textLayer .endOfContent {
+  display: block;
+  position: absolute;
+  inset: 100% 0 0;
+  z-index: 0;
+  cursor: default;
+  user-select: none;
+}
+
+.textLayer.selecting .endOfContent {
+  top: 0;
+}

@@ -89,15 +89,20 @@ export function ContextBar({
 
   return (
     <div className="flex flex-wrap items-center gap-3 border-b border-border bg-background px-4 py-2.5">
-      <Button
-        variant={originalPath ? "outline" : "default"}
-        size="sm"
-        onClick={onPickFile}
-        className="gap-2"
-      >
-        <FilePlus className="h-4 w-4" />
-        {originalPath ? "Change PDF" : "Open PDF"}
-      </Button>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <Button
+            variant={originalPath ? "outline" : "default"}
+            size="sm"
+            onClick={onPickFile}
+            className="gap-2"
+          >
+            <FilePlus className="h-4 w-4" />
+            {originalPath ? "Change PDF" : "Open PDF"}
+          </Button>
+        </TooltipTrigger>
+        <TooltipContent>Ctrl+O, or drop a PDF onto the window</TooltipContent>
+      </Tooltip>
 
       {originalPath && (
         <div className="flex max-w-[260px] items-center gap-1.5 rounded-md bg-muted px-2.5 py-1 text-xs">

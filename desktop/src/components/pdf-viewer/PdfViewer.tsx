@@ -1,42 +1,104 @@
-import { useCallback, useEffect, useRef, useState } from "react";
-import { Maximize2, Minus, Plus } from "lucide-react";
-import * as pdfjs from "pdfjs-dist";
-import workerSrc from "pdfjs-dist/build/pdf.worker.min.mjs?url";
+import {
+  useCallback,
+  useEffect,
+  useImperativeHandle,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type CSSProperties,
+  type ReactNode,
+  type Ref,
+} from "react";
 
-import { Button } from "@/components/ui/button";
-import { sidecarToken, sidecarUrl } from "@/lib/api-client";
+import { FindBar } from "@/components/pdf-viewer/FindBar";
+import { PageRenderer } from "@/components/pdf-viewer/page-renderer";
+import { ViewerToolbar } from "@/components/pdf-viewer/ViewerToolbar";
+import "@/components/pdf-viewer/pdf-viewer.css";
+import { usePdfDocument } from "@/hooks/usePdfDocument";
+import { usePdfFind } from "@/hooks/usePdfFind";
+import type { ArtifactChange } from "@/lib/pdf-viewer/artifact-swap";
+import {
+  CONTENT_PADDING,
+  PAGE_GAP,
+  fitWidthZoom,
+  mostVisiblePage,
+  offsetForAnchor,
+  offsetForPage,
+  pageGeometry,
+  renderWindow,
+  scrollAnchor,
+  slotSize,
+  visibleRange,
+  zoomIn,
+  zoomOut,
+  type PageSize,
+  type ScrollAnchor,
+} from "@/lib/pdf-viewer/layout";
 
-pdfjs.GlobalWorkerOptions.workerSrc = workerSrc;
-
-type PdfDoc = pdfjs.PDFDocumentProxy;
+/** What the workspace's keyboard shortcuts can ask of a pane. */
+export interface PdfViewerHandle {
+  /** Shortcuts go to the other pane when this one has nothing loaded. */
+  hasDocument: () => boolean;
+  zoomIn: () => void;
+  zoomOut: () => void;
+  resetZoom: () => void;
+  openFind: () => void;
+  findNext: () => void;
+  findPrevious: () => void;
+}
 
 interface PdfViewerProps {
   /** Absolute host filesystem path. The sidecar streams the bytes. */
   filePath: string | null;
   /** Optional placeholder when no file is loaded. */
-  emptyState?: React.ReactNode;
+  emptyState?: ReactNode;
   /** Page to scroll to (1-indexed). Updates from chat reference clicks. */
   scrollToPage?: number;
   /** Compact label shown in the bottom toolbar (e.g. "Original" / "Translated"). */
   label?: string;
   /** When set and `filePath` is null, render a single blank white page of
    *  these dimensions (CSS points at scale=1) instead of `emptyState`. */
-  placeholderSize?: { width: number; height: number } | null;
-  /** Fired once after a document loads, with the first page's natural size
-   *  (CSS points at scale=1). Fires again with `null` when the document is
-   *  unloaded. */
-  onFirstPageSize?: (size: { width: number; height: number } | null) => void;
-  /** Fired when the most-visible page changes (throttled ~250ms). Used by
-   *  the original viewer to feed the translation priority scheduler so the
-   *  page the user is looking at translates first. */
+  placeholderSize?: PageSize | null;
+  /** Fired after a different document loads, with its first page's natural
+   *  size (CSS points at scale=1). Fires again with `null` when the document
+   *  is unloaded. */
+  onFirstPageSize?: (size: PageSize | null) => void;
+  /** Fired when the page the reader is on changes. Used by the original viewer
+   *  to feed the translation priority scheduler so the page the user is
+   *  looking at translates first. */
   onVisiblePageChange?: (page: number) => void;
   /** Bumped by the caller whenever the file at `filePath` may have been
-   *  overwritten in-place (e.g. Re-translate writing to the same rolling
-   *  output path that's currently displayed). Forces the load effect to
-   *  refetch and re-parse rather than reuse the cached PDFDocumentProxy. */
+   *  overwritten in place (e.g. Re-translate writing to the same rolling
+   *  output path that's currently displayed). Forces a refetch of the path. */
   reloadKey?: number;
+  /** Treat a new `filePath` as a new version of the document on screen, not a
+   *  different document: load it off-screen, keep the reader's place, and
+   *  repaint only the pages `changeLog` says changed. For the translated
+   *  pane, whose rolling PDF is replaced after every chunk. */
+  incrementalUpdates?: boolean;
+  /** `translatedChanges` from the store. Only read with `incrementalUpdates`. */
+  changeLog?: readonly ArtifactChange[];
+  /** This pane receives the zoom and find shortcuts; its label says so. */
+  active?: boolean;
+  ref?: Ref<PdfViewerHandle>;
 }
 
+const NO_CHANGES: readonly ArtifactChange[] = [];
+
+function* pageNumbers(first: number, last: number): Generator<number> {
+  for (let page = first; page <= last; page++) yield page;
+}
+
+/**
+ * A continuous-scroll PDF pane.
+ *
+ * The React side owns the layout: one slot per page, each sized from the
+ * layout model, so the scroll height is right before any page renders and
+ * stays right as canvases come and go. `PageRenderer` owns what goes inside the
+ * slots. `usePdfDocument` owns the pdf.js document, and `usePdfFind` owns
+ * search. See `lib/pdf-viewer/` for the pure half of all four.
+ */
 export function PdfViewer({
   filePath,
   emptyState,
@@ -46,323 +108,406 @@ export function PdfViewer({
   onFirstPageSize,
   onVisiblePageChange,
   reloadKey = 0,
+  incrementalUpdates = false,
+  changeLog = NO_CHANGES,
+  active = false,
+  ref,
 }: PdfViewerProps) {
-  // Throttle visible-page callbacks so a fast scroll doesn't spam the store
-  // (and downstream the /translate/{job_id}/reprioritize endpoint).
-  const lastReportedPage = useRef<number>(0);
-  const reportRafRef = useRef<number | null>(null);
-  const reportVisible = useCallback(
-    (page: number) => {
-      if (!onVisiblePageChange) return;
-      if (page === lastReportedPage.current) return;
-      if (reportRafRef.current !== null) return; // already pending
-      reportRafRef.current = window.requestAnimationFrame(() => {
-        reportRafRef.current = null;
-        if (page !== lastReportedPage.current) {
-          lastReportedPage.current = page;
-          onVisiblePageChange(page);
-        }
-      });
-    },
-    [onVisiblePageChange],
-  );
-  const [doc, setDoc] = useState<PdfDoc | null>(null);
-  const [pageCount, setPageCount] = useState(0);
-  const [zoom, setZoom] = useState(1);
-  const [error, setError] = useState<string | null>(null);
-  const [loading, setLoading] = useState(false);
-  const containerRef = useRef<HTMLDivElement>(null);
-  const pageRefs = useRef<Array<HTMLDivElement | null>>([]);
-  const renderedPages = useRef<Set<number>>(new Set());
-  // Streaming-render: when the rolling translated PDF is swapped (chunk_ready
-  // fires a new `_translated_v{N}.pdf` path), we want the user to stay roughly
-  // where they were reading. We capture the most-recently-visible page index
-  // before the swap and scrollIntoView it after the new doc mounts.
-  const visiblePageRef = useRef<number>(1);
-  const pendingScrollTargetRef = useRef<number | null>(null);
+  const { loaded, loading, error } = usePdfDocument({
+    filePath,
+    reloadKey,
+    incrementalUpdates,
+    changeLog,
+  });
+  const doc = loaded?.doc ?? null;
 
-  // Load the document whenever the file path changes
-  useEffect(() => {
-    if (!filePath) {
-      setDoc(null);
-      setPageCount(0);
-      renderedPages.current.clear();
-      onFirstPageSize?.(null);
+  // Created once. StrictMode's development remount releases it rather than
+  // destroying it, so the same instance keeps working afterwards.
+  const [renderer] = useState(() => new PageRenderer());
+  const [sizes, setSizes] = useState<PageSize[]>([]);
+  const [zoom, setZoom] = useState(1);
+  const [currentPage, setCurrentPage] = useState(1);
+  const scrollerRef = useRef<HTMLDivElement>(null);
+
+  const geometry = useMemo(() => pageGeometry(sizes, zoom), [sizes, zoom]);
+  const pageCount =
+    doc !== null && sizes.length === doc.numPages ? sizes.length : 0;
+
+  // Scroll handlers and async work need the latest values without being
+  // re-created for every change.
+  const geometryRef = useRef(geometry);
+  geometryRef.current = geometry;
+  const sizesRef = useRef(sizes);
+  sizesRef.current = sizes;
+  const zoomRef = useRef(zoom);
+  zoomRef.current = zoom;
+  const currentPageRef = useRef(currentPage);
+  currentPageRef.current = currentPage;
+  const onVisiblePageChangeRef = useRef(onVisiblePageChange);
+  onVisiblePageChangeRef.current = onVisiblePageChange;
+  const onFirstPageSizeRef = useRef(onFirstPageSize);
+  onFirstPageSizeRef.current = onFirstPageSize;
+  const reportedPageRef = useRef(0);
+
+  /** Work out what's on screen from the scroll position: which pages the
+   *  renderer keeps, and which page the reader is on. */
+  const updateViewport = useCallback(() => {
+    const scroller = scrollerRef.current;
+    const geo = geometryRef.current;
+    if (!scroller || geo.tops.length === 0) {
+      renderer.update(null, null);
       return;
     }
-    // Capture scroll target BEFORE the new doc tears down the old DOM. The
-    // chunked-translate flow swaps `filePath` every chunk; without this the
-    // user would be punted back to page 1 each time a chunk lands. Initial
-    // mount has visiblePageRef=1, so the restore is a no-op there.
-    pendingScrollTargetRef.current = visiblePageRef.current;
-    let cancelled = false;
-    setLoading(true);
-    setError(null);
+    const { scrollTop, clientHeight } = scroller;
+    const visible = visibleRange(geo, scrollTop, clientHeight);
+    renderer.update(visible, visible && renderWindow(visible, geo.tops.length));
+    const page = mostVisiblePage(geo, scrollTop, clientHeight);
+    if (page === null) return;
+    setCurrentPage(page);
+    if (page !== reportedPageRef.current) {
+      reportedPageRef.current = page;
+      onVisiblePageChangeRef.current?.(page);
+    }
+  }, [renderer]);
 
-    (async () => {
-      try {
-        const url = await sidecarUrl(
-          `/pdf/file?path=${encodeURIComponent(filePath)}`,
-        );
-        const token = await sidecarToken();
-        const task = pdfjs.getDocument({
-          url,
-          httpHeaders: { Authorization: `Bearer ${token}` },
-        });
-        const loaded = await task.promise;
-        if (cancelled) {
-          loaded.destroy();
-          return;
-        }
-        setDoc(loaded);
-        setPageCount(loaded.numPages);
-        renderedPages.current.clear();
-        pageRefs.current = new Array(loaded.numPages).fill(null);
+  const frameRef = useRef<number | null>(null);
+  const scheduleViewportUpdate = useCallback(() => {
+    if (frameRef.current !== null) return;
+    frameRef.current = requestAnimationFrame(() => {
+      frameRef.current = null;
+      updateViewport();
+    });
+  }, [updateViewport]);
 
-        if (onFirstPageSize) {
-          try {
-            const firstPage = await loaded.getPage(1);
-            if (!cancelled) {
-              const v = firstPage.getViewport({ scale: 1 });
-              onFirstPageSize({ width: v.width, height: v.height });
-            }
-          } catch {
-            // best-effort; ignore size reporting failures
-          }
-        }
-      } catch (e) {
-        if (!cancelled) setError((e as Error).message);
-      } finally {
-        if (!cancelled) setLoading(false);
+  useEffect(
+    () => () => {
+      if (frameRef.current !== null) cancelAnimationFrame(frameRef.current);
+      frameRef.current = null;
+      renderer.releaseAll();
+    },
+    [renderer],
+  );
+
+  // Hand each document to the renderer. A different document starts at the
+  // top; a new version of the same one leaves the reader where they are.
+  useEffect(() => {
+    renderer.setDocument(doc, loaded?.changes ?? null);
+    if (loaded && !loaded.keepPosition) {
+      reportedPageRef.current = 0;
+      const scroller = scrollerRef.current;
+      if (scroller) {
+        scroller.scrollTop = 0;
+        scroller.scrollLeft = 0;
       }
-    })();
+    }
+    scheduleViewportUpdate();
+  }, [loaded, doc, renderer, scheduleViewportUpdate]);
+
+  // Page sizes. Every page starts at the first page's size, so the scroll
+  // height is about right immediately, and is corrected as the real sizes come
+  // in. Chromium's scroll anchoring keeps the reader in place when a page above
+  // them changes height. A new version of the same document keeps the sizes it
+  // has and re-checks only the pages that changed.
+  useEffect(() => {
+    if (!loaded) {
+      setSizes([]);
+      onFirstPageSizeRef.current?.(null);
+      return;
+    }
+    const { doc: current, changes, keepPosition } = loaded;
+    const known = sizesRef.current;
+    const reuse =
+      keepPosition && changes !== null && known.length === current.numPages;
+    let cancelled = false;
+
+    void (async () => {
+      let resolved: PageSize[];
+      let pending: Iterable<number>;
+      if (reuse) {
+        resolved = known.slice();
+        pending = changes === "all" ? pageNumbers(1, current.numPages) : changes;
+      } else {
+        const first = (await current.getPage(1)).getViewport({ scale: 1 });
+        if (cancelled) return;
+        const size = { width: first.width, height: first.height };
+        if (!keepPosition) onFirstPageSizeRef.current?.(size);
+        resolved = new Array<PageSize>(current.numPages).fill(size);
+        setSizes(resolved.slice());
+        pending = pageNumbers(2, current.numPages);
+      }
+      let corrected = 0;
+      for (const page of pending) {
+        const viewport = (await current.getPage(page)).getViewport({ scale: 1 });
+        if (cancelled) return;
+        const size = resolved[page - 1];
+        if (size.width !== viewport.width || size.height !== viewport.height) {
+          resolved[page - 1] = { width: viewport.width, height: viewport.height };
+          corrected++;
+          if (corrected % 50 === 0) setSizes(resolved.slice());
+        }
+      }
+      if (corrected % 50 !== 0) setSizes(resolved.slice());
+    })().catch(() => {
+      // A destroyed document rejects; its successor resolves its own sizes.
+    });
 
     return () => {
       cancelled = true;
     };
-    // onFirstPageSize is intentionally excluded — we only want to refire on path change
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [filePath, reloadKey]);
+  }, [loaded]);
 
-  // Lazy-render pages as they enter the viewport
-  const renderPage = useCallback(
-    async (pageNum: number) => {
-      if (!doc || renderedPages.current.has(pageNum)) return;
-      renderedPages.current.add(pageNum);
-      try {
-        const page = await doc.getPage(pageNum);
-        const canvasHost = pageRefs.current[pageNum - 1];
-        if (!canvasHost) return;
+  // Where the reader was when a zoom was asked for. Restored once the new
+  // layout exists, before paint, so the page doesn't visibly jump.
+  const zoomAnchorRef = useRef<{
+    anchor: ScrollAnchor | null;
+    centerX: number;
+  } | null>(null);
 
-        const dpr = window.devicePixelRatio || 1;
-        const viewport = page.getViewport({ scale: zoom * dpr });
-        const canvas = document.createElement("canvas");
-        canvas.width = Math.floor(viewport.width);
-        canvas.height = Math.floor(viewport.height);
-        canvas.style.width = `${Math.floor(viewport.width / dpr)}px`;
-        canvas.style.height = `${Math.floor(viewport.height / dpr)}px`;
-        canvas.className = "block bg-white shadow-sm";
-        // Crossfade: start invisible, transition to visible after render
-        // completes. Avoids the hard cut between the placeholder/old canvas
-        // and the freshly-rendered page during streaming-translate hot-swaps.
-        canvas.style.opacity = "0";
-        canvas.style.transition = "opacity 180ms ease-out";
+  const changeZoom = useCallback((compute: (zoom: number) => number) => {
+    const target = compute(zoomRef.current);
+    if (target === zoomRef.current) return;
+    const scroller = scrollerRef.current;
+    // Several steps before one render share the anchor of the first.
+    if (scroller && !zoomAnchorRef.current) {
+      zoomAnchorRef.current = {
+        anchor: scrollAnchor(geometryRef.current, scroller.scrollTop),
+        centerX:
+          (scroller.scrollLeft + scroller.clientWidth / 2) /
+          Math.max(1, scroller.scrollWidth),
+      };
+    }
+    zoomRef.current = target;
+    setZoom(target);
+  }, []);
 
-        const ctx = canvas.getContext("2d");
-        if (!ctx) return;
-
-        canvasHost.replaceChildren(canvas);
-        await page.render({ canvas, canvasContext: ctx, viewport }).promise;
-        // Trigger the transition after the browser commits the opacity:0
-        // paint, so the user sees the fade rather than instant pop-in.
-        window.requestAnimationFrame(() => {
-          canvas.style.opacity = "1";
-        });
-      } catch (e) {
-        console.warn(`Failed to render page ${pageNum}:`, e);
-        renderedPages.current.delete(pageNum);
+  useLayoutEffect(() => {
+    const pending = zoomAnchorRef.current;
+    zoomAnchorRef.current = null;
+    const scroller = scrollerRef.current;
+    if (pending && scroller) {
+      if (pending.anchor) {
+        scroller.scrollTop = offsetForAnchor(geometryRef.current, pending.anchor);
       }
+      scroller.scrollLeft =
+        pending.centerX * scroller.scrollWidth - scroller.clientWidth / 2;
+    }
+    renderer.setZoom(zoom);
+    updateViewport();
+  }, [zoom, renderer, updateViewport]);
+
+  useLayoutEffect(() => {
+    scheduleViewportUpdate();
+  }, [geometry, scheduleViewportUpdate]);
+
+  useEffect(() => {
+    const scroller = scrollerRef.current;
+    if (!scroller) return;
+    const observer = new ResizeObserver(() => scheduleViewportUpdate());
+    observer.observe(scroller);
+    return () => observer.disconnect();
+  }, [scheduleViewportUpdate]);
+
+  const goToPage = useCallback(
+    (page: number, behavior: ScrollBehavior = "auto") => {
+      const scroller = scrollerRef.current;
+      if (!scroller) return;
+      scroller.scrollTo({
+        top: offsetForPage(geometryRef.current, page),
+        behavior,
+      });
+      updateViewport();
     },
-    [doc, zoom],
+    [updateViewport],
   );
 
-  // Re-render every visible page when zoom changes
+  // Chat reference clicks. Only a new request scrolls; a document finishing
+  // loading doesn't replay an old one.
   useEffect(() => {
-    if (!doc) return;
-    renderedPages.current.clear();
-    pageRefs.current.forEach((host, idx) => {
-      if (host) {
-        // Trigger via observer below
-        host.replaceChildren();
-      }
-      void idx;
-    });
-    // Visible pages will be picked up by the observer below
-  }, [zoom, doc]);
-
-  // Intersection observer: render whatever is near the viewport, and track
-  // which page is currently most-visible so we can restore that scroll
-  // position when the doc reloads (chunked-translate hot-swap).
-  useEffect(() => {
-    if (!doc || !containerRef.current) return;
-    const observer = new IntersectionObserver(
-      (entries) => {
-        entries.forEach((entry) => {
-          if (entry.isIntersecting) {
-            const idx = Number(
-              (entry.target as HTMLElement).dataset.page ?? "0",
-            );
-            if (idx > 0) {
-              void renderPage(idx);
-              visiblePageRef.current = idx;
-              reportVisible(idx);
-            }
-          }
-        });
-      },
-      {
-        root: containerRef.current,
-        rootMargin: "200px 0px",
-        threshold: 0.01,
-      },
-    );
-    pageRefs.current.forEach((host) => host && observer.observe(host));
-    return () => observer.disconnect();
-  }, [doc, renderPage, reportVisible]);
-
-  // Restore scroll position after a new doc loads (chunked-translate flow).
-  // We scroll to the placeholder for the previously-visible page; the
-  // observer will then trigger that page to actually render. Page heights
-  // stabilize once rendered, so the user lands close to where they were.
-  useEffect(() => {
-    if (!doc) return;
-    const target = pendingScrollTargetRef.current;
-    pendingScrollTargetRef.current = null;
-    if (!target || target <= 1 || target > pageCount) return;
-    const t = window.setTimeout(() => {
-      pageRefs.current[target - 1]?.scrollIntoView({ block: "start" });
-    }, 0);
-    return () => window.clearTimeout(t);
-  }, [doc, pageCount]);
-
-  // Scroll to a specific page when requested by chat references
-  useEffect(() => {
-    if (!scrollToPage || !pageRefs.current[scrollToPage - 1]) return;
-    pageRefs.current[scrollToPage - 1]?.scrollIntoView({
-      behavior: "smooth",
-      block: "start",
-    });
+    if (scrollToPage && pageCount > 0) {
+      goToPage(Math.min(scrollToPage, pageCount), "smooth");
+    }
   }, [scrollToPage]);
 
-  const handleZoomIn = () => setZoom((z) => Math.min(z * 1.2, 5));
-  const handleZoomOut = () => setZoom((z) => Math.max(z / 1.2, 0.2));
-  const handleFitWidth = () => {
-    if (!containerRef.current || !doc) return;
-    void doc.getPage(1).then((page) => {
-      const baseViewport = page.getViewport({ scale: 1 });
-      const containerWidth = containerRef.current!.clientWidth - 48;
-      setZoom(containerWidth / baseViewport.width);
-    });
+  const revealPage = useCallback(
+    (page: number) => {
+      const scroller = scrollerRef.current;
+      if (!scroller) return;
+      const visible = visibleRange(
+        geometryRef.current,
+        scroller.scrollTop,
+        scroller.clientHeight,
+      );
+      if (visible && page >= visible.first && page <= visible.last) return;
+      scroller.scrollTop = offsetForPage(geometryRef.current, page);
+      updateViewport();
+    },
+    [updateViewport],
+  );
+
+  // Scrolls only this pane. `element.scrollIntoView` would also scroll any
+  // ancestor that can, and the workspace's overflow-hidden containers can.
+  const revealElement = useCallback(
+    (element: HTMLElement) => {
+      const scroller = scrollerRef.current;
+      if (!scroller) return;
+      const target = element.getBoundingClientRect();
+      const view = scroller.getBoundingClientRect();
+      scroller.scrollTop +=
+        target.top + target.height / 2 - (view.top + scroller.clientHeight / 2);
+      if (
+        target.left < view.left ||
+        target.right > view.left + scroller.clientWidth
+      ) {
+        scroller.scrollLeft +=
+          target.left + target.width / 2 - (view.left + scroller.clientWidth / 2);
+      }
+      updateViewport();
+    },
+    [updateViewport],
+  );
+
+  const find = usePdfFind({
+    doc,
+    changes: loaded?.changes ?? null,
+    renderer,
+    currentPage: () => currentPageRef.current,
+    revealPage,
+    revealElement,
+    onClose: () => scrollerRef.current?.focus({ preventScroll: true }),
+  });
+
+  const fitWidth = useCallback(() => {
+    const scroller = scrollerRef.current;
+    const size =
+      sizesRef.current[currentPageRef.current - 1] ?? sizesRef.current[0];
+    if (!scroller || !size) return;
+    changeZoom(() => fitWidthZoom(size.width, scroller.clientWidth));
+  }, [changeZoom]);
+
+  useImperativeHandle(
+    ref,
+    () => ({
+      hasDocument: () => doc !== null,
+      zoomIn: () => changeZoom(zoomIn),
+      zoomOut: () => changeZoom(zoomOut),
+      resetZoom: () => changeZoom(() => 1),
+      openFind: find.openFind,
+      findNext: find.next,
+      findPrevious: find.previous,
+    }),
+    [doc, changeZoom, find.openFind, find.next, find.previous],
+  );
+
+  // One stable callback per page. A new callback every render would make React
+  // detach and re-attach every slot, which the renderer takes as the page
+  // leaving the screen.
+  const hostRefs = useRef(
+    new Map<number, (host: HTMLDivElement | null) => void>(),
+  );
+  const hostRef = (page: number) => {
+    let callback = hostRefs.current.get(page);
+    if (!callback) {
+      callback = (host) => renderer.setHost(page, host);
+      hostRefs.current.set(page, callback);
+    }
+    return callback;
   };
 
   return (
     <div className="flex h-full flex-col bg-muted/30">
-      <div
-        ref={containerRef}
-        className="flex-1 overflow-y-auto p-4"
-      >
-        {!filePath && placeholderSize && (
-          <div className="mx-auto flex max-w-3xl flex-col gap-4">
+      <div className="relative min-h-0 flex-1">
+        <div
+          ref={scrollerRef}
+          tabIndex={0}
+          onScroll={scheduleViewportUpdate}
+          className="absolute inset-0 overflow-auto outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/40"
+        >
+          {pageCount > 0 && (
             <div
-              className="relative overflow-hidden rounded-md border border-border bg-white shadow-sm"
-              style={{
-                width: Math.floor(placeholderSize.width * zoom),
-                height: Math.floor(placeholderSize.height * zoom),
-                maxWidth: "100%",
-              }}
-              aria-label="Translation placeholder page"
-            />
-          </div>
-        )}
-        {!filePath && !placeholderSize && emptyState && (
-          <div className="flex h-full items-center justify-center">
-            {emptyState}
-          </div>
-        )}
-        {loading && (
-          <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
-            Loading PDF…
-          </div>
-        )}
-        {error && (
-          <div className="flex h-full items-center justify-center text-sm text-destructive">
-            {error}
-          </div>
-        )}
-        {doc && (
-          <div className="mx-auto flex max-w-3xl flex-col gap-4">
-            {Array.from({ length: pageCount }, (_, i) => (
+              className="mx-auto flex w-fit flex-col"
+              style={{ gap: PAGE_GAP, padding: CONTENT_PADDING }}
+            >
+              {sizes.map((size, index) => {
+                const slot = slotSize(size, zoom);
+                return (
+                  <div
+                    key={index}
+                    className="pdf-page relative shrink-0 overflow-hidden rounded-sm bg-white shadow-sm ring-1 ring-border"
+                    style={
+                      {
+                        width: slot.width,
+                        height: slot.height,
+                        "--scale-factor": zoom,
+                      } as CSSProperties
+                    }
+                  >
+                    <span
+                      aria-hidden
+                      className="absolute inset-0 flex select-none items-center justify-center text-xs text-neutral-400"
+                    >
+                      Page {index + 1}
+                    </span>
+                    <div ref={hostRef(index + 1)} className="absolute inset-0" />
+                  </div>
+                );
+              })}
+            </div>
+          )}
+          {!filePath && placeholderSize && (
+            <div className="mx-auto w-fit" style={{ padding: CONTENT_PADDING }}>
               <div
-                key={i}
-                data-page={i + 1}
-                ref={(el) => {
-                  pageRefs.current[i] = el;
-                }}
-                className="relative overflow-hidden rounded-md border border-border bg-white"
-                style={{
-                  minHeight: 200,
-                }}
-              >
-                <div className="flex h-48 items-center justify-center text-xs text-muted-foreground">
-                  Page {i + 1}…
-                </div>
-              </div>
-            ))}
-          </div>
+                aria-label="Translation placeholder page"
+                className="rounded-sm bg-white shadow-sm ring-1 ring-border"
+                style={slotSize(placeholderSize, zoom)}
+              />
+            </div>
+          )}
+          {!filePath && !placeholderSize && emptyState && (
+            <div className="flex h-full items-center justify-center">
+              {emptyState}
+            </div>
+          )}
+          {filePath && !doc && loading && (
+            <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
+              Loading PDF…
+            </div>
+          )}
+          {filePath && !doc && error && (
+            <div className="flex h-full items-center justify-center px-6 text-center text-sm text-destructive">
+              {error}
+            </div>
+          )}
+        </div>
+
+        {find.open && doc && (
+          <FindBar
+            query={find.query}
+            onQueryChange={find.setQuery}
+            matchCount={find.matchCount}
+            selected={find.selected}
+            searching={find.searching}
+            focusKey={find.focusKey}
+            onNext={find.next}
+            onPrevious={find.previous}
+            onClose={find.close}
+          />
         )}
       </div>
 
       {(doc || label) && (
-        <div className="flex h-9 shrink-0 items-center justify-between border-t border-border bg-background px-3 text-xs">
-          <div className="flex items-center gap-2 text-muted-foreground">
-            {label && <span className="font-medium">{label}</span>}
-            {doc && <span>· {pageCount} pages</span>}
-          </div>
-          {doc && (
-            <div className="flex items-center gap-1">
-              <Button
-                variant="ghost"
-                size="icon"
-                className="h-7 w-7"
-                onClick={handleZoomOut}
-                aria-label="Zoom out"
-              >
-                <Minus className="h-3.5 w-3.5" />
-              </Button>
-              <span className="min-w-[42px] text-center font-mono">
-                {Math.round(zoom * 100)}%
-              </span>
-              <Button
-                variant="ghost"
-                size="icon"
-                className="h-7 w-7"
-                onClick={handleZoomIn}
-                aria-label="Zoom in"
-              >
-                <Plus className="h-3.5 w-3.5" />
-              </Button>
-              <Button
-                variant="ghost"
-                size="icon"
-                className="h-7 w-7"
-                onClick={handleFitWidth}
-                aria-label="Fit width"
-              >
-                <Maximize2 className="h-3.5 w-3.5" />
-              </Button>
-            </div>
-          )}
-        </div>
+        <ViewerToolbar
+          label={label}
+          active={active}
+          hasDocument={pageCount > 0}
+          pageCount={pageCount}
+          currentPage={currentPage}
+          onGoToPage={goToPage}
+          zoom={zoom}
+          onZoomIn={() => changeZoom(zoomIn)}
+          onZoomOut={() => changeZoom(zoomOut)}
+          onFitWidth={fitWidth}
+          onFind={find.openFind}
+        />
       )}
     </div>
   );

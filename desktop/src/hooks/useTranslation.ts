@@ -225,7 +225,9 @@ export function useTranslation() {
                 const when = c.cached_at ? formatRelative(c.cached_at) : "earlier";
                 toast.success(`Loaded from cache · translated ${when}`);
               }
-              adoptArtifact(c.rolling_pdf_path);
+              // The chunk's own pages are all that differ from the previous
+              // rolling PDF, so the translated viewer repaints only those.
+              adoptArtifact(c.rolling_pdf_path, c.pages_in_chunk);
               // Read the store rather than close over it: chunk_ready fires
               // per completed chunk and each one builds on the last.
               const progress = applyChunkReady(
