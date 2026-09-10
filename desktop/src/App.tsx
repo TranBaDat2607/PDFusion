@@ -8,6 +8,7 @@ import { toast } from "sonner";
 import { AboutDialog } from "@/components/AboutDialog";
 import { Header } from "@/components/layout/Header";
 import { ContextBar } from "@/components/layout/ContextBar";
+import { DropOverlay } from "@/components/layout/DropOverlay";
 import { MainLayout } from "@/components/layout/MainLayout";
 import { ProgressOverlay } from "@/components/translation/ProgressOverlay";
 import { SettingsSheet } from "@/components/settings/SettingsSheet";
@@ -18,6 +19,7 @@ import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { useConfig } from "@/hooks/useConfig";
 import { useEngineSetup } from "@/hooks/useEngineSetup";
+import { useFileDrop } from "@/hooks/useFileDrop";
 import { useSidecar } from "@/hooks/useSidecar";
 import { isTranslationBusy, useTranslation } from "@/hooks/useTranslation";
 import { readSkipped, shouldShowSetup } from "@/lib/engine-setup";
@@ -177,6 +179,9 @@ function Workspace() {
     }
   }, [openDocument]);
 
+  // A PDF dragged onto the window goes through the same handler as the picker.
+  const fileDrop = useFileDrop(openDocument);
+
   // `openDocument` is rebuilt whenever the toolbar selection changes, but the
   // listener below must be registered exactly once — re-running that effect
   // would re-open the command-line document on every dropdown change. The ref
@@ -227,7 +232,7 @@ function Workspace() {
   }, [originalPath, translation, selection]);
 
   return (
-    <div className="flex h-full w-full flex-col bg-background text-foreground">
+    <div className="relative flex h-full w-full flex-col bg-background text-foreground">
       <Header
         onOpenSettings={() => setSettingsOpen(true)}
         onOpenAbout={() => setAboutOpen(true)}
@@ -247,7 +252,7 @@ function Workspace() {
         }
       />
       <div className="relative flex-1 overflow-hidden">
-        <MainLayout />
+        <MainLayout onPickFile={handlePickFile} />
         <ProgressOverlay
           state={translation.state}
           onCancel={translation.cancel}
@@ -259,6 +264,7 @@ function Workspace() {
         />
       </div>
 
+      <DropOverlay state={fileDrop} />
       <SettingsSheet open={settingsOpen} onOpenChange={setSettingsOpen} />
       <AboutDialog open={aboutOpen} onOpenChange={setAboutOpen} />
     </div>

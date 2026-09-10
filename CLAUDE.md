@@ -333,9 +333,11 @@ corrupting) the cooldown key for that purpose.
 | `desktop/src-tauri/src/main.rs` | Tauri entry; defers to `desktop_lib::run()` |
 | `desktop/src-tauri/src/lib.rs` | Builder + plugins + sidecar spawn on setup + shutdown hook |
 | `desktop/src-tauri/src/sidecar.rs` | Python locate, child process, READY parsing, health-poll |
+| `desktop/src-tauri/windows/installer-hooks.nsh` | NSIS hooks: register PDFusion under `.pdf` "Open with" (and never as the default) |
 | `desktop/src/App.tsx` | Shell: ThemeProvider → QueryClientProvider → Workspace |
-| `desktop/src/components/layout/` | `Header`, `ContextBar`, `MainLayout` (resizable splits) |
-| `desktop/src/components/pdf-viewer/` | `PdfViewer` (pdf.js, lazy render, zoom/fit) |
+| `desktop/src/components/layout/` | `Header`, `ContextBar`, `MainLayout` (resizable splits + the workspace's keyboard shortcuts), `DropOverlay` |
+| `desktop/src/components/pdf-viewer/` | `PdfViewer` (layout, scroll, zoom), `page-renderer.ts` (canvas recycling, text layers), `text-selection.ts`, `find-highlight.ts`, `FindBar`, `ViewerToolbar`, `pdf-viewer.css` — see "PDF viewer" |
+| `desktop/src/lib/pdf-viewer/` | Pure: page geometry (`layout.ts`), find matching (`find.ts`), which pages a new rolling PDF changed (`artifact-swap.ts`), key → shortcut (`shortcuts.ts`) |
 | `desktop/src/components/chat/` | `ChatPanel`, `UserMessage`, `AssistantMessage`, `ActionLog`, `ReferenceList`, `ChatInput` |
 | `desktop/src/components/settings/` | `SettingsSheet` (tabs per service) |
 | `desktop/src/components/translation/` | `ProgressOverlay`, `TranslatedFileActions` (Save / Open / Show in folder) |
@@ -829,10 +831,76 @@ BabelDOC drives chunking, layout, and PDF reassembly; it delegates the actual te
 
    The one deliberate exception to "[Translator failures are counted, not swallowed](#translator-failures-are-counted-not-swallowed)": a cancelled `translate()` call returns source text **without** touching `failed_translations` — it's an intentional stop, not a failure, and counting it would make a cancelled run look like a partial one if anything ever inspected the counters after cancellation. Total retry attempts (not distinct paragraphs) land in `retry_count`, which `CompletionEvent` and the `/translate` SSE `done` payload also carry as `retry_count` — issue #22 asked to "surface" it; nothing in the UI reads it today, so consider that half-done, not wired to a banner.
 
+### PDF viewer
+
+Both panes are `components/pdf-viewer/PdfViewer.tsx` (#30). Its pure half lives
+in `lib/pdf-viewer/` and is unit-tested. The rest is imperative pdf.js work kept
+out of React state. There are five invariants, and each one is easy to break by
+"simplifying":
+
+- **A slot's size comes from the layout model, never from a canvas.** Only the
+  visible pages ±`RENDER_RADIUS` (3) hold a canvas (`page-renderer.ts`). Every
+  other page is released: its render cancelled, its backing store zeroed
+  (`canvas.width = 0`, not left to GC), its text layer removed, `page.cleanup()`
+  called. So the column's height, go-to, zoom anchoring and "which page am I
+  on" are all computed from `layout.ts:pageGeometry`, and the JSX sizes each
+  slot through the *same* `slotSize`. Round differently in one place and a
+  go-to lands on the wrong page a few hundred pages in. Slots use `ring-1`
+  rather than `border` for the same reason: a border would inset the canvas.
+  Page sizes start as page 1's and are corrected in the background; Chromium's
+  scroll anchoring keeps the reader in place meanwhile.
+- **A canvas is only ever replaced by a finished one.** Zoom resizes the slots,
+  and the existing canvas stretches with them (`.pdf-page-canvas` is
+  `width/height: 100%`, and `--scale-factor` rescales the text layer in the same
+  frame). The re-render waits for `ZOOM_SETTLE_MS` of no further zooming, and
+  each canvas is swapped in only when its render resolves. The reader's
+  position is kept as page + fraction (`scrollAnchor` / `offsetForAnchor`) in a
+  layout effect, before paint. Canvases are capped at `MAX_CANVAS_PIXELS`
+  (4096²) and CSS-upscaled beyond that. Renders run one at a time from a
+  priority list recomputed after every page, so a fast scroll never leaves a
+  backlog of renders for pages it has passed.
+- **The translated pane swaps pages, not documents.** With
+  `incrementalUpdates`, each new rolling PDF loads off-screen while the old one
+  stays up (`hooks/usePdfDocument.ts`), and then only the rendered pages that
+  changed are repainted. Which pages changed comes from `translatedChanges`, an
+  append-only log in the store (`adoptTranslatedArtifact(path, pages_in_chunk)`),
+  **not** from "the latest `chunk_ready`". Two chunk events parsed from one
+  network read are one React render, so a viewer that read only the latest
+  would never repaint the other chunk's pages. Changes also accumulate across
+  loads overtaken by the next chunk (`artifact-swap.ts`). Every replaced
+  `PDFDocumentProxy` is `destroy()`ed; before this, every chunk leaked one into
+  the worker. Every async render re-checks a document *generation*, so a render
+  that lost a race is dropped rather than drawn. A failed swap keeps the
+  previous version on screen. None of this removes the need for the backend's
+  `keep=2` (see "Rolling-PDF pruning keeps two files"): the old version is still
+  what's displayed, and still what pdf.js issues range requests against, until
+  the new one has loaded.
+- **Text layers are core `pdfjs.TextLayer`, plus two pieces copied from
+  `pdf_viewer.mjs` rather than imported.** `pdf-viewer.css` carries its
+  `.textLayer` rules, and `text-selection.ts` ports `TextLayerBuilder`'s
+  drag-selection fix. `pdf_viewer.mjs` itself reads `globalThis.pdfjsLib` when
+  it's evaluated, so importing it would depend silently on import order.
+  Re-check both files against the new pdfjs-dist when bumping it. Find
+  (`hooks/usePdfFind.ts`, `lib/pdf-viewer/find.ts`) reads text from the
+  document, not from text layers (only rendered pages have one). It folds case
+  and diacritics, `đ` → `d` included, and paints highlights onto rendered pages
+  only. Highlight positions map to `textDivs` one-for-one, because `TextLayer`
+  creates one span per item with a `str`, empty strings included.
+- **Shortcuts go to one pane, and are always claimed.** `MainLayout` owns a
+  capture-phase `keydown` handler (`lib/pdf-viewer/shortcuts.ts`). Ctrl+O opens a
+  file. Ctrl+F, F3, Ctrl+± and Ctrl+0 go to the pane last clicked or focused,
+  or to the other pane if that one is empty. Handled keys are
+  `preventDefault`ed even when there's nothing to act on, because WebView2's
+  own find bar only stands down for keys the page takes. Nothing fires while a
+  dialog is open.
+
+Synchronized scrolling between the panes (the first item in #30) is
+deliberately not implemented: the panes scroll and zoom independently.
+
 ### React state ownership
 
 - **TanStack Query** owns all server state (`useConfig`, `useOptions`).
-- **Zustand store** (`lib/store.ts`) owns ephemeral UI state: current PDF paths, active job ID, RAG enabled flag, chat drawer open/closed.
+- **Zustand store** (`lib/store.ts`) owns ephemeral UI state: current PDF paths, the translated-artifact change log, active job ID, RAG enabled flag, chat drawer open/closed.
 - **Job hooks** (`useTranslation`, `useRagIndex`, `useRagAsk`) own per-stream local state and update the global store on terminal events.
 
 ### UI conventions
@@ -865,6 +933,8 @@ BabelDOC drives chunking, layout, and PDF reassembly; it delegates the actual te
 - **Sidecar lifecycle** is wired in `lib.rs::run()`'s `setup` and the `RunEvent::ExitRequested` handler kills the child process.
 - **Sidecar cwd & writable paths**: the child is spawned with cwd = `%LOCALAPPDATA%\PDFusion\` (`sidecar::appdata_dir`), **not** the install dir (`C:\Program Files\PDFusion\` is read-only for non-admins → `WinError 5` on any relative-path write). `lib.rs::setup` pre-creates the AppData subdir layout (`sidecar::ensure_appdata_layout`) before spawn so Python subsystems don't race on first-run `mkdir`.
 - **Per-job translation output** is a throwaway `%TEMP%\pdfusion-translate-<rand>\` dir (not a persistent `translated_pdfs/`). It's wiped three ways: by the next job, by the Tauri `ExitRequested` handler (`sidecar::cleanup_translate_temp_dirs`), and by the FastAPI lifespan orphan sweep on sidecar startup (`server.py:_sweep_orphan_translate_dirs`, only dirs older than 1h). Persistent translated PDFs live in the whole-PDF cache instead.
+- **Drag and drop**: files dropped on the window arrive through `getCurrentWebview().onDragDropEvent` (`hooks/useFileDrop.ts`) with real paths, and open through the same `openDocument` as the picker and the command line; `DropOverlay` shows what's being dragged. That works because `dragDropEnabled` is left at its default (true), and on Windows that **disables HTML5 drag and drop inside the webview**. Anything that needs HTML5 DnD would have to turn the shell's handling off, and this path with it. `enter` is the only event that carries paths. A drag with no files at all (text dragged out of a page) is ignored rather than refused.
+- **"Open with PDFusion"** is registered by `windows/installer-hooks.nsh` (`bundle.windows.nsis.installerHooks`). It writes a `PDFusion.pdf` ProgID, a `.pdf\OpenWithProgids` value and `Applications\PDFusion.exe` under `SHCTX` (HKCU for this per-user install), and removes exactly those on uninstall. **Not `bundle.fileAssociations`**: Tauri's NSIS `APP_ASSOCIATE` overwrites the default value of `Software\Classes\.pdf`, which makes PDFusion the default PDF reader on any machine where the user never picked one. The chosen file arrives as argv, through `initial_file_argument` on a first launch and the single-instance handoff otherwise. Only `pnpm tauri build` exercises the hook (`release.yml` on a tag); CI's `desktop` job never does.
 - **Sidecar discovery** order (see `desktop/src-tauri/src/sidecar.rs`):
   1. **Bundled exe** — `pdfusion-sidecar-<triple>.exe` resolved via `BaseDirectory::Resource`. This is what end users hit (shipped via `bundle.externalBin` in `tauri.conf.json`).
   2. **Dev fallback** — Python interpreter chain: `PDFUSION_PYTHON` env var → `~/anaconda3/envs/{pdfusion,pdfusion-env}/python.exe` → `~/miniconda3/envs/{pdfusion,pdfusion-env}/python.exe` → `python` on PATH, then `python -m desktop_pdf_translator.api.server` with `PYTHONPATH=<root>/src`.
@@ -999,7 +1069,12 @@ and `shell.log`.
   contract, key storage and config read/write, the job registry, both SQLite
   caches, Argos's batching, and translator failure/retry accounting. Still
   uncovered: the BabelDOC pipeline in `processors/processor.py` proper, and all
-  of `rag/`. If you touch those, expect to write tests from scratch.
+  of `rag/`. If you touch those, expect to write tests from scratch. On the
+  frontend, the PDF viewer's pure half is covered (`lib/pdf-viewer/`: geometry,
+  find matching, the artifact change log, shortcut mapping). Its DOM half is
+  not (`page-renderer.ts`, text layers, find highlighting, drag and drop),
+  because vitest runs in node with no DOM. Exercise that half in
+  `pnpm tauri dev`.
 
   ```bash
   # Python (pytest config lives in pyproject.toml; tests/conftest.py puts src/ on sys.path)
@@ -1110,6 +1185,11 @@ and `shell.log`.
   still downloads on first Chat use, with no progress and no preflight. The
   translation side of that problem is solved (see "First-run engine setup");
   Chat's half of issue #21 is deliberately left for a follow-up.
+- **Synchronized scrolling between the Original and Translated panes** — the
+  first item in issue #30, left out on purpose when the rest of that issue
+  shipped. The panes scroll and zoom independently. `lib/pdf-viewer/layout.ts`'s
+  `scrollAnchor` / `offsetForAnchor` (page + fraction) are the pieces a sync
+  would build on.
 - **Auto-save preference** — saving a translation is an explicit action (Save dialog). A "always save `<name>_vi.pdf` beside the source" setting was proposed in issue #11 but deliberately not built: it needs a config field, a Settings control, and an overwrite policy for repeat runs.
 
 ## Removed (legacy)

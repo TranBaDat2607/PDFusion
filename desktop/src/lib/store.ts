@@ -5,6 +5,10 @@
 
 import { create } from "zustand";
 
+import {
+  appendArtifactChange,
+  type ArtifactChange,
+} from "@/lib/pdf-viewer/artifact-swap";
 import type { ChunkProgress } from "@/lib/translation-progress";
 
 export type Theme = "light" | "dark" | "system";
@@ -39,8 +43,23 @@ interface AppState {
   /** Take a freshly produced artifact as the on-screen translation, retiring
    *  any saved copy — which describes the *previous* result from here on.
    *  A single action rather than two setters: this fires once per
-   *  `chunk_ready` (i.e. per page), and the two writes must not drift apart. */
-  adoptTranslatedArtifact: (path: string) => void;
+   *  `chunk_ready` (i.e. per page), and the two writes must not drift apart.
+   *
+   *  `changedPages` is how the new artifact differs from the one it replaces
+   *  (`chunk_ready.pages_in_chunk`, `[first, last]`, 1-indexed). It goes into
+   *  `translatedChanges`; omitted means unknown. */
+  adoptTranslatedArtifact: (
+    path: string,
+    changedPages?: [number, number] | null,
+  ) => void;
+
+  /** Every artifact adopted, newest last, trimmed to the last few dozen. The
+   *  translated viewer folds in the entries it hasn't seen yet so it repaints
+   *  only the pages that changed. It's a log rather than "the latest change"
+   *  because a single render can deliver several `chunk_ready`s; see
+   *  `lib/pdf-viewer/artifact-swap.ts`. Re-adopting the path already on screen
+   *  adds nothing, because the file didn't change. */
+  translatedChanges: ArtifactChange[];
 
   /** Language the on-screen translation was actually produced in, as reported
    *  by the job that produced it — not read from live config, which the user
@@ -82,8 +101,8 @@ interface AppState {
   setChunkProgress: (p: ChunkProgress | null) => void;
 
   /** 1-indexed page the user is currently looking at in the *original*
-   *  viewer. Updated (throttled) by the IntersectionObserver in PdfViewer.
-   *  Seeds the backend priority queue at translation start and drives
+   *  viewer. Reported by PdfViewer's scroll handling whenever that page
+   *  changes. Seeds the backend priority queue at translation start and drives
    *  live re-prioritization as the user scrolls. */
   visiblePage: number | null;
   setVisiblePage: (page: number | null) => void;
@@ -102,8 +121,17 @@ export const useAppStore = create<AppState>((set) => ({
   exportedPdfPath: null,
   setExportedPdfPath: (path) => set({ exportedPdfPath: path }),
 
-  adoptTranslatedArtifact: (path) =>
-    set({ translatedPdfPath: path, exportedPdfPath: null }),
+  adoptTranslatedArtifact: (path, changedPages) =>
+    set((s) => ({
+      translatedPdfPath: path,
+      exportedPdfPath: null,
+      translatedChanges:
+        path === s.translatedPdfPath
+          ? s.translatedChanges
+          : appendArtifactChange(s.translatedChanges, changedPages ?? null),
+    })),
+
+  translatedChanges: [],
 
   translationTargetLang: "vi",
   setTranslationTargetLang: (translationTargetLang) =>
