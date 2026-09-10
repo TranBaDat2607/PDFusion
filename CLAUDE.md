@@ -682,7 +682,11 @@ staged assets, that is **1352 MB → 857 MB unpacked (-495 MB)** and a
 **98.7 MB → 43.8 MB** sidecar exe. Two consequences:
 **`tests/test_sidecar_smoke.py`'s frozen half is the only check that can catch
 an over-exclusion**, and `FORBIDDEN_AT_BOOT` in `test_sidecar_boot.py` still
-lists torch — the dev env has it, the bundle does not.
+lists torch and stanza — the dev env has them (argostranslate hard-requires
+stanza, which requires torch), the bundle does not. `transformers` and
+`sentence_transformers` are *not* on that list: nothing requires them any more,
+so a clean install doesn't have them to import, and the list's companion test
+requires every name on it to be installed.
 
 RAG embeddings had to move off torch in the same change or the excludes would
 have broken Chat: `rag/onnx_embeddings.py` runs the *same*
@@ -1029,8 +1033,12 @@ and `shell.log`.
   `desktop_pdf_translator.api` pulled in BabelDOC and torch; see "Import cost
   is a startup budget" above for the rule that fixed it. `test_sidecar_boot.py`
   is the guard — it asserts in a subprocess that importing `api.server` leaves
-  torch, chromadb, stanza, BabelDOC, sklearn, camelot and transformers out
-  of `sys.modules`. If it goes red, the desktop app's startup
+  torch, chromadb, stanza, BabelDOC, sklearn and camelot out of `sys.modules`.
+  Every name on that list has to be **installed**, which a second test enforces:
+  an uninstalled one cannot be imported at boot, so guarding it proves nothing
+  and only hides a typo. That is why `transformers` and `sentence_transformers`
+  left the list when the excludes took them out of the dependency tree, while
+  torch and stanza stayed. If it goes red, the desktop app's startup
   is what broke; a slow suite is only the symptom you notice first.
 
   Two conventions that keep it that way, both worth preserving:
