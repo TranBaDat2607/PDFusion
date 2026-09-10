@@ -27,7 +27,14 @@ google-genai>=1.0.0,<2.0.0
 anthropic>=0.40.0,<1.0.0
 
 tiktoken>=0.5.0,<1.0.0
-sentence-transformers>=2.3.0,<3.0.0
-chromadb>=0.4.15,<0.5.0
+chromadb>=1.5.0,<2.0.0
+
+# RAG embeddings run on onnxruntime directly (rag/onnx_embeddings.py) rather
+# than sentence-transformers, which pulled torch + transformers into the
+# installer. All three also arrive transitively via babeldoc/chromadb; they are
+# named here because src/ imports them.
+onnxruntime>=1.17.0,<2.0.0
+tokenizers>=0.15.0,<1.0.0
+huggingface-hub>=0.20.0,<1.0.0
 
 colorama>=0.4.6; sys_platform == "win32"

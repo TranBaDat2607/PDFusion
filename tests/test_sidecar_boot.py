@@ -23,14 +23,27 @@ import pytest
 
 _SRC = Path(__file__).resolve().parents[1] / "src"
 
+# `sentence_transformers` and `transformers` used to be here. Both left with
+# the switch to rag/onnx_embeddings.py: sentence-transformers was the only thing
+# that required either, so a clean `pip install -r requirements.txt` no longer
+# installs them — stanza and underthesea name transformers only in an extra.
+# test_every_forbidden_name_is_a_real_module requires every name in this tuple
+# to be installed, so an uninstalled one fails the suite rather than quietly
+# guarding nothing. That is the point: a name that cannot be imported at all is
+# not evidence about what boot imports.
+#
+# `torch` and `stanza` stay for the opposite reason — argostranslate
+# hard-requires stanza==1.10.1, which requires torch, so pip still installs that
+# whole chain into a dev/CI env even though `pdfusion-sidecar.spec` excludes it
+# from the shipped bundle. There they are both installed and genuinely worth
+# asserting are never imported.
 FORBIDDEN_AT_BOOT = (
     "torch",
     "chromadb",
-    "sentence_transformers",
+    "stanza",
     "babeldoc",
     "sklearn",
     "camelot",
-    "transformers",
 )
 
 

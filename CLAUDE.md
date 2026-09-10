@@ -14,7 +14,7 @@ The UI was migrated from PySide6/qfluentwidgets to **Tauri (Rust shell) + React 
 # Full desktop app (Tauri shell auto-spawns the sidecar):
 cd desktop
 pnpm tauri dev          # dev with HMR
-pnpm tauri build        # production installer (.msi / .exe in src-tauri/target/release/bundle/)
+pnpm tauri build        # production installer (NSIS .exe in src-tauri/target/release/bundle/nsis/)
 
 # Frontend-only (React in browser, no Rust shell, no sidecar):
 cd desktop
@@ -54,11 +54,20 @@ pnpm install
 > install it globally instead: `npm install -g pnpm`.
 
 > Note: `requirements.txt` and `pyproject.toml` are **not** kept in lockstep.
-> `requirements.txt` flatly installs the RAG + advanced extras (chromadb,
-> langchain, camelot, pytesseract, etc.); `pyproject.toml` puts those behind
-> `[project.optional-dependencies]` named `rag`, `advanced`, `all`. For the
-> desktop app to fully work (RAG chat especially), install everything via
+> `requirements.txt` flatly installs the RAG + advanced extras (chromadb, the
+> onnxruntime embedding stack, camelot, pdfplumber); `pyproject.toml` puts those
+> behind `[project.optional-dependencies]` named `rag`, `advanced`, `all`. For
+> the desktop app to fully work (RAG chat especially), install everything via
 > `requirements.txt` or `pip install -e ".[all]"`.
+
+> Two dependency notes worth not re-deriving. **Both OpenCV wheels are
+> installed and neither is ours to choose**: `opencv-python-headless` is a
+> direct BabelDOC requirement and `opencv-python` comes from
+> `rapidocr-onnxruntime`, itself a hard BabelDOC requirement. They install to
+> the same `cv2` package and PyInstaller collects it once, so there is nothing
+> a pin can fix. And **torch is still installed in a dev/CI env** even though
+> the bundle excludes it — argostranslate hard-requires `stanza==1.10.1`, which
+> requires torch. See "Argos does not need torch" below.
 
 **API key configuration** — create a `.env` in the project root:
 ```
@@ -353,6 +362,8 @@ corrupting) the cooldown key for that purpose.
 | `src/desktop_pdf_translator/translators/` | `BaseTranslator`, OpenAI/Gemini/Anthropic/Argos + `TranslatorFactory` |
 | `src/desktop_pdf_translator/translators/rate_limiter.py` | Process-wide token-bucket QPS limiter, one singleton per LLM service |
 | `src/desktop_pdf_translator/rag/` | ChromaDB + `EnhancedRAGChain` (deep-search/web-research was dropped in `35bca2c`) |
+| `src/desktop_pdf_translator/rag/onnx_embeddings.py` | MiniLM embeddings on onnxruntime — what replaced sentence-transformers |
+| `src/desktop_pdf_translator/translators/_sbd_compat.py` | The `stanza` stub that lets the bundle drop torch |
 | `src/desktop_pdf_translator/utils/` | API key encryption; `file_export.py` (durable copy of a translated PDF); `logging_setup.py` (shared rotating `app.log` config); `paths.py` (`appdata_dir()`/`logs_dir()`) |
 | `src/desktop_pdf_translator/translators/translation_cache.py` | Persistent **paragraph-level** SQLite cache (singleton `get_translation_cache()`) |
 | `src/desktop_pdf_translator/processors/pdf_cache.py` | Persistent **whole-PDF** SQLite cache (singleton `get_pdf_cache()`) |
@@ -635,6 +646,57 @@ notice; and a disabled Radix `SelectItem` sets `pointer-events: none`, so the
 Broadening Argos beyond en→vi means shipping more language packs, not editing
 `SUPPORTED_PAIRS` alone.
 
+### Argos does not need torch
+
+The offline translator used to drag in 590 MB of tensor library, and the reason
+is one line: `argostranslate/sbd.py` does an unguarded top-level `import stanza`,
+`argostranslate/translate.py` imports from `sbd`, and `import stanza` pulls both
+torch and transformers. Worse, the upstream en→vi pack ships
+`stanza/en/tokenize/ewt.pt`, a torch checkpoint — so `StanzaSentencizer` was
+genuinely selected and torch genuinely used, not merely imported.
+
+Three changes remove it, and all three are needed:
+
+- **The pack carries MiniSBD instead.** `fetch-offline-assets.ps1` repacks the
+  staged `.argosmodel`: `stanza/` out (0.75 MB), `minisbd/en.onnx` in (0.19 MB,
+  onnxruntime). The repack is idempotent, so it also fixes a pack staged before
+  this existed, and it writes through a sibling temp file + `os.replace`.
+- **The splitter is pinned, not merely preferred.**
+  `argos_translator._configure_argos_settings` sets
+  `settings.chunk_type = ChunkType.MINISBD`. Assignment rather than the
+  `ARGOS_CHUNK_TYPE` env var, which `argostranslate/settings.py` reads at
+  *module import* time — `PackageTranslation.__init__` reads `chunk_type` per
+  translation, so the assignment holds whatever the import order, and whatever
+  sbd model a runtime-downloaded pack happens to carry.
+- **The import is satisfied by an empty module.**
+  `translators/_sbd_compat.install_stanza_stub()` registers a bare
+  `ModuleType("stanza")` when the real one is absent. `stanza.Pipeline` is only
+  touched inside `StanzaSentencizer.lazy_pipeline`, which is now never
+  constructed, so nothing more is needed. It is a no-op when stanza *is*
+  installed — which it always is in dev, because argostranslate hard-requires
+  it — so dev and the bundle differ only in whether the import is real.
+
+`pdfusion-sidecar.spec` then excludes `stanza`, `torch`, `transformers` and
+`sentence_transformers`. Measured like-for-like on the same commit and the same
+staged assets, that is **1352 MB → 857 MB unpacked (-495 MB)** and a
+**98.7 MB → 43.8 MB** sidecar exe. Two consequences:
+**`tests/test_sidecar_smoke.py`'s frozen half is the only check that can catch
+an over-exclusion**, and `FORBIDDEN_AT_BOOT` in `test_sidecar_boot.py` still
+lists torch and stanza — the dev env has them (argostranslate hard-requires
+stanza, which requires torch), the bundle does not. `transformers` and
+`sentence_transformers` are *not* on that list: nothing requires them any more,
+so a clean install doesn't have them to import, and the list's companion test
+requires every name on it to be installed.
+
+RAG embeddings had to move off torch in the same change or the excludes would
+have broken Chat: `rag/onnx_embeddings.py` runs the *same*
+`paraphrase-multilingual-MiniLM-L12-v2` weights (multilingual, 384-dim, chosen
+for Vietnamese) through onnxruntime + tokenizers, reimplementing the only two
+things sentence-transformers did here — tokenize, then mean-pool over the
+attention mask, per the model's `modules.json`. The feed is built from
+`session.get_inputs()` rather than hardcoded, so a re-export with a different
+signature still works. The ~470 MB first-use download is unchanged.
+
 ### Two-tier translation caching
 
 Two independent, persistent SQLite caches sit on the translation path. Both live
@@ -813,7 +875,8 @@ BabelDOC drives chunking, layout, and PDF reassembly; it delegates the actual te
 # 1. Stage the engine assets the installer ships (~290 MB into assets/).
 #    Network + several minutes; skips whatever is already staged. Omit this
 #    and the build still succeeds — it prints a WARN per missing asset and the
-#    app downloads them on first run instead.
+#    app downloads them on first run instead. This also repacks the Argos pack
+#    off stanza and onto MiniSBD; see "Argos does not need torch".
 conda activate pdfusion
 ./fetch-offline-assets.ps1
 
@@ -832,7 +895,7 @@ pip install -e ".[dev]"          # ensures pyinstaller is available
 #    is the problem this staging exists to fix.
 cd desktop
 pnpm tauri build
-# → desktop/src-tauri/target/release/bundle/msi/PDFusion_<version>_x64_en-US.msi
+# → desktop/src-tauri/target/release/bundle/nsis/PDFusion_<version>_x64-setup.exe
 ```
 
 > **Dev-mode bootstrap caveat**: Tauri's build script validates `externalBin`
@@ -856,9 +919,18 @@ native .pyd + bundled package data). The `_internal/` tree is staged at
 `desktop/src-tauri/_internal/` (not inside `binaries/`) so that Tauri's
 `resources` glob installs it at `<install>/_internal/`, sibling to the
 renamed `pdfusion-sidecar.exe` — which is what PyInstaller's onedir
-bootloader requires to find `pythonXYZ.dll` (e.g. `python311.dll` for this project's Python 3.11) et al. First build is slow (~10-20 min) and
-the resulting .msi is large (~500 MB-1 GB) because we bundle the full
-chromadb + sentence-transformers + babeldoc stack.
+bootloader requires to find `pythonXYZ.dll` (e.g. `python311.dll` for this project's Python 3.11) et al. First build is slow (~10-20 min).
+
+**NSIS is the only bundle target, and it installs per user.**
+`bundle.targets` is `["nsis"]` with `nsis.installMode: "currentUser"`, so the
+app lands in `%LOCALAPPDATA%\Programs\PDFusion` with no UAC prompt. The
+per-machine WiX `.msi` is gone: it was the origin of the read-only-cwd bug class
+the code works around (`C:\Program Files\` is not writable for non-admins), and
+pushing the thousands of `_internal/**/*` files through WiX was slow. Re-add
+`"msi"` to `bundle.targets` if an IT-deploy story ever needs one. Note the
+install dir is now writable — that does **not** make the AppData cwd work in
+`lib.rs::setup` redundant, since a machine upgraded from an MSI install is
+still out there.
 
 On top of that, `fetch-offline-assets.ps1` stages two runtime asset sets that
 the spec bundles when present (`_internal/argos_pack/`,
@@ -876,7 +948,15 @@ file `restore_offline_assets_package_async` looks for, and setup downloads
 instead.
 
 The HuggingFace embedding model for RAG chat (~470 MB) is still **not** bundled
-and still downloads on first use to `~/.cache/huggingface`.
+and still downloads on first use to `~/.cache/huggingface` — now as
+`onnx/model.onnx` + `tokenizer.json` fetched by `rag/onnx_embeddings.py`, rather
+than by sentence-transformers.
+
+Releases are built by `.github/workflows/release.yml` on a `v*` tag: it stages
+the offline assets, runs `pnpm tauri build`, and attaches the installer to a
+**draft** release. Signing is opt-in — set the `WINDOWS_SIGN_COMMAND` secret
+(Azure Trusted Signing) or `bundle.windows.certificateThumbprint` (an OV cert in
+the runner's store); with neither, the job warns and ships unsigned.
 
 Hidden-import additions for chromadb / babeldoc / etc. live in
 `pdfusion-sidecar.spec`. Extend that file (then rerun `build-sidecar.ps1`)
@@ -934,7 +1014,8 @@ and `shell.log`.
                                    # test_translation_cache_store.py, test_pdf_cache_store.py,
                                    # test_argos_batching.py,
                                    # test_doc_layout_cache.py, test_engine_warm_gate.py,
-                                   # test_export_openapi.py, test_sse_schemas.py
+                                   # test_export_openapi.py, test_sse_schemas.py,
+                                   # test_sbd_compat.py, test_onnx_embeddings.py
   python -m pytest tests -m smoke  # test_sidecar_smoke.py — excluded by default
 
   # Frontend (vitest, node environment — no jsdom)
@@ -952,8 +1033,12 @@ and `shell.log`.
   `desktop_pdf_translator.api` pulled in BabelDOC and torch; see "Import cost
   is a startup budget" above for the rule that fixed it. `test_sidecar_boot.py`
   is the guard — it asserts in a subprocess that importing `api.server` leaves
-  torch, chromadb, sentence-transformers, BabelDOC, sklearn, camelot and
-  transformers out of `sys.modules`. If it goes red, the desktop app's startup
+  torch, chromadb, stanza, BabelDOC, sklearn and camelot out of `sys.modules`.
+  Every name on that list has to be **installed**, which a second test enforces:
+  an uninstalled one cannot be imported at boot, so guarding it proves nothing
+  and only hides a typo. That is why `transformers` and `sentence_transformers`
+  left the list when the excludes took them out of the dependency tree, while
+  torch and stanza stayed. If it goes red, the desktop app's startup
   is what broke; a slow suite is only the symptom you notice first.
 
   Two conventions that keep it that way, both worth preserving:
@@ -1012,7 +1097,10 @@ and `shell.log`.
 ## Out of scope (for a later phase)
 
 - **Auto-update** flow.
-- **Code signing** for Windows (SmartScreen will warn on first install of the unsigned `.msi`).
+- **A signing certificate.** The plumbing exists — `bundle.windows` carries
+  `digestAlgorithm`/`timestampUrl` and `release.yml` reads a
+  `WINDOWS_SIGN_COMMAND` secret — but no certificate is configured, so shipped
+  installers are unsigned and SmartScreen warns on first install.
 - **Cross-platform** (macOS/Linux) — Tauri supports both, but explicit testing deferred. The PyInstaller spec is Windows-tested only.
 - **i18n of the UI strings** (the UI itself stays English; the translation *output* follows the toolbar's target language).
 - **More Argos language pairs** — the offline backend ships en→vi only. Adding

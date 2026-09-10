@@ -123,22 +123,61 @@ const BUNDLED_SIDECAR_FILENAME: &str = "pdfusion-sidecar.exe";
 #[cfg(not(windows))]
 const BUNDLED_SIDECAR_FILENAME: &str = "pdfusion-sidecar";
 
+/// A staged exe below this is `build-sidecar.ps1 -Stub`'s placeholder, not a
+/// real build. The PyInstaller exe is ~80 MiB.
+const STUB_THRESHOLD_BYTES: u64 = 1024 * 1024; // 1 MiB
+
+/// Whether a staged file is a real sidecar rather than a `-Stub` placeholder.
+/// Returns the observed size on rejection so the caller can name it in a log.
+fn check_staged_size(path: &Path) -> Result<(), Option<u64>> {
+    match std::fs::metadata(path) {
+        Ok(m) if m.len() >= STUB_THRESHOLD_BYTES => Ok(()),
+        Ok(m) => Err(Some(m.len())),
+        Err(_) => Err(None),
+    }
+}
+
 /// Resolve the bundled sidecar exe via Tauri's resource resolver.
 /// Returns `None` if there's no `externalBin` ship of the sidecar (i.e. dev mode)
-/// OR the staged file looks like a stub (size < 1 MiB) so dev mode can replace
-/// the real exe with a placeholder and have the runtime fall through to the
-/// local Python interpreter. The real PyInstaller-built exe is ~80 MiB.
+/// OR the staged file looks like a stub so dev mode can replace the real exe
+/// with a placeholder and have the runtime fall through to the local Python
+/// interpreter.
+///
+/// Every rejection is logged. Falling through silently made a stubbed or
+/// truncated exe in a *shipped* install indistinguishable from ordinary dev
+/// output: the only trace was the "Sidecar (dev) python" line that follows,
+/// or `PythonNotFound` on a machine that has no Python at all.
 fn resolve_bundled_sidecar(app: &AppHandle) -> Option<PathBuf> {
-    const STUB_THRESHOLD_BYTES: u64 = 1024 * 1024; // 1 MiB
-    app.path()
+    let path = app
+        .path()
         .resolve(BUNDLED_SIDECAR_FILENAME, tauri::path::BaseDirectory::Resource)
-        .ok()
-        .filter(|p| {
-            p.exists()
-                && std::fs::metadata(p)
-                    .map(|m| m.len() >= STUB_THRESHOLD_BYTES)
-                    .unwrap_or(false)
-        })
+        .ok()?;
+    if !path.exists() {
+        log::info!(
+            "No bundled sidecar at {} — falling back to local Python",
+            path.display()
+        );
+        return None;
+    }
+    match check_staged_size(&path) {
+        Ok(()) => Some(path),
+        Err(Some(len)) => {
+            log::warn!(
+                "Ignoring bundled sidecar {}: {} bytes is below the {} byte stub threshold. This is a `build-sidecar.ps1 -Stub` placeholder, not a real build — falling back to local Python.",
+                path.display(),
+                len,
+                STUB_THRESHOLD_BYTES
+            );
+            None
+        }
+        Err(None) => {
+            log::warn!(
+                "Ignoring bundled sidecar {}: could not read its size — falling back to local Python.",
+                path.display()
+            );
+            None
+        }
+    }
 }
 
 fn locate_python() -> Result<PathBuf, SidecarError> {
@@ -281,7 +320,9 @@ pub fn ensure_appdata_layout() {
     let subdirs: &[&str] = &[
         "logs",
         "translated_pdf_cache/files",
-        "chroma_db",
+        // `_v2` tracks rag/vector_store.py: chromadb 1.x cannot read the
+        // 0.4-era directory, so the two must not drift apart.
+        "chroma_db_v2",
         "translation_cache",
     ];
     for sub in subdirs {
@@ -597,7 +638,10 @@ async fn health_check(port: u16, token: &str) -> Result<(), SidecarError> {
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_ready_line, redact_ready_line, unexpected_exit, Command};
+    use super::{
+        check_staged_size, parse_ready_line, redact_ready_line, unexpected_exit, Command,
+        STUB_THRESHOLD_BYTES,
+    };
     use std::sync::atomic::AtomicBool;
     use std::sync::Mutex;
     use std::time::Duration;
@@ -664,5 +708,26 @@ mod tests {
         let status = unexpected_exit(&child, &shutting_down, Duration::from_millis(10)).await;
 
         assert!(status.is_none());
+    }
+
+    #[test]
+    fn a_stub_sized_exe_is_rejected_with_its_size() {
+        let dir = std::env::temp_dir().join(format!("pdfusion-stub-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("create temp dir");
+        let stub = dir.join("pdfusion-sidecar.exe");
+        std::fs::write(&stub, b"").expect("write stub");
+
+        assert_eq!(check_staged_size(&stub), Err(Some(0)));
+
+        std::fs::write(&stub, vec![0u8; STUB_THRESHOLD_BYTES as usize]).expect("write real");
+        assert_eq!(check_staged_size(&stub), Ok(()));
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn an_unreadable_path_is_rejected_without_a_size() {
+        let missing = std::env::temp_dir().join("pdfusion-does-not-exist.exe");
+        assert_eq!(check_staged_size(&missing), Err(None));
     }
 }

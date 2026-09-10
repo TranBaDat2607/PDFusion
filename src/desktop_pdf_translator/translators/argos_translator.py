@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import Optional
 
 from ..config import TranslationService
+from ._sbd_compat import install_stanza_stub
 from .base import BaseTranslator
 from .capabilities import SUPPORTED_PAIRS
 from .translation_cache import llm_cache_get as _llm_cache_get, llm_cache_set as _llm_cache_set
@@ -170,6 +171,8 @@ def _configure_argos_settings() -> None:
     with _settings_lock:
         if _argos_configured:
             return
+        install_stanza_stub()
+
         import argostranslate.settings as _argos_settings
 
         device = _detect_device()
@@ -177,6 +180,12 @@ def _configure_argos_settings() -> None:
         _argos_settings.beam_size = 1                # greedy decoding
         _argos_settings.device = device
         _argos_settings.compute_type = compute_type
+        # Pin sentence splitting to MiniSBD (onnxruntime) so neither stanza nor
+        # torch is ever needed. Assignment rather than ARGOS_CHUNK_TYPE, which
+        # settings.py reads at module-import time; PackageTranslation.__init__
+        # reads settings.chunk_type per translation, so this holds whatever the
+        # import order and whatever sbd model the installed pack carries.
+        _argos_settings.chunk_type = _argos_settings.ChunkType.MINISBD
         # Pipeline overlap: while batch N is decoding, the encoder can start
         # batch N+1. Only worth it on >=4 cores; below that the context-switch
         # cost outweighs the win.
@@ -185,11 +194,12 @@ def _configure_argos_settings() -> None:
 
         logger.info(
             "Argos CTranslate2 tuned: device=%s, compute_type=%s, "
-            "beam_size=%d, inter_threads=%d",
+            "beam_size=%d, inter_threads=%d, chunk_type=%s",
             _argos_settings.device,
             _argos_settings.compute_type,
             _argos_settings.beam_size,
             _argos_settings.inter_threads,
+            _argos_settings.chunk_type.name,
         )
         _argos_configured = True
 
