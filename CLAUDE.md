@@ -1067,9 +1067,12 @@ and `shell.log`.
 
 - **What is covered, and what still isn't.** The PDF-export path, the language
   contract, key storage and config read/write, the job registry, both SQLite
-  caches, Argos's batching, and translator failure/retry accounting. Still
-  uncovered: the BabelDOC pipeline in `processors/processor.py` proper, and all
-  of `rag/`. If you touch those, expect to write tests from scratch. On the
+  caches, Argos's batching, translator failure/retry accounting, and chat's
+  document isolation (`test_rag_isolation.py` runs a real ChromaDB under
+  `tmp_path` with a deterministic embedding function, so nothing downloads).
+  Still uncovered: the BabelDOC pipeline in `processors/processor.py` proper, and
+  the rest of `rag/` — extraction, ranking, answer generation. If you touch
+  those, expect to write tests from scratch. On the
   frontend, the PDF viewer's pure half is covered (`lib/pdf-viewer/`: geometry,
   find matching, the artifact change log, shortcut mapping). Its DOM half is
   not (`page-renderer.ts`, text layers, find highlighting, drag and drop),
@@ -1090,7 +1093,8 @@ and `shell.log`.
                                    # test_argos_batching.py,
                                    # test_doc_layout_cache.py, test_engine_warm_gate.py,
                                    # test_export_openapi.py, test_sse_schemas.py,
-                                   # test_sbd_compat.py, test_onnx_embeddings.py
+                                   # test_sbd_compat.py, test_onnx_embeddings.py,
+                                   # test_rag_isolation.py, test_rag_api.py
   python -m pytest tests -m smoke  # test_sidecar_smoke.py — excluded by default
 
   # Frontend (vitest, node environment — no jsdom)
