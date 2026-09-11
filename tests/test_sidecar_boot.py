@@ -80,6 +80,10 @@ def _run_probe(code: str) -> str:
         # The migration runner every SQLite store opens through. Both caches
         # import it, and both are on the boot path via `api.routes.config`.
         "desktop_pdf_translator.storage.migrations",
+        # Both imported at module level by `api/routes/rag.py`, so the /rag/ask
+        # pre-flight can answer from the records without loading chromadb.
+        "desktop_pdf_translator.storage.records",
+        "desktop_pdf_translator.rag.index_spec",
     ],
 )
 def test_boot_path_does_not_import_the_heavy_stack(module: str) -> None:

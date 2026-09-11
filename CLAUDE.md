@@ -363,11 +363,11 @@ corrupting) the cooldown key for that purpose.
 | `src/desktop_pdf_translator/processors/` | `PDFProcessor` async generator wrapping BabelDOC (unchanged) |
 | `src/desktop_pdf_translator/translators/` | `BaseTranslator`, OpenAI/Gemini/Anthropic/Argos + `TranslatorFactory` |
 | `src/desktop_pdf_translator/translators/rate_limiter.py` | Process-wide token-bucket QPS limiter, one singleton per LLM service |
-| `src/desktop_pdf_translator/rag/` | ChromaDB + `EnhancedRAGChain` (deep-search/web-research was dropped in `35bca2c`) |
+| `src/desktop_pdf_translator/rag/` | `EnhancedRAGChain`, and chat-index storage as one ChromaDB collection per index (`vector_store.py`); `index_spec.py` names the embedding model and chunker version every index records. Deep-search/web-research was dropped in `35bca2c` |
 | `src/desktop_pdf_translator/rag/onnx_embeddings.py` | MiniLM embeddings on onnxruntime — what replaced sentence-transformers |
 | `src/desktop_pdf_translator/translators/_sbd_compat.py` | The `stanza` stub that lets the bundle drop torch |
 | `src/desktop_pdf_translator/utils/` | API key encryption; `file_export.py` (durable copy of a translated PDF); `logging_setup.py` (shared rotating `app.log` config); `paths.py` (`appdata_dir()`, resolved from `%LOCALAPPDATA%` exactly as the shell resolves it, and `logs_dir()`) |
-| `src/desktop_pdf_translator/storage/` | SQLite plumbing every store shares: `sqlite.py` (connection pragmas, per-thread connections, UTC-millisecond timestamps) and `migrations.py` (versioned schema migrations on `PRAGMA user_version`). Stdlib-only, re-exports nothing |
+| `src/desktop_pdf_translator/storage/` | SQLite plumbing every store shares: `sqlite.py` (connection pragmas, per-thread connections, UTC-millisecond timestamps) and `migrations.py` (versioned schema migrations on `PRAGMA user_version`); `records.py` is `pdfusion.db`, the records database of documents and their chat indexes. Stdlib-only, re-exports nothing — see "Local data layer" |
 | `src/desktop_pdf_translator/translators/translation_cache.py` | Persistent **paragraph-level** SQLite cache (singleton `get_translation_cache()`) |
 | `src/desktop_pdf_translator/processors/pdf_cache.py` | Persistent **whole-PDF** SQLite cache (singleton `get_pdf_cache()`) |
 | `src/desktop_pdf_translator/processors/doc_layout_cache.py` | Process-wide DocLayout-YOLO model, loaded once (`get_shared_doc_layout_model()`) |
@@ -391,11 +391,11 @@ All routes (except `GET /health`) require `Authorization: Bearer <token>`.
 | POST | `/translate` | Start translation job → returns `{ job_id }`. `source_lang` / `target_lang` / `service` are `None`-defaulted (config applies); an unsupported pair is refused with **422** and a missing engine with **409**, both before the job is created. `bypass_cache: bool` forces a full re-translate (used by the "Re-translate" button). There is deliberately **no `output_dir`** — output always lands in a per-job `%TEMP%` dir that the cleanup paths know about |
 | GET | `/translate/{job_id}/events` | SSE: `progress`, `chunk_ready`, `paragraph_translated`, `done`, `error`, `cancelled`. **`chunk_ready` arrives in priority order, not page order** — nearest the viewer's page first — so `chunk_index` is not a completion count and `pages_in_chunk[1]` is not a running total. Accumulate with `lib/translation-progress.ts`; page totals come from `total_pages` (`total_chunks` is not a page count — Argos runs 3-page chunks) |
 | POST | `/translate/{job_id}/cancel` | Cancel an in-flight translation |
-| POST | `/rag/index` | Index a PDF into ChromaDB → returns `{ job_id }`. A document's id is the **SHA-256 of its bytes**, derived by the sidecar — the request carries no `document_id`, and `done` returns it. It used to be the file name stem, so two different `paper.pdf`s shared one index (#59) |
+| POST | `/rag/index` | Index a PDF into ChromaDB → returns `{ job_id }`. A document's id is the **SHA-256 of its bytes**, derived by the sidecar — the request carries no `document_id`, and `done` returns it. It used to be the file name stem, so two different `paper.pdf`s shared one index (#59). The index is recorded in `pdfusion.db` and is `ready` only once every chunk is stored; a PDF with no extractable text ends in an `error` event |
 | GET | `/rag/index/{job_id}/events` | SSE: `progress`, `done`, `error` |
-| POST | `/rag/ask` | Ask the RAG chain → returns `{ job_id }`. `document_id` is **required** (422 without it): a question is about exactly one document, and there is no "search every document" mode. A document with no chunks ends in an `error` event, not an empty answer |
+| POST | `/rag/ask` | Ask the RAG chain → returns `{ job_id }`. `document_id` is **required** (422 without it): a question is about exactly one document, and there is no "search every document" mode. A document with no ready index is refused with **409** before a job is created |
 | GET | `/rag/ask/{job_id}/events` | SSE: `progress`, `answer`, `done`, `error`. Retrieved chunks ride on `answer.pdf_references` (**not** `pdf_sources`); their `page` is **1-indexed**, or `null` when the chunk has none. Chunk metadata is 0-indexed and `PdfViewer.scrollToPage` counts from 1, so `rag_chain._display_page` converts at that one boundary |
-| DELETE | `/rag/document/{document_id}` | Remove an indexed document from the vector store |
+| DELETE | `/rag/document/{document_id}` | Remove a document's chat indexes and their collections: **204** removed, **404** no index, **500** storage failure |
 | GET | `/pdf/file?path=...` | Stream a PDF from disk (used by pdf.js client-side) |
 | POST | `/pdf/export` | Copy a translated PDF to a user-chosen permanent path (`{source_path, destination_path, protect_path?}` → `{saved_path, bytes_written}`). `protect_path` is the opened document; it's refused as a destination |
 
@@ -700,6 +700,47 @@ attention mask, per the model's `modules.json`. The feed is built from
 `session.get_inputs()` rather than hardcoded, so a re-export with a different
 signature still works. The ~470 MB first-use download is unchanged.
 
+### Local data layer
+
+Everything the sidecar persists lives under one root, `utils/paths.appdata_dir()`
+(`%LOCALAPPDATA%\PDFusion`, resolved exactly as `sidecar.rs:appdata_dir` does),
+in three kinds of store with different rules (#59):
+
+| Store | Holds | Rules |
+|---|---|---|
+| `pdfusion.db` (`storage/records.py`) | **Records.** `documents` (id = SHA-256 of the file's bytes), `document_locations` (every path a document was opened from), `rag_indexes` (one row per chat index: embedding model and dimension, chunker version, `indexing` → `ready` \| `failed`) | System of record. Foreign keys with `ON DELETE CASCADE`; at most one `ready` index per document, model and chunker, enforced by a partial unique index. A file from a newer build refuses to open (`on_too_new="raise"`) |
+| `vectors/` (`rag/vector_store.py`) | **Derived.** One ChromaDB collection per `rag_indexes` row, named `rag_<id>` | Rebuildable. Chunks carry only what retrieval reads; a document's id and path live in the records |
+| `translation_cache/`, `translated_pdf_cache/` | **Caches** — see "Two-tier translation caching" | Disposable: clearing them never touches a record. `pdf_translations.file_hash` equals `documents.id` by value |
+
+All SQLite goes through `storage/sqlite.py` and `storage/migrations.py`. To
+change a schema, append a `Migration` to that store's `_MIGRATIONS`.
+
+**Why chat can only answer from the open PDF.** A question names a document;
+`POST /rag/ask` looks up that document's ready index in the records (409 if it
+has none), and retrieval reads that index's collection and nothing else. There
+is no metadata filter to forget and no "search every document" mode. What keeps
+that true:
+
+- **An index is `ready` only once it is whole.** `_run_index` records it as
+  `indexing` before writing a chunk, and `complete_index` marks it ready and
+  replaces the document's other indexes in one transaction. A failed or
+  cancelled job fails the row and drops the collection (`_abandon`). Whatever
+  that misses, `_recover` catches when a process first opens the vector store:
+  `indexing` rows a dead process left are failed and their collections dropped,
+  and so is any collection no row accounts for.
+- **Indexing and deleting are serialized per document** (`_document_lock`). The
+  chat panel starts an index job whenever a PDF opens, so one document can be
+  requested twice at once; the second job finds the first one's index ready.
+- **Changing the embedding model or the chunker means editing
+  `rag/index_spec.py`.** A ready index is looked up by both, so every document is
+  indexed again on its next open instead of mixing vectors in one index.
+- **A question reads its index's chunks once** (`vector_store.get_chunks`);
+  both keyword passes and the surrounding-context step work from that list.
+- **The lifespan deletes `chroma_db/` and `chroma_db_v2/`**
+  (`server.py:_remove_legacy_vector_stores`), the stores older builds used.
+  `sidecar.rs:ensure_appdata_layout` creates `vectors/`, and must never create
+  `chroma_db_v2` again.
+
 ### Two-tier translation caching
 
 Two independent, persistent SQLite caches sit on the translation path. Both live
@@ -941,7 +982,7 @@ deliberately not implemented: the panes scroll and zoom independently.
 ## Tauri shell details
 
 - **Plugins enabled**: `opener` (open external URLs), `dialog` (file picker), `single-instance` and `window-state` — that's all. `shell` and `fs` were registered but never imported by `desktop/src`; PDFs reach the viewer over HTTP from the sidecar, and Save/Open/Reveal go through the app commands in `lib.rs`. Don't re-add a plugin "just in case": every one widens what an injected script can invoke. Same reasoning inside a plugin: the capability grants `opener:allow-open-url` + `opener:allow-default-urls` rather than `opener:default`, because that set also carries `allow-reveal-item-in-dir` — a second, unvalidated route to the reveal that `reveal_path_in_file_manager` exists to gate. The app commands call the plugin's **Rust** API (`app.opener()`), which capabilities don't apply to, so narrowing the webview's grant costs nothing. The two new plugins cost nothing there either: `single-instance` has no JS API at all, and `window-state`'s (`saveWindowState` / `restoreState`) is left ungranted — save and restore happen in Rust on window create and on exit, so the webview never needs to ask.
-- **Single instance**: registered **first**, before every other plugin — a second launch has to be turned away before the rest of the app builds, or you get two windows, two sidecars, and two writers on one `chroma_db` + SQLite WAL set. Its callback focuses the existing window and, if the second launch named a PDF, emits `pdfusion://open-file` so that document opens in the running app. The *first* launch's own argv is read by the `initial_file_argument` command; `App.tsx` handles both through the same `openDocument`.
+- **Single instance**: registered **first**, before every other plugin — a second launch has to be turned away before the rest of the app builds, or you get two windows, two sidecars, and two writers on one `pdfusion.db`, `vectors` store and cache WAL set. Its callback focuses the existing window and, if the second launch named a PDF, emits `pdfusion://open-file` so that document opens in the running app. The *first* launch's own argv is read by the `initial_file_argument` command; `App.tsx` handles both through the same `openDocument`.
 - **Window**: 1400×900 default, min 1024×700 — then `tauri-plugin-window-state` restores whatever the user last left. `GUISettings.window_width/height` were deleted with it: they predate the Tauri migration and nothing ever read them. `withGlobalTauri` is off — `__TAURI_INTERNALS__` (which `lib/tauri-ready.ts` waits on) is injected regardless; the flag only adds the legacy `window.__TAURI__` global.
 - **Boot screen** (`components/StartupScreen.tsx`): app-level copy ("Starting PDFusion…"), a Retry and a "Show logs folder" button. Those two are offered in the `error` branch **and**, after `SLOW_START_MS` (15 s), in `starting` — otherwise a sidecar that never comes up leaves the user on a bare spinner for the full `READY_TIMEOUT` + `HEALTH_TIMEOUT`, which is two minutes. A healthy boot reaches READY in about a second, so anything still spinning at that mark is already abnormal. Retry calls `restart_app`, which relaunches the process rather than re-spawning the sidecar — the handle is a `OnceCell` set once per process, so re-entering that lifecycle would mean two spawn paths and a window with two Python processes. `restart_app` has to repeat the exit work by hand (`save_window_state`, `cleanup_translate_temp_dirs`): `AppHandle::restart` routes through `RunEvent::ExitRequested` **only when called off the main thread**, and a synchronous command handler runs on it, so it takes the `cleanup_before_exit` branch — resource tables cleared, windows hidden, nothing else. The `ExitRequested` arm in `lib.rs` and `window-state`'s own `RunEvent::Exit` hook both stay silent. Anything added to the exit path has to be added there too. The `PDFUSION_PYTHON` hint is behind `import.meta.env.DEV`; it describes this repo's dev setup and means nothing to someone who installed the `.msi`.
 - **CSP**: set in `tauri.conf.json` — `default-src 'self'` with `connect-src` widened to `http://127.0.0.1:*` (the sidecar) plus Tauri's IPC origin, `worker-src blob:` (pdf.js), and `style-src 'unsafe-inline'` (Tailwind's runtime styles). Tauri nonces its own init script, so `script-src` stays at `'self'`. It applies to the bundled app only — in `pnpm tauri dev` the page is served by Vite, which Tauri doesn't inject headers into, so **a CSP break shows up first in `pnpm tauri build`**, not in dev.
@@ -1083,8 +1124,8 @@ and `shell.log`.
 
 - **What is covered, and what still isn't.** The PDF-export path, the language
   contract, key storage and config read/write, the job registry, both SQLite
-  caches, Argos's batching, translator failure/retry accounting, and chat's
-  document isolation (`test_rag_isolation.py` runs a real ChromaDB under
+  caches, Argos's batching, translator failure/retry accounting, the records
+  database, and chat's document isolation (`test_rag_isolation.py` runs a real ChromaDB under
   `tmp_path` with a deterministic embedding function, so nothing downloads).
   Still uncovered: the BabelDOC pipeline in `processors/processor.py` proper, and
   the rest of `rag/` — extraction, ranking, answer generation. If you touch
@@ -1111,7 +1152,8 @@ and `shell.log`.
                                    # test_export_openapi.py, test_sse_schemas.py,
                                    # test_sbd_compat.py, test_onnx_embeddings.py,
                                    # test_rag_isolation.py, test_rag_api.py,
-                                   # test_storage_migrations.py, test_storage_paths.py
+                                   # test_storage_migrations.py, test_storage_paths.py,
+                                   # test_records_store.py
   python -m pytest tests -m smoke  # test_sidecar_smoke.py — excluded by default
 
   # Frontend (vitest, node environment — no jsdom)

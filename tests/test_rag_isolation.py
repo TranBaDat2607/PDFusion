@@ -1,18 +1,14 @@
 """Chat answers from the open PDF, and from no other (#59).
 
-It didn't, in two ways this suite pins down:
+A document is the SHA-256 of its bytes, recorded in `pdfusion.db`, and each of
+its chat indexes is a row there whose chunks live in a ChromaDB collection of
+their own. A question names one index, so another document's chunks are never
+within reach.
 
-* the index was keyed by file name, so a second, different `paper.pdf` was
-  "Already indexed" and every answer about it came from the first;
-* `hybrid_search`'s fallback dropped the document filter, so any failure in the
-  keyword pass searched every PDF ever indexed.
-
-(The third — a question with no `document_id` searched everything — is refused
-by `AskRequest` now; see `test_rag_api.py`.)
-
-Everything runs against a real ChromaDB under `tmp_path`, with a deterministic
-embedding function standing in for the ONNX model: no ~470 MB download, and
-nothing reaches the user's AppData.
+Everything here is real — the `_run_index` job, the records database, ChromaDB,
+the chain's retrieval — under `tmp_path`, with a deterministic embedding
+function standing in for the ONNX model: nothing downloads, and nothing reaches
+the user's AppData.
 """
 
 from __future__ import annotations
@@ -21,18 +17,25 @@ import asyncio
 import hashlib
 import re
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Tuple
 
 import pytest
 from chromadb import EmbeddingFunction
+from fastapi import HTTPException
 
 from desktop_pdf_translator.api.jobs import Job
 from desktop_pdf_translator.api.routes import rag as rag_routes
 from desktop_pdf_translator.api.schemas import IndexRequest
 from desktop_pdf_translator.processors.pdf_cache import compute_file_hash
 from desktop_pdf_translator.rag import rag_chain as rag_chain_module
+from desktop_pdf_translator.rag.index_spec import (
+    CHUNKER_VERSION,
+    EMBEDDING_DIMENSIONS,
+    EMBEDDING_MODEL,
+)
 from desktop_pdf_translator.rag.rag_chain import EnhancedRAGChain
 from desktop_pdf_translator.rag.vector_store import ChromaDBManager
+from desktop_pdf_translator.storage.records import IndexRecord, RecordsStore
 
 from conftest import MINIMAL_PDF
 
@@ -83,8 +86,7 @@ class HashingEmbeddingFunction(EmbeddingFunction):
 
 
 class _NoKeySettings:
-    """No LLM key anywhere: the chain builds no translator, skips HyDE, and
-    never reads the developer's own config.toml."""
+    """No LLM key anywhere: the chain builds no translator and skips HyDE."""
 
     class translation:
         preferred_service = None
@@ -96,7 +98,10 @@ class _NoKeySettings:
 
 class _FakeProcessor:
     """Stands in for `ScientificPDFProcessor` (fitz + camelot + pdfplumber):
-    one chunk, whose text says which of the two papers it was read from."""
+    one chunk on one page, whose text says which paper it was read from."""
+
+    def __init__(self) -> None:
+        self.page_layouts = {0: {}}
 
     def process_pdf(self, path: Path) -> List[Dict[str, Any]]:
         return _chunks(ALPHA if b"alpha" in path.read_bytes() else BETA)
@@ -106,54 +111,65 @@ def _chunks(*texts: str) -> List[Dict[str, Any]]:
     return [{"text": text, "page": 0, "metadata": {}} for text in texts]
 
 
+def _write_paper(path: Path, marker: bytes) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(MINIMAL_PDF + b"% " + marker + b"\n")
+    return path
+
+
+def run_index(path: Path) -> Dict[str, Any]:
+    """Run the real `_run_index` job; return its terminal event."""
+    job = Job(job_id="index")
+    asyncio.run(rag_routes._run_index(job, IndexRequest(file_path=str(path))))
+    return job.history[-1]
+
+
 @pytest.fixture
 def store(tmp_path: Path) -> ChromaDBManager:
     return ChromaDBManager(
-        persist_directory=tmp_path / "chroma",
+        persist_directory=tmp_path / "vectors",
         embedding_function=HashingEmbeddingFunction(),
     )
 
 
 @pytest.fixture
-def two_documents(store: ChromaDBManager) -> None:
-    async def seed() -> None:
-        await store.add_document_chunks(_chunks(ALPHA), "doc-alpha", "C:/a/paper.pdf")
-        await store.add_document_chunks(_chunks(BETA), "doc-beta", "C:/b/paper.pdf")
-
-    asyncio.run(seed())
+def records(tmp_path: Path) -> RecordsStore:
+    return RecordsStore(tmp_path / "pdfusion.db")
 
 
 @pytest.fixture
-def two_papers(tmp_path: Path) -> tuple[Path, Path]:
-    """Two different PDFs sharing a file name — the pair a stem-keyed index
-    could not tell apart."""
-    first = tmp_path / "downloads" / "paper.pdf"
-    second = tmp_path / "desktop" / "paper.pdf"
-    for path, marker in ((first, b"alpha"), (second, b"beta")):
-        path.parent.mkdir(parents=True)
-        path.write_bytes(MINIMAL_PDF + b"% " + marker + b"\n")
-    return first, second
-
-
-@pytest.fixture
-def run_index(store: ChromaDBManager, monkeypatch: pytest.MonkeyPatch):
-    """Run the real `_run_index` job against the tmp store; return its `done`
-    payload."""
+def sidecar(store: ChromaDBManager, records: RecordsStore, monkeypatch: pytest.MonkeyPatch):
+    """Point the rag routes at the tmp stores."""
 
     async def get_store() -> ChromaDBManager:
         return store
 
     monkeypatch.setattr(rag_routes, "_get_store", get_store)
+    monkeypatch.setattr(rag_routes, "get_records_store", lambda: records)
     monkeypatch.setattr(rag_routes, "_load_document_processor", lambda: _FakeProcessor)
+    monkeypatch.setattr(rag_routes, "_document_locks", {})
 
-    def run(path: Path) -> Dict[str, Any]:
-        job = Job(job_id="index")
-        asyncio.run(rag_routes._run_index(job, IndexRequest(file_path=str(path))))
-        last = job.history[-1]
-        assert last["type"] == "done", last
-        return last["data"]
 
-    return run
+@pytest.fixture
+def two_papers(tmp_path: Path) -> Tuple[Path, Path]:
+    """Two different PDFs sharing a file name — the pair a name-keyed index
+    could not tell apart."""
+    return (
+        _write_paper(tmp_path / "downloads" / "paper.pdf", b"alpha"),
+        _write_paper(tmp_path / "desktop" / "paper.pdf", b"beta"),
+    )
+
+
+@pytest.fixture
+def chain(store: ChromaDBManager, monkeypatch: pytest.MonkeyPatch) -> EnhancedRAGChain:
+    monkeypatch.setattr(rag_chain_module, "get_settings", lambda: _NoKeySettings())
+    return EnhancedRAGChain(store)
+
+
+def _ready(records: RecordsStore, done: Dict[str, Any]) -> IndexRecord:
+    index = records.ready_index(done["data"]["document_id"], EMBEDDING_MODEL, CHUNKER_VERSION)
+    assert index is not None
+    return index
 
 
 # ---------------------------------------------------------------------------
@@ -162,67 +178,168 @@ def run_index(store: ChromaDBManager, monkeypatch: pytest.MonkeyPatch):
 
 
 def test_a_second_pdf_with_the_same_name_gets_its_own_index(
-    run_index, two_papers, store: ChromaDBManager
+    sidecar, two_papers, store: ChromaDBManager, records: RecordsStore
 ):
     first, second = two_papers
 
     indexed_first = run_index(first)
     indexed_second = run_index(second)
 
-    assert indexed_first["document_id"] == compute_file_hash(first)
-    assert indexed_second["document_id"] == compute_file_hash(second)
-    assert indexed_second["document_id"] != indexed_first["document_id"]
-    # Keyed by stem, this one was "Already indexed" — with the first file's
-    # chunks standing in for its own.
-    assert indexed_second["cached"] is False
-    chunks = asyncio.run(store.search_by_document(indexed_second["document_id"]))
-    assert [c["text"] for c in chunks] == [BETA]
+    assert indexed_first["type"] == indexed_second["type"] == "done"
+    assert indexed_first["data"]["document_id"] == compute_file_hash(first)
+    assert indexed_second["data"]["document_id"] == compute_file_hash(second)
+    # Keyed by file name, this one was "Already indexed", with the first
+    # paper's chunks standing in for its own.
+    assert indexed_second["data"]["cached"] is False
+    index_first, index_second = _ready(records, indexed_first), _ready(records, indexed_second)
+    assert [c["text"] for c in asyncio.run(store.get_chunks(index_second.id))] == [BETA]
+    assert store.index_ids() == {index_first.id, index_second.id}
 
 
-def test_reopening_the_same_pdf_reuses_its_index(run_index, two_papers):
+def test_reopening_the_same_pdf_reuses_its_index(
+    sidecar, two_papers, store: ChromaDBManager, records: RecordsStore
+):
     first, _ = two_papers
 
     run_index(first)
     again = run_index(first)
 
-    assert again == {"document_id": compute_file_hash(first), "chunks": 1, "cached": True}
+    assert again["data"] == {"document_id": compute_file_hash(first), "chunks": 1, "cached": True}
+    assert len(records.index_ids()) == len(store.index_ids()) == 1
 
 
-# ---------------------------------------------------------------------------
-# retrieval stays inside one document
-# ---------------------------------------------------------------------------
-
-
-def test_retrieval_returns_only_the_named_documents_chunks(
-    store: ChromaDBManager, two_documents, monkeypatch: pytest.MonkeyPatch
+def test_new_bytes_at_the_same_path_are_a_new_document(
+    sidecar, tmp_path: Path, records: RecordsStore
 ):
-    monkeypatch.setattr(rag_chain_module, "get_settings", lambda: _NoKeySettings())
-    chain = EnhancedRAGChain(store)
+    paper = _write_paper(tmp_path / "paper.pdf", b"alpha")
+    before = run_index(paper)["data"]["document_id"]
 
-    results = asyncio.run(chain._retrieve_pdf_knowledge(QUESTION, "doc-beta", 5))
+    _write_paper(paper, b"beta")
+    after = run_index(paper)
+
+    assert after["data"]["document_id"] != before
+    assert after["data"]["cached"] is False
+    assert records.document_path(after["data"]["document_id"]) == str(paper)
+
+
+# ---------------------------------------------------------------------------
+# an index is ready only when it is whole
+# ---------------------------------------------------------------------------
+
+
+def test_a_pdf_with_no_text_ends_in_an_error_and_leaves_no_index(
+    sidecar, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    store: ChromaDBManager, records: RecordsStore,
+):
+    class _Scanned(_FakeProcessor):
+        def process_pdf(self, path: Path) -> List[Dict[str, Any]]:
+            return []
+
+    monkeypatch.setattr(rag_routes, "_load_document_processor", lambda: _Scanned)
+
+    result = run_index(_write_paper(tmp_path / "scan.pdf", b"scan"))
+
+    assert (result["type"], result["data"]) == ("error", {"message": rag_routes.NO_TEXT_MESSAGE})
+    assert records.index_ids() == store.index_ids() == set()
+
+
+def test_an_index_that_fails_partway_is_failed_and_dropped(
+    sidecar, two_papers, monkeypatch: pytest.MonkeyPatch,
+    store: ChromaDBManager, records: RecordsStore,
+):
+    add_chunks = store.add_chunks
+
+    async def add_then_fail(index_id: str, chunks):
+        await add_chunks(index_id, chunks)
+        raise RuntimeError("disk full")
+
+    monkeypatch.setattr(store, "add_chunks", add_then_fail)
+
+    result = run_index(two_papers[0])
+
+    assert result["type"] == "error"
+    (index_id,) = records.index_ids()
+    assert records.get_index(index_id).status == "failed"
+    assert store.index_ids() == set()
+
+
+def test_an_index_a_crash_left_half_built_is_failed_and_dropped_on_recovery(
+    store: ChromaDBManager, records: RecordsStore, tmp_path: Path
+):
+    paper = _write_paper(tmp_path / "paper.pdf", b"alpha")
+    document_id = compute_file_hash(paper)
+    records.upsert_document(document_id, paper.name, paper.stat().st_size, str(paper))
+    interrupted = records.begin_index(
+        document_id, EMBEDDING_MODEL, EMBEDDING_DIMENSIONS, CHUNKER_VERSION
+    )
+    asyncio.run(store.add_chunks(interrupted.id, _chunks(ALPHA)))
+
+    rag_routes._recover(records, store)
+
+    assert records.get_index(interrupted.id).status == "failed"
+    assert records.ready_index(document_id, EMBEDDING_MODEL, CHUNKER_VERSION) is None
+    assert store.index_ids() == set()
+
+
+def test_a_collection_no_record_accounts_for_is_dropped_on_recovery(
+    store: ChromaDBManager, records: RecordsStore
+):
+    asyncio.run(store.add_chunks("orphan", _chunks(ALPHA)))
+
+    rag_routes._recover(records, store)
+
+    assert store.index_ids() == set()
+
+
+# ---------------------------------------------------------------------------
+# a question stays inside one index
+# ---------------------------------------------------------------------------
+
+
+def test_retrieval_reaches_only_the_named_index(
+    sidecar, two_papers, records: RecordsStore, chain: EnhancedRAGChain
+):
+    _, second = two_papers
+    run_index(two_papers[0])
+    index_second = _ready(records, run_index(second))
+
+    results = asyncio.run(chain._retrieve_pdf_knowledge(QUESTION, index_second.id, 5))
 
     assert results, "the named document's own chunk should be found"
-    assert {r["metadata"]["document_id"] for r in results} == {"doc-beta"}
+    assert {r.get("original_text", r["text"]) for r in results} == {BETA}
 
 
-def test_the_semantic_fallback_keeps_the_document_filter(
-    store: ChromaDBManager, two_documents, monkeypatch: pytest.MonkeyPatch
+def test_a_question_reads_its_index_once_and_cites_its_document(
+    sidecar, two_papers, records: RecordsStore, store: ChromaDBManager,
+    chain: EnhancedRAGChain, monkeypatch: pytest.MonkeyPatch,
 ):
-    """`hybrid_search` falls back to a plain similarity search when its keyword
-    pass fails. The fallback used to drop `filter_metadata`, so this returned
-    the other document's chunk as well."""
+    """Retrieval used to re-read the document's chunks for each keyword pass
+    and for every candidate's surrounding context — up to 12 reads."""
+    run_index(two_papers[0])
+    index_second = _ready(records, run_index(two_papers[1]))
+    reads: List[str] = []
+    get_chunks = store.get_chunks
 
-    def keyword_pass_fails(*args, **kwargs):
-        raise RuntimeError("keyword pass failed")
+    async def counted(index_id: str):
+        reads.append(index_id)
+        return await get_chunks(index_id)
 
-    monkeypatch.setattr(store.collection, "get", keyword_pass_fails)
+    monkeypatch.setattr(store, "get_chunks", counted)
 
-    results = asyncio.run(
-        store.hybrid_search(QUESTION, n_results=4, filter_metadata={"document_id": "doc-beta"})
+    answer = asyncio.run(
+        chain.answer_question(
+            question=QUESTION,
+            index_id=index_second.id,
+            document_id=index_second.document_id,
+            document_path="C:/desktop/paper.pdf",
+        )
     )
 
-    assert results
-    assert {r["metadata"]["document_id"] for r in results} == {"doc-beta"}
+    assert reads == [index_second.id]
+    assert answer["pdf_references"]
+    assert {(r["document_id"], r["document_path"]) for r in answer["pdf_references"]} == {
+        (index_second.document_id, "C:/desktop/paper.pdf")
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -230,11 +347,16 @@ def test_the_semantic_fallback_keeps_the_document_filter(
 # ---------------------------------------------------------------------------
 
 
-def test_deleting_reports_how_many_chunks_went(store: ChromaDBManager):
-    async def scenario():
-        await store.add_document_chunks(_chunks(ALPHA, BETA), "doc", "C:/paper.pdf")
-        unknown = await store.delete_document("no-such-document")
-        removed = await store.delete_document("doc")
-        return unknown, removed, await store.has_document("doc")
+def test_deleting_a_document_drops_its_collection_and_only_its(
+    sidecar, two_papers, records: RecordsStore, store: ChromaDBManager
+):
+    index_first = _ready(records, run_index(two_papers[0]))
+    index_second = _ready(records, run_index(two_papers[1]))
 
-    assert asyncio.run(scenario()) == (0, 2, False)
+    asyncio.run(rag_routes.delete_document(index_first.document_id))
+
+    assert store.index_ids() == {index_second.id}
+    assert records.index_ids() == {index_second.id}
+    with pytest.raises(HTTPException) as again:
+        asyncio.run(rag_routes.delete_document(index_first.document_id))
+    assert again.value.status_code == 404
