@@ -77,6 +77,9 @@ def _run_probe(code: str) -> str:
         # inside a function for exactly this reason.
         "desktop_pdf_translator.api.routes.setup",
         "desktop_pdf_translator.engine_assets",
+        # The migration runner every SQLite store opens through. Both caches
+        # import it, and both are on the boot path via `api.routes.config`.
+        "desktop_pdf_translator.storage.migrations",
     ],
 )
 def test_boot_path_does_not_import_the_heavy_stack(module: str) -> None:

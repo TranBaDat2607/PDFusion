@@ -20,7 +20,10 @@ touched, so nothing reaches `~/AppData/Local/PDFusion/`.
 from __future__ import annotations
 
 import shutil
+import sqlite3
+from datetime import datetime, timedelta
 from pathlib import Path
+from typing import Dict, Tuple
 
 import pytest
 
@@ -461,3 +464,114 @@ def test_entries_survive_a_new_cache_object_over_the_same_directory(
 
     second = PDFTranslationCache(cache_dir=tmp_path / "c")
     assert look(second, source_pdf) is not None
+
+
+# ---------------------------------------------------------------------------
+# schema versioning (#59)
+# ---------------------------------------------------------------------------
+
+# `pdf_translations` as the unversioned code created it. `last_used_seq` was
+# added later, by an ALTER TABLE whose failure was swallowed, so both shapes
+# exist on real machines — a developer's own index.db turned up without it.
+_UNVERSIONED_TABLE = """
+    CREATE TABLE pdf_translations (
+        cache_key TEXT PRIMARY KEY,
+        file_hash TEXT NOT NULL,
+        source_lang TEXT NOT NULL,
+        target_lang TEXT NOT NULL,
+        service TEXT NOT NULL,
+        model TEXT,
+        pipeline_version TEXT NOT NULL,
+        cached_path TEXT NOT NULL,
+        original_filename TEXT NOT NULL,
+        cached_at TEXT NOT NULL,
+        last_used TEXT,{sequence}
+        hit_count INTEGER DEFAULT 0,
+        file_size_bytes INTEGER NOT NULL
+    )
+"""
+
+
+def _unversioned_cache(
+    cache_dir: Path, tmp_path: Path, with_sequence: bool
+) -> Tuple[Dict[str, Path], datetime]:
+    """An unversioned `index.db` holding two real entries, `older` last used a
+    day before `newer`. Returns their source PDFs and the local time both were
+    written at."""
+    files = cache_dir / "files"
+    files.mkdir(parents=True)
+    sequence = "\n        last_used_seq INTEGER NOT NULL DEFAULT 0," if with_sequence else ""
+    written = datetime.now().replace(microsecond=250_000) - timedelta(days=3)
+
+    conn = sqlite3.connect(cache_dir / "index.db")
+    conn.execute(_UNVERSIONED_TABLE.format(sequence=sequence))
+    sources = {}
+    for order, name in enumerate(("older", "newer"), start=1):
+        src = tmp_path / f"{name}.pdf"
+        src.write_bytes(MINIMAL_PDF + name.encode())
+        digest = compute_file_hash(src)
+        key = _make_cache_key(digest, "en", "vi", "openai", "gpt-4o", PIPELINE_VERSION)
+        cached = files / f"{key}.pdf"
+        cached.write_bytes(MINIMAL_PDF)
+        values = [
+            key, digest, "en", "vi", "openai", "gpt-4o", PIPELINE_VERSION,
+            str(cached), src.name, written.isoformat(),
+            (written + timedelta(days=order)).isoformat(),
+        ]
+        if with_sequence:
+            values.append(order)
+        values += [order, cached.stat().st_size]
+        conn.execute(
+            f"INSERT INTO pdf_translations VALUES ({', '.join('?' * len(values))})",
+            values,
+        )
+        sources[name] = src
+    conn.commit()
+    conn.close()
+    return sources, written
+
+
+def test_a_new_cache_starts_at_the_current_schema(cache: PDFTranslationCache):
+    assert cache._conn().execute("PRAGMA user_version").fetchone()[0] == 1
+
+
+@pytest.mark.parametrize(
+    "with_sequence", [False, True], ids=["before-last_used_seq", "with-last_used_seq"]
+)
+def test_an_unversioned_cache_is_upgraded_in_place(tmp_path: Path, with_sequence: bool):
+    cache_dir = tmp_path / "c"
+    sources, written = _unversioned_cache(cache_dir, tmp_path, with_sequence)
+
+    cache = PDFTranslationCache(cache_dir=cache_dir)
+    conn = cache._conn()
+
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == 1
+    types = {row["name"]: row["type"] for row in conn.execute("PRAGMA table_info(pdf_translations)")}
+    assert types["cached_at"] == types["last_used"] == types["last_used_seq"] == "INTEGER"
+    # Eviction order survives: derived from `last_used` where the sequence
+    # column was missing, carried over where it existed.
+    order = [
+        row["original_filename"]
+        for row in conn.execute("SELECT original_filename FROM pdf_translations ORDER BY last_used_seq")
+    ]
+    assert order == ["older.pdf", "newer.pdf"]
+
+    hit = look(cache, sources["older"])
+    assert hit is not None
+    # Local time in, UTC out, the same instant — and an explicit offset on the
+    # wire, which `formatRelative` in useTranslation.ts reads correctly.
+    assert datetime.fromisoformat(hit.cached_at).utcoffset() == timedelta(0)
+    assert datetime.fromisoformat(hit.cached_at).timestamp() == pytest.approx(
+        written.timestamp(), abs=0.002
+    )
+
+
+def test_an_upgraded_cache_opens_again_as_it_is(tmp_path: Path):
+    cache_dir = tmp_path / "c"
+    sources, _ = _unversioned_cache(cache_dir, tmp_path, with_sequence=False)
+    PDFTranslationCache(cache_dir=cache_dir)._conn()
+
+    again = PDFTranslationCache(cache_dir=cache_dir)
+
+    assert again.stats()["entries"] == 2
+    assert look(again, sources["newer"]) is not None

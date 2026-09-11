@@ -11,11 +11,13 @@ never touched, so nothing here can reach `~/AppData/Local/PDFusion/`.
 
 from __future__ import annotations
 
+import sqlite3
 from datetime import datetime, timedelta
 from pathlib import Path
 
 import pytest
 
+from desktop_pdf_translator.storage.sqlite import now_ms
 from desktop_pdf_translator.translators import translation_cache as tc_module
 from desktop_pdf_translator.translators.translation_cache import (
     TranslationCache,
@@ -165,7 +167,7 @@ def test_clear_expired_reaps_only_the_expired(tmp_path: Path):
     store(cache, "fresh", "tươi")
     cache._conn().execute(
         "UPDATE translations SET expires_at = ? WHERE source_text = ?",
-        ((datetime.now() - timedelta(days=1)).isoformat(), "fresh"),
+        (now_ms() - 86_400_000, "fresh"),
     )
     cache._conn().commit()
     store(cache, "current", "hiện tại")
@@ -339,3 +341,92 @@ def test_cache_enabled_is_false_when_settings_cannot_be_read(
 
     monkeypatch.setattr(config_module, "get_settings", boom)
     assert tc_module._cache_enabled() is False
+
+
+# ---------------------------------------------------------------------------
+# schema versioning (#59)
+# ---------------------------------------------------------------------------
+
+
+def _unversioned_cache(cache_dir: Path, rows) -> None:
+    """A `cache.db` exactly as the unversioned code created it: timestamps are
+    local-time ISO strings in TEXT columns, and `user_version` is 0."""
+    cache_dir.mkdir(parents=True)
+    conn = sqlite3.connect(cache_dir / "cache.db")
+    conn.execute(
+        """
+        CREATE TABLE translations (
+            cache_key TEXT PRIMARY KEY,
+            source_lang TEXT NOT NULL,
+            target_lang TEXT NOT NULL,
+            service TEXT NOT NULL,
+            model TEXT,
+            source_text TEXT NOT NULL,
+            translated_text TEXT NOT NULL,
+            cached_at TEXT NOT NULL,
+            expires_at TEXT NOT NULL,
+            hit_count INTEGER DEFAULT 0,
+            last_used TEXT
+        )
+        """
+    )
+    conn.execute("CREATE INDEX idx_expires ON translations(expires_at)")
+    for text, translated, cached_at, expires_at, hits, last_used in rows:
+        conn.execute(
+            "INSERT INTO translations VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                _make_cache_key(text, "en", "vi", "openai", "gpt-4o"),
+                "en", "vi", "openai", "gpt-4o", text, translated,
+                cached_at.isoformat(), expires_at.isoformat(), hits,
+                last_used.isoformat() if last_used else None,
+            ),
+        )
+    conn.commit()
+    conn.close()
+
+
+def test_a_new_cache_starts_at_the_current_schema(cache: TranslationCache):
+    assert cache._conn().execute("PRAGMA user_version").fetchone()[0] == 1
+
+
+def test_an_unversioned_cache_is_upgraded_in_place(tmp_path: Path):
+    cache_dir = tmp_path / "c"
+    written = datetime.now().replace(microsecond=500_000) - timedelta(days=1)
+    expires = written + timedelta(days=30)
+    _unversioned_cache(
+        cache_dir,
+        [
+            ("Hello", "Xin chào", written, expires, 3, written + timedelta(hours=1)),
+            ("Stale", "Cũ", written - timedelta(days=60), written - timedelta(days=30), 0, None),
+        ],
+    )
+
+    cache = TranslationCache(cache_dir=cache_dir)
+
+    assert cache._conn().execute("PRAGMA user_version").fetchone()[0] == 1
+    row = cache._conn().execute(
+        "SELECT cached_at, expires_at, hit_count FROM translations WHERE source_text = 'Hello'"
+    ).fetchone()
+    # Local time in, UTC milliseconds out: the same instants.
+    assert row["cached_at"] == pytest.approx(written.timestamp() * 1000, abs=2)
+    assert row["expires_at"] == pytest.approx(expires.timestamp() * 1000, abs=2)
+    assert row["hit_count"] == 3
+    assert fetch(cache, "Hello") == "Xin chào"
+    # An entry that had expired is still expired after the conversion.
+    assert fetch(cache, "Stale") is None
+    assert cache.clear_expired() == 1
+
+
+def test_an_upgraded_cache_opens_again_as_it_is(tmp_path: Path):
+    cache_dir = tmp_path / "c"
+    written = datetime.now() - timedelta(days=1)
+    _unversioned_cache(
+        cache_dir, [("Hello", "Xin chào", written, written + timedelta(days=30), 0, None)]
+    )
+    TranslationCache(cache_dir=cache_dir)._conn()
+
+    again = TranslationCache(cache_dir=cache_dir)
+
+    assert again._conn().execute("PRAGMA user_version").fetchone()[0] == 1
+    assert fetch(again, "Hello") == "Xin chào"
+    assert again.stats()["entries"] == 1
