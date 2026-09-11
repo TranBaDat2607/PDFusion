@@ -1,29 +1,27 @@
 """The `/rag` HTTP contract (#59).
 
-Only the rag router is mounted, so no lifespan runs, and the store and chain are
-stubs: nothing here imports chromadb or loads an embedding model. What the store
-itself does with a document id is `test_rag_isolation.py`'s job.
+Only the rag router is mounted, so no lifespan runs, and the records and the
+vector store are stubs: nothing here imports chromadb or loads a model. What the
+real stores do with a document is `test_rag_isolation.py`'s job.
 """
 
 from __future__ import annotations
 
-import asyncio
-from typing import Optional
+from pathlib import Path
+from typing import List, Optional
 
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from desktop_pdf_translator.api import auth
-from desktop_pdf_translator.api.jobs import Job
+from desktop_pdf_translator.api import auth, server
+from desktop_pdf_translator.api.jobs import get_registry
 from desktop_pdf_translator.api.routes import rag as rag_routes
-from desktop_pdf_translator.api.schemas import AskRequest
+from desktop_pdf_translator.rag.index_spec import CHUNKER_VERSION, EMBEDDING_MODEL
+from desktop_pdf_translator.storage.records import IndexRecord
 
 TOKEN = "test-token-for-rag-api"
 AUTH = {"Authorization": f"Bearer {TOKEN}"}
-
-# Captured before `_no_real_jobs` replaces it, for the test that runs it.
-_REAL_RUN_ASK = rag_routes._run_ask
 
 
 @pytest.fixture(autouse=True)
@@ -33,11 +31,12 @@ def _token(monkeypatch: pytest.MonkeyPatch):
 
 @pytest.fixture(autouse=True)
 def _no_real_jobs(monkeypatch: pytest.MonkeyPatch):
-    async def _noop(job, payload) -> None:
+    async def _noop(*args, **kwargs) -> None:
         return None
 
     monkeypatch.setattr(rag_routes, "_run_ask", _noop)
     monkeypatch.setattr(rag_routes, "_run_index", _noop)
+    monkeypatch.setattr(rag_routes, "_document_locks", {})
 
 
 @pytest.fixture
@@ -47,22 +46,62 @@ def client() -> TestClient:
     return TestClient(app)
 
 
-class _StubStore:
-    def __init__(self, removed: int = 0, error: Optional[Exception] = None):
-        self.removed = removed
+def _ready_index(document_id: str = "abc123") -> IndexRecord:
+    return IndexRecord(
+        id="index-1",
+        document_id=document_id,
+        embedding_model=EMBEDDING_MODEL,
+        embedding_dim=384,
+        chunker_version=CHUNKER_VERSION,
+        status="ready",
+        chunk_count=3,
+        error=None,
+        created_at=0,
+        completed_at=1,
+    )
+
+
+class _StubRecords:
+    def __init__(
+        self,
+        ready: Optional[IndexRecord] = None,
+        removed: tuple = (),
+        error: Optional[Exception] = None,
+    ):
+        self.ready = ready
+        self.removed = list(removed)
         self.error = error
 
-    async def delete_document(self, document_id: str) -> int:
+    def ready_index(self, document_id, embedding_model, chunker_version):
+        return self.ready
+
+    def document_path(self, document_id):
+        return "C:/papers/paper.pdf"
+
+    def delete_document_indexes(self, document_id) -> List[str]:
         if self.error is not None:
             raise self.error
         return self.removed
 
 
-def _use_store(monkeypatch: pytest.MonkeyPatch, store: _StubStore) -> None:
+class _StubStore:
+    def __init__(self) -> None:
+        self.dropped: List[str] = []
+
+    def drop_index(self, index_id: str) -> bool:
+        self.dropped.append(index_id)
+        return True
+
+
+def _use(monkeypatch: pytest.MonkeyPatch, records: _StubRecords) -> _StubStore:
+    store = _StubStore()
+
     async def get_store() -> _StubStore:
         return store
 
+    monkeypatch.setattr(rag_routes, "get_records_store", lambda: records)
     monkeypatch.setattr(rag_routes, "_get_store", get_store)
+    return store
 
 
 # ---------------------------------------------------------------------------
@@ -86,7 +125,11 @@ def test_a_question_has_to_name_its_document(client: TestClient, body):
     assert response.status_code == 422
 
 
-def test_a_question_about_one_document_is_accepted(client: TestClient):
+def test_a_question_about_an_indexed_document_is_accepted(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+):
+    _use(monkeypatch, _StubRecords(ready=_ready_index()))
+
     response = client.post(
         "/rag/ask",
         json={"question": "What is the ablation?", "document_id": "abc123"},
@@ -97,33 +140,23 @@ def test_a_question_about_one_document_is_accepted(client: TestClient):
     assert response.json()["job_id"]
 
 
-def test_a_question_about_an_unindexed_document_ends_in_an_error(
-    monkeypatch: pytest.MonkeyPatch,
+def test_a_question_about_an_unindexed_document_is_refused_before_a_job_exists(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
 ):
     """Searching a document with no chunks would answer "I could not find
     relevant information", as if the document had been read."""
+    _use(monkeypatch, _StubRecords(ready=None))
+    jobs_before = len(get_registry()._jobs)
 
-    class _EmptyStore:
-        async def has_document(self, document_id: str) -> bool:
-            return False
+    response = client.post(
+        "/rag/ask",
+        json={"question": "What is the ablation?", "document_id": "abc123"},
+        headers=AUTH,
+    )
 
-    class _Chain:
-        vector_store = _EmptyStore()
-
-        async def answer_question(self, **kwargs):
-            raise AssertionError("an unindexed document must not be searched")
-
-    async def get_chain() -> _Chain:
-        return _Chain()
-
-    monkeypatch.setattr(rag_routes, "_get_chain", get_chain)
-    job = Job(job_id="ask")
-
-    asyncio.run(_REAL_RUN_ASK(job, AskRequest(question="hi", document_id="abc123")))
-
-    assert [(e["type"], e["data"]) for e in job.history] == [
-        ("error", {"message": rag_routes.NOT_INDEXED_MESSAGE})
-    ]
+    assert response.status_code == 409
+    assert response.json()["detail"] == rag_routes.NOT_INDEXED_MESSAGE
+    assert len(get_registry()._jobs) == jobs_before
 
 
 # ---------------------------------------------------------------------------
@@ -131,22 +164,52 @@ def test_a_question_about_an_unindexed_document_ends_in_an_error(
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize(
-    "store, expected",
-    [
-        (_StubStore(removed=3), 204),
-        # Both of these used to come back the other way round: 204 for an id
-        # that matched nothing, 404 "Document not found" for a storage failure.
-        (_StubStore(removed=0), 404),
-        (_StubStore(error=RuntimeError("disk I/O error")), 500),
-    ],
-    ids=["deleted", "unknown", "storage-failure"],
-)
-def test_deleting_a_document_says_what_happened(
-    client: TestClient, monkeypatch: pytest.MonkeyPatch, store: _StubStore, expected: int
+def test_deleting_a_document_drops_every_one_of_its_collections(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
 ):
-    _use_store(monkeypatch, store)
+    store = _use(monkeypatch, _StubRecords(removed=("index-1", "index-0")))
+
+    response = client.delete("/rag/document/abc123", headers=AUTH)
+
+    assert response.status_code == 204
+    assert store.dropped == ["index-1", "index-0"]
+
+
+@pytest.mark.parametrize(
+    "records, expected",
+    [
+        # These came back the other way round before #59: 204 for a document
+        # with nothing to delete, 404 "Document not found" for a storage failure.
+        (_StubRecords(removed=()), 404),
+        (_StubRecords(error=RuntimeError("disk I/O error")), 500),
+    ],
+    ids=["unknown", "storage-failure"],
+)
+def test_deleting_says_what_went_wrong(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch, records: _StubRecords, expected: int
+):
+    store = _use(monkeypatch, records)
 
     response = client.delete("/rag/document/abc123", headers=AUTH)
 
     assert response.status_code == expected
+    assert store.dropped == []
+
+
+# ---------------------------------------------------------------------------
+# startup
+# ---------------------------------------------------------------------------
+
+
+def test_the_legacy_vector_stores_are_removed_and_the_current_one_kept(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
+    root = tmp_path / "PDFusion"
+    for name in ("chroma_db_v2", "chroma_db", "vectors"):
+        (root / name).mkdir(parents=True)
+        (root / name / "chroma.sqlite3").write_bytes(b"SQLite format 3\x00")
+
+    server._remove_legacy_vector_stores()
+
+    assert sorted(p.name for p in root.iterdir()) == ["vectors"]

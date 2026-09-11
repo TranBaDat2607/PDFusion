@@ -38,7 +38,7 @@ from uvicorn.main import STARTUP_FAILURE
 
 from .. import __version__
 from ..config import TranslationService, get_settings
-from ..utils import configure_logging
+from ..utils import appdata_dir, configure_logging
 from .auth import init_token, require_token
 from .routes import config as config_routes
 from .routes import pdf as pdf_routes
@@ -206,6 +206,28 @@ def _gc_translation_cache() -> None:
         logger.warning("Translation cache GC failed: %s", exc)
 
 
+def _remove_legacy_vector_stores() -> None:
+    """Delete the chat indexes older builds left under the data root (#59).
+
+    `chroma_db/` is the chromadb 0.4 store, unreadable since the 1.x upgrade.
+    `chroma_db_v2/` held every document's chunks in one shared collection. Chat
+    indexes now live in `vectors/`, one collection per index recorded in
+    `pdfusion.db`, and a document is indexed again the next time chat opens it.
+    Filesystem work only — chromadb is never imported here, so the sweep costs
+    nothing for the users who never chat.
+    """
+    root = appdata_dir()
+    for name in ("chroma_db_v2", "chroma_db"):
+        legacy = root / name
+        if not legacy.is_dir():
+            continue
+        shutil.rmtree(legacy, ignore_errors=True)
+        if legacy.exists():
+            logger.warning("Could not fully remove the legacy vector store %s", legacy)
+        else:
+            logger.info("Removed the legacy vector store %s", legacy)
+
+
 # Strong ref so the GC task isn't reaped mid-flight (create_task holds weak refs).
 _startup_tasks: set[asyncio.Task] = set()
 
@@ -228,10 +250,12 @@ async def _lifespan(app: FastAPI):
             name="argos-prewarm",
             daemon=True,
         ).start()
-    # Paragraph-cache GC in the background so startup isn't delayed.
-    gc_task = asyncio.create_task(asyncio.to_thread(_gc_translation_cache))
-    _startup_tasks.add(gc_task)
-    gc_task.add_done_callback(_startup_tasks.discard)
+    # Paragraph-cache GC and the legacy vector-store sweep, in the background
+    # so startup isn't delayed.
+    for chore in (_gc_translation_cache, _remove_legacy_vector_stores):
+        task = asyncio.create_task(asyncio.to_thread(chore))
+        _startup_tasks.add(task)
+        task.add_done_callback(_startup_tasks.discard)
     yield
     logger.info("Sidecar shutting down")
 

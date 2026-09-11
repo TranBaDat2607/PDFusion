@@ -134,7 +134,7 @@ fn open_logs_folder(app: tauri::AppHandle) -> Result<(), String> {
 /// This is what the boot screen's Retry does. The sidecar handle is a
 /// `OnceCell` set exactly once per process, so "spawn it again" would mean
 /// making that lifecycle re-entrant — two spawn paths, a window where two
-/// Python processes share one `chroma_db`. A relaunch re-runs the existing
+/// Python processes share one `pdfusion.db` and `vectors` store. A relaunch re-runs the existing
 /// startup path unchanged, which is the whole point of retrying.
 ///
 /// Everything an ordinary exit does has to be done *here*, explicitly.
@@ -163,7 +163,7 @@ pub fn run() {
     tauri::Builder::default()
         // Must come first: a second launch has to be turned away before the
         // rest of the app builds. Two windows means two sidecars sharing one
-        // `chroma_db` and one set of SQLite WAL files.
+        // `vectors` store and one set of SQLite WAL files.
         .plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
             if let Some(window) = app.get_webview_window("main") {
                 let _ = window.unminimize();

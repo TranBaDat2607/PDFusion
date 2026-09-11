@@ -312,6 +312,13 @@ pub(crate) fn appdata_dir() -> PathBuf {
 /// itself is unwritable, the sidecar will surface a clearer downstream error.
 pub fn ensure_appdata_layout() {
     let root = appdata_dir();
+    ensure_appdata_layout_in(&root);
+    log::info!("AppData layout ready at {}", root.display());
+}
+
+/// `ensure_appdata_layout` against an explicit root, so a test can run it in a
+/// temp dir instead of the real `%LOCALAPPDATA%`.
+fn ensure_appdata_layout_in(root: &Path) {
     // `translated_pdfs/` is intentionally absent: BabelDOC's live output now
     // lives in a per-job %TEMP%\pdfusion-translate-<rand>\ dir that the
     // sidecar wipes on the next translation start, on app exit (via
@@ -320,9 +327,11 @@ pub fn ensure_appdata_layout() {
     let subdirs: &[&str] = &[
         "logs",
         "translated_pdf_cache/files",
-        // `_v2` tracks rag/vector_store.py: chromadb 1.x cannot read the
-        // 0.4-era directory, so the two must not drift apart.
-        "chroma_db_v2",
+        // Chat indexes: one ChromaDB collection per index recorded in
+        // `pdfusion.db` (rag/vector_store.py). It replaced `chroma_db_v2`,
+        // which the sidecar deletes on startup — so that name must not come
+        // back here, or every launch would recreate what the last one removed.
+        "vectors",
         "translation_cache",
     ];
     for sub in subdirs {
@@ -331,7 +340,6 @@ pub fn ensure_appdata_layout() {
             log::warn!("Could not pre-create {}: {}", dir.display(), e);
         }
     }
-    log::info!("AppData layout ready at {}", root.display());
 }
 
 /// Wipe every `pdfusion-translate-*` directory under the system temp root.
@@ -639,8 +647,8 @@ async fn health_check(port: u16, token: &str) -> Result<(), SidecarError> {
 #[cfg(test)]
 mod tests {
     use super::{
-        check_staged_size, parse_ready_line, redact_ready_line, unexpected_exit, Command,
-        STUB_THRESHOLD_BYTES,
+        check_staged_size, ensure_appdata_layout_in, parse_ready_line, redact_ready_line,
+        unexpected_exit, Command, STUB_THRESHOLD_BYTES,
     };
     use std::sync::atomic::AtomicBool;
     use std::sync::Mutex;
@@ -729,5 +737,22 @@ mod tests {
     fn an_unreadable_path_is_rejected_without_a_size() {
         let missing = std::env::temp_dir().join("pdfusion-does-not-exist.exe");
         assert_eq!(check_staged_size(&missing), Err(None));
+    }
+
+    #[test]
+    fn the_appdata_layout_holds_the_vector_store_and_no_legacy_one() {
+        let root = std::env::temp_dir().join(format!("pdfusion-layout-{}", std::process::id()));
+        std::fs::remove_dir_all(&root).ok();
+
+        ensure_appdata_layout_in(&root);
+
+        for sub in ["logs", "translated_pdf_cache/files", "vectors", "translation_cache"] {
+            assert!(root.join(sub).is_dir(), "{sub} was not created");
+        }
+        // The sidecar deletes `chroma_db_v2` on startup (#59); creating it here
+        // would put it back on every launch.
+        assert!(!root.join("chroma_db_v2").exists());
+
+        std::fs::remove_dir_all(&root).ok();
     }
 }

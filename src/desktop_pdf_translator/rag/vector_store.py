@@ -1,14 +1,19 @@
 """
-Vector store manager using ChromaDB for efficient similarity search.
-Handles embeddings, indexing, and retrieval for RAG system.
+Chat index storage: one ChromaDB collection per index.
+
+Which indexes exist — for which document, built with which embedding model and
+chunker — is recorded in `storage/records.py`. This module stores and searches
+the chunks of one index at a time. Every method names an index, and a query only
+ever reaches that index's collection, so no code path can search across
+documents (#59). Collections are derived data: `api/routes/rag.py:_recover`
+drops any the records don't account for.
 """
 
 import asyncio
-import logging
 import json
+import logging
 from pathlib import Path
-from typing import List, Dict, Any, Optional, Tuple
-from datetime import datetime
+from typing import Any, Dict, List, Optional, Set
 
 import chromadb
 from chromadb.config import Settings
@@ -19,34 +24,40 @@ from .onnx_embeddings import OnnxEmbeddingFunction
 
 logger = logging.getLogger(__name__)
 
-# Chunks are keyed by the SHA-256 of their document's bytes (#59). The
-# collection they used to live in keyed them by file name stem, which nothing
-# looks up any more, so it is dropped on open rather than left on disk.
-_COLLECTION = "pdf_chunks"
-_LEGACY_COLLECTION = "pdf_documents"
+_COLLECTION_PREFIX = "rag_"
+# Chunks per `collection.add` call: keeps a long PDF under ChromaDB's batch
+# limit, and the embedding model's working memory small.
+_ADD_BATCH = 256
+
+
+def collection_name(index_id: str) -> str:
+    return f"{_COLLECTION_PREFIX}{index_id}"
+
+
+def _first_bbox(elements: Any) -> Optional[List[float]]:
+    """The first element's bounding box — the only part of a chunk's element
+    list anything reads (`rag_chain._create_pdf_references`)."""
+    if not elements or not isinstance(elements[0], dict):
+        return None
+    bbox = elements[0].get('bbox')
+    return [float(v) for v in bbox] if bbox else None
 
 
 class ChromaDBManager:
-    """
-    ChromaDB manager for vector storage and retrieval.
-    Optimized for desktop applications with local persistence.
-    """
-    
+    """ChromaDB storage for chat indexes, persisted under the app's data root."""
+
     def __init__(self, persist_directory: Optional[Path] = None,
                  embedding_function=None):
         """
-        Initialize ChromaDB manager.
-
         Args:
-            persist_directory: Directory to persist the database
+            persist_directory: Where ChromaDB keeps its files. Defaults to
+                `vectors/` under the app's data root.
             embedding_function: ChromaDB embedding function. Defaults to the
                 ONNX MiniLM model; tests pass a deterministic one so they need
                 no model download.
         """
-        # `chroma_db_v2` rather than `chroma_db`: the 0.4-era directory is not
-        # readable by chromadb 1.x, and a document index is cheap to rebuild.
         if persist_directory is None:
-            persist_directory = appdata_dir() / "chroma_db_v2"
+            persist_directory = appdata_dir() / "vectors"
 
         self.persist_directory = Path(persist_directory)
         self.persist_directory.mkdir(parents=True, exist_ok=True)
@@ -63,366 +74,192 @@ class ChromaDBManager:
             embedding_function = OnnxEmbeddingFunction()
         self.embedding_function = embedding_function
 
-        try:
-            self.client.delete_collection(_LEGACY_COLLECTION)
-            logger.info("Dropped the file-name-keyed %r collection", _LEGACY_COLLECTION)
-        except NotFoundError:
-            pass
-
-        self.collection = self.client.get_or_create_collection(
-            name=_COLLECTION,
-            embedding_function=self.embedding_function,
-            configuration={"hnsw": {"space": "cosine"}},
-        )
-
         logger.info(f"ChromaDB initialized at: {self.persist_directory}")
 
-    async def add_document_chunks(self, chunks: List[Dict[str, Any]], 
-                                document_id: str, document_path: str) -> bool:
-        """
-        Add document chunks to vector store.
-        
-        Args:
-            chunks: List of document chunks with text and metadata
-            document_id: Unique identifier for the document
-            document_path: Path to the original document
-            
-        Returns:
-            True if successful, False otherwise
-        """
-        try:
-            # Prepare data for ChromaDB
-            ids = []
-            documents = []
-            metadatas = []
-            
-            for i, chunk in enumerate(chunks):
-                chunk_id = f"{document_id}_chunk_{i}"
-                ids.append(chunk_id)
-                documents.append(chunk['text'])
-                
-                # Prepare metadata
-                metadata = {
-                    'document_id': document_id,
-                    'document_path': document_path,
-                    'chunk_index': i,
-                    'page': chunk.get('page', 0),
-                    'chunk_type': chunk.get('metadata', {}).get('section_type', 'content'),
-                    'has_equations': chunk.get('metadata', {}).get('has_equations', False),
-                    'has_tables': chunk.get('metadata', {}).get('has_tables', False),
-                    'has_figures': chunk.get('metadata', {}).get('has_figures', False),
-                    'created_at': datetime.now().isoformat(),
-                    'text_length': len(chunk['text'])
-                }
-                
-                # Add elements information
-                if 'elements' in chunk:
-                    metadata['elements_count'] = len(chunk['elements'])
-                    metadata['elements'] = json.dumps(chunk['elements'])
-                
-                metadatas.append(metadata)
-            
-            # Add to collection. Embedding + upsert are CPU-heavy and blocking;
-            # run off the event loop so the sidecar stays responsive.
-            await asyncio.to_thread(
-                self.collection.add,
-                ids=ids,
-                documents=documents,
-                metadatas=metadatas,
+    def _collection(self, index_id: str, create: bool = False):
+        if create:
+            return self.client.get_or_create_collection(
+                name=collection_name(index_id),
+                embedding_function=self.embedding_function,
+                configuration={"hnsw": {"space": "cosine"}},
             )
-            
-            logger.info(f"Added {len(chunks)} chunks for document {document_id}")
-            return True
-            
-        except Exception as e:
-            logger.error(f"Failed to add document chunks: {e}")
-            return False
-    
-    async def search_similar(self, query: str, n_results: int = 5,
-                           filter_metadata: Optional[Dict] = None) -> List[Dict[str, Any]]:
+        return self.client.get_collection(
+            name=collection_name(index_id),
+            embedding_function=self.embedding_function,
+        )
+
+    async def add_chunks(self, index_id: str, chunks: List[Dict[str, Any]]) -> int:
+        """Embed and store an index's chunks; return how many were stored.
+
+        Raises on failure. The caller fails the index and drops its collection,
+        so a half-written index is never taken for a finished one.
+
+        Chunks keep only the metadata retrieval reads. The document's id and
+        path are not repeated on every chunk: the collection is the document's,
+        and the records know where it lives.
         """
-        Search for similar chunks using semantic similarity.
-        
-        Args:
-            query: Search query
-            n_results: Number of results to return
-            filter_metadata: Optional metadata filters
-            
-        Returns:
-            List of similar chunks with scores
+        ids: List[str] = []
+        documents: List[str] = []
+        metadatas: List[Dict[str, Any]] = []
+        for i, chunk in enumerate(chunks):
+            section = chunk.get('metadata', {})
+            metadata = {
+                'chunk_index': i,
+                'page': chunk.get('page', 0),
+                'chunk_type': section.get('section_type', 'content'),
+                'has_equations': bool(section.get('has_equations', False)),
+                'has_tables': bool(section.get('has_tables', False)),
+                'has_figures': bool(section.get('has_figures', False)),
+            }
+            bbox = _first_bbox(chunk.get('elements'))
+            if bbox is not None:
+                metadata['bbox'] = json.dumps(bbox)
+            ids.append(f"chunk_{i}")
+            documents.append(chunk['text'])
+            metadatas.append(metadata)
+
+        def add() -> None:
+            collection = self._collection(index_id, create=True)
+            for start in range(0, len(ids), _ADD_BATCH):
+                end = start + _ADD_BATCH
+                collection.add(
+                    ids=ids[start:end],
+                    documents=documents[start:end],
+                    metadatas=metadatas[start:end],
+                )
+
+        # Embedding is CPU-heavy and blocking: off the event loop.
+        await asyncio.to_thread(add)
+        logger.info(f"Added {len(ids)} chunks to index {index_id}")
+        return len(ids)
+
+    async def get_chunks(self, index_id: str) -> List[Dict[str, Any]]:
+        """Every chunk of an index, in reading order.
+
+        The one full read a question makes; the keyword pass and the
+        surrounding-context step both work from the list this returns.
         """
-        try:
-            # Perform similarity search (embeds the query — run off-loop)
-            results = await asyncio.to_thread(
-                self.collection.query,
+        results = await asyncio.to_thread(
+            lambda: self._collection(index_id).get(include=['documents', 'metadatas'])
+        )
+        chunks = [
+            {'text': text, 'metadata': metadata, 'chunk_id': chunk_id}
+            for chunk_id, text, metadata in zip(
+                results['ids'], results['documents'], results['metadatas']
+            )
+        ]
+        chunks.sort(key=lambda c: (
+            c['metadata'].get('page', 0),
+            c['metadata'].get('chunk_index', 0),
+        ))
+        return chunks
+
+    async def search_similar(self, index_id: str, query: str,
+                             n_results: int = 5) -> List[Dict[str, Any]]:
+        """Semantic search within one index."""
+
+        def search():
+            collection = self._collection(index_id)
+            available = collection.count()
+            if available == 0:
+                return None
+            return collection.query(
                 query_texts=[query],
-                n_results=n_results,
-                where=filter_metadata,
+                n_results=min(n_results, available),
                 include=['documents', 'metadatas', 'distances'],
             )
-            
-            # Format results
-            formatted_results = []
-            
-            if results['documents'] and len(results['documents']) > 0:
-                for i in range(len(results['documents'][0])):
-                    result = {
-                        'text': results['documents'][0][i],
-                        'metadata': results['metadatas'][0][i],
-                        'similarity_score': 1 - results['distances'][0][i],  # Convert distance to similarity
-                        'chunk_id': results['ids'][0][i] if 'ids' in results else None
-                    }
-                    formatted_results.append(result)
-            
-            logger.info(f"Found {len(formatted_results)} similar chunks for query: {query[:50]}...")
-            return formatted_results
-            
+
+        try:
+            # Embeds the query: off the event loop.
+            results = await asyncio.to_thread(search)
         except Exception as e:
             logger.error(f"Similarity search failed: {e}")
             return []
-    
-    async def has_document(self, document_id: str) -> bool:
-        """Whether any chunk of `document_id` is stored. Fetches one id, no text."""
-        results = await asyncio.to_thread(
-            self.collection.get,
-            where={"document_id": document_id},
-            limit=1,
-            include=[],
-        )
-        return bool(results['ids'])
 
-    async def search_by_document(self, document_id: str) -> List[Dict[str, Any]]:
-        """
-        Get all chunks for a specific document.
-        
-        Args:
-            document_id: Document identifier
-            
-        Returns:
-            List of chunks for the document
-        """
-        try:
-            results = await asyncio.to_thread(
-                self.collection.get,
-                where={"document_id": document_id},
-                include=['documents', 'metadatas'],
-            )
-
-            formatted_results = []
-            if results['documents']:
-                for i in range(len(results['documents'])):
-                    result = {
-                        'text': results['documents'][i],
-                        'metadata': results['metadatas'][i],
-                        'chunk_id': results['ids'][i]
-                    }
-                    formatted_results.append(result)
-
-            # Sort by chunk index
-            formatted_results.sort(key=lambda x: x['metadata'].get('chunk_index', 0))
-            
-            return formatted_results
-            
-        except Exception as e:
-            logger.error(f"Document search failed: {e}")
+        if not results or not results['documents']:
             return []
 
-    async def get_document_chunks(self, document_id: str,
-                                  page_range: Optional[Tuple[int, int]] = None,
-                                  limit: Optional[int] = None) -> List[Dict[str, Any]]:
-        """
-        Get chunks from a specific document, optionally filtered by page range.
-
-        Args:
-            document_id: Document identifier
-            page_range: Optional tuple of (start_page, end_page) inclusive
-            limit: Maximum number of chunks to return
-
-        Returns:
-            List of chunks, sorted by page and chunk index
-        """
-        try:
-            # Get all chunks for the document
-            results = await asyncio.to_thread(
-                self.collection.get,
-                where={"document_id": document_id},
-                include=['documents', 'metadatas'],
-            )
-
-            formatted_results = []
-            if results['documents']:
-                for i in range(len(results['documents'])):
-                    metadata = results['metadatas'][i]
-                    page = metadata.get('page', 0)
-
-                    # Filter by page range if specified
-                    if page_range:
-                        start_page, end_page = page_range
-                        if page < start_page or page > end_page:
-                            continue
-
-                    result = {
-                        'text': results['documents'][i],
-                        'metadata': metadata,
-                        'chunk_id': results['ids'][i],
-                        'similarity_score': 1.0  # Set default score for early chunks
-                    }
-                    formatted_results.append(result)
-
-            # Sort by page and chunk index
-            formatted_results.sort(key=lambda x: (
-                x['metadata'].get('page', 0),
-                x['metadata'].get('chunk_index', 0)
-            ))
-
-            # Apply limit if specified
-            if limit:
-                formatted_results = formatted_results[:limit]
-
-            return formatted_results
-
-        except Exception as e:
-            logger.error(f"Failed to get document chunks: {e}")
-            return []
-
-    async def delete_document(self, document_id: str) -> int:
-        """
-        Delete all chunks for a document.
-
-        Args:
-            document_id: Document identifier
-
-        Returns:
-            How many chunks were removed — 0 when the store has no such
-            document. Storage errors propagate rather than being folded into
-            the return value: the route has to tell "not found" from "failed".
-        """
-        # Get all chunk IDs for the document. NOTE: ids are always
-        # returned by get(); 'ids' is not a valid `include` value and
-        # passing it raises, which made this method always fail.
-        results = await asyncio.to_thread(
-            self.collection.get,
-            where={"document_id": document_id},
-            include=[],
-        )
-
-        ids = results['ids']
-        if ids:
-            await asyncio.to_thread(self.collection.delete, ids=ids)
-            logger.info(f"Deleted {len(ids)} chunks for document {document_id}")
-
-        return len(ids)
-    
-    def get_collection_stats(self) -> Dict[str, Any]:
-        """Get statistics about the collection."""
-        try:
-            count = self.collection.count()
-            
-            # Get sample of documents to analyze
-            sample_results = self.collection.peek(limit=100)
-            
-            stats = {
-                'total_chunks': count,
-                'total_documents': len(set(
-                    meta.get('document_id', '')
-                    for meta in sample_results.get('metadatas', [])
-                )) if sample_results.get('metadatas') else 0,
-                'persist_directory': str(self.persist_directory),
-                'embedding_model': self.embedding_function.model_name
+        formatted_results = [
+            {
+                'text': results['documents'][0][i],
+                'metadata': results['metadatas'][0][i],
+                'similarity_score': 1 - results['distances'][0][i],  # Convert distance to similarity
+                'chunk_id': results['ids'][0][i],
             }
-            
-            # Analyze content types
-            if sample_results.get('metadatas'):
-                has_equations = sum(1 for meta in sample_results['metadatas'] 
-                                  if meta.get('has_equations', False))
-                has_tables = sum(1 for meta in sample_results['metadatas'] 
-                               if meta.get('has_tables', False))
-                has_figures = sum(1 for meta in sample_results['metadatas'] 
-                                if meta.get('has_figures', False))
-                
-                stats.update({
-                    'chunks_with_equations': has_equations,
-                    'chunks_with_tables': has_tables,
-                    'chunks_with_figures': has_figures
-                })
-            
-            return stats
-            
-        except Exception as e:
-            logger.error(f"Failed to get collection stats: {e}")
-            return {'error': str(e)}
-    
-    async def hybrid_search(self, query: str, n_results: int = 5,
-                          alpha: float = 0.7,
-                          filter_metadata: Optional[Dict] = None) -> List[Dict[str, Any]]:
+            for i in range(len(results['documents'][0]))
+        ]
+        logger.info(f"Found {len(formatted_results)} similar chunks for query: {query[:50]}...")
+        return formatted_results
+
+    async def hybrid_search(self, index_id: str, query: str,
+                            chunks: List[Dict[str, Any]], n_results: int = 5,
+                            alpha: float = 0.7) -> List[Dict[str, Any]]:
         """
-        Perform hybrid search combining semantic and keyword matching.
+        Blend semantic search with keyword matching, within one index.
 
         Args:
+            index_id: The index to search
             query: Search query
+            chunks: The index's chunks, as `get_chunks` returned them — read once
+                by the caller, not once per search
             n_results: Number of results to return
             alpha: Weight for semantic search (1-alpha for keyword search)
-            filter_metadata: Optional metadata filters (e.g., {"document_id": "123"})
 
         Returns:
             List of ranked results
         """
+        semantic_results = await self.search_similar(index_id, query, n_results * 2)
+
+        # Simple keyword search (can be enhanced with BM25)
+        keyword_results = []
+        query_words = query.lower().split()
+        if query_words:
+            for chunk in chunks:
+                text = chunk['text'].lower()
+                keyword_score = sum(1 for word in query_words if word in text)
+                if keyword_score > 0:
+                    keyword_results.append(
+                        {**chunk, 'keyword_score': keyword_score / len(query_words)}
+                    )
+
+        # Combine and rank results
+        combined_results: Dict[str, Dict[str, Any]] = {}
+        for result in semantic_results:
+            combined_results[result['chunk_id']] = {
+                **result, 'final_score': alpha * result['similarity_score']
+            }
+        for result in keyword_results:
+            existing = combined_results.get(result['chunk_id'])
+            if existing is not None:
+                existing['final_score'] += (1 - alpha) * result['keyword_score']
+            else:
+                combined_results[result['chunk_id']] = {
+                    **result,
+                    'similarity_score': 0,
+                    'final_score': (1 - alpha) * result['keyword_score'],
+                }
+
+        final_results = sorted(
+            combined_results.values(), key=lambda x: x['final_score'], reverse=True
+        )
+        return final_results[:n_results]
+
+    def drop_index(self, index_id: str) -> bool:
+        """Delete an index's collection; `False` if it had none.
+
+        Blocking: from async code, call it through `asyncio.to_thread`.
+        """
         try:
-            # Semantic search with filter
-            semantic_results = await self.search_similar(query, n_results * 2, filter_metadata=filter_metadata)
+            self.client.delete_collection(collection_name(index_id))
+        except NotFoundError:
+            return False
+        logger.info(f"Dropped the collection of index {index_id}")
+        return True
 
-            # Simple keyword search (can be enhanced with BM25)
-            keyword_results = []
-            query_words = query.lower().split()
-
-            # Get all documents for keyword matching with filter
-            all_results = await asyncio.to_thread(
-                self.collection.get,
-                where=filter_metadata,
-                include=['documents', 'metadatas']
-            )
-
-            if all_results['documents']:
-                for i, doc in enumerate(all_results['documents']):
-                    doc_lower = doc.lower()
-                    keyword_score = sum(1 for word in query_words if word in doc_lower)
-                    
-                    if keyword_score > 0:
-                        keyword_results.append({
-                            'text': doc,
-                            'metadata': all_results['metadatas'][i],
-                            'keyword_score': keyword_score / len(query_words),
-                            'chunk_id': all_results['ids'][i]
-                        })
-            
-            # Combine and rank results
-            combined_results = {}
-            
-            # Add semantic results
-            for result in semantic_results:
-                chunk_id = result['chunk_id']
-                combined_results[chunk_id] = result.copy()
-                combined_results[chunk_id]['final_score'] = alpha * result['similarity_score']
-            
-            # Add keyword results
-            for result in keyword_results:
-                chunk_id = result['chunk_id']
-                if chunk_id in combined_results:
-                    combined_results[chunk_id]['final_score'] += (1 - alpha) * result['keyword_score']
-                else:
-                    combined_results[chunk_id] = result.copy()
-                    combined_results[chunk_id]['final_score'] = (1 - alpha) * result['keyword_score']
-                    combined_results[chunk_id]['similarity_score'] = 0
-            
-            # Sort by final score and return top results
-            final_results = list(combined_results.values())
-            final_results.sort(key=lambda x: x['final_score'], reverse=True)
-            
-            return final_results[:n_results]
-            
-        except Exception as e:
-            logger.error(f"Hybrid search failed: {e}")
-            # Fall back to semantic search — within the same filter. Dropping
-            # it here searched every document ever indexed (#59).
-            return await self.search_similar(query, n_results, filter_metadata=filter_metadata)
-    
+    def index_ids(self) -> Set[str]:
+        """The ids of every index that has a collection. Blocking."""
+        return {
+            collection.name[len(_COLLECTION_PREFIX):]
+            for collection in self.client.list_collections()
+            if collection.name.startswith(_COLLECTION_PREFIX)
+        }

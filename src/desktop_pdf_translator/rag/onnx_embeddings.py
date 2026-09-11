@@ -20,9 +20,13 @@ from typing import Any, Dict, List
 import numpy as np
 from chromadb import EmbeddingFunction, Embeddings
 
+from .index_spec import EMBEDDING_MODEL
+
 logger = logging.getLogger(__name__)
 
-DEFAULT_MODEL = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
+# Recorded on every chat index (`rag/index_spec.py`), so changing it re-indexes
+# documents rather than mixing two models' vectors in one index.
+DEFAULT_MODEL = EMBEDDING_MODEL
 
 # From the model's sentence_bert_config.json. Longer inputs are truncated, which
 # is what SentenceTransformer did too.

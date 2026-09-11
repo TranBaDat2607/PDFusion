@@ -4,6 +4,7 @@ RAG chain that answers questions over indexed PDF documents.
 
 import asyncio
 import logging
+from collections import defaultdict
 from typing import List, Dict, Any, Optional
 import json
 from datetime import datetime
@@ -26,7 +27,7 @@ def _display_page(metadata: Dict[str, Any]) -> Optional[int]:
 
     `None` when the chunk carries no usable page — missing, or unparseable.
     Every writer of this metadata stores an int
-    (`vector_store.add_document_chunks`), so that's defensive — but defaulting
+    (`vector_store.add_chunks`), so that's defensive — but defaulting
     to page 1 would cite the first page with exactly the confidence of a real
     hit, and the viewer would scroll there. An absent page says so instead: the
     chat panel labels it "Page ?" and won't jump.
@@ -87,22 +88,27 @@ class EnhancedRAGChain:
                 logger.error(f"Failed to initialize {service.value} for RAG: {e}")
         logger.info("No LLM key configured — RAG will use template answers")
 
-    async def answer_question(self, question: str, document_id: str,
+    async def answer_question(self, question: str, index_id: str, document_id: str,
+                            document_path: str,
                             max_pdf_sources: int = 5,
                             progress_callback: Optional[callable] = None) -> Dict[str, Any]:
-        """Answer a question about one indexed document — always exactly one (#59)."""
+        """Answer a question about one document, from that document's index alone.
+
+        `index_id` names the only ChromaDB collection searched; no other
+        document's chunks are within reach (#59).
+        """
         logger.info(f"Processing question: {question[:100]}...")
 
         start_time = datetime.now()
 
         try:
             pdf_sources = await self._retrieve_pdf_knowledge(
-                question, document_id, max_pdf_sources
+                question, index_id, max_pdf_sources
             )
 
             answer = await self._generate_answer(question, pdf_sources)
 
-            pdf_references = self._create_pdf_references(pdf_sources)
+            pdf_references = self._create_pdf_references(pdf_sources, document_id, document_path)
 
             quality_metrics = self._calculate_quality_metrics(pdf_sources)
 
@@ -131,40 +137,44 @@ class EnhancedRAGChain:
                 'error': str(e)
             }
 
-    async def _retrieve_pdf_knowledge(self, question: str, document_id: str,
+    async def _retrieve_pdf_knowledge(self, question: str, index_id: str,
                                     max_sources: int) -> List[Dict[str, Any]]:
-        """Retrieve relevant knowledge from one PDF document."""
+        """Retrieve relevant knowledge from one document's index."""
 
         try:
-            # Always scoped to the one document. There is no "search every
-            # document" mode: that is how chat answered from PDFs other than
-            # the open one (#59).
-            filter_metadata = {"document_id": document_id}
+            # The index's chunks, read once. Both keyword passes and the
+            # surrounding-context step work from this list; they used to re-read
+            # all of the document's chunks, up to 12 times a question (#59).
+            chunks = await self.vector_store.get_chunks(index_id)
+            if not chunks:
+                return []
 
             # Stage 0: HyDE - Generate hypothetical answer
             hypothetical_answer = await self._generate_hypothetical_answer(question)
 
             # Stage 1: Dual retrieval — original question + HyDE answer
             results_original = await self.vector_store.hybrid_search(
+                index_id,
                 query=question,
+                chunks=chunks,
                 n_results=max_sources * 2,
                 alpha=0.5,
-                filter_metadata=filter_metadata
             )
 
             results_hyde = await self.vector_store.hybrid_search(
+                index_id,
                 query=hypothetical_answer,
+                chunks=chunks,
                 n_results=max_sources * 2,
                 alpha=0.7,  # higher semantic weight for HyDE
-                filter_metadata=filter_metadata
             )
 
             candidate_results = self._merge_search_results(results_original, results_hyde, max_sources * 3)
 
             # Stage 2: Add surrounding context to top candidates
-            enriched_results = await self._add_surrounding_context(
+            enriched_results = self._add_surrounding_context(
                 candidate_results[:max_sources * 2],
-                document_id,
+                chunks,
                 context_window=1
             )
 
@@ -223,38 +233,38 @@ Hypothetical answer:"""
 
         return merged[:max_results]
 
-    async def _add_surrounding_context(self, chunks: List[Dict[str, Any]],
-                                      document_id: Optional[str],
-                                      context_window: int = 1) -> List[Dict[str, Any]]:
-        """Add surrounding chunks to provide better context."""
-        if not document_id or not chunks:
-            return chunks
+    def _add_surrounding_context(self, candidates: List[Dict[str, Any]],
+                                 chunks: List[Dict[str, Any]],
+                                 context_window: int = 1) -> List[Dict[str, Any]]:
+        """Add each candidate's neighbouring chunks on the same page.
+
+        Works from the index's chunks, already read, instead of reading them
+        again for every candidate.
+        """
+        if not candidates:
+            return candidates
+
+        chunks_by_page = defaultdict(list)
+        for surr_chunk in chunks:
+            chunks_by_page[surr_chunk.get('metadata', {}).get('page', 0)].append(surr_chunk)
 
         enriched_chunks = []
 
-        for chunk in chunks:
+        for chunk in candidates:
             metadata = chunk.get('metadata', {})
             page = metadata.get('page', 0)
             chunk_index = metadata.get('chunk_index', 0)
 
-            surrounding = await self.vector_store.get_document_chunks(
-                document_id=document_id,
-                page_range=(max(0, page - 1), page + 1),
-                limit=None
-            )
-
             context_before = []
             context_after = []
 
-            for surr_chunk in surrounding:
-                surr_meta = surr_chunk.get('metadata', {})
-                surr_page = surr_meta.get('page', 0)
-                surr_index = surr_meta.get('chunk_index', 0)
+            for surr_chunk in chunks_by_page.get(page, []):
+                surr_index = surr_chunk.get('metadata', {}).get('chunk_index', 0)
 
-                if surr_page == page and surr_index < chunk_index and chunk_index - surr_index <= context_window:
+                if surr_index < chunk_index and chunk_index - surr_index <= context_window:
                     context_before.append(surr_chunk['text'])
 
-                if surr_page == page and surr_index > chunk_index and surr_index - chunk_index <= context_window:
+                if surr_index > chunk_index and surr_index - chunk_index <= context_window:
                     context_after.append(surr_chunk['text'])
 
             enriched_text_parts = []
@@ -432,13 +442,17 @@ ANSWER:
 
         return '\n'.join(answer_parts)
 
-    def _create_pdf_references(self, pdf_sources: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    def _create_pdf_references(self, pdf_sources: List[Dict[str, Any]],
+                               document_id: str, document_path: str) -> List[Dict[str, Any]]:
         """Create PDF references with navigation information.
 
         This list is the `pdf_references` field of the `answer`/`done` SSE
         payload, and the chat panel feeds `page` straight to
         `PdfViewer.scrollToPage` — so it is 1-indexed, or `None`. See
         `_display_page`.
+
+        Every source comes from one document's index, so its id and path come
+        from the caller; chunks no longer carry them.
         """
 
         references = []
@@ -451,22 +465,18 @@ ANSWER:
                 'page': _display_page(metadata),
                 'text': source.get('text', '')[:150] + "...",
                 'confidence': source.get('similarity_score', 0.0),
-                'document_id': metadata.get('document_id', ''),
-                'document_path': metadata.get('document_path', ''),
+                'document_id': document_id,
+                'document_path': document_path,
                 'chunk_id': source.get('chunk_id', ''),
                 'has_equations': metadata.get('has_equations', False),
                 'has_tables': metadata.get('has_tables', False),
                 'has_figures': metadata.get('has_figures', False)
             }
 
-            if 'elements' in metadata:
+            if 'bbox' in metadata:
                 try:
-                    elements = json.loads(metadata['elements'])
-                    if elements and len(elements) > 0:
-                        first_element = elements[0]
-                        if 'bbox' in first_element:
-                            reference['bbox'] = first_element['bbox']
-                except Exception:
+                    reference['bbox'] = json.loads(metadata['bbox'])
+                except (TypeError, ValueError):
                     pass
 
             references.append(reference)
