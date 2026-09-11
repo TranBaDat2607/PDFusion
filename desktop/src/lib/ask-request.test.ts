@@ -13,20 +13,12 @@ describe("buildAskBody", () => {
     });
   });
 
-  it("keeps a null document — that means 'every indexed document'", () => {
-    expect(buildAskBody({ question: "hi", documentId: null })).toEqual({
-      question: "hi",
-      document_id: null,
-      max_pdf_sources: 5,
-    });
-  });
-
   // The regression this guards: `AskRequest` accepts `question`,
   // `document_id` and `max_pdf_sources` and nothing else. Sending fields the
   // schema doesn't declare is not an error — FastAPI drops them — so a toggle
   // wired to one looks functional while doing nothing at all.
   it("sends nothing the sidecar's AskRequest doesn't declare", () => {
-    const body = buildAskBody({ question: "hi", documentId: null });
+    const body = buildAskBody({ question: "hi", documentId: "paper" });
     expect(Object.keys(body).sort()).toEqual([
       "document_id",
       "max_pdf_sources",

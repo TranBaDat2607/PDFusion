@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useRef, useState, type SetStateAction } from "react";
 
 import { api } from "@/lib/api-client";
 import type { components } from "@/lib/api-types";
@@ -24,8 +24,24 @@ const INITIAL: IndexState = {
 export function useRagIndex() {
   const [state, setState] = useState<IndexState>(INITIAL);
   const abortRef = useRef<AbortController | null>(null);
+  // Bumped by every start and reset, for the same reason as `useRagAsk`'s: the
+  // previous document's index job keeps streaming after the next `start`, and
+  // its `done` used to mark the panel ready — with the previous document's id,
+  // so the first question about the new PDF was asked of the old one (#59).
+  const generationRef = useRef(0);
+
+  const abort = useCallback(() => {
+    generationRef.current += 1;
+    abortRef.current?.abort();
+    abortRef.current = null;
+  }, []);
 
   const start = useCallback(async (filePath: string) => {
+    abort();
+    const generation = generationRef.current;
+    const update = (next: SetStateAction<IndexState>) => {
+      if (generationRef.current === generation) setState(next);
+    };
     setState({ ...INITIAL, status: "indexing", stage: "Submitting…" });
 
     let jobId: string;
@@ -35,9 +51,10 @@ export function useRagIndex() {
       });
       jobId = accepted.job_id;
     } catch (e) {
-      setState({ ...INITIAL, status: "error", error: (e as Error).message });
+      update({ ...INITIAL, status: "error", error: (e as Error).message });
       return;
     }
+    if (generationRef.current !== generation) return;
 
     const controller = new AbortController();
     abortRef.current = controller;
@@ -50,14 +67,14 @@ export function useRagIndex() {
         onEvent: ({ type, data }) => {
           if (type === "progress") {
             const p = data as components["schemas"]["IndexProgressPayload"];
-            setState((s) => ({
+            update((s) => ({
               ...s,
               stage: p.stage ?? s.stage,
               progress: p.progress ?? s.progress,
             }));
           } else if (type === "done") {
             const c = data as components["schemas"]["IndexDonePayload"];
-            setState({
+            update({
               status: "ready",
               stage: "Ready",
               progress: 100,
@@ -66,28 +83,31 @@ export function useRagIndex() {
             });
           } else if (type === "error") {
             const e = data as components["schemas"]["JobErrorPayload"];
-            setState((s) => ({ ...s, status: "error", error: e.message }));
+            update((s) => ({ ...s, status: "error", error: e.message }));
           }
         },
       });
       // Stream ended without a terminal event (sidecar died mid-index).
-      setState((s) =>
+      update((s) =>
         s.status === "indexing"
           ? { ...s, status: "error", error: "Index stream ended unexpectedly" }
           : s,
       );
     } catch (e) {
-      setState((s) => ({
+      update((s) => ({
         ...s,
         status: "error",
         error: (e as Error).message,
       }));
     } finally {
-      abortRef.current = null;
+      if (abortRef.current === controller) abortRef.current = null;
     }
-  }, []);
+  }, [abort]);
 
-  const reset = useCallback(() => setState(INITIAL), []);
+  const reset = useCallback(() => {
+    abort();
+    setState(INITIAL);
+  }, [abort]);
 
   return { state, start, reset };
 }
