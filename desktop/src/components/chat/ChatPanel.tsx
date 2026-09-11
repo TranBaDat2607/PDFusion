@@ -9,9 +9,10 @@ import { ActionLog } from "@/components/chat/ActionLog";
 import { AssistantMessage } from "@/components/chat/AssistantMessage";
 import { ChatInput } from "@/components/chat/ChatInput";
 import { UserMessage } from "@/components/chat/UserMessage";
-import { useRagAsk, type RagAnswer } from "@/hooks/useRagAsk";
+import { useRagAsk } from "@/hooks/useRagAsk";
 import { useRagIndex } from "@/hooks/useRagIndex";
 import { useUpdateConfig } from "@/hooks/useConfig";
+import { answerForDocument, type RagAnswer } from "@/lib/rag-ask";
 import { useAppStore } from "@/lib/store";
 
 interface ChatPanelProps {
@@ -49,28 +50,33 @@ export function ChatPanel({
     update.mutate({ rag_enabled: false });
   }, [setChatOpen, setRagEnabled, update]);
 
-  // Auto-index when a document is loaded
+  // A new document starts a new conversation, and indexes itself. Whatever
+  // the panel was asking belongs to the previous document, so it is aborted
+  // first: left running, its answer landed in this document's chat, with page
+  // links into the wrong PDF (#59).
   useEffect(() => {
+    ask.reset();
+    setMessages([]);
+    setPendingQuestion(null);
     if (!documentPath) {
       index.reset();
-      ask.reset();
-      setMessages([]);
       return;
     }
     void index.start(documentPath);
-    setMessages([]);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [documentPath]);
 
-  // When ask finishes, append the assistant message
+  // When an answer arrives, append it — to the chat of the document it was
+  // asked about, and no other.
   useEffect(() => {
-    if (ask.state.status === "done" && ask.state.answer) {
-      setMessages((prev) => [
-        ...prev,
-        { id: ++messageCounter, kind: "assistant", answer: ask.state.answer! },
-      ]);
-      setPendingQuestion(null);
-    }
+    const answer = answerForDocument(ask.state, index.state.documentId);
+    if (!answer) return;
+    setMessages((prev) => [
+      ...prev,
+      { id: ++messageCounter, kind: "assistant", answer },
+    ]);
+    setPendingQuestion(null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ask.state.status, ask.state.answer]);
 
   // Auto-scroll to bottom when content changes
@@ -81,15 +87,14 @@ export function ChatPanel({
 
   const handleSubmit = useCallback(
     ({ text }: { text: string }) => {
+      const documentId = index.state.documentId;
+      if (!documentId) return;
       setMessages((prev) => [
         ...prev,
         { id: ++messageCounter, kind: "user", text },
       ]);
       setPendingQuestion(text);
-      void ask.ask({
-        question: text,
-        documentId: index.state.documentId,
-      });
+      void ask.ask({ question: text, documentId });
     },
     [ask, index.state.documentId],
   );

@@ -12,10 +12,17 @@ from datetime import datetime
 
 import chromadb
 from chromadb.config import Settings
+from chromadb.errors import NotFoundError
 
 from .onnx_embeddings import OnnxEmbeddingFunction
 
 logger = logging.getLogger(__name__)
+
+# Chunks are keyed by the SHA-256 of their document's bytes (#59). The
+# collection they used to live in keyed them by file name stem, which nothing
+# looks up any more, so it is dropped on open rather than left on disk.
+_COLLECTION = "pdf_chunks"
+_LEGACY_COLLECTION = "pdf_documents"
 
 
 class ChromaDBManager:
@@ -24,12 +31,16 @@ class ChromaDBManager:
     Optimized for desktop applications with local persistence.
     """
     
-    def __init__(self, persist_directory: Optional[Path] = None):
+    def __init__(self, persist_directory: Optional[Path] = None,
+                 embedding_function=None):
         """
         Initialize ChromaDB manager.
 
         Args:
             persist_directory: Directory to persist the database
+            embedding_function: ChromaDB embedding function. Defaults to the
+                ONNX MiniLM model; tests pass a deterministic one so they need
+                no model download.
         """
         # `chroma_db_v2` rather than `chroma_db`: the 0.4-era directory is not
         # readable by chromadb 1.x, and a document index is cheap to rebuild.
@@ -47,10 +58,18 @@ class ChromaDBManager:
                 is_persistent=True,
             ),
         )
-        self.embedding_function = OnnxEmbeddingFunction()
+        if embedding_function is None:
+            embedding_function = OnnxEmbeddingFunction()
+        self.embedding_function = embedding_function
+
+        try:
+            self.client.delete_collection(_LEGACY_COLLECTION)
+            logger.info("Dropped the file-name-keyed %r collection", _LEGACY_COLLECTION)
+        except NotFoundError:
+            pass
 
         self.collection = self.client.get_or_create_collection(
-            name="pdf_documents",
+            name=_COLLECTION,
             embedding_function=self.embedding_function,
             configuration={"hnsw": {"space": "cosine"}},
         )
@@ -161,6 +180,16 @@ class ChromaDBManager:
             logger.error(f"Similarity search failed: {e}")
             return []
     
+    async def has_document(self, document_id: str) -> bool:
+        """Whether any chunk of `document_id` is stored. Fetches one id, no text."""
+        results = await asyncio.to_thread(
+            self.collection.get,
+            where={"document_id": document_id},
+            limit=1,
+            include=[],
+        )
+        return bool(results['ids'])
+
     async def search_by_document(self, document_id: str) -> List[Dict[str, Any]]:
         """
         Get all chunks for a specific document.
@@ -255,35 +284,33 @@ class ChromaDBManager:
             logger.error(f"Failed to get document chunks: {e}")
             return []
 
-    async def delete_document(self, document_id: str) -> bool:
+    async def delete_document(self, document_id: str) -> int:
         """
         Delete all chunks for a document.
-        
+
         Args:
             document_id: Document identifier
-            
-        Returns:
-            True if successful
-        """
-        try:
-            # Get all chunk IDs for the document. NOTE: ids are always
-            # returned by get(); 'ids' is not a valid `include` value and
-            # passing it raises, which made this method always fail.
-            results = await asyncio.to_thread(
-                self.collection.get,
-                where={"document_id": document_id},
-                include=[],
-            )
 
-            if results['ids']:
-                await asyncio.to_thread(self.collection.delete, ids=results['ids'])
-                logger.info(f"Deleted {len(results['ids'])} chunks for document {document_id}")
-            
-            return True
-            
-        except Exception as e:
-            logger.error(f"Document deletion failed: {e}")
-            return False
+        Returns:
+            How many chunks were removed — 0 when the store has no such
+            document. Storage errors propagate rather than being folded into
+            the return value: the route has to tell "not found" from "failed".
+        """
+        # Get all chunk IDs for the document. NOTE: ids are always
+        # returned by get(); 'ids' is not a valid `include` value and
+        # passing it raises, which made this method always fail.
+        results = await asyncio.to_thread(
+            self.collection.get,
+            where={"document_id": document_id},
+            include=[],
+        )
+
+        ids = results['ids']
+        if ids:
+            await asyncio.to_thread(self.collection.delete, ids=ids)
+            logger.info(f"Deleted {len(ids)} chunks for document {document_id}")
+
+        return len(ids)
     
     def get_collection_stats(self) -> Dict[str, Any]:
         """Get statistics about the collection."""
@@ -394,5 +421,7 @@ class ChromaDBManager:
             
         except Exception as e:
             logger.error(f"Hybrid search failed: {e}")
-            return await self.search_similar(query, n_results)  # Fallback to semantic search
+            # Fall back to semantic search — within the same filter. Dropping
+            # it here searched every document ever indexed (#59).
+            return await self.search_similar(query, n_results, filter_metadata=filter_metadata)
     

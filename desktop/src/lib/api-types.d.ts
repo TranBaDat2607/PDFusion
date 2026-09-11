@@ -407,7 +407,7 @@ export interface components {
         /** AskRequest */
         AskRequest: {
             /** Document Id */
-            document_id?: string | null;
+            document_id: string;
             /**
              * Max Pdf Sources
              * @default 5
@@ -835,8 +835,6 @@ export interface components {
         };
         /** IndexRequest */
         IndexRequest: {
-            /** Document Id */
-            document_id?: string | null;
             /** File Path */
             file_path: string;
         };

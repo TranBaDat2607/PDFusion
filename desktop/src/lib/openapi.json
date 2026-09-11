@@ -46,15 +46,9 @@
       "AskRequest": {
         "properties": {
           "document_id": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Document Id"
+            "minLength": 1,
+            "title": "Document Id",
+            "type": "string"
           },
           "max_pdf_sources": {
             "default": 5,
@@ -67,7 +61,8 @@
           }
         },
         "required": [
-          "question"
+          "question",
+          "document_id"
         ],
         "title": "AskRequest",
         "type": "object"
@@ -928,17 +923,6 @@
       },
       "IndexRequest": {
         "properties": {
-          "document_id": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Document Id"
-          },
           "file_path": {
             "title": "File Path",
             "type": "string"

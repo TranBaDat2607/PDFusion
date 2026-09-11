@@ -16,8 +16,10 @@ import type { components } from "@/lib/api-types";
 
 export interface AskBodyInput {
   question: string;
-  /** `null` asks across every indexed document. */
-  documentId: string | null;
+  /** The open document. Not nullable: `null` used to ask across every indexed
+   *  document, which is how chat answered from PDFs other than the open one
+   *  (#59). The sidecar refuses a request without one. */
+  documentId: string;
 }
 
 export function buildAskBody(

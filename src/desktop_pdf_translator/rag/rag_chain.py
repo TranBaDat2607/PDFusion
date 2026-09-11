@@ -87,10 +87,10 @@ class EnhancedRAGChain:
                 logger.error(f"Failed to initialize {service.value} for RAG: {e}")
         logger.info("No LLM key configured — RAG will use template answers")
 
-    async def answer_question(self, question: str, document_id: Optional[str] = None,
+    async def answer_question(self, question: str, document_id: str,
                             max_pdf_sources: int = 5,
                             progress_callback: Optional[callable] = None) -> Dict[str, Any]:
-        """Answer a question using indexed PDF knowledge."""
+        """Answer a question about one indexed document — always exactly one (#59)."""
         logger.info(f"Processing question: {question[:100]}...")
 
         start_time = datetime.now()
@@ -131,15 +131,15 @@ class EnhancedRAGChain:
                 'error': str(e)
             }
 
-    async def _retrieve_pdf_knowledge(self, question: str, document_id: Optional[str],
+    async def _retrieve_pdf_knowledge(self, question: str, document_id: str,
                                     max_sources: int) -> List[Dict[str, Any]]:
-        """Retrieve relevant knowledge from PDF documents."""
+        """Retrieve relevant knowledge from one PDF document."""
 
         try:
-            if document_id:
-                filter_metadata = {"document_id": document_id}
-            else:
-                filter_metadata = None
+            # Always scoped to the one document. There is no "search every
+            # document" mode: that is how chat answered from PDFs other than
+            # the open one (#59).
+            filter_metadata = {"document_id": document_id}
 
             # Stage 0: HyDE - Generate hypothetical answer
             hypothetical_answer = await self._generate_hypothetical_answer(question)

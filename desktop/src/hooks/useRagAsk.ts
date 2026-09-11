@@ -1,60 +1,52 @@
 import { useCallback, useRef, useState } from "react";
 
 import { api } from "@/lib/api-client";
-import type { components } from "@/lib/api-types";
 import { buildAskBody } from "@/lib/ask-request";
+import {
+  IDLE_ASK,
+  failAsk,
+  reduceAskEvent,
+  startAsk,
+  streamEnded,
+  type AskState,
+} from "@/lib/rag-ask";
 import { streamJobEvents } from "@/lib/sse";
 
-export interface ActionEvent {
-  id: number;
-  description: string;
-  status: "running" | "done" | "failed";
-}
-
-/**
- * Generated from `api/sse_schemas.py` (see issue #27) — previously hand-typed
- * here, and it was exactly that hand-copy declaring `pdf_sources` (alongside a
- * `web_sources` branch left over from the web research dropped in `35bca2c`)
- * that kept the reference list permanently empty (#13): the chain has always
- * returned `pdf_references`. `page` is 1-indexed — `rag_chain._display_page`
- * converts at that boundary, so it goes straight to `PdfViewer.scrollToPage`;
- * `null` when the chunk has no usable page.
- */
-export type PdfReference = components["schemas"]["PdfReferencePayload"];
-
-/** The `answer` / `done` SSE payload from `POST /rag/ask`. */
-export type RagAnswer = components["schemas"]["AskResultPayload"];
-
-export interface AskState {
-  status: "idle" | "asking" | "done" | "error";
-  actions: ActionEvent[];
-  message: string;
-  progress: number;
-  answer: RagAnswer | null;
-  error?: string;
-}
-
-const INITIAL: AskState = {
-  status: "idle",
-  actions: [],
-  message: "",
-  progress: 0,
-  answer: null,
-};
-
-let actionCounter = 0;
+export type {
+  ActionEvent,
+  AskState,
+  PdfReference,
+  RagAnswer,
+} from "@/lib/rag-ask";
 
 interface AskParams {
   question: string;
-  documentId: string | null;
+  /** The open document. A question is always about exactly one (#59). */
+  documentId: string;
 }
 
 export function useRagAsk() {
-  const [state, setState] = useState<AskState>(INITIAL);
+  const [state, setState] = useState<AskState>(IDLE_ASK);
   const abortRef = useRef<AbortController | null>(null);
+  // Bumped by every ask, abort and reset. A callback from a stream whose
+  // generation is no longer current belongs to a question nobody is waiting
+  // for — the previous document's answer, or the "ended unexpectedly" check
+  // that runs once an aborted stream returns — so it must not touch state.
+  const generationRef = useRef(0);
+
+  const abort = useCallback(() => {
+    generationRef.current += 1;
+    abortRef.current?.abort();
+    abortRef.current = null;
+  }, []);
 
   const ask = useCallback(async (params: AskParams) => {
-    setState({ ...INITIAL, status: "asking" });
+    abort();
+    const generation = generationRef.current;
+    const update = (next: (s: AskState) => AskState) => {
+      if (generationRef.current === generation) setState(next);
+    };
+    setState(startAsk(params.documentId));
 
     let jobId: string;
     try {
@@ -64,9 +56,10 @@ export function useRagAsk() {
       );
       jobId = accepted.job_id;
     } catch (e) {
-      setState({ ...INITIAL, status: "error", error: (e as Error).message });
+      update((s) => failAsk(s, (e as Error).message));
       return;
     }
+    if (generationRef.current !== generation) return;
 
     const controller = new AbortController();
     abortRef.current = controller;
@@ -76,69 +69,21 @@ export function useRagAsk() {
         buildPath: (lastEventId) =>
           `/rag/ask/${jobId}/events${lastEventId ? `?last_seq=${lastEventId}` : ""}`,
         signal: controller.signal,
-        onEvent: ({ type, data }) => {
-          if (type === "progress") {
-            const p = data as components["schemas"]["AskProgressPayload"];
-            setState((s) => ({
-              ...s,
-              message: p.message ?? s.message,
-              progress: p.progress ?? s.progress,
-              actions: p.message
-                ? [
-                    ...s.actions,
-                    {
-                      id: ++actionCounter,
-                      description: p.message,
-                      status: "done",
-                    },
-                  ]
-                : s.actions,
-            }));
-          } else if (type === "answer") {
-            const ans = data as RagAnswer;
-            setState((s) => ({
-              ...s,
-              status: "done",
-              progress: 100,
-              answer: ans,
-            }));
-          } else if (type === "done") {
-            const ans = data as RagAnswer;
-            setState((s) => ({
-              status: "done",
-              actions: s.actions,
-              message: s.message,
-              progress: 100,
-              answer: s.answer ?? ans,
-            }));
-          } else if (type === "error") {
-            const e = data as components["schemas"]["JobErrorPayload"];
-            setState((s) => ({
-              ...s,
-              status: "error",
-              error: e.message,
-            }));
-          }
-        },
+        onEvent: (event) => update((s) => reduceAskEvent(s, event)),
       });
       // Stream ended without a terminal event (sidecar died mid-answer).
-      setState((s) =>
-        s.status === "asking"
-          ? { ...s, status: "error", error: "Answer stream ended unexpectedly" }
-          : s,
-      );
+      update(streamEnded);
     } catch (e) {
-      setState((s) => ({
-        ...s,
-        status: "error",
-        error: (e as Error).message,
-      }));
+      update((s) => failAsk(s, (e as Error).message));
     } finally {
-      abortRef.current = null;
+      if (abortRef.current === controller) abortRef.current = null;
     }
-  }, []);
+  }, [abort]);
 
-  const reset = useCallback(() => setState(INITIAL), []);
+  const reset = useCallback(() => {
+    abort();
+    setState(IDLE_ASK);
+  }, [abort]);
 
-  return { state, ask, reset };
+  return { state, ask, abort, reset };
 }

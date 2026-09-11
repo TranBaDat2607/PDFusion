@@ -390,9 +390,9 @@ All routes (except `GET /health`) require `Authorization: Bearer <token>`.
 | POST | `/translate` | Start translation job → returns `{ job_id }`. `source_lang` / `target_lang` / `service` are `None`-defaulted (config applies); an unsupported pair is refused with **422** and a missing engine with **409**, both before the job is created. `bypass_cache: bool` forces a full re-translate (used by the "Re-translate" button). There is deliberately **no `output_dir`** — output always lands in a per-job `%TEMP%` dir that the cleanup paths know about |
 | GET | `/translate/{job_id}/events` | SSE: `progress`, `chunk_ready`, `paragraph_translated`, `done`, `error`, `cancelled`. **`chunk_ready` arrives in priority order, not page order** — nearest the viewer's page first — so `chunk_index` is not a completion count and `pages_in_chunk[1]` is not a running total. Accumulate with `lib/translation-progress.ts`; page totals come from `total_pages` (`total_chunks` is not a page count — Argos runs 3-page chunks) |
 | POST | `/translate/{job_id}/cancel` | Cancel an in-flight translation |
-| POST | `/rag/index` | Index a PDF into ChromaDB → returns `{ job_id }` |
+| POST | `/rag/index` | Index a PDF into ChromaDB → returns `{ job_id }`. A document's id is the **SHA-256 of its bytes**, derived by the sidecar — the request carries no `document_id`, and `done` returns it. It used to be the file name stem, so two different `paper.pdf`s shared one index (#59) |
 | GET | `/rag/index/{job_id}/events` | SSE: `progress`, `done`, `error` |
-| POST | `/rag/ask` | Ask the RAG chain → returns `{ job_id }` |
+| POST | `/rag/ask` | Ask the RAG chain → returns `{ job_id }`. `document_id` is **required** (422 without it): a question is about exactly one document, and there is no "search every document" mode. A document with no chunks ends in an `error` event, not an empty answer |
 | GET | `/rag/ask/{job_id}/events` | SSE: `progress`, `answer`, `done`, `error`. Retrieved chunks ride on `answer.pdf_references` (**not** `pdf_sources`); their `page` is **1-indexed**, or `null` when the chunk has none. Chunk metadata is 0-indexed and `PdfViewer.scrollToPage` counts from 1, so `rag_chain._display_page` converts at that one boundary |
 | DELETE | `/rag/document/{document_id}` | Remove an indexed document from the vector store |
 | GET | `/pdf/file?path=...` | Stream a PDF from disk (used by pdf.js client-side) |
@@ -1067,9 +1067,12 @@ and `shell.log`.
 
 - **What is covered, and what still isn't.** The PDF-export path, the language
   contract, key storage and config read/write, the job registry, both SQLite
-  caches, Argos's batching, and translator failure/retry accounting. Still
-  uncovered: the BabelDOC pipeline in `processors/processor.py` proper, and all
-  of `rag/`. If you touch those, expect to write tests from scratch. On the
+  caches, Argos's batching, translator failure/retry accounting, and chat's
+  document isolation (`test_rag_isolation.py` runs a real ChromaDB under
+  `tmp_path` with a deterministic embedding function, so nothing downloads).
+  Still uncovered: the BabelDOC pipeline in `processors/processor.py` proper, and
+  the rest of `rag/` — extraction, ranking, answer generation. If you touch
+  those, expect to write tests from scratch. On the
   frontend, the PDF viewer's pure half is covered (`lib/pdf-viewer/`: geometry,
   find matching, the artifact change log, shortcut mapping). Its DOM half is
   not (`page-renderer.ts`, text layers, find highlighting, drag and drop),
@@ -1090,7 +1093,8 @@ and `shell.log`.
                                    # test_argos_batching.py,
                                    # test_doc_layout_cache.py, test_engine_warm_gate.py,
                                    # test_export_openapi.py, test_sse_schemas.py,
-                                   # test_sbd_compat.py, test_onnx_embeddings.py
+                                   # test_sbd_compat.py, test_onnx_embeddings.py,
+                                   # test_rag_isolation.py, test_rag_api.py
   python -m pytest tests -m smoke  # test_sidecar_smoke.py — excluded by default
 
   # Frontend (vitest, node environment — no jsdom)

@@ -227,13 +227,17 @@ class EngineStatusResponse(BaseModel):
 
 
 class IndexRequest(BaseModel):
+    # No `document_id`: the sidecar derives it from the file's bytes. It used
+    # to default to the file name stem, so two different `paper.pdf`s shared
+    # one index and chat answered about the second from the first (#59).
     file_path: str
-    document_id: Optional[str] = None  # defaults to filename
 
 
 class AskRequest(BaseModel):
     question: str
-    document_id: Optional[str] = None
+    # Required. `None` used to mean "every indexed document", which is how chat
+    # came to answer from PDFs other than the open one (#59).
+    document_id: str = Field(min_length=1)
     max_pdf_sources: int = 5
 
 
