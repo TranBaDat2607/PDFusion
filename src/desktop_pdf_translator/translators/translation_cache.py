@@ -1,7 +1,7 @@
 """Persistent on-disk translation cache (SQLite, WAL).
 
-Stdlib sqlite3, TTL via ISO8601 expires_at, single index on expires_at for
-cheap GC. WAL mode lets many readers run while a
+Stdlib sqlite3, TTL via `expires_at` in UTC milliseconds, single index on it for
+cheap GC, schema versioned by `storage/migrations.py`. WAL mode lets many readers run while a
 single writer holds the lock — fine for translator throughput where we read
 much more than we write.
 
@@ -18,21 +18,19 @@ import hashlib
 import logging
 import sqlite3
 import threading
-from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional, Dict, Any
+
+from ..storage.migrations import Migration, migrate
+from ..storage.sqlite import ThreadLocalConnections, local_iso_to_utc_ms, now_ms
+from ..utils.paths import appdata_dir
 
 logger = logging.getLogger(__name__)
 
 
 def _default_cache_dir() -> Path:
-    """Resolve the default cache directory under Windows AppData.
-
-    Matches the convention used by `ConfigManager` (config/manager.py:33) and
-    the RAG ChromaDB store, so all PDFusion on-disk state lives under
-    `~/AppData/Local/PDFusion/`.
-    """
-    return Path.home() / "AppData" / "Local" / "PDFusion" / "translation_cache"
+    """`translation_cache/` under the app's data root, like every other store."""
+    return appdata_dir() / "translation_cache"
 
 
 def _make_cache_key(
@@ -44,6 +42,60 @@ def _make_cache_key(
 ) -> str:
     payload = f"{lang_in}|{lang_out}|{service}|{model or ''}|{source_text}"
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+_TRANSLATIONS_TABLE = """
+    CREATE TABLE {name} (
+        cache_key TEXT PRIMARY KEY,
+        source_lang TEXT NOT NULL,
+        target_lang TEXT NOT NULL,
+        service TEXT NOT NULL,
+        model TEXT,
+        source_text TEXT NOT NULL,
+        translated_text TEXT NOT NULL,
+        cached_at INTEGER NOT NULL,   -- Unix ms, UTC
+        expires_at INTEGER NOT NULL,  -- Unix ms, UTC
+        hit_count INTEGER NOT NULL DEFAULT 0,
+        last_used INTEGER             -- Unix ms, UTC; NULL until the first hit
+    )
+"""
+
+
+def _v1_integer_utc_timestamps(conn: sqlite3.Connection) -> None:
+    """Create the table, or rebuild the unversioned one with its timestamps
+    converted from local-time ISO strings to UTC milliseconds.
+
+    SQLite can't change a column's type in place, so the rebuild is its
+    documented create-copy-drop-rename, inside the migration's transaction.
+    """
+    exists = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'translations'"
+    ).fetchone()
+    if exists is None:
+        conn.execute(_TRANSLATIONS_TABLE.format(name="translations"))
+    else:
+        conn.execute(_TRANSLATIONS_TABLE.format(name="translations_v1"))
+        conn.execute(
+            f"""
+            INSERT INTO translations_v1
+            (cache_key, source_lang, target_lang, service, model, source_text,
+             translated_text, cached_at, expires_at, hit_count, last_used)
+            SELECT cache_key, source_lang, target_lang, service, model, source_text,
+                   translated_text,
+                   COALESCE({local_iso_to_utc_ms('cached_at')}, :now),
+                   COALESCE({local_iso_to_utc_ms('expires_at')}, :now),
+                   COALESCE(hit_count, 0),
+                   {local_iso_to_utc_ms('last_used')}
+            FROM translations
+            """,
+            {"now": now_ms()},
+        )
+        conn.execute("DROP TABLE translations")
+        conn.execute("ALTER TABLE translations_v1 RENAME TO translations")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_expires ON translations(expires_at)")
+
+
+_MIGRATIONS = (Migration(1, "integer UTC timestamps", _v1_integer_utc_timestamps),)
 
 
 class TranslationCache:
@@ -72,9 +124,13 @@ class TranslationCache:
         # Per-thread sqlite connection. Reused across translate() calls so
         # hundreds of paragraphs in one PDF don't each pay the connect+WAL
         # handshake (~1-3 ms on Windows).
-        self._tls = threading.local()
+        self._connections = ThreadLocalConnections(self.db_path)
+        # The schema is brought up to date on first use rather than here. The
+        # singleton can be built on the event loop, and a migration may rebuild
+        # a table holding hundreds of megabytes.
+        self._schema_ready = False
+        self._schema_lock = threading.Lock()
 
-        self._init_database()
         logger.info(
             "TranslationCache initialized at %s (ttl=%d days, cap=%.1f MB)",
             self.db_path, self.ttl_days, self.max_size_mb,
@@ -82,40 +138,12 @@ class TranslationCache:
 
     def _conn(self) -> sqlite3.Connection:
         """Per-thread sqlite connection, opened on first use."""
-        conn = getattr(self._tls, "conn", None)
-        if conn is None:
-            conn = sqlite3.connect(self.db_path, check_same_thread=False)
-            conn.row_factory = sqlite3.Row
-            conn.execute("PRAGMA journal_mode=WAL")
-            conn.execute("PRAGMA synchronous=NORMAL")
-            self._tls.conn = conn
-        return conn
-
-    def _init_database(self) -> None:
-        with sqlite3.connect(self.db_path) as conn:
-            conn.execute("PRAGMA journal_mode=WAL")
-            conn.execute("PRAGMA synchronous=NORMAL")
-            conn.execute(
-                """
-                CREATE TABLE IF NOT EXISTS translations (
-                    cache_key TEXT PRIMARY KEY,
-                    source_lang TEXT NOT NULL,
-                    target_lang TEXT NOT NULL,
-                    service TEXT NOT NULL,
-                    model TEXT,
-                    source_text TEXT NOT NULL,
-                    translated_text TEXT NOT NULL,
-                    cached_at TEXT NOT NULL,
-                    expires_at TEXT NOT NULL,
-                    hit_count INTEGER DEFAULT 0,
-                    last_used TEXT
-                )
-                """
-            )
-            conn.execute(
-                "CREATE INDEX IF NOT EXISTS idx_expires ON translations(expires_at)"
-            )
-            conn.commit()
+        if not self._schema_ready:
+            with self._schema_lock:
+                if not self._schema_ready:
+                    migrate(self.db_path, _MIGRATIONS, on_too_new="reset")
+                    self._schema_ready = True
+        return self._connections.get()
 
     def get(
         self,
@@ -138,7 +166,7 @@ class TranslationCache:
                 self._bump(miss=True)
                 return None
 
-            if datetime.fromisoformat(row["expires_at"]) < datetime.now():
+            if row["expires_at"] < now_ms():
                 # Expired — leave row in place; clear_expired() reaps later.
                 self._bump(miss=True)
                 return None
@@ -147,7 +175,7 @@ class TranslationCache:
                 with self._write_lock:
                     conn.execute(
                         "UPDATE translations SET hit_count = hit_count + 1, last_used = ? WHERE cache_key = ?",
-                        (datetime.now().isoformat(), key),
+                        (now_ms(), key),
                     )
                     conn.commit()
             except sqlite3.OperationalError:
@@ -173,8 +201,8 @@ class TranslationCache:
         if not translated_text:
             return False
         key = _make_cache_key(source_text, lang_in, lang_out, service, model)
-        now = datetime.now()
-        expires_at = now + timedelta(days=self.ttl_days)
+        now = now_ms()
+        expires_at = now + self.ttl_days * 86_400_000
         try:
             conn = self._conn()
             with self._write_lock:
@@ -189,7 +217,7 @@ class TranslationCache:
                     (
                         key, lang_in, lang_out, service, model,
                         source_text, translated_text,
-                        now.isoformat(), expires_at.isoformat(),
+                        now, expires_at,
                     ),
                 )
                 conn.commit()
@@ -200,7 +228,7 @@ class TranslationCache:
 
     def clear_expired(self) -> int:
         try:
-            now = datetime.now().isoformat()
+            now = now_ms()
             conn = self._conn()
             with self._write_lock:
                 cur = conn.execute(
@@ -281,7 +309,7 @@ class TranslationCache:
             total = conn.execute("SELECT COUNT(*) FROM translations").fetchone()[0]
             expired = conn.execute(
                 "SELECT COUNT(*) FROM translations WHERE expires_at < ?",
-                (datetime.now().isoformat(),),
+                (now_ms(),),
             ).fetchone()[0]
             by_service = {
                 row[0]: row[1]

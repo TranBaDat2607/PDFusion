@@ -8,7 +8,7 @@ from .encryption import (
     decrypt_api_key,
     is_encrypted,
 )
-from .paths import appdata_dir, logs_dir
+from .paths import adopt_legacy_config, appdata_dir, logs_dir
 from .logging_setup import configure_logging
 
 __all__ = [
@@ -16,6 +16,7 @@ __all__ = [
     "encrypt_api_key",
     "decrypt_api_key",
     "is_encrypted",
+    "adopt_legacy_config",
     "appdata_dir",
     "logs_dir",
     "configure_logging",

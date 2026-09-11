@@ -7,7 +7,11 @@ without an editable install.
 
 from __future__ import annotations
 
+import atexit
+import os
+import shutil
 import sys
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -15,6 +19,23 @@ import pytest
 _SRC = Path(__file__).resolve().parents[1] / "src"
 if str(_SRC) not in sys.path:
     sys.path.insert(0, str(_SRC))
+
+# Every store resolves its root through `utils/paths.appdata_dir()`, which reads
+# `%LOCALAPPDATA%`. Point that at a throwaway folder for the whole run, so
+# nothing a test does can open, write or migrate the developer's real
+# `%LOCALAPPDATA%\PDFusion`. A default run during #59 did migrate a real
+# paragraph cache; the path that reached it was never pinned to one test (a
+# worker thread outliving its test fits the evidence), which is why this is
+# process-wide and set at import — ahead of every test module, fixture and
+# thread. Subprocesses such as `test_sidecar_boot.py`'s inherit it.
+_TEST_LOCALAPPDATA = Path(tempfile.mkdtemp(prefix="pdfusion-tests-"))
+os.environ["LOCALAPPDATA"] = str(_TEST_LOCALAPPDATA)
+# An empty config, so `ConfigManager` runs on defaults, as it does in CI,
+# rather than adopting the developer's own `config.toml` from the home-based
+# legacy root (`utils/paths.adopt_legacy_config`).
+(_TEST_LOCALAPPDATA / "PDFusion").mkdir()
+(_TEST_LOCALAPPDATA / "PDFusion" / "config.toml").write_text("", encoding="utf-8")
+atexit.register(shutil.rmtree, _TEST_LOCALAPPDATA, ignore_errors=True)
 
 
 # A minimal but structurally real PDF, so tests exercise the `%PDF-` header

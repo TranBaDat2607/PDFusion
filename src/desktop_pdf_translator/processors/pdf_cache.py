@@ -11,8 +11,8 @@ copying the cached PDF into the live output directory and emitting synthetic
 SSE events.
 
 Storage layout:
-    ~/AppData/Local/PDFusion/translated_pdf_cache/
-        index.db              -- SQLite WAL
+    <appdata_dir>/translated_pdf_cache/     (utils/paths.appdata_dir)
+        index.db              -- SQLite WAL, schema versioned by storage/migrations.py
         files/<key>.pdf       -- content-addressed translated PDFs
 """
 
@@ -23,9 +23,17 @@ import shutil
 import sqlite3
 import threading
 from dataclasses import dataclass
-from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Optional
+
+from ..storage.migrations import Migration, migrate
+from ..storage.sqlite import (
+    ThreadLocalConnections,
+    local_iso_to_utc_ms,
+    ms_to_iso,
+    now_ms,
+)
+from ..utils.paths import appdata_dir
 
 logger = logging.getLogger(__name__)
 
@@ -40,7 +48,7 @@ _HASH_CHUNK = 1024 * 1024  # 1 MB streaming reads
 
 
 def _default_cache_dir() -> Path:
-    return Path.home() / "AppData" / "Local" / "PDFusion" / "translated_pdf_cache"
+    return appdata_dir() / "translated_pdf_cache"
 
 
 def compute_file_hash(path: Path) -> str:
@@ -115,10 +123,84 @@ def is_cacheable_artifact(
     )
 
 
+# `last_used_seq` orders eviction, not `last_used`: two writes close enough
+# together — a `store()` immediately followed by a `lookup()`'s refresh — can
+# land on the same clock reading (observed on GitHub Actions' Windows runners),
+# and a tie between "just touched" and "never touched" breaks arbitrarily. A
+# monotonic counter has no such tie.
+_PDF_TRANSLATIONS_TABLE = """
+    CREATE TABLE {name} (
+        cache_key TEXT PRIMARY KEY,
+        file_hash TEXT NOT NULL,       -- sha256 of the input PDF: its document id
+        source_lang TEXT NOT NULL,
+        target_lang TEXT NOT NULL,
+        service TEXT NOT NULL,
+        model TEXT,
+        pipeline_version TEXT NOT NULL,
+        cached_path TEXT NOT NULL,
+        original_filename TEXT NOT NULL,
+        cached_at INTEGER NOT NULL,    -- Unix ms, UTC
+        last_used INTEGER,             -- Unix ms, UTC
+        last_used_seq INTEGER NOT NULL DEFAULT 0,
+        hit_count INTEGER NOT NULL DEFAULT 0,
+        file_size_bytes INTEGER NOT NULL
+    )
+"""
+
+
+def _v1_integer_utc_timestamps(conn: sqlite3.Connection) -> None:
+    """Create the table, or rebuild the unversioned one: timestamps converted
+    from local-time ISO strings to UTC milliseconds, and `last_used_seq`
+    filled in where the file predates it.
+
+    That column arrived through an `ALTER TABLE` whose failure was swallowed,
+    so both shapes of this table exist on real machines. Where it is missing,
+    the order it encodes is derived from the timestamps it replaced, with
+    `rowid` (insertion order) breaking ties.
+    """
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(pdf_translations)")}
+    if not columns:
+        conn.execute(_PDF_TRANSLATIONS_TABLE.format(name="pdf_translations"))
+    else:
+        if "last_used_seq" in columns:
+            sequence = "last_used_seq"
+        else:
+            sequence = "ROW_NUMBER() OVER (ORDER BY COALESCE(last_used, cached_at), rowid)"
+        conn.execute(_PDF_TRANSLATIONS_TABLE.format(name="pdf_translations_v1"))
+        conn.execute(
+            f"""
+            INSERT INTO pdf_translations_v1
+            (cache_key, file_hash, source_lang, target_lang, service, model,
+             pipeline_version, cached_path, original_filename, cached_at,
+             last_used, last_used_seq, hit_count, file_size_bytes)
+            SELECT cache_key, file_hash, source_lang, target_lang, service, model,
+                   pipeline_version, cached_path, original_filename,
+                   COALESCE({local_iso_to_utc_ms('cached_at')}, :now),
+                   {local_iso_to_utc_ms('last_used')},
+                   {sequence},
+                   COALESCE(hit_count, 0),
+                   file_size_bytes
+            FROM pdf_translations
+            """,
+            {"now": now_ms()},
+        )
+        conn.execute("DROP TABLE pdf_translations")
+        conn.execute("ALTER TABLE pdf_translations_v1 RENAME TO pdf_translations")
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_pdf_last_used_seq ON pdf_translations(last_used_seq)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_pdf_file_hash ON pdf_translations(file_hash)"
+    )
+
+
+_MIGRATIONS = (Migration(1, "integer UTC timestamps", _v1_integer_utc_timestamps),)
+
+
 @dataclass
 class CacheHit:
     cached_path: Path
-    cached_at: str            # ISO8601
+    cached_at: str            # ISO-8601, with a UTC offset
     hit_count: int
     original_filename: str
 
@@ -145,74 +227,26 @@ class PDFTranslationCache:
         self._hits = 0
         self._misses = 0
         self._stats_lock = threading.Lock()
-        self._tls = threading.local()
+        self._connections = ThreadLocalConnections(self.db_path)
+        # The schema is brought up to date on first use rather than here: the
+        # singleton is built on the event loop (`get_pdf_cache()` is evaluated
+        # before `asyncio.to_thread` runs `lookup`), and a migration rebuilds
+        # the table.
+        self._schema_ready = False
+        self._schema_lock = threading.Lock()
 
-        self._init_database()
         logger.info(
             "PDFTranslationCache initialized at %s (cap=%.1f MB)",
             self.db_path, self.max_size_mb,
         )
 
     def _conn(self) -> sqlite3.Connection:
-        conn = getattr(self._tls, "conn", None)
-        if conn is None:
-            conn = sqlite3.connect(self.db_path, check_same_thread=False)
-            conn.row_factory = sqlite3.Row
-            conn.execute("PRAGMA journal_mode=WAL")
-            conn.execute("PRAGMA synchronous=NORMAL")
-            self._tls.conn = conn
-        return conn
-
-    def _init_database(self) -> None:
-        with sqlite3.connect(self.db_path) as conn:
-            conn.execute("PRAGMA journal_mode=WAL")
-            conn.execute("PRAGMA synchronous=NORMAL")
-            conn.execute(
-                """
-                CREATE TABLE IF NOT EXISTS pdf_translations (
-                    cache_key TEXT PRIMARY KEY,
-                    file_hash TEXT NOT NULL,
-                    source_lang TEXT NOT NULL,
-                    target_lang TEXT NOT NULL,
-                    service TEXT NOT NULL,
-                    model TEXT,
-                    pipeline_version TEXT NOT NULL,
-                    cached_path TEXT NOT NULL,
-                    original_filename TEXT NOT NULL,
-                    cached_at TEXT NOT NULL,
-                    last_used TEXT,
-                    last_used_seq INTEGER NOT NULL DEFAULT 0,
-                    hit_count INTEGER DEFAULT 0,
-                    file_size_bytes INTEGER NOT NULL
-                )
-                """
-            )
-            # Added after `last_used` (a wall-clock string) turned out unfit
-            # for ordering eviction: two writes close enough together — a
-            # `store()` immediately followed by a `lookup()`'s refresh, as
-            # happens in a burst of cache activity — can land the same
-            # `datetime.now()` value on a coarser clock (observed on GitHub
-            # Actions' Windows runners), and a tie between "just touched" and
-            # "never touched" breaks arbitrarily. `last_used_seq` is a
-            # monotonic counter with no such tie, ever. Existing rows default
-            # to 0 and sort arbitrarily among themselves exactly once, until
-            # each is touched — a one-time, best-effort degrade for installs
-            # upgrading into this column, not a regression from before.
-            try:
-                conn.execute(
-                    "ALTER TABLE pdf_translations "
-                    "ADD COLUMN last_used_seq INTEGER NOT NULL DEFAULT 0"
-                )
-            except sqlite3.OperationalError:
-                pass  # column already exists
-            conn.execute(
-                "CREATE INDEX IF NOT EXISTS idx_pdf_last_used ON pdf_translations(last_used)"
-            )
-            conn.execute(
-                "CREATE INDEX IF NOT EXISTS idx_pdf_last_used_seq "
-                "ON pdf_translations(last_used_seq)"
-            )
-            conn.commit()
+        if not self._schema_ready:
+            with self._schema_lock:
+                if not self._schema_ready:
+                    migrate(self.db_path, _MIGRATIONS, on_too_new="reset")
+                    self._schema_ready = True
+        return self._connections.get()
 
     def lookup(
         self,
@@ -269,7 +303,7 @@ class PDFTranslationCache:
                 self._bump(miss=True)
                 return None
 
-            now = datetime.now().isoformat()
+            now = now_ms()
             try:
                 with self._write_lock:
                     conn.execute(
@@ -286,7 +320,7 @@ class PDFTranslationCache:
             self._bump(miss=False)
             return CacheHit(
                 cached_path=cached_path,
-                cached_at=row["cached_at"],
+                cached_at=ms_to_iso(row["cached_at"]),
                 hit_count=int(row["hit_count"]) + 1,
                 original_filename=row["original_filename"],
             )
@@ -359,7 +393,7 @@ class PDFTranslationCache:
                 size_bytes,
             )
 
-        now = datetime.now().isoformat()
+        now = now_ms()
         try:
             conn = self._conn()
             with self._write_lock:

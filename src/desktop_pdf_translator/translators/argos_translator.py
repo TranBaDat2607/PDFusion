@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import Optional
 
 from ..config import TranslationService
+from ..utils.paths import logs_dir
 from ._sbd_compat import install_stanza_stub
 from .base import BaseTranslator
 from .capabilities import SUPPORTED_PAIRS
@@ -79,9 +80,7 @@ def _preview(s: str, n: int = 60) -> str:
 # ---------------------------------------------------------------------------
 def _debug_json_path() -> Path:
     """Location of argos_debug.json — under the writable AppData logs dir."""
-    return (
-        Path.home() / "AppData" / "Local" / "PDFusion" / "logs" / "argos_debug.json"
-    )
+    return logs_dir() / "argos_debug.json"
 
 
 class _ArgosDebugRecorder:

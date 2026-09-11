@@ -269,7 +269,9 @@ async def get_options() -> OptionsResponse:
 
 @router.get("/cache", response_model=CacheStatsResponse)
 async def get_cache_stats() -> CacheStatsResponse:
-    stats = get_translation_cache().stats()
+    # SQLite, and on the first use after an upgrade a schema migration: off the
+    # event loop, like the clear paths below.
+    stats = await asyncio.to_thread(lambda: get_translation_cache().stats())
     return CacheStatsResponse(**stats) if stats else CacheStatsResponse()
 
 

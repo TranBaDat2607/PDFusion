@@ -366,7 +366,8 @@ corrupting) the cooldown key for that purpose.
 | `src/desktop_pdf_translator/rag/` | ChromaDB + `EnhancedRAGChain` (deep-search/web-research was dropped in `35bca2c`) |
 | `src/desktop_pdf_translator/rag/onnx_embeddings.py` | MiniLM embeddings on onnxruntime — what replaced sentence-transformers |
 | `src/desktop_pdf_translator/translators/_sbd_compat.py` | The `stanza` stub that lets the bundle drop torch |
-| `src/desktop_pdf_translator/utils/` | API key encryption; `file_export.py` (durable copy of a translated PDF); `logging_setup.py` (shared rotating `app.log` config); `paths.py` (`appdata_dir()`/`logs_dir()`) |
+| `src/desktop_pdf_translator/utils/` | API key encryption; `file_export.py` (durable copy of a translated PDF); `logging_setup.py` (shared rotating `app.log` config); `paths.py` (`appdata_dir()`, resolved from `%LOCALAPPDATA%` exactly as the shell resolves it, and `logs_dir()`) |
+| `src/desktop_pdf_translator/storage/` | SQLite plumbing every store shares: `sqlite.py` (connection pragmas, per-thread connections, UTC-millisecond timestamps) and `migrations.py` (versioned schema migrations on `PRAGMA user_version`). Stdlib-only, re-exports nothing |
 | `src/desktop_pdf_translator/translators/translation_cache.py` | Persistent **paragraph-level** SQLite cache (singleton `get_translation_cache()`) |
 | `src/desktop_pdf_translator/processors/pdf_cache.py` | Persistent **whole-PDF** SQLite cache (singleton `get_pdf_cache()`) |
 | `src/desktop_pdf_translator/processors/doc_layout_cache.py` | Process-wide DocLayout-YOLO model, loaded once (`get_shared_doc_layout_model()`) |
@@ -702,9 +703,24 @@ signature still works. The ~470 MB first-use download is unchanged.
 ### Two-tier translation caching
 
 Two independent, persistent SQLite caches sit on the translation path. Both live
-under `~/AppData/Local/PDFusion/`, use WAL + per-thread connections, are
-process-wide singletons, and are content-addressed by SHA-256 — so neither is
-invalidated by re-runs with identical inputs.
+under the app's data root (`utils/paths.appdata_dir`), open through
+`storage/sqlite.py` (WAL + per-thread connections), are process-wide singletons,
+and are content-addressed by SHA-256 — so neither is invalidated by re-runs with
+identical inputs.
+
+**Both schemas are versioned** (`storage/migrations.py`, #59). Each database
+records its version in `PRAGMA user_version`, and a store brings its file up to
+date on the first use of its connection — never in its constructor, because
+`get_pdf_cache()` is evaluated on the event loop before `asyncio.to_thread` runs
+the method, and a migration may rebuild a large table. Every step runs in one
+`BEGIN IMMEDIATE` transaction with its version bump. To change a schema, append
+a `Migration` to the store's `_MIGRATIONS`; never edit one that has shipped, and
+never `ALTER TABLE` outside one — a swallowed `ALTER` is how `index.db` came to
+exist in two shapes. Timestamps are INTEGER Unix milliseconds
+(`storage/sqlite.now_ms`); v1 converted the local-time ISO strings the
+unversioned code wrote, and `CacheHit.cached_at` goes out as ISO-8601 with a UTC
+offset. A cache file written by a newer build is moved aside and started fresh
+(`on_too_new="reset"`).
 
 1. **Whole-PDF cache** (`processors/pdf_cache.py`, `get_pdf_cache()`). Keyed on
    `sha256(file_bytes) | lang_in | lang_out | service | model | PIPELINE_VERSION`.
@@ -916,7 +932,7 @@ deliberately not implemented: the panes scroll and zoom independently.
 
 ## Configuration
 
-- Runtime config: `~/AppData/Local/PDFusion/config.toml` (encrypted API keys).
+- Runtime config: `%LOCALAPPDATA%\PDFusion\config.toml` (encrypted API keys). Every store resolves that root through `utils/paths.appdata_dir()`, the same way the shell's `sidecar.rs:appdata_dir` does. Python used to hardcode `~/AppData/Local/PDFusion`, which is a different folder wherever Local AppData has been relocated; on such a machine `ConfigManager` copies a `config.toml` left at the old root, once (`adopt_legacy_config`), so settings and keys survive the move.
 - Defaults / reference: `config/default_config.toml`.
 - `.env` is auto-loaded via `python-dotenv` and overrides the TOML. It's searched at the **repo root** (resolved from `__file__`, not `cwd` — `cwd` is non-writable `C:\Program Files\…` on an installed launch) and in the AppData config dir. See `config/manager.py:_load_dotenv`.
 - Singleton: `get_config_manager()` / `get_settings()` from `desktop_pdf_translator.config`.
@@ -1094,7 +1110,8 @@ and `shell.log`.
                                    # test_doc_layout_cache.py, test_engine_warm_gate.py,
                                    # test_export_openapi.py, test_sse_schemas.py,
                                    # test_sbd_compat.py, test_onnx_embeddings.py,
-                                   # test_rag_isolation.py, test_rag_api.py
+                                   # test_rag_isolation.py, test_rag_api.py,
+                                   # test_storage_migrations.py, test_storage_paths.py
   python -m pytest tests -m smoke  # test_sidecar_smoke.py — excluded by default
 
   # Frontend (vitest, node environment — no jsdom)
@@ -1123,11 +1140,16 @@ and `shell.log`.
   Two conventions that keep it that way, both worth preserving:
 
   - **A cache test builds its own cache under `tmp_path`.** Every storage class
-    here is a process-wide singleton over `~/AppData/Local/PDFusion/`, so a
-    test that reaches for `get_pdf_cache()` reads and evicts the developer's
-    own data. The same applies to settings: `_refresh_cap_from_settings` and
-    `_cache_enabled` are stubbed rather than allowed to find a real
-    `config.toml`.
+    here is a process-wide singleton over the app's data root, so a test that
+    reaches for `get_pdf_cache()` gets the shared one. The same applies to
+    settings: `_refresh_cap_from_settings` and `_cache_enabled` are stubbed
+    rather than allowed to find a `config.toml`. Behind that convention sits a
+    backstop: `tests/conftest.py` points `%LOCALAPPDATA%` at a throwaway folder
+    (with an empty `config.toml`) at import time, so `appdata_dir()` can never
+    resolve the developer's real `%LOCALAPPDATA%\PDFusion` during a run. It was
+    added after a default run during #59 migrated a real paragraph cache
+    through a path no single test owned. Don't remove it because every test
+    looks isolated.
   - **`tests/test_sidecar_smoke.py` is marked `smoke` and deselected by
     `addopts`.** It is the one suite that spawns real interpreters. It runs
     twice — once against `python -m desktop_pdf_translator.api.server`, once

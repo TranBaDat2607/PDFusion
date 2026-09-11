@@ -14,6 +14,7 @@ import chromadb
 from chromadb.config import Settings
 from chromadb.errors import NotFoundError
 
+from ..utils.paths import appdata_dir
 from .onnx_embeddings import OnnxEmbeddingFunction
 
 logger = logging.getLogger(__name__)
@@ -45,7 +46,7 @@ class ChromaDBManager:
         # `chroma_db_v2` rather than `chroma_db`: the 0.4-era directory is not
         # readable by chromadb 1.x, and a document index is cheap to rebuild.
         if persist_directory is None:
-            persist_directory = Path.home() / "AppData" / "Local" / "PDFusion" / "chroma_db_v2"
+            persist_directory = appdata_dir() / "chroma_db_v2"
 
         self.persist_directory = Path(persist_directory)
         self.persist_directory.mkdir(parents=True, exist_ok=True)

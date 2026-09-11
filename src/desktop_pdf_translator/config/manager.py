@@ -11,7 +11,14 @@ import tomlkit
 from pydantic import ValidationError
 
 from .models import AppSettings
-from ..utils import DPAPI_PREFIX, encrypt_api_key, decrypt_api_key, is_encrypted, appdata_dir
+from ..utils import (
+    DPAPI_PREFIX,
+    adopt_legacy_config,
+    appdata_dir,
+    decrypt_api_key,
+    encrypt_api_key,
+    is_encrypted,
+)
 
 # Try to import python-dotenv for .env file support
 from dotenv import load_dotenv
@@ -35,6 +42,9 @@ class ConfigManager:
         """
         if config_dir is None:
             self.config_dir = appdata_dir()
+            # Where Local AppData is relocated, the config was written to a
+            # different folder than `appdata_dir` resolves now (#59).
+            adopt_legacy_config(self.config_dir)
         else:
             self.config_dir = Path(config_dir)
         
