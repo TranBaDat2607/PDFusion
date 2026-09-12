@@ -8,7 +8,9 @@ boots without paying for it.
 What exists is recorded in `pdfusion.db` (`storage/records.py`): a document is
 the SHA-256 of its bytes, and each chat index over it is a row whose chunks live
 in a ChromaDB collection of their own. A question names one document and is
-answered from that document's ready index, and from nothing else (#59).
+answered from that document's ready index, and from nothing else (#59). A
+question that can't be answered ends in an `error` event, never in an answer
+that reports the failure (#31).
 """
 
 from __future__ import annotations
@@ -22,9 +24,12 @@ from typing import TYPE_CHECKING, Dict, Optional, Tuple
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sse_starlette.sse import EventSourceResponse
 
+from ...config import get_settings
 from ...processors.pdf_cache import compute_file_hash
+from ...rag.errors import IndexUnavailableError
 from ...rag.index_spec import CHUNKER_VERSION, EMBEDDING_DIMENSIONS, EMBEDDING_MODEL
 from ...storage.records import IndexRecord, RecordsStore, get_records_store
+from ...translators.capabilities import resolve_languages
 from ..auth import require_token
 from ..jobs import Job, get_registry, serialize_sse_event
 from ..schemas import AskRequest, IndexRequest, JobAccepted
@@ -38,10 +43,17 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/rag", tags=["rag"], dependencies=[Depends(require_token)])
 
 NOT_INDEXED_MESSAGE = (
-    "This document isn't indexed yet. Reopen it to index it, then ask again."
+    "This document isn't indexed yet. Ask again once it has been indexed."
 )
 NO_TEXT_MESSAGE = (
     "No text could be extracted from this PDF, so there is nothing to ask about."
+)
+# The `code` on `/rag/ask`'s `error` event when the question's index had to be
+# cleared. The chat panel indexes the document again when it sees it.
+INDEX_UNAVAILABLE = "index_unavailable"
+INDEX_UNAVAILABLE_MESSAGE = (
+    "This document's chat index was missing or damaged, so it has been cleared. "
+    "Ask again once the document has been indexed."
 )
 
 _vector_store: Optional[ChromaDBManager] = None
@@ -82,12 +94,21 @@ def _recover(records: RecordsStore, store: ChromaDBManager) -> None:
     `indexing` belongs to a process that died partway through one: its row is
     failed and its half-written collection dropped. A collection no row
     accounts for — its index was replaced or deleted, and the drop didn't
-    happen — is dropped as well.
+    happen — is dropped as well. And a ready index whose collection is gone
+    (`vectors/` deleted or replaced behind the records' back) loses its row: it
+    would pass `/rag/ask`'s pre-flight and then fail every question (#31).
+
+    Run it once per process, never again to pick up something new such as
+    settings: an index being built at that moment is `indexing` too, and would
+    be failed and dropped mid-write.
     """
     for index_id in records.fail_stale_indexing():
         store.drop_index(index_id)
-    for index_id in store.index_ids() - records.index_ids():
+    collections = store.index_ids()
+    for index_id in collections - records.index_ids():
         store.drop_index(index_id)
+    for index_id in records.index_ids(status="ready") - collections:
+        records.delete_index(index_id)
 
 
 def _load_document_processor() -> type:
@@ -175,6 +196,15 @@ async def _run_index(job: Job, payload: IndexRequest) -> None:
             ready = await asyncio.to_thread(
                 records.ready_index, document_id, EMBEDDING_MODEL, CHUNKER_VERSION
             )
+            if ready is not None and not await asyncio.to_thread(store.has_index, ready.id):
+                # Ready in the records, but its chunks are gone. Build it again
+                # rather than hand the panel an index every question fails on.
+                logger.warning(
+                    "Index %s of document %s has no collection; indexing again",
+                    ready.id, document_id,
+                )
+                await asyncio.to_thread(records.delete_index, ready.id)
+                ready = None
             if ready is not None:
                 await job.emit(
                     "progress",
@@ -269,8 +299,23 @@ async def stream_index_events(
 # ---------------------------------------------------------------------------
 
 
+async def _clear_unavailable_index(index: IndexRecord) -> None:
+    """Delete an index whose chunks can't be read, so its document is indexed
+    again. Best-effort: `_recover` catches what this misses on the next start."""
+    try:
+        await asyncio.to_thread(get_records_store().delete_index, index.id)
+        store = await _get_store()
+        await asyncio.to_thread(store.drop_index, index.id)
+    except Exception:  # noqa: BLE001
+        logger.warning("Could not clear the unavailable index %s", index.id, exc_info=True)
+
+
 async def _run_ask(
-    job: Job, payload: AskRequest, index: IndexRecord, document_path: str
+    job: Job,
+    payload: AskRequest,
+    index: IndexRecord,
+    document_path: str,
+    answer_lang: str,
 ) -> None:
     started = time.time()
     try:
@@ -289,6 +334,7 @@ async def _run_ask(
             index_id=index.id,
             document_id=index.document_id,
             document_path=document_path,
+            answer_lang=answer_lang,
             max_pdf_sources=payload.max_pdf_sources,
             progress_callback=progress_callback,
         )
@@ -299,6 +345,15 @@ async def _run_ask(
     except asyncio.CancelledError:
         await job.finish("cancelled", {})
         raise
+    except IndexUnavailableError:
+        logger.warning(
+            "The chunks of index %s (document %s) are gone; clearing it",
+            index.id, index.document_id,
+        )
+        await _clear_unavailable_index(index)
+        await job.finish(
+            "error", {"message": INDEX_UNAVAILABLE_MESSAGE, "code": INDEX_UNAVAILABLE}
+        )
     except Exception as exc:  # noqa: BLE001
         logger.exception("RAG ask job failed")
         await job.finish("error", {"message": str(exc)})
@@ -316,10 +371,15 @@ async def start_ask(payload: AskRequest) -> JobAccepted:
     if index is None:
         raise HTTPException(status_code=409, detail=NOT_INDEXED_MESSAGE)
     document_path = await asyncio.to_thread(records.document_path, payload.document_id)
+    # Resolved when the question is accepted, the way `/translate` resolves its
+    # languages, so the answer is in the language chosen when it was asked.
+    _, answer_lang = resolve_languages(get_settings(), None, payload.target_lang)
 
     registry = get_registry()
     job = await registry.create()
-    job.task = asyncio.create_task(_run_ask(job, payload, index, document_path or ""))
+    job.task = asyncio.create_task(
+        _run_ask(job, payload, index, document_path or "", answer_lang.value)
+    )
     return JobAccepted(job_id=job.job_id)
 
 

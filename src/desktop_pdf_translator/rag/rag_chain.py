@@ -1,19 +1,43 @@
 """
-RAG chain that answers questions over indexed PDF documents.
+RAG chain that answers a question from one indexed PDF document.
 """
 
 import asyncio
-import logging
-from collections import defaultdict
-from typing import List, Dict, Any, Optional
 import json
+import logging
+import threading
+from collections import defaultdict
+from dataclasses import dataclass
 from datetime import datetime
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from ..config import TranslationService, get_settings
+from ..translators.base import (
+    LANGUAGE_DISPLAY_NAMES,
+    BaseTranslator,
+    is_fatal_translation_error,
+)
+from ..translators.capabilities import SERVICE_LABELS
 from ..translators.factory import TranslatorFactory
+from .errors import AnswerGenerationError, IndexUnavailableError
+from .keyword_search import Bm25Index
 from .vector_store import ChromaDBManager
 
 logger = logging.getLogger(__name__)
+
+# The services that can write an answer, in the order they are tried. Answer
+# synthesis needs an instruction-following model, so Argos (the default
+# preferred_service) is never one of them.
+_LLM_SERVICES = (
+    TranslationService.OPENAI,
+    TranslationService.ANTHROPIC,
+    TranslationService.GEMINI,
+)
+
+# The answer when retrieval finds nothing to answer from. No model is asked:
+# given no context, it would answer from its own knowledge, as if the document
+# had said it (#31).
+NOTHING_FOUND_ANSWER = "I couldn't find anything in this document about that."
 
 
 def _display_page(metadata: Dict[str, Any]) -> Optional[int]:
@@ -44,177 +68,230 @@ def _page_label(metadata: Dict[str, Any]) -> str:
     return 'N/A' if page is None else str(page)
 
 
+def answer_language_instruction(answer_lang: str) -> str:
+    """The sentence that sets an answer's language (#31).
+
+    Goes in the answer prompt and its system prompt, and nowhere else. The HyDE
+    prompt gets none: what it writes is a search query, and a query in the
+    answer's language would miss the words of a document written in another.
+    """
+    if answer_lang == "auto":
+        return "Answer in the same language as the question, whatever language the document is in."
+    name = LANGUAGE_DISPLAY_NAMES.get(answer_lang, answer_lang)
+    return f"Answer in {name}, whatever language the question or the document is in."
+
+
+def describe_answer_error(service: TranslationService, error: BaseException) -> str:
+    """The sentence the chat panel shows when the answer model fails."""
+    label = SERVICE_LABELS.get(service, service.value)
+    if is_fatal_translation_error(error):
+        return f"{label} rejected the API key, so chat can't answer. Check the key in Settings."
+    return f"{label} couldn't write an answer: {error}"
+
+
+@dataclass(frozen=True)
+class AnswerModel:
+    """The LLM that writes one question's answer."""
+
+    service: TranslationService
+    translator: BaseTranslator
+
+
 class EnhancedRAGChain:
     """RAG chain that retrieves PDF context from ChromaDB and synthesizes an answer via an LLM translator."""
 
     def __init__(self, vector_store: ChromaDBManager):
         self.vector_store = vector_store
-        self.settings = get_settings()
-
-        self.translator = None
-        self._initialize_translator()
-
+        self._model: Optional[AnswerModel] = None
+        self._model_key: Optional[Tuple[Any, ...]] = None
+        self._model_lock = threading.Lock()
         logger.info("RAG chain initialized")
 
-    def _initialize_translator(self):
-        """Initialize an LLM translator for answer generation.
+    def _answer_model(self) -> Optional[AnswerModel]:
+        """The LLM that writes an answer, from the settings as they are now. Blocking.
 
-        Answer synthesis needs an instruction-following model, so Argos (the
-        default preferred_service) is never used here. Pick the preferred
-        service when it's an LLM with a key, otherwise the first LLM service
-        that has a key. With no key at all, stay on the template-answer path.
+        Looked up for every question. The chain is built once per process and
+        used to pick its model then, so a key saved later was ignored until the
+        sidecar restarted: `PUT /config` replaces the settings object rather
+        than updating the one the chain held (#31). Building the chain again
+        instead is not an option; see `api/routes/rag.py:_recover`.
+
+        The preferred service when it's an LLM with a key, otherwise the first
+        LLM service that has one; `None` with no key at all, which is the
+        template-answer path. The translator is built again only when the chosen
+        service, its key or its model changed.
         """
-        llm_services = (
-            TranslationService.OPENAI,
-            TranslationService.ANTHROPIC,
-            TranslationService.GEMINI,
-        )
-        preferred = self.settings.translation.preferred_service
-        candidates = [preferred] if preferred in llm_services else []
-        candidates += [s for s in llm_services if s not in candidates]
+        settings = get_settings()
+        preferred = settings.translation.preferred_service
+        candidates = [preferred] if preferred in _LLM_SERVICES else []
+        candidates += [s for s in _LLM_SERVICES if s not in candidates]
 
-        for service in candidates:
-            if not self.settings.has_api_key(service):
-                continue
-            try:
-                self.translator = TranslatorFactory.create_translator(
-                    service=service,
-                    lang_in="auto",
-                    lang_out="vi",
-                )
+        with self._model_lock:
+            for service in candidates:
+                if not settings.has_api_key(service):
+                    continue
+                service_settings = getattr(settings, service.value)
+                key = (service, service_settings.api_key, service_settings.model)
+                if self._model is not None and key == self._model_key:
+                    return self._model
+                try:
+                    # `generate()` never reads the language pair: the answer's
+                    # language is set in its prompt.
+                    translator = TranslatorFactory.create_translator(
+                        service=service,
+                        lang_in="auto",
+                        lang_out="vi",
+                    )
+                except Exception as e:
+                    logger.error(f"Failed to initialize {service.value} for RAG: {e}")
+                    continue
+                self._model, self._model_key = AnswerModel(service, translator), key
                 logger.info(f"RAG answer LLM initialized: {service.value}")
-                return
-            except Exception as e:
-                logger.error(f"Failed to initialize {service.value} for RAG: {e}")
-        logger.info("No LLM key configured — RAG will use template answers")
+                return self._model
+            self._model = self._model_key = None
+            return None
 
     async def answer_question(self, question: str, index_id: str, document_id: str,
-                            document_path: str,
-                            max_pdf_sources: int = 5,
-                            progress_callback: Optional[callable] = None) -> Dict[str, Any]:
+                              document_path: str,
+                              answer_lang: str = "auto",
+                              max_pdf_sources: int = 5,
+                              progress_callback: Optional[Callable[[str, int], None]] = None) -> Dict[str, Any]:
         """Answer a question about one document, from that document's index alone.
 
         `index_id` names the only ChromaDB collection searched; no other
-        document's chunks are within reach (#59).
+        document's chunks are within reach (#59). `answer_lang` is a language
+        code, or `auto` for the question's own language.
+
+        Raises when the question can't be answered: `IndexUnavailableError` when
+        the index's chunks can't be read, `AnswerGenerationError` when the model
+        fails, anything else as it came. `_run_ask` ends the job with an `error`
+        event for each. Returning the failure as the answer, as this used to,
+        put it in the chat as if the document had said it (#31).
         """
         logger.info(f"Processing question: {question[:100]}...")
 
         start_time = datetime.now()
 
-        try:
-            pdf_sources = await self._retrieve_pdf_knowledge(
-                question, index_id, max_pdf_sources
-            )
+        model = await asyncio.to_thread(self._answer_model)
 
-            answer = await self._generate_answer(question, pdf_sources)
+        pdf_sources = await self._retrieve_pdf_knowledge(
+            question, index_id, max_pdf_sources, model
+        )
 
-            pdf_references = self._create_pdf_references(pdf_sources, document_id, document_path)
+        answer = await self._generate_answer(question, pdf_sources, model, answer_lang)
 
-            quality_metrics = self._calculate_quality_metrics(pdf_sources)
+        pdf_references = self._create_pdf_references(pdf_sources, document_id, document_path)
 
-            processing_time = (datetime.now() - start_time).total_seconds()
+        quality_metrics = self._calculate_quality_metrics(pdf_sources)
 
-            result = {
-                'answer': answer,
-                'pdf_references': pdf_references,
-                'quality_metrics': quality_metrics,
-                'processing_time': processing_time,
-                'sources_used': {
-                    'pdf_sources': len(pdf_sources),
-                },
-                'timestamp': datetime.now().isoformat()
-            }
+        processing_time = (datetime.now() - start_time).total_seconds()
 
-            logger.info(f"Question answered successfully in {processing_time:.2f}s")
-            return result
-
-        except Exception as e:
-            logger.error(f"Failed to answer question: {e}")
-            return {
-                'answer': f"Sorry, I cannot answer this question due to an error: {str(e)}",
-                'pdf_references': [],
-                'quality_metrics': {'confidence': 0.0, 'completeness': 0.0},
-                'error': str(e)
-            }
+        logger.info(f"Question answered successfully in {processing_time:.2f}s")
+        return {
+            'answer': answer,
+            'pdf_references': pdf_references,
+            'quality_metrics': quality_metrics,
+            'processing_time': processing_time,
+            'sources_used': {
+                'pdf_sources': len(pdf_sources),
+            },
+            'timestamp': datetime.now().isoformat()
+        }
 
     async def _retrieve_pdf_knowledge(self, question: str, index_id: str,
-                                    max_sources: int) -> List[Dict[str, Any]]:
-        """Retrieve relevant knowledge from one document's index."""
+                                      max_sources: int,
+                                      model: Optional[AnswerModel] = None) -> List[Dict[str, Any]]:
+        """Retrieve relevant knowledge from one document's index. Raises on failure."""
 
-        try:
-            # The index's chunks, read once. Both keyword passes and the
-            # surrounding-context step work from this list; they used to re-read
-            # all of the document's chunks, up to 12 times a question (#59).
-            chunks = await self.vector_store.get_chunks(index_id)
-            if not chunks:
-                return []
+        # The index's chunks, read once. Both keyword passes and the
+        # surrounding-context step work from this list; they used to re-read
+        # all of the document's chunks, up to 12 times a question (#59).
+        chunks = await self.vector_store.get_chunks(index_id)
+        if not chunks:
+            # `_run_index` never marks an index with no chunks ready, so this
+            # one is damaged.
+            raise IndexUnavailableError(index_id)
 
-            # Stage 0: HyDE - Generate hypothetical answer
-            hypothetical_answer = await self._generate_hypothetical_answer(question)
+        # BM25 statistics for those chunks, built once for both passes.
+        # Tokenizing a whole document is CPU work: off the event loop.
+        keywords = await asyncio.to_thread(Bm25Index, [chunk['text'] for chunk in chunks])
 
-            # Stage 1: Dual retrieval — original question + HyDE answer
-            results_original = await self.vector_store.hybrid_search(
-                index_id,
-                query=question,
-                chunks=chunks,
-                n_results=max_sources * 2,
-                alpha=0.5,
-            )
+        # Stage 0: HyDE - Generate hypothetical answer
+        hypothetical_answer = await self._generate_hypothetical_answer(question, model)
 
+        # Stage 1: Dual retrieval — original question + HyDE answer
+        results_original = await self.vector_store.hybrid_search(
+            index_id,
+            query=question,
+            chunks=chunks,
+            keywords=keywords,
+            n_results=max_sources * 2,
+            alpha=0.5,
+        )
+
+        # With no hypothetical answer, the second pass would search for the
+        # question again.
+        results_hyde: List[Dict[str, Any]] = []
+        if hypothetical_answer != question:
             results_hyde = await self.vector_store.hybrid_search(
                 index_id,
                 query=hypothetical_answer,
                 chunks=chunks,
+                keywords=keywords,
                 n_results=max_sources * 2,
                 alpha=0.7,  # higher semantic weight for HyDE
             )
 
-            candidate_results = self._merge_search_results(results_original, results_hyde, max_sources * 3)
+        candidate_results = self._merge_search_results(results_original, results_hyde, max_sources * 3)
 
-            # Stage 2: Add surrounding context to top candidates
-            enriched_results = self._add_surrounding_context(
-                candidate_results[:max_sources * 2],
-                chunks,
-                context_window=1
-            )
+        # Stage 2: Add surrounding context to top candidates. It groups every
+        # chunk by page, so it runs off the event loop too.
+        enriched_results = await asyncio.to_thread(
+            self._add_surrounding_context,
+            candidate_results[:max_sources * 2],
+            chunks,
+            1,
+        )
 
-            # Stage 3: Re-rank
-            results = await self._rerank_results(
-                question,
-                enriched_results,
-                top_k=max_sources
-            )
+        # Stage 3: Re-rank
+        results = await self._rerank_results(
+            question,
+            enriched_results,
+            top_k=max_sources
+        )
 
-            logger.info(f"Retrieved {len(results)} PDF sources")
-            return results
+        logger.info(f"Retrieved {len(results)} PDF sources")
+        return results
 
-        except Exception as e:
-            logger.error(f"PDF knowledge retrieval failed: {e}")
-            return []
+    async def _generate_hypothetical_answer(self, question: str,
+                                            model: Optional[AnswerModel]) -> str:
+        """HyDE: a hypothetical answer to search with.
 
-    async def _generate_hypothetical_answer(self, question: str) -> str:
-        """HyDE: generate a hypothetical answer to use as the retrieval query."""
-        try:
-            if not self.translator:
-                return question
+        The question itself when there is no model, or when the model fails:
+        HyDE only improves the search, and a failing model is reported by the
+        answer step.
+        """
+        if model is None:
+            return question
 
-            hyde_prompt = f"""Generate a brief hypothetical answer to this question. The answer should be written as if it came from a technical document or research paper. Keep it under 100 words.
+        # No language instruction; see `answer_language_instruction`.
+        hyde_prompt = f"""Generate a brief hypothetical answer to this question. The answer should be written as if it came from a technical document or research paper. Keep it under 100 words.
 
 Question: {question}
 
 Hypothetical answer:"""
 
+        try:
             answer = await asyncio.to_thread(
-                self.translator.generate,
+                model.translator.generate,
                 hyde_prompt,
                 "You generate hypothetical answers for document retrieval.",
                 150,
             )
-            return answer or question
-
         except Exception as e:
-            logger.error(f"HyDE generation failed: {e}")
+            logger.warning(f"HyDE generation failed: {e}")
             return question
+        return answer or question
 
     def _merge_search_results(self, results1: List[Dict[str, Any]],
                               results2: List[Dict[str, Any]],
@@ -358,42 +435,38 @@ Hypothetical answer:"""
 
         return chunks[:top_k]
 
-    async def _generate_answer(self, question: str, pdf_sources: List[Dict[str, Any]]) -> str:
-        """Generate an answer using PDF sources."""
+    async def _generate_answer(self, question: str, pdf_sources: List[Dict[str, Any]],
+                               model: Optional[AnswerModel], answer_lang: str) -> str:
+        """Write the answer from the retrieved sources.
 
-        context_parts = []
-
-        if pdf_sources:
-            context_parts.append("=== INFORMATION FROM PDF DOCUMENTS ===")
-            for i, source in enumerate(pdf_sources[:3]):
-                text = source.get('text', '')
-                page = _page_label(source.get('metadata', {}))
-                context_parts.append(f"[PDF Source {i+1}, Page {page}]: {text[:300]}...")
-
-        full_context = '\n'.join(context_parts)
-
-        prompt = self._create_answer_prompt(question, full_context)
-
-        try:
-            if self.translator:
-                answer = await self._generate_with_llm(prompt)
-            else:
-                answer = self._generate_template_answer(question, pdf_sources)
-            return answer
-        except Exception as e:
-            logger.error(f"Answer generation failed: {e}")
+        A model that fails raises `AnswerGenerationError`. It used to fall back
+        to the template answer, which hid a rejected key behind excerpts that
+        looked like an answer.
+        """
+        if not pdf_sources:
+            return NOTHING_FOUND_ANSWER
+        if model is None:
             return self._generate_template_answer(question, pdf_sources)
 
-    def _create_answer_prompt(self, question: str, context: str) -> str:
+        context_parts = ["=== INFORMATION FROM PDF DOCUMENTS ==="]
+        for i, source in enumerate(pdf_sources[:3]):
+            text = source.get('text', '')
+            page = _page_label(source.get('metadata', {}))
+            context_parts.append(f"[PDF Source {i+1}, Page {page}]: {text[:300]}...")
+
+        prompt = self._create_answer_prompt(question, '\n'.join(context_parts), answer_lang)
+        return await self._generate_with_llm(model, prompt, answer_lang)
+
+    def _create_answer_prompt(self, question: str, context: str, answer_lang: str = "auto") -> str:
         """Create a comprehensive prompt for answer generation."""
 
         prompt = f"""
-You are an intelligent AI assistant specialized in answering questions based on translated PDF documents.
+You are an intelligent AI assistant specialized in answering questions based on PDF documents.
 
 TASK:
 - Answer questions comprehensively and accurately
 - Base your answer on the PDF context provided
-- Answer in Vietnamese
+- {answer_language_instruction(answer_lang)}
 
 QUESTION: {question}
 
@@ -408,37 +481,36 @@ ANSWER:
 
         return prompt
 
-    async def _generate_with_llm(self, prompt: str) -> str:
-        """Generate an answer with whichever LLM backend is configured."""
-        answer = await asyncio.to_thread(
-            self.translator.generate,
-            prompt,
-            (
-                "You are an intelligent AI assistant that answers questions "
-                "based on documents. Always respond in Vietnamese regardless "
-                "of the language of the question or source documents."
-            ),
-            1000,
+    async def _generate_with_llm(self, model: AnswerModel, prompt: str, answer_lang: str) -> str:
+        """Generate an answer with the configured LLM.
+
+        Raises `AnswerGenerationError`, carrying the sentence to show, when the
+        model fails or returns nothing.
+        """
+        system = (
+            "You are an intelligent AI assistant that answers questions based on "
+            "documents. " + answer_language_instruction(answer_lang)
         )
+        try:
+            answer = await asyncio.to_thread(model.translator.generate, prompt, system, 1000)
+        except Exception as e:
+            logger.error(f"Answer generation failed: {e}")
+            raise AnswerGenerationError(describe_answer_error(model.service, e)) from e
         if not answer:
-            raise RuntimeError("LLM returned no answer")
+            label = SERVICE_LABELS.get(model.service, model.service.value)
+            raise AnswerGenerationError(f"{label} returned an empty answer. Try asking again.")
         return answer
 
     def _generate_template_answer(self, question: str, pdf_sources: List[Dict[str, Any]]) -> str:
-        """Generate template-based answer as fallback."""
+        """The answer with no LLM key: the question and excerpts of the best sources."""
 
-        answer_parts = []
-        answer_parts.append(f"Based on available information, I will answer the question: '{question}'")
-
-        if pdf_sources:
-            answer_parts.append("\n**Information from PDF documents:**")
-            for i, source in enumerate(pdf_sources[:2]):
-                text = source.get('text', '')
-                page = _page_label(source.get('metadata', {}))
-                answer_parts.append(f"- Page {page}: {text[:200]}...")
-            answer_parts.append("\n**Conclusion:** The above information provides an overview of your question. For more details, please refer to the cited sources.")
-        else:
-            answer_parts.append("\nSorry, I could not find relevant information to answer this question.")
+        answer_parts = [f"Based on available information, I will answer the question: '{question}'"]
+        answer_parts.append("\n**Information from PDF documents:**")
+        for source in pdf_sources[:2]:
+            text = source.get('text', '')
+            page = _page_label(source.get('metadata', {}))
+            answer_parts.append(f"- Page {page}: {text[:200]}...")
+        answer_parts.append("\n**Conclusion:** The above information provides an overview of your question. For more details, please refer to the cited sources.")
 
         return '\n'.join(answer_parts)
 

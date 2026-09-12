@@ -14,17 +14,21 @@
 
 import type { components } from "@/lib/api-types";
 
+type AskRequest = components["schemas"]["AskRequest"];
+
 export interface AskBodyInput {
   question: string;
   /** The open document. Not nullable: `null` used to ask across every indexed
    *  document, which is how chat answered from PDFs other than the open one
    *  (#59). The sidecar refuses a request without one. */
   documentId: string;
+  /** The language to answer in: the toolbar's "To" language. Omitted from the
+   *  body when null/undefined, and the sidecar then answers in the configured
+   *  default. Answers used to be Vietnamese whatever was chosen (#31). */
+  targetLang?: string | null;
 }
 
-export function buildAskBody(
-  input: AskBodyInput,
-): components["schemas"]["AskRequest"] {
+export function buildAskBody(input: AskBodyInput): AskRequest {
   return {
     question: input.question,
     document_id: input.documentId,
@@ -35,5 +39,11 @@ export function buildAskBody(
     // what's generated here. Spelling out the same default the backend would
     // apply anyway keeps this request body's behavior identical either way.
     max_pdf_sources: 5,
+    // Spread rather than assigned, as in `translate-request.ts`, so an unset
+    // language is absent from the body rather than sent as `undefined`. The
+    // cast is a boundary one: the value comes from `LanguageCode` via config.
+    ...(input.targetLang
+      ? { target_lang: input.targetLang as AskRequest["target_lang"] }
+      : {}),
   };
 }

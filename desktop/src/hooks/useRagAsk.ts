@@ -1,9 +1,10 @@
 import { useCallback, useRef, useState } from "react";
 
-import { api } from "@/lib/api-client";
+import { ApiError, api } from "@/lib/api-client";
 import { buildAskBody } from "@/lib/ask-request";
 import {
   IDLE_ASK,
+  NOT_INDEXED,
   failAsk,
   reduceAskEvent,
   startAsk,
@@ -23,6 +24,8 @@ interface AskParams {
   question: string;
   /** The open document. A question is always about exactly one (#59). */
   documentId: string;
+  /** The language to answer in; the configured default when unset. */
+  targetLang?: string | null;
 }
 
 export function useRagAsk() {
@@ -56,7 +59,10 @@ export function useRagAsk() {
       );
       jobId = accepted.job_id;
     } catch (e) {
-      update((s) => failAsk(s, (e as Error).message));
+      // A 409 means the document has no ready index; the panel indexes it.
+      const code =
+        e instanceof ApiError && e.status === 409 ? NOT_INDEXED : null;
+      update((s) => failAsk(s, (e as Error).message, code));
       return;
     }
     if (generationRef.current !== generation) return;

@@ -115,23 +115,25 @@ class GeminiTranslator(BaseTranslator):
         system: Optional[str] = None,
         max_tokens: int = 1000,
     ) -> Optional[str]:
-        """Freeform generation used by the RAG chain."""
-        try:
-            config = genai_types.GenerateContentConfig(
-                temperature=0.3,
-                max_output_tokens=max_tokens,
-                system_instruction=system if system else None,
-            )
-            response = self.client.models.generate_content(
+        """Freeform generation used by the RAG chain.
+
+        Raises on failure, after `_call_with_backoff`'s retries; see
+        `OpenAITranslator.generate`.
+        """
+        config = genai_types.GenerateContentConfig(
+            temperature=0.3,
+            max_output_tokens=max_tokens,
+            system_instruction=system if system else None,
+        )
+        response = self._call_with_backoff(
+            lambda: self.client.models.generate_content(
                 model=self.model_name,
                 contents=prompt,
                 config=config,
             )
-            text = response.text
-            return text.strip() if text else None
-        except Exception as e:
-            logger.error(f"Gemini generate failed: {e}")
-            return None
+        )
+        text = response.text
+        return text.strip() if text else None
 
     def _create_translation_prompt(self, text: str) -> str:
         """Create optimized translation prompt for Vietnamese."""

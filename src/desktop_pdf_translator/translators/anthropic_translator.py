@@ -107,12 +107,16 @@ class AnthropicTranslator(BaseTranslator):
         system: str | None = None,
         max_tokens: int = 1000,
     ) -> str | None:
-        """Freeform generation used by the RAG chain."""
-        try:
-            kwargs = {}
-            if system:
-                kwargs["system"] = system
-            response = self.client.messages.create(
+        """Freeform generation used by the RAG chain.
+
+        Raises on failure, after `_call_with_backoff`'s retries; see
+        `OpenAITranslator.generate`.
+        """
+        kwargs = {}
+        if system:
+            kwargs["system"] = system
+        response = self._call_with_backoff(
+            lambda: self.client.messages.create(
                 model=self.model,
                 max_tokens=max_tokens,
                 temperature=0.3,
@@ -120,15 +124,13 @@ class AnthropicTranslator(BaseTranslator):
                 timeout=60,
                 **kwargs,
             )
-            text = "".join(
-                block.text
-                for block in response.content
-                if getattr(block, "type", None) == "text"
-            ).strip()
-            return text or None
-        except Exception as e:
-            logger.error(f"Anthropic generate failed: {e}")
-            return None
+        )
+        text = "".join(
+            block.text
+            for block in response.content
+            if getattr(block, "type", None) == "text"
+        ).strip()
+        return text or None
 
     def _create_translation_prompt(self, text: str) -> tuple[str, str]:
         source_lang = LANGUAGE_DISPLAY_NAMES.get(self.lang_in, self.lang_in)

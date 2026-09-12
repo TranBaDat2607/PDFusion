@@ -8,6 +8,7 @@ real stores do with a document is `test_rag_isolation.py`'s job.
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
 from typing import List, Optional
 
 import pytest
@@ -17,6 +18,7 @@ from fastapi.testclient import TestClient
 from desktop_pdf_translator.api import auth, server
 from desktop_pdf_translator.api.jobs import get_registry
 from desktop_pdf_translator.api.routes import rag as rag_routes
+from desktop_pdf_translator.config import LanguageCode
 from desktop_pdf_translator.rag.index_spec import CHUNKER_VERSION, EMBEDDING_MODEL
 from desktop_pdf_translator.storage.records import IndexRecord
 
@@ -157,6 +159,76 @@ def test_a_question_about_an_unindexed_document_is_refused_before_a_job_exists(
     assert response.status_code == 409
     assert response.json()["detail"] == rag_routes.NOT_INDEXED_MESSAGE
     assert len(get_registry()._jobs) == jobs_before
+
+
+def _record_asks(monkeypatch: pytest.MonkeyPatch) -> List[tuple]:
+    """Replace `_run_ask` with one that records what the route handed it."""
+    calls: List[tuple] = []
+
+    async def finished() -> None:
+        return None
+
+    def record(*args):
+        calls.append(args)
+        return finished()
+
+    monkeypatch.setattr(rag_routes, "_run_ask", record)
+    return calls
+
+
+def test_a_question_is_answered_in_the_language_it_names(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+):
+    _use(monkeypatch, _StubRecords(ready=_ready_index()))
+    calls = _record_asks(monkeypatch)
+
+    response = client.post(
+        "/rag/ask",
+        json={"question": "What is the ablation?", "document_id": "abc123", "target_lang": "ja"},
+        headers=AUTH,
+    )
+
+    assert response.status_code == 202
+    (job, payload, index, document_path, answer_lang), = calls
+    assert answer_lang == "ja"
+
+
+def test_a_question_naming_no_language_is_answered_in_the_configured_one(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+):
+    """Answers used to be Vietnamese whatever the toolbar said (#31)."""
+    _use(monkeypatch, _StubRecords(ready=_ready_index()))
+    calls = _record_asks(monkeypatch)
+    settings = SimpleNamespace(
+        translation=SimpleNamespace(
+            default_source_lang=LanguageCode.AUTO,
+            default_target_lang=LanguageCode.ENGLISH,
+        )
+    )
+    monkeypatch.setattr(rag_routes, "get_settings", lambda: settings)
+
+    response = client.post(
+        "/rag/ask",
+        json={"question": "What is the ablation?", "document_id": "abc123"},
+        headers=AUTH,
+    )
+
+    assert response.status_code == 202
+    assert calls[0][-1] == "en"
+
+
+def test_a_language_the_app_does_not_know_is_refused(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+):
+    _use(monkeypatch, _StubRecords(ready=_ready_index()))
+
+    response = client.post(
+        "/rag/ask",
+        json={"question": "What is the ablation?", "document_id": "abc123", "target_lang": "xx"},
+        headers=AUTH,
+    )
+
+    assert response.status_code == 422
 
 
 # ---------------------------------------------------------------------------

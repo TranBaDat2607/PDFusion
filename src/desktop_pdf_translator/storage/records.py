@@ -287,8 +287,23 @@ class RecordsStore:
             conn.execute("DELETE FROM rag_indexes WHERE document_id = ?", (document_id,))
         return ids
 
-    def index_ids(self) -> Set[str]:
-        return {r["id"] for r in self._conn().execute("SELECT id FROM rag_indexes")}
+    def delete_index(self, index_id: str) -> bool:
+        """Delete one index's row; `False` if it had none. Dropping its
+        collection is the caller's job."""
+        conn = self._conn()
+        with self._write_lock, conn:
+            cursor = conn.execute("DELETE FROM rag_indexes WHERE id = ?", (index_id,))
+        return cursor.rowcount > 0
+
+    def index_ids(self, status: Optional[str] = None) -> Set[str]:
+        """The ids of every index, or of those with this status."""
+        if status is None:
+            rows = self._conn().execute("SELECT id FROM rag_indexes")
+        else:
+            rows = self._conn().execute(
+                "SELECT id FROM rag_indexes WHERE status = ?", (status,)
+            )
+        return {r["id"] for r in rows}
 
 
 def _index_record(row: Optional[sqlite3.Row]) -> Optional[IndexRecord]:

@@ -239,6 +239,10 @@ class AskRequest(BaseModel):
     # came to answer from PDFs other than the open one (#59).
     document_id: str = Field(min_length=1)
     max_pdf_sources: int = 5
+    # The language to answer in: the toolbar's "To" language. `None` means the
+    # configured default, the rule `/translate` follows too. Answers used to be
+    # Vietnamese whatever was chosen (#31).
+    target_lang: Optional[LanguageCode] = None
 
 
 # ---------------------------------------------------------------------------

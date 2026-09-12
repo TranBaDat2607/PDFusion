@@ -92,24 +92,27 @@ class OpenAITranslator(BaseTranslator):
         system: Optional[str] = None,
         max_tokens: int = 1000,
     ) -> Optional[str]:
-        """Freeform generation used by the RAG chain."""
-        try:
-            messages: List[Dict[str, str]] = []
-            if system:
-                messages.append({"role": "system", "content": system})
-            messages.append({"role": "user", "content": prompt})
-            response = self.client.chat.completions.create(
+        """Freeform generation used by the RAG chain.
+
+        Raises on failure, after `_call_with_backoff`'s retries: the chain turns
+        the error into the chat's `error` event. It used to be logged and
+        swallowed, so the chat answered with a template instead (#31).
+        """
+        messages: List[Dict[str, str]] = []
+        if system:
+            messages.append({"role": "system", "content": system})
+        messages.append({"role": "user", "content": prompt})
+        response = self._call_with_backoff(
+            lambda: self.client.chat.completions.create(
                 model=self.model,
                 messages=messages,
                 max_tokens=max_tokens,
                 temperature=0.3,
                 timeout=60,
             )
-            content = response.choices[0].message.content
-            return content.strip() if content else None
-        except Exception as e:
-            logger.error(f"OpenAI generate failed: {e}")
-            return None
+        )
+        content = response.choices[0].message.content
+        return content.strip() if content else None
 
     def _create_translation_prompt(self, text: str) -> List[Dict[str, str]]:
         """Create optimized translation prompt for Vietnamese."""
