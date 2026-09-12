@@ -1,8 +1,10 @@
 """Pydantic request/response schemas for the sidecar API."""
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, Field
+
+from .sse_schemas import AskResultPayload
 
 from ..config import (
     GUISettings,
@@ -243,6 +245,47 @@ class AskRequest(BaseModel):
     # configured default, the rule `/translate` follows too. Answers used to be
     # Vietnamese whatever was chosen (#31).
     target_lang: Optional[LanguageCode] = None
+
+
+class DocumentSummaryResponse(BaseModel):
+    """A recorded document, as Settings → Chat lists it (#31). Metadata only."""
+
+    document_id: str
+    display_name: str
+    # Where it was most recently opened from.
+    path: Optional[str] = None
+    size_bytes: int
+    page_count: Optional[int] = None
+    # Chunks in the ready index a question would use; `None` without one.
+    chunk_count: Optional[int] = None
+    question_count: int
+    last_opened_at: str  # ISO-8601 with a UTC offset
+
+
+class DocumentListResponse(BaseModel):
+    documents: List[DocumentSummaryResponse]
+
+
+class ChatMessageResponse(BaseModel):
+    """One saved chat message (#31)."""
+
+    id: int
+    role: Literal["user", "assistant"]
+    text: str
+    # Assistant messages only: the answer as it was sent, citations included.
+    # Its pages still point at the right place, because a document's id is the
+    # hash of its bytes; its `chunk_id`s name chunks of an index that may be gone.
+    answer: Optional[AskResultPayload] = None
+    created_at: str  # ISO-8601 with a UTC offset
+
+
+class ChatHistoryResponse(BaseModel):
+    messages: List[ChatMessageResponse]
+
+
+class ResetIndexesResponse(BaseModel):
+    # How many chat indexes were deleted.
+    removed: int
 
 
 # ---------------------------------------------------------------------------

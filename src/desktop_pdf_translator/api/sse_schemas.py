@@ -139,12 +139,15 @@ class EmptyPayload(BaseModel):
 
 
 class IndexProgressPayload(BaseModel):
-    """`progress` events from `_run_index`. `chunks` is only sent from two of
-    the three call sites."""
+    """`progress` events from `_run_index`. `chunks` is sent only once there is
+    a count. `document_id` is on the first event only: the document is named
+    before the vector store loads, so the chat panel can show its history
+    meanwhile (#31)."""
 
     stage: str
     progress: int
     chunks: Optional[int] = None
+    document_id: Optional[str] = None
 
 
 class IndexDonePayload(BaseModel):

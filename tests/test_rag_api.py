@@ -1,4 +1,4 @@
-"""The `/rag` HTTP contract (#59).
+"""The `/rag` HTTP contract (#59, #31).
 
 Only the rag router is mounted, so no lifespan runs, and the records and the
 vector store are stubs: nothing here imports chromadb or loads a model. What the
@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from pathlib import Path
 from types import SimpleNamespace
-from typing import List, Optional
+from typing import List, Optional, Sequence
 
 import pytest
 from fastapi import FastAPI
@@ -20,7 +20,11 @@ from desktop_pdf_translator.api.jobs import get_registry
 from desktop_pdf_translator.api.routes import rag as rag_routes
 from desktop_pdf_translator.config import LanguageCode
 from desktop_pdf_translator.rag.index_spec import CHUNKER_VERSION, EMBEDDING_MODEL
-from desktop_pdf_translator.storage.records import IndexRecord
+from desktop_pdf_translator.storage.records import (
+    ChatMessageRecord,
+    DocumentSummary,
+    IndexRecord,
+)
 
 TOKEN = "test-token-for-rag-api"
 AUTH = {"Authorization": f"Bearer {TOKEN}"}
@@ -67,12 +71,22 @@ class _StubRecords:
     def __init__(
         self,
         ready: Optional[IndexRecord] = None,
-        removed: tuple = (),
+        removed: Optional[Sequence[str]] = None,
         error: Optional[Exception] = None,
+        documents: Sequence[DocumentSummary] = (),
+        messages: Sequence[ChatMessageRecord] = (),
+        settled: Sequence[str] = (),
+        index_ids: Sequence[str] = (),
     ):
         self.ready = ready
-        self.removed = list(removed)
+        # `None`: the document isn't recorded. A sequence: it was, with these indexes.
+        self.removed = removed
         self.error = error
+        self.documents = list(documents)
+        self.stored_messages = list(messages)
+        self.settled = list(settled)
+        self.ids = set(index_ids)
+        self.cleared: List[str] = []
 
     def ready_index(self, document_id, embedding_model, chunker_version):
         return self.ready
@@ -80,29 +94,60 @@ class _StubRecords:
     def document_path(self, document_id):
         return "C:/papers/paper.pdf"
 
-    def delete_document_indexes(self, document_id) -> List[str]:
+    def delete_document(self, document_id) -> Optional[List[str]]:
         if self.error is not None:
             raise self.error
-        return self.removed
+        return None if self.removed is None else list(self.removed)
+
+    def list_documents(self, embedding_model, chunker_version):
+        return self.documents
+
+    def messages(self, document_id):
+        return self.stored_messages
+
+    def clear_messages(self, document_id) -> int:
+        self.cleared.append(document_id)
+        return 0
+
+    def delete_settled_indexes(self) -> List[str]:
+        if self.error is not None:
+            raise self.error
+        return self.settled
+
+    def index_ids(self, status=None):
+        return self.ids
 
 
 class _StubStore:
-    def __init__(self) -> None:
+    def __init__(self, collections: Sequence[str] = (), fail: bool = False) -> None:
         self.dropped: List[str] = []
+        self.collections = set(collections)
+        self.fail = fail
 
     def drop_index(self, index_id: str) -> bool:
+        if self.fail:
+            raise RuntimeError("The process cannot access the file")
         self.dropped.append(index_id)
         return True
 
+    def index_ids(self):
+        return self.collections - set(self.dropped)
 
-def _use(monkeypatch: pytest.MonkeyPatch, records: _StubRecords) -> _StubStore:
-    store = _StubStore()
+
+def _use(
+    monkeypatch: pytest.MonkeyPatch, records: _StubRecords, *, loaded: bool = True,
+    store: Optional[_StubStore] = None,
+) -> _StubStore:
+    """Point the routes at stubs. `loaded` says whether this process has opened
+    the vector store; nothing here may open it."""
+    store = store or _StubStore()
 
     async def get_store() -> _StubStore:
-        return store
+        pytest.fail("the vector store must not be opened")
 
     monkeypatch.setattr(rag_routes, "get_records_store", lambda: records)
     monkeypatch.setattr(rag_routes, "_get_store", get_store)
+    monkeypatch.setattr(rag_routes, "_loaded_store", lambda: store if loaded else None)
     return store
 
 
@@ -232,11 +277,102 @@ def test_a_language_the_app_does_not_know_is_refused(
 
 
 # ---------------------------------------------------------------------------
+# GET /rag/documents, and a document's messages
+# ---------------------------------------------------------------------------
+
+
+def test_the_document_list_is_read_from_the_records_alone(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+):
+    """Opening Settings → Chat must not load chromadb and the embedding model."""
+    records = _StubRecords(
+        documents=[
+            DocumentSummary(
+                id="abc123",
+                display_name="paper.pdf",
+                size_bytes=2048,
+                page_count=3,
+                last_opened_at=0,
+                path="C:/papers/paper.pdf",
+                chunk_count=12,
+                question_count=2,
+            )
+        ]
+    )
+    _use(monkeypatch, records, loaded=False)
+
+    response = client.get("/rag/documents", headers=AUTH)
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "documents": [
+            {
+                "document_id": "abc123",
+                "display_name": "paper.pdf",
+                "path": "C:/papers/paper.pdf",
+                "size_bytes": 2048,
+                "page_count": 3,
+                "chunk_count": 12,
+                "question_count": 2,
+                "last_opened_at": "1970-01-01T00:00:00+00:00",
+            }
+        ]
+    }
+
+
+def test_a_documents_conversation_comes_back_with_its_answers(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+):
+    answer = {
+        "answer": "Tensile strength.",
+        "pdf_references": [
+            {
+                "type": "pdf",
+                "page": 2,
+                "text": "The tensile strength of copper…",
+                "confidence": 0.5,
+                "document_id": "abc123",
+                "document_path": "C:/papers/paper.pdf",
+                "chunk_id": "chunk_1",
+            }
+        ],
+    }
+    records = _StubRecords(
+        messages=[
+            ChatMessageRecord(1, "abc123", "user", "What is measured?", None, 0),
+            ChatMessageRecord(2, "abc123", "assistant", "Tensile strength.", answer, 0),
+        ]
+    )
+    _use(monkeypatch, records, loaded=False)
+
+    response = client.get("/rag/document/abc123/messages", headers=AUTH)
+
+    assert response.status_code == 200
+    messages = response.json()["messages"]
+    assert [(m["role"], m["text"]) for m in messages] == [
+        ("user", "What is measured?"),
+        ("assistant", "Tensile strength."),
+    ]
+    assert messages[0]["answer"] is None
+    assert messages[1]["answer"]["pdf_references"][0]["page"] == 2
+
+
+def test_clearing_a_conversation(client: TestClient, monkeypatch: pytest.MonkeyPatch):
+    records = _StubRecords()
+    _use(monkeypatch, records, loaded=False)
+
+    response = client.delete("/rag/document/abc123/messages", headers=AUTH)
+
+    assert response.status_code == 204
+    assert records.cleared == ["abc123"]
+
+
+# ---------------------------------------------------------------------------
 # DELETE /rag/document/{document_id}
 # ---------------------------------------------------------------------------
 
 
-def test_deleting_a_document_drops_every_one_of_its_collections(
+def test_removing_a_document_drops_every_one_of_its_collections(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ):
     store = _use(monkeypatch, _StubRecords(removed=("index-1", "index-0")))
@@ -247,17 +383,30 @@ def test_deleting_a_document_drops_every_one_of_its_collections(
     assert store.dropped == ["index-1", "index-0"]
 
 
+def test_removing_a_document_never_opens_the_vector_store(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+):
+    """`_recover` drops the collections when the store opens."""
+    store = _use(monkeypatch, _StubRecords(removed=("index-1",)), loaded=False)
+
+    response = client.delete("/rag/document/abc123", headers=AUTH)
+
+    assert response.status_code == 204
+    assert store.dropped == []
+
+
 @pytest.mark.parametrize(
     "records, expected",
     [
+        (_StubRecords(removed=()), 204),
         # These came back the other way round before #59: 204 for a document
         # with nothing to delete, 404 "Document not found" for a storage failure.
-        (_StubRecords(removed=()), 404),
+        (_StubRecords(removed=None), 404),
         (_StubRecords(error=RuntimeError("disk I/O error")), 500),
     ],
-    ids=["unknown", "storage-failure"],
+    ids=["recorded-without-an-index", "unknown", "storage-failure"],
 )
-def test_deleting_says_what_went_wrong(
+def test_removing_says_what_happened(
     client: TestClient, monkeypatch: pytest.MonkeyPatch, records: _StubRecords, expected: int
 ):
     store = _use(monkeypatch, records)
@@ -266,6 +415,57 @@ def test_deleting_says_what_went_wrong(
 
     assert response.status_code == expected
     assert store.dropped == []
+
+
+# ---------------------------------------------------------------------------
+# POST /rag/reset
+# ---------------------------------------------------------------------------
+
+
+def test_reset_drops_the_collections_through_the_open_store(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+):
+    """The deleted indexes' collections go, and so does one no row accounts for.
+    One being built stays: its row is still there."""
+    records = _StubRecords(settled=["index-1"], index_ids=["index-building"])
+    store = _use(
+        monkeypatch, records,
+        store=_StubStore(collections=["index-1", "index-building", "orphan"]),
+    )
+
+    response = client.post("/rag/reset", headers=AUTH)
+
+    assert (response.status_code, response.json()) == (200, {"removed": 1})
+    assert store.dropped == ["index-1", "orphan"]
+
+
+def test_reset_deletes_a_vector_store_this_process_has_not_opened(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
+    """The way out of a store too damaged to open: no client holds its files,
+    so the directory itself goes."""
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
+    vectors = tmp_path / "PDFusion" / "vectors"
+    (vectors / "segment").mkdir(parents=True)
+    (vectors / "chroma.sqlite3").write_bytes(b"SQLite format 3\x00")
+    store = _use(monkeypatch, _StubRecords(settled=["index-1", "index-2"]), loaded=False)
+
+    response = client.post("/rag/reset", headers=AUTH)
+
+    assert (response.status_code, response.json()) == (200, {"removed": 2})
+    assert not vectors.exists()
+    assert store.dropped == []
+
+
+def test_reset_that_cannot_delete_the_files_says_to_restart(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+):
+    _use(monkeypatch, _StubRecords(settled=["index-1"]), store=_StubStore(fail=True))
+
+    response = client.post("/rag/reset", headers=AUTH)
+
+    assert response.status_code == 500
+    assert response.json()["detail"] == rag_routes.RESET_FILES_FAILED_MESSAGE
 
 
 # ---------------------------------------------------------------------------

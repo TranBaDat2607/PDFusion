@@ -208,8 +208,55 @@ export interface paths {
         get?: never;
         put?: never;
         post?: never;
-        /** Delete Document */
+        /**
+         * Delete Document
+         * @description Forget a document: its record, the paths it was opened from, its chat
+         *     indexes and its chat history. Opening the PDF again starts afresh.
+         */
         delete: operations["delete_document_rag_document__document_id__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/rag/document/{document_id}/messages": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Chat History
+         * @description One document's chat history, oldest first; empty when it has none.
+         */
+        get: operations["get_chat_history_rag_document__document_id__messages_get"];
+        put?: never;
+        post?: never;
+        /** Clear Chat History */
+        delete: operations["clear_chat_history_rag_document__document_id__messages_delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/rag/documents": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Documents
+         * @description Every recorded document, most recently opened first.
+         *
+         *     A records query: listing never loads the vector store or the embedding model.
+         */
+        get: operations["list_documents_rag_documents_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
         options?: never;
         head?: never;
         patch?: never;
@@ -243,6 +290,33 @@ export interface paths {
         get: operations["stream_index_events_rag_index__job_id__events_get"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/rag/reset": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Reset Indexes
+         * @description Delete every chat index and its chunks: the recovery action for a damaged
+         *     vector store (#31).
+         *
+         *     Documents and chat history stay, and each document is indexed again the
+         *     next time chat opens it. An index being built right now is left to finish.
+         *     Runs under `_init_lock`, so the store can't open partway through. When it
+         *     isn't open, `vectors/` is deleted outright, which works even on a store too
+         *     damaged to open.
+         */
+        post: operations["reset_indexes_rag_reset_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -537,6 +611,29 @@ export interface components {
              */
             translated_file: string | null;
         };
+        /** ChatHistoryResponse */
+        ChatHistoryResponse: {
+            /** Messages */
+            messages: components["schemas"]["ChatMessageResponse"][];
+        };
+        /**
+         * ChatMessageResponse
+         * @description One saved chat message (#31).
+         */
+        ChatMessageResponse: {
+            answer?: components["schemas"]["AskResultPayload"] | null;
+            /** Created At */
+            created_at: string;
+            /** Id */
+            id: number;
+            /**
+             * Role
+             * @enum {string}
+             */
+            role: "user" | "assistant";
+            /** Text */
+            text: string;
+        };
         /**
          * ChunkReadyEventPayload
          * @description `ChunkReadyEvent.to_dict()` — the `chunk_ready` SSE event.
@@ -680,6 +777,33 @@ export interface components {
             /** Rag Enabled */
             rag_enabled?: boolean | null;
         };
+        /** DocumentListResponse */
+        DocumentListResponse: {
+            /** Documents */
+            documents: components["schemas"]["DocumentSummaryResponse"][];
+        };
+        /**
+         * DocumentSummaryResponse
+         * @description A recorded document, as Settings → Chat lists it (#31). Metadata only.
+         */
+        DocumentSummaryResponse: {
+            /** Chunk Count */
+            chunk_count?: number | null;
+            /** Display Name */
+            display_name: string;
+            /** Document Id */
+            document_id: string;
+            /** Last Opened At */
+            last_opened_at: string;
+            /** Page Count */
+            page_count?: number | null;
+            /** Path */
+            path?: string | null;
+            /** Question Count */
+            question_count: number;
+            /** Size Bytes */
+            size_bytes: number;
+        };
         /**
          * EmptyPayload
          * @description The terminal `cancelled` event on both RAG streams — `api/routes/rag.py`
@@ -811,8 +935,10 @@ export interface components {
         };
         /**
          * IndexProgressPayload
-         * @description `progress` events from `_run_index`. `chunks` is only sent from two of
-         *     the three call sites.
+         * @description `progress` events from `_run_index`. `chunks` is sent only once there is
+         *     a count. `document_id` is on the first event only: the document is named
+         *     before the vector store loads, so the chat panel can show its history
+         *     meanwhile (#31).
          */
         IndexProgressPayload: {
             /**
@@ -820,6 +946,11 @@ export interface components {
              * @default null
              */
             chunks: number | null;
+            /**
+             * Document Id
+             * @default null
+             */
+            document_id: string | null;
             /** Progress */
             progress: number;
             /** Stage */
@@ -1030,6 +1161,11 @@ export interface components {
              * @default false
              */
             enabled: boolean;
+        };
+        /** ResetIndexesResponse */
+        ResetIndexesResponse: {
+            /** Removed */
+            removed: number;
         };
         /**
          * ServiceCredentialUpdate
@@ -1611,6 +1747,101 @@ export interface operations {
             };
         };
     };
+    get_chat_history_rag_document__document_id__messages_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                document_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChatHistoryResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    clear_chat_history_rag_document__document_id__messages_delete: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                document_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_documents_rag_documents_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DocumentListResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     start_index_rag_index_post: {
         parameters: {
             query?: never;
@@ -1668,6 +1899,37 @@ export interface operations {
                 };
                 content: {
                     "text/event-stream": components["schemas"]["IndexProgressPayload"] | components["schemas"]["IndexDonePayload"] | components["schemas"]["JobErrorPayload"] | components["schemas"]["EmptyPayload"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    reset_indexes_rag_reset_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResetIndexesResponse"];
                 };
             };
             /** @description Validation Error */

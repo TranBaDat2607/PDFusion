@@ -10,16 +10,19 @@ the SHA-256 of its bytes, and each chat index over it is a row whose chunks live
 in a ChromaDB collection of their own. A question names one document and is
 answered from that document's ready index, and from nothing else (#59). A
 question that can't be answered ends in an `error` event, never in an answer
-that reports the failure (#31).
+that reports the failure (#31). A document's chat history is recorded there
+too, and `/rag/documents`, Remove and Reset manage what is stored.
 """
 
 from __future__ import annotations
 
 import asyncio
 import logging
+import shutil
+import sys
 import time
 from pathlib import Path
-from typing import TYPE_CHECKING, Dict, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sse_starlette.sse import EventSourceResponse
@@ -29,10 +32,21 @@ from ...processors.pdf_cache import compute_file_hash
 from ...rag.errors import IndexUnavailableError
 from ...rag.index_spec import CHUNKER_VERSION, EMBEDDING_DIMENSIONS, EMBEDDING_MODEL
 from ...storage.records import IndexRecord, RecordsStore, get_records_store
+from ...storage.sqlite import ms_to_iso
 from ...translators.capabilities import resolve_languages
+from ...utils.paths import appdata_dir
 from ..auth import require_token
 from ..jobs import Job, get_registry, serialize_sse_event
-from ..schemas import AskRequest, IndexRequest, JobAccepted
+from ..schemas import (
+    AskRequest,
+    ChatHistoryResponse,
+    ChatMessageResponse,
+    DocumentListResponse,
+    DocumentSummaryResponse,
+    IndexRequest,
+    JobAccepted,
+    ResetIndexesResponse,
+)
 
 if TYPE_CHECKING:
     from ...rag.rag_chain import EnhancedRAGChain
@@ -138,6 +152,16 @@ async def _get_store() -> ChromaDBManager:
     return _vector_store
 
 
+def _loaded_store() -> Optional[ChromaDBManager]:
+    """The vector store if this process has opened it. Never opens it.
+
+    Removing a document or resetting the indexes must not load chromadb and the
+    embedding model just to delete. Collections the records no longer account
+    for are dropped by `_recover` when the store does open.
+    """
+    return _vector_store
+
+
 # ---------------------------------------------------------------------------
 # Index
 # ---------------------------------------------------------------------------
@@ -186,6 +210,12 @@ async def _run_index(job: Job, payload: IndexRequest) -> None:
         # A document is its bytes, not its name: a second, different
         # `paper.pdf` is a different document (#59).
         document_id, size = await asyncio.to_thread(_identify, file_path)
+        # Named before the vector store loads, which takes seconds on first
+        # use, so the chat panel can show the document's history meanwhile.
+        await job.emit(
+            "progress",
+            {"stage": "Opening the document", "progress": 2, "document_id": document_id},
+        )
         store = await _get_store()
 
         async with _document_lock(document_id):
@@ -310,6 +340,23 @@ async def _clear_unavailable_index(index: IndexRecord) -> None:
         logger.warning("Could not clear the unavailable index %s", index.id, exc_info=True)
 
 
+async def _save_exchange(document_id: str, question: str, answer: Dict[str, Any]) -> None:
+    """Add a question and its answer to the document's chat history.
+
+    Keyed by the document the question was accepted for, never by anything the
+    client says afterwards, so an answer that arrives after the user opened
+    another PDF is still filed under the one it was about. Best-effort: the
+    answer is delivered even when saving fails, as it does when the document
+    was removed mid-question.
+    """
+    try:
+        await asyncio.to_thread(get_records_store().add_exchange, document_id, question, answer)
+    except Exception:  # noqa: BLE001
+        logger.warning(
+            "Could not save the chat history of document %s", document_id, exc_info=True
+        )
+
+
 async def _run_ask(
     job: Job,
     payload: AskRequest,
@@ -339,6 +386,9 @@ async def _run_ask(
             progress_callback=progress_callback,
         )
 
+        # Saved before the answer is sent, so a chat panel that refetches the
+        # history on `answer` finds it there.
+        await _save_exchange(index.document_id, payload.question, result)
         await job.emit("answer", result)
         result["elapsed_seconds"] = time.time() - started
         await job.finish("done", result)
@@ -398,25 +448,155 @@ async def stream_ask_events(
     return EventSourceResponse(event_source(), ping=15)
 
 
+# ---------------------------------------------------------------------------
+# Documents and chat history
+# ---------------------------------------------------------------------------
+
+
+@router.get("/documents", response_model=DocumentListResponse)
+async def list_documents() -> DocumentListResponse:
+    """Every recorded document, most recently opened first.
+
+    A records query: listing never loads the vector store or the embedding model.
+    """
+    records = get_records_store()
+    documents = await asyncio.to_thread(
+        records.list_documents, EMBEDDING_MODEL, CHUNKER_VERSION
+    )
+    return DocumentListResponse(
+        documents=[
+            DocumentSummaryResponse(
+                document_id=document.id,
+                display_name=document.display_name,
+                path=document.path,
+                size_bytes=document.size_bytes,
+                page_count=document.page_count,
+                chunk_count=document.chunk_count,
+                question_count=document.question_count,
+                last_opened_at=ms_to_iso(document.last_opened_at),
+            )
+            for document in documents
+        ]
+    )
+
+
 @router.delete("/document/{document_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_document(document_id: str) -> None:
-    store = await _get_store()
+    """Forget a document: its record, the paths it was opened from, its chat
+    indexes and its chat history. Opening the PDF again starts afresh."""
     records = get_records_store()
     async with _document_lock(document_id):
-        # 404 when the document has no chat index, 500 when storage fails. The
+        # 404 when the document isn't recorded, 500 when storage fails. The
         # store used to report both the other way round (#59).
         try:
-            removed = await asyncio.to_thread(records.delete_document_indexes, document_id)
+            removed = await asyncio.to_thread(records.delete_document, document_id)
         except Exception as exc:  # noqa: BLE001
-            logger.exception("Removing the chat index of document %s failed", document_id)
+            logger.exception("Removing document %s failed", document_id)
             raise HTTPException(
-                status_code=500, detail=f"Could not remove the document's index: {exc}"
+                status_code=500, detail=f"Could not remove the document: {exc}"
             ) from exc
-        if not removed:
+        if removed is None:
             raise HTTPException(status_code=404, detail="Document not found")
 
+        store = _loaded_store()
+        if store is None:
+            return  # `_recover` drops the collections when the store opens
         for index_id in removed:
             try:
                 await asyncio.to_thread(store.drop_index, index_id)
             except Exception:  # noqa: BLE001 — the rows are gone; `_recover` drops it next start
                 logger.warning("Could not drop the collection of index %s", index_id, exc_info=True)
+
+
+@router.get("/document/{document_id}/messages", response_model=ChatHistoryResponse)
+async def get_chat_history(document_id: str) -> ChatHistoryResponse:
+    """One document's chat history, oldest first; empty when it has none."""
+    messages = await asyncio.to_thread(get_records_store().messages, document_id)
+    return ChatHistoryResponse(
+        messages=[
+            ChatMessageResponse(
+                id=message.id,
+                role=message.role,
+                text=message.content,
+                answer=message.answer,
+                created_at=ms_to_iso(message.created_at),
+            )
+            for message in messages
+        ]
+    )
+
+
+@router.delete(
+    "/document/{document_id}/messages", status_code=status.HTTP_204_NO_CONTENT
+)
+async def clear_chat_history(document_id: str) -> None:
+    await asyncio.to_thread(get_records_store().clear_messages, document_id)
+
+
+# ---------------------------------------------------------------------------
+# Reset
+# ---------------------------------------------------------------------------
+
+RESET_FILES_FAILED_MESSAGE = (
+    "The chat indexes were cleared, but their files could not be deleted. "
+    "Restart PDFusion, then reset again."
+)
+
+
+def _drop_collections(
+    records: RecordsStore, store: ChromaDBManager, index_ids: List[str]
+) -> None:
+    """Drop the deleted indexes' collections, and any other collection no row
+    accounts for. Blocking."""
+    for index_id in index_ids:
+        store.drop_index(index_id)
+    for index_id in store.index_ids() - records.index_ids():
+        store.drop_index(index_id)
+
+
+def _delete_vector_store() -> None:
+    """Delete `vectors/` outright. Blocking.
+
+    Only while this process has no client open on it. A client that failed to
+    open can still be cached by chromadb, holding the store's files, so that
+    cache is cleared first whenever chromadb has been imported at all.
+    """
+    shared = sys.modules.get("chromadb.api.shared_system_client")
+    if shared is not None:
+        shared.SharedSystemClient.clear_system_cache()
+    vectors = appdata_dir() / "vectors"
+    shutil.rmtree(vectors, ignore_errors=True)
+    if vectors.exists():
+        raise OSError(f"Could not delete {vectors}")
+
+
+@router.post("/reset", response_model=ResetIndexesResponse)
+async def reset_indexes() -> ResetIndexesResponse:
+    """Delete every chat index and its chunks: the recovery action for a damaged
+    vector store (#31).
+
+    Documents and chat history stay, and each document is indexed again the
+    next time chat opens it. An index being built right now is left to finish.
+    Runs under `_init_lock`, so the store can't open partway through. When it
+    isn't open, `vectors/` is deleted outright, which works even on a store too
+    damaged to open.
+    """
+    records = get_records_store()
+    async with _init_lock:
+        try:
+            removed = await asyncio.to_thread(records.delete_settled_indexes)
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("Resetting the chat indexes failed")
+            raise HTTPException(
+                status_code=500, detail=f"Could not reset the chat indexes: {exc}"
+            ) from exc
+        store = _loaded_store()
+        try:
+            if store is not None:
+                await asyncio.to_thread(_drop_collections, records, store, removed)
+            else:
+                await asyncio.to_thread(_delete_vector_store)
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("Deleting the chat indexes' files failed")
+            raise HTTPException(status_code=500, detail=RESET_FILES_FAILED_MESSAGE) from exc
+    return ResetIndexesResponse(removed=len(removed))
