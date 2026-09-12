@@ -339,7 +339,7 @@ corrupting) the cooldown key for that purpose.
 | `desktop/src/components/pdf-viewer/` | `PdfViewer` (layout, scroll, zoom), `page-renderer.ts` (canvas recycling, text layers), `text-selection.ts`, `find-highlight.ts`, `FindBar`, `ViewerToolbar`, `pdf-viewer.css` — see "PDF viewer" |
 | `desktop/src/lib/pdf-viewer/` | Pure: page geometry (`layout.ts`), find matching (`find.ts`), which pages a new rolling PDF changed (`artifact-swap.ts`), key → shortcut (`shortcuts.ts`) |
 | `desktop/src/components/chat/` | `ChatPanel`, `UserMessage`, `AssistantMessage`, `ActionLog`, `ReferenceList`, `ChatInput` |
-| `desktop/src/components/settings/` | `SettingsSheet` (a tab per service, plus Cache and Chat); `ModelCombobox` (a model name typed freely or picked from suggestions); `ChatIndexTab` (the recorded documents, Remove, Reset) |
+| `desktop/src/components/settings/` | `SettingsSheet` (a tab per service, plus Cache and Chat); `ModelCombobox` (a model name typed freely or picked from suggestions); `ChatIndexTab` (Enable chat, the recorded documents, Remove, Reset) |
 | `desktop/src/components/translation/` | `ProgressOverlay`, `TranslatedFileActions` (Save / Open / Show in folder) |
 | `desktop/src/components/ui/` | shadcn-generated primitives (button, dialog, sheet, …) |
 | `desktop/src/lib/api-client.ts` | Typed HTTP wrapper with bearer-token + sidecar URL helpers |
@@ -354,6 +354,7 @@ corrupting) the cooldown key for that purpose.
 | `desktop/src/lib/chat-history.ts` | Pure: a document's saved-chat query key, and the just-answered exchange shown until the refetch |
 | `desktop/src/lib/chat-documents.ts` | Pure: the line Settings → Chat shows under each recorded document |
 | `desktop/src/lib/service-settings.ts` | Pure: a Settings service tab's draft, the `PUT /config` body it makes, and what Save checks with the provider first — see "LLM endpoints and models" |
+| `desktop/src/lib/cache-settings.ts` | Pure: the sizes, confirmations and toasts Settings → Cache shows |
 | `src/desktop_pdf_translator/engine_assets.py` | What "the offline engine is installed" means; no heavy imports |
 | `src/desktop_pdf_translator/api/server.py` | FastAPI app + uvicorn entry + port discovery |
 | `src/desktop_pdf_translator/api/auth.py` | Bearer-token middleware |
@@ -389,8 +390,8 @@ All routes (except `GET /health`) require `Authorization: Bearer <token>`.
 | PUT | `/config` | Update API keys / models / endpoints / language defaults. `model` is free text. `openai` and `anthropic` take `base_url` (`""` = the provider's own); changing it while a key is saved needs `api_key` in the same body, or **422** — see "LLM endpoints and models" |
 | POST | `/config/validate` | Check credentials with the provider, off the event loop and under a deadline. `api_key` / `model` / `base_url` left out come from the saved settings, and the saved key is only checked against the saved endpoint (**422** otherwise) |
 | GET | `/config/options` | Static dropdown data (languages, services, model *suggestions* with each service's default first) + `supported_pairs` per service (`null` = unrestricted) |
-| GET | `/config/cache` | Paragraph-cache stats (entries, hit rate, size) |
-| DELETE | `/config/cache?scope=all\|expired` | Clear/GC the paragraph-level translation cache |
+| GET | `/config/cache` | Both caches' stats: `paragraph` (entries, expired, hit rate, size, TTL) and `pdf` (entries, hit rate, size, LRU cap) |
+| DELETE | `/config/cache?scope=all\|expired&target=paragraph\|pdf\|all` | Clear the cache `target` names (`paragraph` by default); `scope=expired` reaps expired paragraphs and never touches the PDF cache. Any other value is **422**, not a clear |
 | GET | `/setup/status` | Which engine assets are installed, plus the running install's phase and the last one's error. Stat calls only — polled twice a second during an install |
 | POST | `/setup/engine` | Start installing the engine assets, or report the one already running; answers with the same body as `/setup/status` |
 | POST | `/translate` | Start translation job → returns `{ job_id }`. `source_lang` / `target_lang` / `service` are `None`-defaulted (config applies); an unsupported pair is refused with **422** and a missing engine with **409**, both before the job is created. `bypass_cache: bool` forces a full re-translate (used by the "Re-translate" button). There is deliberately **no `output_dir`** — output always lands in a per-job `%TEMP%` dir that the cleanup paths know about |
@@ -1067,7 +1068,8 @@ deliberately not implemented: the panes scroll and zoom independently.
 ### React state ownership
 
 - **TanStack Query** owns all server state (`useConfig`, `useOptions`, `useChatHistory`, and Settings → Chat's document list). The chat panel keeps no copy of a conversation: it reads the saved one by document id.
-- **Zustand store** (`lib/store.ts`) owns ephemeral UI state: current PDF paths, the translated-artifact change log, active job ID, RAG enabled flag, chat drawer open/closed.
+- **Zustand store** (`lib/store.ts`) owns ephemeral UI state: current PDF paths, the translated-artifact change log, active job ID, whether the chat panel is showing.
+- **Chat on/off is server state, not the panel's.** `config.rag.chat_enabled` (Settings → Chat, read through `useChatEnabled`) decides whether the toolbar has a Chat button and whether the panel can mount at all, and the panel only mounts to index. The toolbar button and the panel's X change `chatOpen` and nothing else. They used to be one switch that also wrote `rag.enabled`, which nothing read; `chat_enabled` is a new name so that stale `false` isn't taken for "chat off" (#32).
 - **Job hooks** (`useTranslation`, `useRagIndex`, `useRagAsk`) own per-stream local state and update the global store on terminal events.
 
 ### UI conventions

@@ -14,7 +14,7 @@ import { UserMessage } from "@/components/chat/UserMessage";
 import { useChatHistory, useClearChatHistory } from "@/hooks/useChatHistory";
 import { useRagAsk } from "@/hooks/useRagAsk";
 import { useRagIndex } from "@/hooks/useRagIndex";
-import { useConfig, useUpdateConfig } from "@/hooks/useConfig";
+import { useConfig } from "@/hooks/useConfig";
 import {
   CHAT_DOCUMENTS_KEY,
   appendExchange,
@@ -38,7 +38,6 @@ export function ChatPanel({
 }: ChatPanelProps) {
   const index = useRagIndex();
   const ask = useRagAsk();
-  const update = useUpdateConfig();
   const { data: config } = useConfig();
   const queryClient = useQueryClient();
   // Saved by the sidecar and read back by document id, so a conversation
@@ -46,7 +45,6 @@ export function ChatPanel({
   const history = useChatHistory(index.state.documentId);
   const clearHistory = useClearChatHistory();
   const setChatOpen = useAppStore((s) => s.setChatOpen);
-  const setRagEnabled = useAppStore((s) => s.setRagEnabled);
   const scrollRef = useRef<HTMLDivElement>(null);
   const [pendingQuestion, setPendingQuestion] = useState<string | null>(null);
 
@@ -70,11 +68,9 @@ export function ChatPanel({
       ]
     : saved;
 
-  const handleClose = useCallback(() => {
-    setChatOpen(false);
-    setRagEnabled(false);
-    update.mutate({ rag_enabled: false });
-  }, [setChatOpen, setRagEnabled, update]);
+  // Hides the panel and nothing more. Settings → Chat is where chat is
+  // turned off (#32).
+  const handleClose = useCallback(() => setChatOpen(false), [setChatOpen]);
 
   // A new document has its own conversation, and indexes itself. Whatever the
   // panel was asking belongs to the previous document, so it is aborted first:
@@ -193,7 +189,7 @@ export function ChatPanel({
             size="icon"
             variant="ghost"
             onClick={handleClose}
-            aria-label="Close chat"
+            aria-label="Hide chat"
             className="h-8 w-8"
           >
             <X className="h-4 w-4" />

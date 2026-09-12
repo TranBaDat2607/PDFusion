@@ -2,6 +2,8 @@
 
 import asyncio
 import logging
+from typing import Literal
+
 from fastapi import APIRouter, Depends, HTTPException
 
 from ...processors.pdf_cache import get_pdf_cache
@@ -22,11 +24,13 @@ from ..auth import require_token
 from ..schemas import (
     APIKeyMaskedSettings,
     CacheClearResponse,
+    CacheOverviewResponse,
     CacheStatsResponse,
     ConfigResponse,
     ConfigUpdateRequest,
     OptionsResponse,
     LanguageOption,
+    PdfCacheStatsResponse,
     ServiceOption,
     ValidateRequest,
     ValidateResponse,
@@ -208,8 +212,8 @@ async def update_config(payload: ConfigUpdateRequest) -> ConfigResponse:
         current["translation"]["default_source_lang"] = payload.default_source_lang.value
     if payload.default_target_lang is not None:
         current["translation"]["default_target_lang"] = payload.default_target_lang.value
-    if payload.rag_enabled is not None:
-        current["rag"]["enabled"] = payload.rag_enabled
+    if payload.chat_enabled is not None:
+        current["rag"]["chat_enabled"] = payload.chat_enabled
     if payload.max_parallel_chunks is not None:
         current["processing"]["max_parallel_chunks"] = payload.max_parallel_chunks
     if payload.cache_translations is not None:
@@ -340,31 +344,37 @@ async def get_options() -> OptionsResponse:
 # ---------------------------------------------------------------------------
 
 
-@router.get("/cache", response_model=CacheStatsResponse)
-async def get_cache_stats() -> CacheStatsResponse:
+@router.get("/cache", response_model=CacheOverviewResponse)
+async def get_cache_stats() -> CacheOverviewResponse:
     # SQLite, and on the first use after an upgrade a schema migration: off the
-    # event loop, like the clear paths below.
-    stats = await asyncio.to_thread(lambda: get_translation_cache().stats())
-    return CacheStatsResponse(**stats) if stats else CacheStatsResponse()
+    # event loop, singletons included, like the clear paths below.
+    paragraph, pdf = await asyncio.gather(
+        asyncio.to_thread(lambda: get_translation_cache().stats()),
+        asyncio.to_thread(lambda: get_pdf_cache().stats()),
+    )
+    return CacheOverviewResponse(
+        paragraph=CacheStatsResponse(**paragraph) if paragraph else CacheStatsResponse(),
+        pdf=PdfCacheStatsResponse(**pdf) if pdf else PdfCacheStatsResponse(),
+    )
 
 
 @router.delete("/cache", response_model=CacheClearResponse)
-async def clear_cache(scope: str = "all", target: str = "paragraph") -> CacheClearResponse:
+async def clear_cache(
+    scope: Literal["all", "expired"] = "all",
+    target: Literal["paragraph", "pdf", "all"] = "paragraph",
+) -> CacheClearResponse:
     """Clear the on-disk translation caches.
 
-    `scope=expired` only reaps stale entries; `scope=all` wipes everything
-    (e.g. when the user changes models). `target` picks which cache:
-    `paragraph` (default, backward compatible), `pdf` (whole-PDF cache), or
-    `all` (both). The PDF cache has no TTL, so `scope=expired` doesn't touch it.
+    `target` names which: `paragraph` (the default), `pdf` (the whole-PDF
+    cache) or `all`. `scope=expired` reaps only entries past their TTL, which
+    only the paragraph cache has, so it never touches the PDF cache. Anything
+    else is a 422: a mistyped target used to fall through to clearing.
     """
     removed = 0
     if target in ("paragraph", "all"):
         cache = get_translation_cache()
-        if scope == "expired":
-            removed += await asyncio.to_thread(cache.clear_expired)
-        else:
-            scope = "all"
-            removed += await asyncio.to_thread(cache.clear_all)
-    if target in ("pdf", "all") and scope != "expired":
-        removed += await asyncio.to_thread(get_pdf_cache().clear_all)
-    return CacheClearResponse(removed=removed, scope=scope)
+        clear = cache.clear_expired if scope == "expired" else cache.clear_all
+        removed += await asyncio.to_thread(clear)
+    if target in ("pdf", "all") and scope == "all":
+        removed += await asyncio.to_thread(lambda: get_pdf_cache().clear_all())
+    return CacheClearResponse(removed=removed, scope=scope, target=target)

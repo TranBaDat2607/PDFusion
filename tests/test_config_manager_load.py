@@ -125,6 +125,14 @@ def test_a_model_the_app_has_never_heard_of_is_left_alone(manager: ConfigManager
     assert settings.gemini.model == "gemini-9-flash"
 
 
+def test_the_old_chat_switch_does_not_turn_chat_off(manager: ConfigManager):
+    """`rag.enabled` was written on every show or hide of the chat panel and read
+    by nothing, so most configs say `false`. Read as "chat is off", it would
+    have removed Chat for most users (#32)."""
+    write_config(manager, {"rag": {"enabled": False}})
+    assert manager.load_settings().rag.chat_enabled is True
+
+
 def test_an_endpoint_is_stored_without_its_trailing_slash(manager: ConfigManager):
     write_config(manager, {"openai": {"base_url": " http://localhost:11434/v1/ "}})
     assert manager.load_settings().openai.base_url == "http://localhost:11434/v1"

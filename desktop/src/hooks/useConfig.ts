@@ -26,6 +26,13 @@ export function useConfig() {
   });
 }
 
+/** Whether chat is turned on in Settings → Chat. `false` until the config has
+ *  loaded, so the Chat button doesn't flash in and out on startup. */
+export function useChatEnabled(): boolean {
+  const { data } = useConfig();
+  return data?.rag.chat_enabled ?? false;
+}
+
 export function useOptions() {
   return useQuery({
     queryKey: ["config", "options"],

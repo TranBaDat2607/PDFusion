@@ -1,10 +1,13 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   CheckCircle2,
   Database,
   Eye,
   EyeOff,
+  FileText,
   Loader2,
+  RefreshCw,
   ShieldCheck,
   Sparkles,
   Trash2,
@@ -14,6 +17,14 @@ import {
 import { ChatIndexTab } from "@/components/settings/ChatIndexTab";
 import { ModelCombobox } from "@/components/settings/ModelCombobox";
 import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
@@ -35,6 +46,14 @@ import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { toast } from "sonner";
 import { api } from "@/lib/api-client";
+import type { components } from "@/lib/api-types";
+import {
+  clearConfirmation,
+  describeCleared,
+  formatMegabytes,
+  type CacheTarget,
+  type ClearScope,
+} from "@/lib/cache-settings";
 import {
   useConfig,
   useOptions,
@@ -59,6 +78,7 @@ import {
   type ServiceDraft,
   type ServiceDrafts,
 } from "@/lib/service-settings";
+import { cn } from "@/lib/utils";
 
 const ALL_SERVICES: ServiceCode[] = ["argos", "openai", "gemini", "anthropic"];
 
@@ -538,155 +558,248 @@ function ServiceTab({
   );
 }
 
-interface CacheStats {
-  entries: number;
-  active: number;
-  expired: number;
-  size_mb: number;
-  by_service: Record<string, number>;
-  hits: number;
-  misses: number;
-  hit_rate: number;
-  cache_dir: string;
-  ttl_days: number;
-  max_size_mb: number;
-}
+type CacheOverview = components["schemas"]["CacheOverviewResponse"];
+type CacheClearResult = components["schemas"]["CacheClearResponse"];
 
+const CACHE_STATS_KEY = ["cache-stats"] as const;
+
+/**
+ * Settings → Cache: the paragraph cache and the translated-PDF cache, each with
+ * its own switch, size and Clear (#32). The tab used to show only the
+ * paragraph cache, while its "Clear all" emptied both.
+ */
 function CacheTab({ open }: { open: boolean }) {
-  const [stats, setStats] = useState<CacheStats | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [clearing, setClearing] = useState<"expired" | "all" | null>(null);
+  const queryClient = useQueryClient();
+  const { data: config } = useConfig();
+  const update = useUpdateConfig();
+  // Kept after the dialog closes, so its text doesn't change mid-animation.
+  const [confirmTarget, setConfirmTarget] = useState<CacheTarget>("paragraph");
+  const [confirming, setConfirming] = useState(false);
 
-  const refresh = async () => {
-    setLoading(true);
-    try {
-      const s = await api.get<CacheStats>("/config/cache");
-      setStats(s);
-    } catch (e) {
-      toast.error("Failed to load cache stats", { description: (e as Error).message });
-    } finally {
-      setLoading(false);
-    }
+  const stats = useQuery({
+    queryKey: CACHE_STATS_KEY,
+    queryFn: () => api.get<CacheOverview>("/config/cache"),
+    enabled: open,
+  });
+
+  const clear = useMutation({
+    mutationFn: ({ target, scope }: { target: CacheTarget; scope: ClearScope }) =>
+      api.delete<CacheClearResult>(`/config/cache?scope=${scope}&target=${target}`),
+    onSuccess: (result, { target, scope }) => {
+      toast.success(describeCleared(result.removed, target, scope));
+      void queryClient.invalidateQueries({ queryKey: CACHE_STATS_KEY });
+    },
+    onError: (e) =>
+      toast.error("Could not clear the cache", {
+        description: (e as Error).message,
+      }),
+  });
+
+  const confirmClear = (target: CacheTarget) => {
+    setConfirmTarget(target);
+    setConfirming(true);
   };
 
-  useEffect(() => {
-    if (open) refresh();
-  }, [open]);
-
-  const handleClear = async (scope: "expired" | "all") => {
-    setClearing(scope);
-    try {
-      // "Clear all" also wipes the whole-PDF cache (translated PDFs), not
-      // just the paragraph cache; "Clear expired" is paragraph-only (the PDF
-      // cache has no TTL).
-      const target = scope === "all" ? "all" : "paragraph";
-      const r = await api.delete<{ removed: number; scope: string }>(
-        `/config/cache?scope=${scope}&target=${target}`,
-      );
-      toast.success(`Cleared ${r.removed} ${scope} entries`);
-      await refresh();
-    } catch (e) {
-      toast.error("Failed to clear cache", { description: (e as Error).message });
-    } finally {
-      setClearing(null);
-    }
-  };
+  const paragraph = stats.data?.paragraph;
+  const pdf = stats.data?.pdf;
+  const confirmation = clearConfirmation(confirmTarget);
 
   return (
-    <div className="space-y-4 py-2">
-      <div className="rounded-md border border-border bg-muted/40 p-4 space-y-3">
-        <div className="flex items-center gap-2">
-          <Database className="h-4 w-4 text-primary" />
-          <span className="text-sm font-medium">Translation cache</span>
-        </div>
-        <p className="text-sm text-muted-foreground leading-relaxed">
-          Persists every translated paragraph on disk so re-translating the same
-          PDF (or any paragraph you've seen before) is instant. Stored locally
-          and never uploaded. Keyed by source text + language pair + service + model.
-        </p>
-      </div>
-
-      {stats ? (
-        <div className="grid grid-cols-2 gap-3 text-sm">
-          <Stat label="Entries" value={stats.active.toLocaleString()} />
-          <Stat label="Size" value={`${stats.size_mb.toFixed(2)} MB`} />
-          <Stat label="Session hits" value={stats.hits.toLocaleString()} />
-          <Stat
-            label="Hit rate"
-            value={
-              stats.hits + stats.misses === 0
-                ? "—"
-                : `${(stats.hit_rate * 100).toFixed(0)}%`
-            }
-          />
-          <Stat label="Expired" value={stats.expired.toLocaleString()} />
-          <Stat label="TTL" value={`${stats.ttl_days} days`} />
-        </div>
-      ) : (
-        <div className="text-sm text-muted-foreground">
-          {loading ? "Loading…" : "No data"}
-        </div>
-      )}
-
-      {stats && Object.keys(stats.by_service).length > 0 && (
-        <div className="text-xs text-muted-foreground">
-          By service:{" "}
-          {Object.entries(stats.by_service)
-            .map(([s, n]) => `${s} (${n})`)
-            .join(" · ")}
-        </div>
-      )}
-
-      <div className="flex flex-wrap gap-2">
-        <Button
-          variant="secondary"
-          size="sm"
-          onClick={refresh}
-          disabled={loading}
-        >
-          {loading ? (
-            <>
-              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-              Refreshing…
-            </>
-          ) : (
-            "Refresh"
-          )}
-        </Button>
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={() => handleClear("expired")}
-          disabled={clearing !== null}
-        >
-          {clearing === "expired" ? (
-            <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-          ) : (
-            <Trash2 className="mr-2 h-4 w-4" />
-          )}
-          Clear expired
-        </Button>
-        <Button
-          variant="destructive"
-          size="sm"
-          onClick={() => handleClear("all")}
-          disabled={clearing !== null}
-        >
-          {clearing === "all" ? (
-            <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-          ) : (
-            <Trash2 className="mr-2 h-4 w-4" />
-          )}
-          Clear all
-        </Button>
-      </div>
-
-      {stats?.cache_dir && (
-        <p className="text-xs text-muted-foreground break-all">
-          Location: <code>{stats.cache_dir}</code>
+    <div className="space-y-6 py-2">
+      {stats.isError && (
+        <p className="text-sm text-destructive">
+          Could not load the caches: {stats.error.message}
         </p>
       )}
+
+      <CacheSection
+        icon={<Database className="h-4 w-4 text-primary" />}
+        title="Paragraph cache"
+        switchLabel="Cache translated paragraphs"
+        enabled={config?.translation.cache_translations ?? true}
+        onEnabledChange={
+          config
+            ? (checked) => update.mutate({ cache_translations: checked })
+            : undefined
+        }
+        description="Every translated paragraph, kept by its text, languages, service and model. A paragraph translated before isn't sent to the translation service again."
+        location={paragraph?.cache_dir}
+      >
+        {paragraph ? (
+          <div className="grid grid-cols-3 gap-2">
+            <Stat label="Size" value={formatMegabytes(paragraph.size_mb)} />
+            <Stat label="Paragraphs" value={String(paragraph.active)} />
+            <Stat label="Expired" value={String(paragraph.expired)} />
+            <Stat label="Hit rate" value={hitRate(paragraph)} />
+            <Stat label="Expire after" value={`${paragraph.ttl_days} days`} />
+            <Stat label="Size limit" value={formatMegabytes(paragraph.max_size_mb)} />
+          </div>
+        ) : (
+          <StatsLoading pending={stats.isPending} />
+        )}
+        <div className="flex flex-wrap gap-2">
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={clear.isPending || !paragraph?.expired}
+            onClick={() => clear.mutate({ target: "paragraph", scope: "expired" })}
+          >
+            Remove expired
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={clear.isPending || !paragraph?.entries}
+            onClick={() => confirmClear("paragraph")}
+          >
+            <Trash2 className="mr-2 h-4 w-4" />
+            Clear paragraphs
+          </Button>
+        </div>
+      </CacheSection>
+
+      <CacheSection
+        separated
+        icon={<FileText className="h-4 w-4 text-primary" />}
+        title="Translated PDF cache"
+        switchLabel="Cache translated PDFs"
+        enabled={config?.translation.cache_translated_pdfs ?? true}
+        onEnabledChange={
+          config
+            ? (checked) => update.mutate({ cache_translated_pdfs: checked })
+            : undefined
+        }
+        description="Every translated PDF, kept by the file's contents, languages, service and model. Translating the same PDF again shows the kept copy in under a second; Re-translate runs the pipeline anyway."
+        location={pdf?.cache_dir}
+      >
+        {pdf ? (
+          <>
+            <div className="grid grid-cols-3 gap-2">
+              <Stat label="Size" value={formatMegabytes(pdf.size_mb)} />
+              <Stat label="PDFs" value={String(pdf.entries)} />
+              <Stat label="Hit rate" value={hitRate(pdf)} />
+            </div>
+            <p className="text-xs text-muted-foreground">
+              Past {formatMegabytes(pdf.max_size_mb)}, the PDFs used longest ago
+              are removed first.
+            </p>
+          </>
+        ) : (
+          <StatsLoading pending={stats.isPending} />
+        )}
+        <div className="flex flex-wrap gap-2">
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={clear.isPending || !pdf?.entries}
+            onClick={() => confirmClear("pdf")}
+          >
+            <Trash2 className="mr-2 h-4 w-4" />
+            Clear PDFs
+          </Button>
+        </div>
+      </CacheSection>
+
+      <Button
+        variant="secondary"
+        size="sm"
+        onClick={() => void stats.refetch()}
+        disabled={stats.isFetching}
+      >
+        {stats.isFetching ? (
+          <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+        ) : (
+          <RefreshCw className="mr-2 h-4 w-4" />
+        )}
+        Refresh
+      </Button>
+
+      <Dialog open={confirming} onOpenChange={setConfirming}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>{confirmation.title}</DialogTitle>
+            <DialogDescription>{confirmation.description}</DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setConfirming(false)}>
+              Cancel
+            </Button>
+            <Button
+              variant="destructive"
+              onClick={() => {
+                clear.mutate({ target: confirmTarget, scope: "all" });
+                setConfirming(false);
+              }}
+            >
+              {confirmation.action}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
+  );
+}
+
+function hitRate(stats: { hits: number; misses: number; hit_rate: number }): string {
+  return stats.hits + stats.misses === 0
+    ? "—"
+    : `${Math.round(stats.hit_rate * 100)}%`;
+}
+
+interface CacheSectionProps {
+  icon: ReactNode;
+  title: string;
+  description: string;
+  switchLabel: string;
+  enabled: boolean;
+  /** Absent until the config has loaded, which disables the switch. */
+  onEnabledChange?: (enabled: boolean) => void;
+  location?: string;
+  separated?: boolean;
+  children: ReactNode;
+}
+
+function CacheSection({
+  icon,
+  title,
+  description,
+  switchLabel,
+  enabled,
+  onEnabledChange,
+  location,
+  separated,
+  children,
+}: CacheSectionProps) {
+  return (
+    <section className={cn("space-y-3", separated && "border-t border-border pt-6")}>
+      <div className="flex items-center justify-between gap-3">
+        <div className="flex items-center gap-2">
+          {icon}
+          <span className="text-sm font-medium">{title}</span>
+        </div>
+        <Switch
+          aria-label={switchLabel}
+          checked={enabled}
+          disabled={!onEnabledChange}
+          onCheckedChange={onEnabledChange}
+        />
+      </div>
+      <p className="text-xs leading-relaxed text-muted-foreground">{description}</p>
+      {children}
+      {location && (
+        <p className="break-all text-xs text-muted-foreground">
+          Stored in <code>{location}</code>
+        </p>
+      )}
+    </section>
+  );
+}
+
+function StatsLoading({ pending }: { pending: boolean }) {
+  return (
+    <p className="text-sm text-muted-foreground">
+      {pending ? "Loading…" : "No data"}
+    </p>
   );
 }
 
@@ -716,8 +829,6 @@ function PerformanceSection() {
   const { data: config } = useConfig();
   const update = useUpdateConfig();
   const current = config?.processing?.max_parallel_chunks ?? 0;
-  const cacheEnabled = config?.translation?.cache_translations ?? true;
-  const pdfCacheEnabled = config?.translation?.cache_translated_pdfs ?? true;
 
   return (
     <div className="space-y-4">
@@ -748,40 +859,6 @@ function PerformanceSection() {
         <p className="text-xs text-muted-foreground">
           More parallel pages = faster, but uses more RAM. Each in-flight page
           holds ~150-300 MB of BabelDOC state.
-        </p>
-      </div>
-
-      <div className="space-y-2">
-        <Label htmlFor="cache-translations" className="flex items-center gap-2">
-          <Switch
-            id="cache-translations"
-            checked={cacheEnabled}
-            onCheckedChange={(checked) =>
-              update.mutate({ cache_translations: checked })
-            }
-          />
-          <span className="text-sm">Cache translations to disk</span>
-        </Label>
-        <p className="text-xs text-muted-foreground pl-10">
-          Re-translating a paragraph you've seen before is instant.
-        </p>
-      </div>
-
-      <div className="space-y-2">
-        <Label htmlFor="cache-translated-pdfs" className="flex items-center gap-2">
-          <Switch
-            id="cache-translated-pdfs"
-            checked={pdfCacheEnabled}
-            onCheckedChange={(checked) =>
-              update.mutate({ cache_translated_pdfs: checked })
-            }
-          />
-          <span className="text-sm">Cache translated PDFs</span>
-        </Label>
-        <p className="text-xs text-muted-foreground pl-10">
-          Reopen the same PDF and the translated copy loads in under a second —
-          the layout / typeset / render pipeline is skipped entirely. Use
-          Re-translate to force a fresh run.
         </p>
       </div>
     </div>

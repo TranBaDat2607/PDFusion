@@ -54,10 +54,10 @@ export interface paths {
          * Clear Cache
          * @description Clear the on-disk translation caches.
          *
-         *     `scope=expired` only reaps stale entries; `scope=all` wipes everything
-         *     (e.g. when the user changes models). `target` picks which cache:
-         *     `paragraph` (default, backward compatible), `pdf` (whole-PDF cache), or
-         *     `all` (both). The PDF cache has no TTL, so `scope=expired` doesn't touch it.
+         *     `target` names which: `paragraph` (the default), `pdf` (the whole-PDF
+         *     cache) or `all`. `scope=expired` reaps only entries past their TTL, which
+         *     only the paragraph cache has, so it never touches the PDF cache. Anything
+         *     else is a 422: a mistyped target used to fall through to clearing.
          */
         delete: operations["clear_cache_config_cache_delete"];
         options?: never;
@@ -544,10 +544,31 @@ export interface components {
         CacheClearResponse: {
             /** Removed */
             removed: number;
-            /** Scope */
-            scope: string;
+            /**
+             * Scope
+             * @enum {string}
+             */
+            scope: "expired" | "all";
+            /**
+             * Target
+             * @enum {string}
+             */
+            target: "paragraph" | "pdf" | "all";
         };
-        /** CacheStatsResponse */
+        /**
+         * CacheOverviewResponse
+         * @description Both translation caches, which Settings → Cache shows side by side. It
+         *     used to show only the paragraph cache, while its "Clear all" emptied both
+         *     (#32).
+         */
+        CacheOverviewResponse: {
+            paragraph: components["schemas"]["CacheStatsResponse"];
+            pdf: components["schemas"]["PdfCacheStatsResponse"];
+        };
+        /**
+         * CacheStatsResponse
+         * @description The paragraph cache (`translators/translation_cache.py`).
+         */
         CacheStatsResponse: {
             /**
              * Active
@@ -774,6 +795,8 @@ export interface components {
             cache_translated_pdfs?: boolean | null;
             /** Cache Translations */
             cache_translations?: boolean | null;
+            /** Chat Enabled */
+            chat_enabled?: boolean | null;
             default_source_lang?: components["schemas"]["LanguageCode"] | null;
             default_target_lang?: components["schemas"]["LanguageCode"] | null;
             gemini?: components["schemas"]["ServiceCredentialUpdate"] | null;
@@ -781,8 +804,6 @@ export interface components {
             max_parallel_chunks?: number | null;
             openai?: components["schemas"]["EndpointCredentialUpdate"] | null;
             preferred_service?: components["schemas"]["TranslationService"] | null;
-            /** Rag Enabled */
-            rag_enabled?: boolean | null;
         };
         /** DocumentListResponse */
         DocumentListResponse: {
@@ -1044,6 +1065,51 @@ export interface components {
             target_preview: string;
         };
         /**
+         * PdfCacheStatsResponse
+         * @description The whole-PDF cache (`processors/pdf_cache.py`).
+         */
+        PdfCacheStatsResponse: {
+            /** By Service */
+            by_service?: {
+                [key: string]: number;
+            };
+            /**
+             * Cache Dir
+             * @default
+             */
+            cache_dir: string;
+            /**
+             * Entries
+             * @default 0
+             */
+            entries: number;
+            /**
+             * Hit Rate
+             * @default 0
+             */
+            hit_rate: number;
+            /**
+             * Hits
+             * @default 0
+             */
+            hits: number;
+            /**
+             * Max Size Mb
+             * @default 1000
+             */
+            max_size_mb: number;
+            /**
+             * Misses
+             * @default 0
+             */
+            misses: number;
+            /**
+             * Size Mb
+             * @default 0
+             */
+            size_mb: number;
+        };
+        /**
          * PdfReferencePayload
          * @description One entry of `AskResultPayload.pdf_references`
          *     (`rag_chain._create_pdf_references`). `page` is 1-indexed, or `None` when
@@ -1181,11 +1247,11 @@ export interface components {
              */
             auto_process_documents: boolean;
             /**
-             * Enabled
-             * @description Enable RAG functionality
-             * @default false
+             * Chat Enabled
+             * @description Show the Chat button and index PDFs for chat
+             * @default true
              */
-            enabled: boolean;
+            chat_enabled: boolean;
         };
         /** ResetIndexesResponse */
         ResetIndexesResponse: {
@@ -1476,7 +1542,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["CacheStatsResponse"];
+                    "application/json": components["schemas"]["CacheOverviewResponse"];
                 };
             };
             /** @description Validation Error */
@@ -1493,8 +1559,8 @@ export interface operations {
     clear_cache_config_cache_delete: {
         parameters: {
             query?: {
-                scope?: string;
-                target?: string;
+                scope?: "all" | "expired";
+                target?: "paragraph" | "pdf" | "all";
             };
             header?: {
                 authorization?: string | null;
