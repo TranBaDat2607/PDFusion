@@ -207,7 +207,14 @@ class ProcessingSettings(BaseModel):
 class RAGSettings(BaseModel):
     """RAG (Retrieval-Augmented Generation) settings."""
 
-    enabled: bool = Field(False, description="Enable RAG functionality")
+    # Settings → Chat's "Enable chat". Off removes the Chat button and the panel,
+    # so no PDF is indexed. A new name, not the old `enabled`: the toolbar wrote
+    # that on every show or hide of the panel and nothing ever read it, so the
+    # `false` most configs hold meant "panel closed", never "chat off".
+    # Pydantic ignores the old key, and the next save drops it (#32).
+    chat_enabled: bool = Field(
+        True, description="Show the Chat button and index PDFs for chat"
+    )
     auto_process_documents: bool = Field(True, description="Auto-process documents for RAG")
 
 

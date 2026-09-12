@@ -12,6 +12,7 @@ import {
   PdfViewer,
   type PdfViewerHandle,
 } from "@/components/pdf-viewer/PdfViewer";
+import { useChatEnabled } from "@/hooks/useConfig";
 import { matchShortcut } from "@/lib/pdf-viewer/shortcuts";
 import { useAppStore } from "@/lib/store";
 import { cn } from "@/lib/utils";
@@ -37,10 +38,11 @@ export function MainLayout({ onPickFile }: MainLayoutProps) {
   );
   const setVisiblePage = useAppStore((s) => s.setVisiblePage);
   const chatOpen = useAppStore((s) => s.chatOpen);
-  const ragEnabled = useAppStore((s) => s.ragEnabled);
+  const chatEnabled = useChatEnabled();
   const [scrollToPage, setScrollToPage] = useState<number | undefined>();
 
-  const showChat = chatOpen && ragEnabled;
+  // Turning chat off in Settings unmounts the panel, so nothing is indexed.
+  const showChat = chatOpen && chatEnabled;
   const groupRef = useRef<GroupImperativeHandle | null>(null);
   const [animating, setAnimating] = useState(false);
   const [chatPanelMounted, setChatPanelMounted] = useState(false);

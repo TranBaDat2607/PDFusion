@@ -174,18 +174,50 @@
             "type": "integer"
           },
           "scope": {
+            "enum": [
+              "expired",
+              "all"
+            ],
             "title": "Scope",
+            "type": "string"
+          },
+          "target": {
+            "enum": [
+              "paragraph",
+              "pdf",
+              "all"
+            ],
+            "title": "Target",
             "type": "string"
           }
         },
         "required": [
           "removed",
-          "scope"
+          "scope",
+          "target"
         ],
         "title": "CacheClearResponse",
         "type": "object"
       },
+      "CacheOverviewResponse": {
+        "description": "Both translation caches, which Settings \u2192 Cache shows side by side. It\nused to show only the paragraph cache, while its \"Clear all\" emptied both\n(#32).",
+        "properties": {
+          "paragraph": {
+            "$ref": "#/components/schemas/CacheStatsResponse"
+          },
+          "pdf": {
+            "$ref": "#/components/schemas/PdfCacheStatsResponse"
+          }
+        },
+        "required": [
+          "paragraph",
+          "pdf"
+        ],
+        "title": "CacheOverviewResponse",
+        "type": "object"
+      },
       "CacheStatsResponse": {
+        "description": "The paragraph cache (`translators/translation_cache.py`).",
         "properties": {
           "active": {
             "default": 0,
@@ -632,6 +664,17 @@
             ],
             "title": "Cache Translations"
           },
+          "chat_enabled": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Chat Enabled"
+          },
           "default_source_lang": {
             "anyOf": [
               {
@@ -694,17 +737,6 @@
                 "type": "null"
               }
             ]
-          },
-          "rag_enabled": {
-            "anyOf": [
-              {
-                "type": "boolean"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Rag Enabled"
           }
         },
         "title": "ConfigUpdateRequest",
@@ -1261,6 +1293,55 @@
         "title": "ParagraphTranslatedEventPayload",
         "type": "object"
       },
+      "PdfCacheStatsResponse": {
+        "description": "The whole-PDF cache (`processors/pdf_cache.py`).",
+        "properties": {
+          "by_service": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "title": "By Service",
+            "type": "object"
+          },
+          "cache_dir": {
+            "default": "",
+            "title": "Cache Dir",
+            "type": "string"
+          },
+          "entries": {
+            "default": 0,
+            "title": "Entries",
+            "type": "integer"
+          },
+          "hit_rate": {
+            "default": 0.0,
+            "title": "Hit Rate",
+            "type": "number"
+          },
+          "hits": {
+            "default": 0,
+            "title": "Hits",
+            "type": "integer"
+          },
+          "max_size_mb": {
+            "default": 1000.0,
+            "title": "Max Size Mb",
+            "type": "number"
+          },
+          "misses": {
+            "default": 0,
+            "title": "Misses",
+            "type": "integer"
+          },
+          "size_mb": {
+            "default": 0.0,
+            "title": "Size Mb",
+            "type": "number"
+          }
+        },
+        "title": "PdfCacheStatsResponse",
+        "type": "object"
+      },
       "PdfReferencePayload": {
         "description": "One entry of `AskResultPayload.pdf_references`\n(`rag_chain._create_pdf_references`). `page` is 1-indexed, or `None` when\nthe chunk has no usable page \u2014 see `rag_chain._display_page`.",
         "properties": {
@@ -1500,10 +1581,10 @@
             "title": "Auto Process Documents",
             "type": "boolean"
           },
-          "enabled": {
-            "default": false,
-            "description": "Enable RAG functionality",
-            "title": "Enabled",
+          "chat_enabled": {
+            "default": true,
+            "description": "Show the Chat button and index PDFs for chat",
+            "title": "Chat Enabled",
             "type": "boolean"
           }
         },
@@ -2019,7 +2100,7 @@
     },
     "/config/cache": {
       "delete": {
-        "description": "Clear the on-disk translation caches.\n\n`scope=expired` only reaps stale entries; `scope=all` wipes everything\n(e.g. when the user changes models). `target` picks which cache:\n`paragraph` (default, backward compatible), `pdf` (whole-PDF cache), or\n`all` (both). The PDF cache has no TTL, so `scope=expired` doesn't touch it.",
+        "description": "Clear the on-disk translation caches.\n\n`target` names which: `paragraph` (the default), `pdf` (the whole-PDF\ncache) or `all`. `scope=expired` reaps only entries past their TTL, which\nonly the paragraph cache has, so it never touches the PDF cache. Anything\nelse is a 422: a mistyped target used to fall through to clearing.",
         "operationId": "clear_cache_config_cache_delete",
         "parameters": [
           {
@@ -2028,6 +2109,10 @@
             "required": false,
             "schema": {
               "default": "all",
+              "enum": [
+                "all",
+                "expired"
+              ],
               "title": "Scope",
               "type": "string"
             }
@@ -2038,6 +2123,11 @@
             "required": false,
             "schema": {
               "default": "paragraph",
+              "enum": [
+                "paragraph",
+                "pdf",
+                "all"
+              ],
               "title": "Target",
               "type": "string"
             }
@@ -2111,7 +2201,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/CacheStatsResponse"
+                  "$ref": "#/components/schemas/CacheOverviewResponse"
                 }
               }
             },
