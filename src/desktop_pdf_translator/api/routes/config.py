@@ -37,37 +37,54 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/config", tags=["config"], dependencies=[Depends(require_token)])
 
 
-# Deadline for the auto-promotion probe below. Generous enough for a cold
-# TLS handshake to a provider, short enough that Settings → Save still feels
-# like a save.
+# Deadline for a credentials probe. Generous enough for a cold TLS handshake to
+# a provider, short enough that Settings → Save still feels like a save.
 _VALIDATE_PROBE_TIMEOUT_S = 20.0
+
+# The services whose settings carry a `base_url`: each can be pointed at another
+# server that speaks its API — Ollama, LM Studio, a proxy (#32).
+_ENDPOINT_SERVICES = (TranslationService.OPENAI, TranslationService.ANTHROPIC)
+
+
+def _probe_kwargs(service_config: dict) -> dict:
+    """What a credentials probe hands `TranslatorFactory`.
+
+    `api_key` and `base_url` go whenever the config names them, `None`
+    included: the factory starts from the *saved* settings, so leaving
+    `base_url` out would probe the saved endpoint instead of the one being
+    checked. The model only when there is one, because `model=None` would
+    replace the backend's own default with None.
+    """
+    kwargs = {
+        name: service_config[name]
+        for name in ("api_key", "base_url")
+        if name in service_config
+    }
+    if service_config.get("model"):
+        kwargs["model"] = service_config["model"]
+    return kwargs
 
 
 async def _credentials_work(
     service: TranslationService, service_config: dict
 ) -> tuple[bool, str]:
-    """Probe a just-saved key the same way `POST /config/validate` does.
+    """Probe credentials with the provider: `POST /config/validate`, and the
+    auto-promotion in `PUT /config`.
 
     Runs off the event loop — `validate_configuration()` is a blocking HTTP
-    call to the provider — and under a deadline, because this sits on the
-    Settings *save* path now, not just behind the Validate button. OpenAI and
-    Anthropic pass their own `timeout=10`; Gemini passes none, so without this
-    a save on a flaky connection would hang for the SDK's default.
+    call to the provider — and under a deadline. OpenAI and Anthropic pass
+    their own `timeout=10`; Gemini passes none, so without this a probe on a
+    flaky connection would hang for the SDK's default, and on the loop it used
+    to freeze the whole sidecar meanwhile.
 
-    A timeout reports the same thing as a rejection: don't promote. The key is
-    still saved, and the user can switch services explicitly.
+    A timeout reports the same thing as a rejection.
     """
 
     def probe() -> tuple[bool, str]:
         from ...translators.factory import TranslatorFactory
 
-        kwargs = {"api_key": service_config.get("api_key")}
-        # Only override the model when we have one: passing `model=None`
-        # replaces the backend's own default with None.
-        if service_config.get("model"):
-            kwargs["model"] = service_config["model"]
         translator = TranslatorFactory.create_translator(
-            service=service, lang_in="en", lang_out="vi", **kwargs
+            service=service, lang_in="en", lang_out="vi", **_probe_kwargs(service_config)
         )
         return translator.validate_configuration()
 
@@ -78,7 +95,7 @@ async def _credentials_work(
     except (asyncio.TimeoutError, TimeoutError):
         # The thread is left to finish on its own; nothing reads its result.
         return False, f"timed out contacting {service.value}"
-    except Exception as exc:  # noqa: BLE001 — any failure means "don't promote"
+    except Exception as exc:  # noqa: BLE001 — any failure is "not valid"
         return False, str(exc)
 
 
@@ -87,6 +104,7 @@ def _mask(service_settings) -> APIKeyMaskedSettings:
     return APIKeyMaskedSettings(
         has_key=bool(getattr(service_settings, "api_key", None)),
         model=service_settings.model,
+        base_url=getattr(service_settings, "base_url", None),
         extra={},
     )
 
@@ -129,13 +147,29 @@ async def update_config(payload: ConfigUpdateRequest) -> ConfigResponse:
         update = getattr(payload, service.value)
         if update is None:
             continue
+        section = current[service.value]
         if update.api_key is not None:
             new_key = update.api_key or None
-            current[service.value]["api_key"] = new_key
+            section["api_key"] = new_key
             if new_key:
                 newly_keyed.append(service)
         if update.model is not None:
-            current[service.value]["model"] = update.model
+            section["model"] = update.model
+        base_url = getattr(update, "base_url", None)
+        if base_url is not None and (base_url or None) != section.get("base_url"):
+            # A saved key is only ever sent to the endpoint it was saved for.
+            # `GET /config` never hands a key out; without this, anything able
+            # to call `PUT /config` could point the endpoint at a server of its
+            # own and read the key off the next request (#32).
+            if section.get("api_key") and update.api_key is None:
+                raise HTTPException(
+                    status_code=422,
+                    detail=(
+                        f"Enter the {SERVICE_LABELS[service]} API key again "
+                        "to change its endpoint."
+                    ),
+                )
+            section["base_url"] = base_url or None
 
     if payload.preferred_service is not None:
         # An explicit choice is the user's to make — honoured unconditionally.
@@ -194,53 +228,89 @@ async def update_config(payload: ConfigUpdateRequest) -> ConfigResponse:
 
 @router.post("/validate", response_model=ValidateResponse)
 async def validate_credentials(payload: ValidateRequest) -> ValidateResponse:
-    """Spin up a translator instance with the supplied credentials and validate."""
-    from ...translators.factory import TranslatorFactory
+    """Check credentials with the provider.
 
-    # Argos has no API key — short-circuit and report the install state.
+    Whatever the request leaves out comes from the saved settings: the key,
+    the model, the endpoint. The saved key is only sent to the saved endpoint,
+    the rule `PUT /config` keeps; checking another endpoint needs the key typed
+    alongside it.
+    """
     if payload.service == TranslationService.ARGOS:
-        try:
+        # Argos has no API key — report the install state. Off the loop, but
+        # without the probe's deadline: its first check imports argostranslate,
+        # which is slow on a cold machine without being a call that can hang.
+        def check_argos() -> tuple[bool, str]:
+            from ...translators.factory import TranslatorFactory
+
             translator = TranslatorFactory.create_translator(
                 service=TranslationService.ARGOS,
                 lang_in="en",
                 lang_out="vi",
             )
-            is_valid, message = translator.validate_configuration()
-            return ValidateResponse(valid=is_valid, message=message)
+            return translator.validate_configuration()
+
+        try:
+            is_valid, message = await asyncio.to_thread(check_argos)
         except Exception as exc:  # noqa: BLE001
             logger.exception("Argos validation failed")
             return ValidateResponse(valid=False, message=str(exc))
-
-    try:
-        kwargs = {"api_key": payload.api_key}
-        if payload.model:
-            kwargs["model"] = payload.model
-        translator = TranslatorFactory.create_translator(
-            service=payload.service,
-            lang_in="en",
-            lang_out="vi",
-            **kwargs,
-        )
-        is_valid, message = translator.validate_configuration()
         return ValidateResponse(valid=is_valid, message=message)
-    except Exception as exc:  # noqa: BLE001 — we want to surface any error to the UI
-        logger.exception("Credential validation failed")
-        return ValidateResponse(valid=False, message=str(exc))
+
+    saved = getattr(get_settings(), payload.service.value)
+    service_config: dict = {"model": payload.model or saved.model}
+    endpoint_changed = False
+    if payload.service in _ENDPOINT_SERVICES:
+        base_url = (
+            saved.base_url if payload.base_url is None else payload.base_url or None
+        )
+        service_config["base_url"] = base_url
+        endpoint_changed = base_url != saved.base_url
+
+    if payload.api_key:
+        service_config["api_key"] = payload.api_key
+    elif endpoint_changed:
+        raise HTTPException(
+            status_code=422,
+            detail="Enter the API key to check a different endpoint.",
+        )
+    elif saved.api_key:
+        service_config["api_key"] = saved.api_key
+    else:
+        return ValidateResponse(valid=False, message="Enter an API key first")
+
+    is_valid, message = await _credentials_work(payload.service, service_config)
+    return ValidateResponse(valid=is_valid, message=message)
 
 
 # ---------------------------------------------------------------------------
 # Static option lists (helpful for select dropdowns in the frontend)
 # ---------------------------------------------------------------------------
 
-# Labels come from the capability module so the dropdown and the "unsupported
-# pair" error message can never name the same language differently.
+# Suggestions for the model field, each service's default first. Not a
+# whitelist: the field takes any name, which is what a local server's models
+# need (#32). `tests/test_config_api.py` fails when a default is missing from
+# its list, which is how `gemini-1.5-flash` stayed on offer after Google
+# retired it.
 _SERVICE_MODELS = {
     TranslationService.ARGOS: ["argostranslate"],
-    TranslationService.OPENAI: ["gpt-4.1"],
-    TranslationService.GEMINI: ["gemini-1.5-flash"],
+    TranslationService.OPENAI: [
+        "gpt-4.1",
+        "gpt-5.6-luna",
+        "gpt-5.6-terra",
+        "gpt-5.6-sol",
+        "gpt-6-astra",
+    ],
+    TranslationService.GEMINI: [
+        "gemini-3.8-flash",
+        "gemini-3.7-flash",
+        "gemini-3.6-flash",
+        "gemini-3.5-flash",
+        "gemini-3.5-flash-lite",
+    ],
     TranslationService.ANTHROPIC: [
-        "claude-opus-4-7",
         "claude-sonnet-4-6",
+        "claude-sonnet-5",
+        "claude-opus-5",
         "claude-haiku-4-5-20251001",
     ],
 }
@@ -248,6 +318,9 @@ _SERVICE_MODELS = {
 
 @router.get("/options", response_model=OptionsResponse)
 async def get_options() -> OptionsResponse:
+    # Labels come from the capability module so the dropdown and the
+    # "unsupported pair" error message can never name the same language
+    # differently.
     return OptionsResponse(
         languages=[LanguageOption(code=c.value, label=LANGUAGE_LABELS[c]) for c in LanguageCode],
         services=[

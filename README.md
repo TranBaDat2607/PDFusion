@@ -55,6 +55,30 @@ ANTHROPIC_API_KEY=...     # optional
 You can also enter and validate keys later from the in-app **Settings** sheet
 (they're encrypted before being written to disk).
 
+### 4. Local and OpenAI-compatible models (optional)
+
+The **OpenAI** and **Claude** tabs in Settings each have an **Endpoint** field,
+so PDFusion can translate with a model running on your own machine, or through
+a proxy that speaks one of those APIs. Leave it blank to use the provider
+itself.
+
+| Server | Settings tab | Endpoint | API key | Model |
+|---|---|---|---|---|
+| [Ollama](https://ollama.com) | OpenAI | `http://localhost:11434/v1` | any text, e.g. `ollama` | a name from `ollama list` |
+| Ollama (recent versions) | Claude | `http://localhost:11434` | any text | a name from `ollama list` |
+| [LM Studio](https://lmstudio.ai) | OpenAI | `http://localhost:1234/v1` | any text | the model identifier LM Studio shows |
+
+Then pick that service in the toolbar. Worth knowing:
+
+- **Enter the key together with the endpoint.** A saved key is only ever sent
+  to the endpoint it was saved for, so changing the endpoint asks for the key
+  again. Local servers ignore the key, but the field can't be empty.
+- **Save checks the model with the server first.** If the server isn't running
+  yet, Save shows the error and offers **Save anyway**.
+- **The model field takes any name.** The list beside it only makes
+  suggestions.
+- Chat writes its answers with the same service and endpoint.
+
 ## Running
 
 ### Full desktop app (recommended)

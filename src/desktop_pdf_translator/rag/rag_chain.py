@@ -119,7 +119,7 @@ class EnhancedRAGChain:
         The preferred service when it's an LLM with a key, otherwise the first
         LLM service that has one; `None` with no key at all, which is the
         template-answer path. The translator is built again only when the chosen
-        service, its key or its model changed.
+        service, its key, its model or its endpoint changed.
         """
         settings = get_settings()
         preferred = settings.translation.preferred_service
@@ -131,7 +131,12 @@ class EnhancedRAGChain:
                 if not settings.has_api_key(service):
                     continue
                 service_settings = getattr(settings, service.value)
-                key = (service, service_settings.api_key, service_settings.model)
+                key = (
+                    service,
+                    service_settings.api_key,
+                    service_settings.model,
+                    getattr(service_settings, "base_url", None),
+                )
                 if self._model is not None and key == self._model_key:
                     return self._model
                 try:

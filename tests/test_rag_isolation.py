@@ -398,11 +398,11 @@ class _Translator:
 
 
 class _KeyedSettings:
-    """An OpenAI key and model, as a `PUT /config` leaves them."""
+    """An OpenAI key, model and endpoint, as a `PUT /config` leaves them."""
 
-    def __init__(self, api_key: str):
+    def __init__(self, api_key: str, base_url: str | None = None):
         self.translation = SimpleNamespace(preferred_service=TranslationService.OPENAI)
-        self.openai = SimpleNamespace(api_key=api_key, model="gpt-test")
+        self.openai = SimpleNamespace(api_key=api_key, model="gpt-test", base_url=base_url)
 
     def has_api_key(self, service) -> bool:
         return service == TranslationService.OPENAI
@@ -562,6 +562,32 @@ def test_a_key_saved_after_chat_started_is_used_without_rebuilding_the_chain(
     assert (first.service, second.service) == (TranslationService.OPENAI,) * 2
     assert second is not first
     assert built == ["sk-first", "sk-second"]
+
+
+def test_a_new_endpoint_builds_the_answer_model_again(
+    chain: EnhancedRAGChain, monkeypatch: pytest.MonkeyPatch
+):
+    """Pointing OpenAI at Ollama can keep the service, the key and the model
+    name. A model kept from before would go on answering from the old server
+    (#32)."""
+    current: Dict[str, Any] = {"settings": _KeyedSettings("ollama")}
+    built: List[Any] = []
+
+    def create_translator(service=None, lang_in=None, lang_out=None, **kwargs):
+        built.append(current["settings"].openai.base_url)
+        return _Translator("answer")
+
+    monkeypatch.setattr(
+        rag_chain_module.TranslatorFactory, "create_translator", create_translator
+    )
+    monkeypatch.setattr(rag_chain_module, "get_settings", lambda: current["settings"])
+
+    first = chain._answer_model()
+    current["settings"] = _KeyedSettings("ollama", base_url="http://localhost:11434/v1")
+    second = chain._answer_model()
+
+    assert second is not first
+    assert built == [None, "http://localhost:11434/v1"]
 
 
 # ---------------------------------------------------------------------------
