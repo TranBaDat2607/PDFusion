@@ -8,9 +8,11 @@ import re
 import threading
 import time
 from abc import ABC, abstractmethod
-from typing import Callable, Dict, Optional, Any
+from functools import partial
+from typing import Callable, Dict, FrozenSet, Optional, Any, Sequence
 
 from ..config import LanguageCode
+from . import param_compat
 from .rate_limiter import default_qps_for, get_rate_limiter
 
 
@@ -328,6 +330,53 @@ class BaseTranslator(ABC):
                 )
                 if self._sleep_or_cancel(delay):
                     raise TranslationCancelled() from error
+
+    def _endpoint_key(self) -> param_compat.EndpointKey:
+        """Which server and model this translator's requests go to."""
+        return (
+            self._SERVICE_NAME or type(self).__name__,
+            getattr(self, "base_url", None),
+            getattr(self, "model", None) or "",
+        )
+
+    def _call_adapting(
+        self,
+        send: Callable[[FrozenSet[str]], Any],
+        adaptable: Sequence[str],
+        *,
+        backoff: bool = True,
+    ) -> Any:
+        """Make a request, leaving out what this endpoint said it won't take.
+
+        `send(rejected)` builds and sends the request without the parameters
+        in `rejected`. A 400 refusing one of `adaptable` is remembered for this
+        endpoint and model (`param_compat`), and the request goes again without
+        it. Every other failure propagates as it came. Each parameter is left
+        out at most once, so this ends.
+
+        `backoff=False` sends directly, for `validate_configuration`, which has
+        never gone through the rate limiter. It still has to send what
+        `translate` sends, or "valid" would vouch for a request nothing makes.
+        """
+        key = self._endpoint_key()
+        while True:
+            rejected = param_compat.rejected_params(key)
+            request = partial(send, rejected)
+            try:
+                return self._call_with_backoff(request) if backoff else request()
+            except Exception as error:
+                param = param_compat.rejected_param(
+                    _status_code_of(error),
+                    str(error),
+                    [name for name in adaptable if name not in rejected],
+                )
+                if param is None:
+                    raise
+                param_compat.remember_rejected(key, param)
+                logger.info(
+                    "%s model %r does not take %r; sending without it from now on",
+                    key[0], key[2], param,
+                )
 
     def _fire_failure_callback(self, error: BaseException, fatal: bool) -> None:
         """Best-effort: report a failed paragraph. Same contract as

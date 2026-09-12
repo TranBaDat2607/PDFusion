@@ -4,6 +4,17 @@
       "APIKeyMaskedSettings": {
         "description": "Service config with the API key masked. The frontend never sees real keys.",
         "properties": {
+          "base_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Base Url"
+          },
           "extra": {
             "additionalProperties": true,
             "title": "Extra",
@@ -592,7 +603,7 @@
           "anthropic": {
             "anyOf": [
               {
-                "$ref": "#/components/schemas/ServiceCredentialUpdate"
+                "$ref": "#/components/schemas/EndpointCredentialUpdate"
               },
               {
                 "type": "null"
@@ -667,7 +678,7 @@
           "openai": {
             "anyOf": [
               {
-                "$ref": "#/components/schemas/ServiceCredentialUpdate"
+                "$ref": "#/components/schemas/EndpointCredentialUpdate"
               },
               {
                 "type": "null"
@@ -786,6 +797,47 @@
         "description": "The terminal `cancelled` event on both RAG streams \u2014 `api/routes/rag.py`\nsends a literal `{}` for it today.",
         "properties": {},
         "title": "EmptyPayload",
+        "type": "object"
+      },
+      "EndpointCredentialUpdate": {
+        "description": "For a service that can talk to another server speaking its API: Ollama,\nLM Studio, a proxy (#32).\n\n`base_url=None` leaves the endpoint unchanged and `\"\"` returns to the\nprovider's own. Changing it while a key is saved needs the key in the same\nupdate, because a saved key is only ever sent to the endpoint it was saved\nfor (`routes/config.py:update_config`).",
+        "properties": {
+          "api_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Api Key"
+          },
+          "base_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Base Url"
+          },
+          "model": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model"
+          }
+        },
+        "title": "EndpointCredentialUpdate",
         "type": "object"
       },
       "EngineAssetGroup": {
@@ -1472,7 +1524,7 @@
         "type": "object"
       },
       "ServiceCredentialUpdate": {
-        "description": "Update payload for one service. `api_key=None` means leave unchanged;\n`api_key=\"\"` means clear it.",
+        "description": "Update payload for one service. `api_key=None` means leave unchanged;\n`api_key=\"\"` means clear it. `model` is any name the provider serves, not\nonly one `/config/options` suggests.",
         "properties": {
           "api_key": {
             "anyOf": [
@@ -1488,6 +1540,7 @@
           "model": {
             "anyOf": [
               {
+                "maxLength": 200,
                 "type": "string"
               },
               {
@@ -1698,14 +1751,34 @@
         "type": "object"
       },
       "ValidateRequest": {
+        "description": "What to check against the provider. Whatever is left out comes from the\nsaved settings, and the saved key is only checked against the saved\nendpoint: naming another one needs the key typed alongside it.",
         "properties": {
           "api_key": {
-            "title": "Api Key",
-            "type": "string"
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Api Key"
+          },
+          "base_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Base Url"
           },
           "model": {
             "anyOf": [
               {
+                "maxLength": 200,
                 "type": "string"
               },
               {
@@ -1719,8 +1792,7 @@
           }
         },
         "required": [
-          "service",
-          "api_key"
+          "service"
         ],
         "title": "ValidateRequest",
         "type": "object"
@@ -2113,7 +2185,7 @@
     },
     "/config/validate": {
       "post": {
-        "description": "Spin up a translator instance with the supplied credentials and validate.",
+        "description": "Check credentials with the provider.\n\nWhatever the request leaves out comes from the saved settings: the key,\nthe model, the endpoint. The saved key is only sent to the saved endpoint,\nthe rule `PUT /config` keeps; checking another endpoint needs the key typed\nalongside it.",
         "operationId": "validate_credentials_config_validate_post",
         "parameters": [
           {

@@ -4,7 +4,8 @@ Configuration models for desktop PDF translator application.
 
 from enum import Enum 
 from pathlib import Path
-from typing import Optional, Literal
+from typing import Dict, FrozenSet, Optional, Literal
+from urllib.parse import urlsplit
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -26,12 +27,68 @@ class TranslationService(str, Enum):
     ANTHROPIC = "anthropic"
     ARGOS = "argos"
 
+
+def normalize_base_url(value: Optional[str]) -> Optional[str]:
+    """An API endpoint as it is stored: `None` for the provider's own.
+
+    Whitespace and trailing slashes go, so one server typed two ways is one
+    endpoint. That matters beyond tidiness: `api/routes/config.py` compares
+    endpoints to decide whether a saved key may be sent to one (#32).
+    """
+    if value is None:
+        return None
+    value = str(value).strip()
+    if not value:
+        return None
+    value = value.rstrip("/")
+    parts = urlsplit(value)
+    if parts.scheme not in ("http", "https") or not parts.hostname:
+        raise ValueError("must be an http:// or https:// URL")
+    return value
+
+
+# Model IDs their provider has shut down, per service. A request naming one
+# fails on every paragraph, so `ConfigManager.load_settings` swaps a saved one
+# for the service's default. The saved copy is the problem: `save_settings`
+# writes the defaults into `config.toml`, so every config ever saved still named
+# `gemini-1.5-flash` long after Google retired it, and changing the default
+# alone reached none of them (#32). The Claude IDs are from Anthropic's
+# deprecations page.
+RETIRED_MODELS: Dict[str, FrozenSet[str]] = {
+    "gemini": frozenset({
+        "gemini-pro",
+        "gemini-1.0-pro",
+        "gemini-1.5-pro",
+        "gemini-1.5-flash",
+        "gemini-1.5-flash-8b",
+        "gemini-2.0-flash",
+        "gemini-2.0-flash-lite",
+    }),
+    "anthropic": frozenset({
+        "claude-2.0",
+        "claude-2.1",
+        "claude-3-haiku-20240307",
+        "claude-3-sonnet-20240229",
+        "claude-3-opus-20240229",
+        "claude-3-5-haiku-20241022",
+        "claude-3-5-sonnet-20240620",
+        "claude-3-5-sonnet-20241022",
+        "claude-3-7-sonnet-20250219",
+        "claude-sonnet-4-20250514",
+        "claude-opus-4-20250514",
+        "claude-opus-4-1-20250805",
+    }),
+}
+
+
 class OpenAISettings(BaseModel):
     """OpenAI translation service settings."""
     
     api_key: Optional[str] = Field(None, description="OpenAI API key")
     model: str = Field("gpt-4.1", description="OpenAI model to use")
-    base_url: Optional[str] = Field(None, description="Custom API base URL")
+    base_url: Optional[str] = Field(
+        None, description="OpenAI-compatible API endpoint. None = api.openai.com"
+    )
     temperature: float = Field(0.3, ge=0.0, le=2.0, description="Translation creativity")
     max_tokens: Optional[int] = Field(None, description="Maximum tokens per request")
     max_qps: Optional[float] = Field(
@@ -39,12 +96,17 @@ class OpenAISettings(BaseModel):
         description="Requests/sec cap shared across every concurrent job. None = built-in default",
     )
 
+    @field_validator("base_url")
+    @classmethod
+    def _normalize_base_url(cls, value: Optional[str]) -> Optional[str]:
+        return normalize_base_url(value)
+
 
 class GeminiSettings(BaseModel):
     """Google Gemini translation service settings."""
     
     api_key: Optional[str] = Field(None, description="Google AI API key")
-    model: str = Field("gemini-1.5-flash", description="Gemini model to use")
+    model: str = Field("gemini-3.8-flash", description="Gemini model to use")
     temperature: float = Field(0.3, ge=0.0, le=1.0, description="Translation creativity")
     max_qps: Optional[float] = Field(
         None, ge=0.1, le=200.0,
@@ -57,13 +119,20 @@ class AnthropicSettings(BaseModel):
 
     api_key: Optional[str] = Field(None, description="Anthropic API key")
     model: str = Field("claude-sonnet-4-6", description="Anthropic model to use")
-    base_url: Optional[str] = Field(None, description="Custom API base URL")
+    base_url: Optional[str] = Field(
+        None, description="Anthropic-compatible API endpoint. None = api.anthropic.com"
+    )
     temperature: float = Field(0.3, ge=0.0, le=1.0, description="Translation creativity")
     max_tokens: int = Field(4000, ge=1, description="Maximum tokens per request")
     max_qps: Optional[float] = Field(
         None, ge=0.1, le=200.0,
         description="Requests/sec cap shared across every concurrent job. None = built-in default",
     )
+
+    @field_validator("base_url")
+    @classmethod
+    def _normalize_base_url(cls, value: Optional[str]) -> Optional[str]:
+        return normalize_base_url(value)
 
 
 class ArgosSettings(BaseModel):

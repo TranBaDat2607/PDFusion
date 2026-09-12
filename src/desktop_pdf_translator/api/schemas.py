@@ -2,7 +2,7 @@
 
 from typing import Any, Dict, List, Literal, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from .sse_schemas import AskResultPayload
 
@@ -14,6 +14,7 @@ from ..config import (
     TranslationService,
     TranslationSettings,
 )
+from ..config.models import normalize_base_url
 
 
 # ---------------------------------------------------------------------------
@@ -31,11 +32,24 @@ class HealthResponse(BaseModel):
 # ---------------------------------------------------------------------------
 
 
+def _endpoint_or_blank(value: Optional[str]) -> Optional[str]:
+    """`None` stays `None`, blank is `""` (the provider's own endpoint), and
+    anything else has to be an http(s) URL, stored the way settings store it."""
+    if value is None:
+        return None
+    if not value.strip():
+        return ""
+    return normalize_base_url(value)
+
+
 class APIKeyMaskedSettings(BaseModel):
     """Service config with the API key masked. The frontend never sees real keys."""
 
     has_key: bool
     model: str
+    # The server this service talks to when it isn't the provider's own
+    # (OpenAI and Anthropic only). Not a secret, unlike the key beside it.
+    base_url: Optional[str] = None
     extra: Dict[str, Any] = Field(default_factory=dict)
 
 
@@ -58,16 +72,45 @@ class ConfigResponse(BaseModel):
 
 class ServiceCredentialUpdate(BaseModel):
     """Update payload for one service. `api_key=None` means leave unchanged;
-    `api_key=""` means clear it."""
+    `api_key=""` means clear it. `model` is any name the provider serves, not
+    only one `/config/options` suggests."""
 
     api_key: Optional[str] = None
-    model: Optional[str] = None
+    model: Optional[str] = Field(None, max_length=200)
+
+    @field_validator("model")
+    @classmethod
+    def _model_is_named(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        value = value.strip()
+        if not value:
+            raise ValueError("must not be blank")
+        return value
+
+
+class EndpointCredentialUpdate(ServiceCredentialUpdate):
+    """For a service that can talk to another server speaking its API: Ollama,
+    LM Studio, a proxy (#32).
+
+    `base_url=None` leaves the endpoint unchanged and `""` returns to the
+    provider's own. Changing it while a key is saved needs the key in the same
+    update, because a saved key is only ever sent to the endpoint it was saved
+    for (`routes/config.py:update_config`).
+    """
+
+    base_url: Optional[str] = None
+
+    @field_validator("base_url")
+    @classmethod
+    def _endpoint(cls, value: Optional[str]) -> Optional[str]:
+        return _endpoint_or_blank(value)
 
 
 class ConfigUpdateRequest(BaseModel):
-    openai: Optional[ServiceCredentialUpdate] = None
+    openai: Optional[EndpointCredentialUpdate] = None
     gemini: Optional[ServiceCredentialUpdate] = None
-    anthropic: Optional[ServiceCredentialUpdate] = None
+    anthropic: Optional[EndpointCredentialUpdate] = None
     preferred_service: Optional[TranslationService] = None
     default_source_lang: Optional[LanguageCode] = None
     default_target_lang: Optional[LanguageCode] = None
@@ -79,9 +122,27 @@ class ConfigUpdateRequest(BaseModel):
 
 
 class ValidateRequest(BaseModel):
+    """What to check against the provider. Whatever is left out comes from the
+    saved settings, and the saved key is only checked against the saved
+    endpoint: naming another one needs the key typed alongside it."""
+
     service: TranslationService
-    api_key: str
-    model: Optional[str] = None
+    # `None` or `""`: the saved key.
+    api_key: Optional[str] = None
+    # `None` or blank: the saved model.
+    model: Optional[str] = Field(None, max_length=200)
+    # `None`: the saved endpoint. `""`: the provider's own.
+    base_url: Optional[str] = None
+
+    @field_validator("model")
+    @classmethod
+    def _model_or_saved(cls, value: Optional[str]) -> Optional[str]:
+        return (value or "").strip() or None
+
+    @field_validator("base_url")
+    @classmethod
+    def _endpoint(cls, value: Optional[str]) -> Optional[str]:
+        return _endpoint_or_blank(value)
 
 
 class ValidateResponse(BaseModel):

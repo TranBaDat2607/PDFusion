@@ -10,7 +10,7 @@ from typing import Optional, Dict, Any
 import tomlkit
 from pydantic import ValidationError
 
-from .models import AppSettings
+from .models import RETIRED_MODELS, AppSettings
 from ..utils import (
     DPAPI_PREFIX,
     adopt_legacy_config,
@@ -83,6 +83,8 @@ class ConfigManager:
         # Override with environment variables
         env_config = self._load_from_environment()
         self._deep_merge(config_data, env_config)
+
+        self._replace_retired_models(config_data)
         
         # Create settings model with validation
         try:
@@ -155,6 +157,30 @@ class ConfigManager:
                 return
         if isinstance(node, dict):
             node.pop(loc[-1], None)
+
+    @staticmethod
+    def _replace_retired_models(config_data: Dict[str, Any]) -> None:
+        """Swap a saved model its provider has shut down for today's default.
+
+        `save_settings` writes the defaults into `config.toml`, so a default
+        that later went away sits in every file that was ever saved, and a new
+        default alone reaches none of them (#32). Only the IDs in
+        `RETIRED_MODELS` move: a model this app has never heard of is the
+        user's to name, and may well be served by their own endpoint.
+        """
+        defaults = AppSettings()
+        for service, retired in RETIRED_MODELS.items():
+            section = config_data.get(service)
+            if not isinstance(section, dict):
+                continue
+            model = section.get("model")
+            if isinstance(model, str) and model.strip() in retired:
+                replacement = getattr(defaults, service).model
+                logger.info(
+                    "%s model %s has been shut down by its provider; using %s",
+                    service, model, replacement,
+                )
+                section["model"] = replacement
     
     def save_settings(self, settings: AppSettings) -> bool:
         """Save settings to the TOML file, atomically.

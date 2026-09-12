@@ -92,8 +92,51 @@ def test_file_values_override_the_model_defaults(manager: ConfigManager):
 def test_sections_absent_from_the_file_keep_their_defaults(manager: ConfigManager):
     write_config(manager, {"openai": {"model": "gpt-4o-mini"}})
     settings = manager.load_settings()
-    assert settings.gemini.model == "gemini-1.5-flash"
+    assert settings.gemini.model == "gemini-3.8-flash"
     assert settings.translation.cache_translations is True
+
+
+def test_a_saved_model_its_provider_shut_down_loads_as_the_default(
+    manager: ConfigManager,
+):
+    """`save_settings` writes the defaults into the file, so every config ever
+    saved still named `gemini-1.5-flash` after Google retired it. A new default
+    alone reached none of them (#32)."""
+    write_config(
+        manager,
+        {
+            "gemini": {"model": "gemini-1.5-flash"},
+            "anthropic": {"model": "claude-3-5-sonnet-20241022"},
+        },
+    )
+    settings = manager.load_settings()
+    assert settings.gemini.model == "gemini-3.8-flash"
+    assert settings.anthropic.model == AppSettings().anthropic.model
+
+
+def test_a_model_the_app_has_never_heard_of_is_left_alone(manager: ConfigManager):
+    """A local server's model, or one newer than this build."""
+    write_config(
+        manager,
+        {"openai": {"model": "llama3.2:3b"}, "gemini": {"model": "gemini-9-flash"}},
+    )
+    settings = manager.load_settings()
+    assert settings.openai.model == "llama3.2:3b"
+    assert settings.gemini.model == "gemini-9-flash"
+
+
+def test_an_endpoint_is_stored_without_its_trailing_slash(manager: ConfigManager):
+    write_config(manager, {"openai": {"base_url": " http://localhost:11434/v1/ "}})
+    assert manager.load_settings().openai.base_url == "http://localhost:11434/v1"
+
+
+def test_an_endpoint_that_is_not_a_web_url_is_dropped(manager: ConfigManager):
+    write_config(
+        manager, {"openai": {"model": "gpt-4o-mini", "base_url": "localhost:11434"}}
+    )
+    settings = manager.load_settings()
+    assert settings.openai.base_url is None
+    assert settings.openai.model == "gpt-4o-mini"
 
 
 def test_a_corrupt_file_does_not_stop_the_sidecar(manager: ConfigManager):

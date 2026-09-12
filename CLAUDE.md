@@ -339,7 +339,7 @@ corrupting) the cooldown key for that purpose.
 | `desktop/src/components/pdf-viewer/` | `PdfViewer` (layout, scroll, zoom), `page-renderer.ts` (canvas recycling, text layers), `text-selection.ts`, `find-highlight.ts`, `FindBar`, `ViewerToolbar`, `pdf-viewer.css` — see "PDF viewer" |
 | `desktop/src/lib/pdf-viewer/` | Pure: page geometry (`layout.ts`), find matching (`find.ts`), which pages a new rolling PDF changed (`artifact-swap.ts`), key → shortcut (`shortcuts.ts`) |
 | `desktop/src/components/chat/` | `ChatPanel`, `UserMessage`, `AssistantMessage`, `ActionLog`, `ReferenceList`, `ChatInput` |
-| `desktop/src/components/settings/` | `SettingsSheet` (a tab per service, plus Cache and Chat); `ChatIndexTab` (the recorded documents, Remove, Reset) |
+| `desktop/src/components/settings/` | `SettingsSheet` (a tab per service, plus Cache and Chat); `ModelCombobox` (a model name typed freely or picked from suggestions); `ChatIndexTab` (the recorded documents, Remove, Reset) |
 | `desktop/src/components/translation/` | `ProgressOverlay`, `TranslatedFileActions` (Save / Open / Show in folder) |
 | `desktop/src/components/ui/` | shadcn-generated primitives (button, dialog, sheet, …) |
 | `desktop/src/lib/api-client.ts` | Typed HTTP wrapper with bearer-token + sidecar URL helpers |
@@ -353,6 +353,7 @@ corrupting) the cooldown key for that purpose.
 | `desktop/src/lib/engine-setup.ts` | Pure: the skip marker and whether the setup screen is due |
 | `desktop/src/lib/chat-history.ts` | Pure: a document's saved-chat query key, and the just-answered exchange shown until the refetch |
 | `desktop/src/lib/chat-documents.ts` | Pure: the line Settings → Chat shows under each recorded document |
+| `desktop/src/lib/service-settings.ts` | Pure: a Settings service tab's draft, the `PUT /config` body it makes, and what Save checks with the provider first — see "LLM endpoints and models" |
 | `src/desktop_pdf_translator/engine_assets.py` | What "the offline engine is installed" means; no heavy imports |
 | `src/desktop_pdf_translator/api/server.py` | FastAPI app + uvicorn entry + port discovery |
 | `src/desktop_pdf_translator/api/auth.py` | Bearer-token middleware |
@@ -365,6 +366,7 @@ corrupting) the cooldown key for that purpose.
 | `src/desktop_pdf_translator/processors/` | `PDFProcessor` async generator wrapping BabelDOC (unchanged) |
 | `src/desktop_pdf_translator/translators/` | `BaseTranslator`, OpenAI/Gemini/Anthropic/Argos + `TranslatorFactory` |
 | `src/desktop_pdf_translator/translators/rate_limiter.py` | Process-wide token-bucket QPS limiter, one singleton per LLM service |
+| `src/desktop_pdf_translator/translators/param_compat.py` | Request parameters an endpoint refused for a model, remembered process-wide. Stdlib-only — see "LLM endpoints and models" |
 | `src/desktop_pdf_translator/rag/` | `EnhancedRAGChain`, and chat-index storage as one ChromaDB collection per index (`vector_store.py`); `index_spec.py` names the embedding model and chunker version every index records. Deep-search/web-research was dropped in `35bca2c` |
 | `src/desktop_pdf_translator/rag/onnx_embeddings.py` | MiniLM embeddings on onnxruntime — what replaced sentence-transformers |
 | `src/desktop_pdf_translator/rag/keyword_search.py` | BM25 over one index's chunks, the keyword half of `hybrid_search`. Stdlib-only — see "Chat answers" |
@@ -383,10 +385,10 @@ All routes (except `GET /health`) require `Authorization: Bearer <token>`.
 |---|---|---|
 | GET | `/health` | Liveness probe (no auth) |
 | GET | `/auth/ping` | Auth probe — used by the Rust shell after startup |
-| GET | `/config` | Current settings (API keys masked) |
-| PUT | `/config` | Update API keys / models / language defaults |
-| POST | `/config/validate` | Test a key by spinning up a translator + calling its `validate_configuration()` |
-| GET | `/config/options` | Static dropdown data (languages, services, models) + `supported_pairs` per service (`null` = unrestricted) |
+| GET | `/config` | Current settings (API keys masked). OpenAI and Anthropic report their endpoint as `base_url`, `null` for the provider's own |
+| PUT | `/config` | Update API keys / models / endpoints / language defaults. `model` is free text. `openai` and `anthropic` take `base_url` (`""` = the provider's own); changing it while a key is saved needs `api_key` in the same body, or **422** — see "LLM endpoints and models" |
+| POST | `/config/validate` | Check credentials with the provider, off the event loop and under a deadline. `api_key` / `model` / `base_url` left out come from the saved settings, and the saved key is only checked against the saved endpoint (**422** otherwise) |
+| GET | `/config/options` | Static dropdown data (languages, services, model *suggestions* with each service's default first) + `supported_pairs` per service (`null` = unrestricted) |
 | GET | `/config/cache` | Paragraph-cache stats (entries, hit rate, size) |
 | DELETE | `/config/cache?scope=all\|expired` | Clear/GC the paragraph-level translation cache |
 | GET | `/setup/status` | Which engine assets are installed, plus the running install's phase and the last one's error. Stat calls only — polled twice a second during an install |
@@ -935,7 +937,7 @@ BabelDOC drives chunking, layout, and PDF reassembly; it delegates the actual te
    - **Lazy install.** The `argostranslate` package is imported lazily and the ~80 MB en→vi language pack is downloaded on first `translate()` call, guarded by a `threading.Lock`. Sidecar startup is unaffected.
    - **Caching.** Argos is deterministic, so it benefits from both the persistent paragraph cache (`translation_cache.py`) and the in-process batch coalescing added in `3356f30` (concurrent `translate()` calls are coalesced into batches of 4). Its `model` field is the fixed string `"argostranslate"`.
 
-4. **Every LLM backend's SDK call goes through `BaseTranslator._call_with_backoff(request)`**, never a bare `self.client...create(...)`. It acquires a token from `rate_limiter.get_rate_limiter(self._SERVICE_NAME)` — a class attribute each backend sets (`"openai"`/`"gemini"`/`"anthropic"`) naming a process-wide limiter singleton shared across every job, sub-job and worker thread — then retries on 429/5xx/408/409 *and* on transport failures, with jittered exponential backoff (`_MAX_RETRIES`, fatal 401/403 excluded). That classifier exists because the SDK clients are constructed with `max_retries=0`: the OpenAI/Anthropic SDKs default to retrying twice on their own — including on connection and timeout errors — and those inner attempts don't take a token, so leaving the default in place lets a 429 storm blow well past the configured QPS. Disabling it without widening the classifier would have just moved those errors from "retried by the SDK" to "an immediately lost paragraph" — a real regression caught in review of the original PR.
+4. **Every LLM backend's SDK call goes through `BaseTranslator._call_with_backoff(request)`**, never a bare `self.client...create(...)`. OpenAI and Anthropic reach it through `_call_adapting`, which reshapes a request a model refused (see "LLM endpoints and models"). It acquires a token from `rate_limiter.get_rate_limiter(self._SERVICE_NAME)` — a class attribute each backend sets (`"openai"`/`"gemini"`/`"anthropic"`) naming a process-wide limiter singleton shared across every job, sub-job and worker thread — then retries on 429/5xx/408/409 *and* on transport failures, with jittered exponential backoff (`_MAX_RETRIES`, fatal 401/403 excluded). That classifier exists because the SDK clients are constructed with `max_retries=0`: the OpenAI/Anthropic SDKs default to retrying twice on their own — including on connection and timeout errors — and those inner attempts don't take a token, so leaving the default in place lets a 429 storm blow well past the configured QPS. Disabling it without widening the classifier would have just moved those errors from "retried by the SDK" to "an immediately lost paragraph" — a real regression caught in review of the original PR.
 
    Transport failures carry no status code, so `is_retryable_translation_error` matches them by class **name along the MRO** (`_RETRYABLE_ERROR_NAMES`) — never `isinstance`, because `base.py` has to import with none of the provider SDKs or httpx installed. Two names cover everything, which is the whole reason it walks the MRO instead of testing the concrete class: `APIConnectionError`, because openai and anthropic funnel every transport failure into it via their `except Exception` fallback and both SDKs' `APITimeoutError` subclasses it; and `TransportError`, because google-genai does *not* wrap, so raw httpx exceptions arrive here and all of them derive from it. Listing leaf names instead (`ReadTimeout`, `ConnectError`, …) is the version that shipped first, and it silently missed `ReadError`, `WriteError`, `NetworkError`, `ProxyError` and `CloseError` — on Gemini, a socket-level read failure stayed an immediately-lost paragraph.
 
@@ -944,6 +946,57 @@ BabelDOC drives chunking, layout, and PDF reassembly; it delegates the actual te
    A new backend must do the same three things every existing one does: check `self.is_cancelled()` at the very top of `translate()` (before the cache lookup — a cancelled job shouldn't even pay for a cache read); add `except TranslationCancelled: return text` **before** `except Exception` — reversed, a cancelled paragraph gets funnelled into `_handle_translation_error` and counted as a failure it wasn't; and set `_SERVICE_NAME` if it wants rate limiting at all — `None` genuinely opts out, handled by an explicit branch in `_call_with_backoff` rather than passed through, since `get_rate_limiter(None)` would otherwise build a real `None`-keyed bucket at the fallback rate and share it between every backend that never named a service. (That branch re-checks the cancel flag itself, so opting out of the limiter doesn't also opt out of the cancel check that rode on its `acquire()`.) `cancel_event` is threaded in by `PDFProcessor` (one `threading.Event` per job), so a Cancel click stops new LLM calls within one in-flight paragraph per worker thread — the asyncio-level `task.cancel()` alone never reached code already running synchronously on a BabelDOC worker thread. Argos gets the same top-of-`translate()` cancel check but no rate limiter or backoff (`_SERVICE_NAME` stays `None`) — it's local, and the existing "a late `event.set()` on an abandoned batch entry is harmless" behavior already covers it.
 
    The one deliberate exception to "[Translator failures are counted, not swallowed](#translator-failures-are-counted-not-swallowed)": a cancelled `translate()` call returns source text **without** touching `failed_translations` — it's an intentional stop, not a failure, and counting it would make a cancelled run look like a partial one if anything ever inspected the counters after cancellation. Total retry attempts (not distinct paragraphs) land in `retry_count`, which `CompletionEvent` and the `/translate` SSE `done` payload also carry as `retry_count` — issue #22 asked to "surface" it; nothing in the UI reads it today, so consider that half-done, not wired to a banner.
+
+### LLM endpoints and models
+
+Settings takes any model name, and OpenAI and Anthropic each take an endpoint
+(`base_url`), which is what lets Ollama, LM Studio or a proxy stand in for the
+provider (#32). README has the recipe. Four rules hold that together:
+
+- **A saved key is only ever sent to the endpoint it was saved for.** `GET
+  /config` never reveals a key, but `base_url` decides where the next request
+  goes, and with it the key in its auth header. So `PUT /config` refuses (422)
+  an endpoint change, clearing one included, unless the same body carries
+  `api_key`, and `POST /config/validate` uses the saved key only against the
+  saved endpoint. Together they keep anything holding the bearer token from
+  reading a key off the wire; don't loosen either for convenience. The Settings
+  sheet mirrors the rule (`lib/service-settings.ts:endpointNeedsKey`) so the
+  user meets it before the 422. Endpoints are normalized in one place,
+  `config/models.py:normalize_base_url` (trimmed, no trailing slash), so a URL
+  typed again is not a change.
+- **A parameter a model refuses is left out, not failed on.** Claude Opus 4.7
+  and later answer 400 to a non-default `temperature`, and OpenAI's reasoning
+  models refuse `temperature` and `max_tokens`; PDFusion sends them on every
+  paragraph. `BaseTranslator._call_adapting` wraps `_call_with_backoff`. On a
+  400 whose message names one of the backend's `_ADAPTABLE_PARAMS` together
+  with a refusal word (`param_compat._REFUSAL_MARKERS`), it records the
+  parameter against (service, `base_url`, model) and sends again without it —
+  for OpenAI's `max_tokens`, as `max_completion_tokens`. The refusal word is
+  load-bearing: "max_tokens is too large" names the parameter too, and wants a
+  smaller number. The record lasts as long as the process.
+  `validate_configuration` goes through the same path (`backoff=False`) with
+  the same parameters as `translate`, since a check that sent less would pass a
+  model that fails every paragraph. The wording matched is OpenAI's documented
+  one; Anthropic's has not been captured, so if a Claude model still fails on
+  `temperature`, compare its message with the markers first.
+- **Model suggestions are not a whitelist.** `/config/options` lists each
+  service's default first, and `tests/test_config_api.py` fails when a default
+  is missing from its list — how `gemini-1.5-flash` stayed on offer after
+  Google retired it.
+- **A retired model in a saved config is replaced as it loads.**
+  `save_settings` writes the defaults into `config.toml`, so a default that
+  later went away is in every file ever saved.
+  `ConfigManager._replace_retired_models` swaps any ID in
+  `config/models.py:RETIRED_MODELS` for the service's current default. Add an
+  ID there when its provider shuts it down. A model not on the list is left
+  alone, since a local server can call its models anything.
+
+Two smaller consequences. The chat answer model is rebuilt when the endpoint
+changes (`rag_chain._answer_model` keys on it). And every credentials probe
+passes `base_url` explicitly, `None` included (`routes/config.py:_probe_kwargs`),
+because `TranslatorFactory` starts from the *saved* settings. A keyless local
+server still needs some key typed: without one, OpenAI or Anthropic falls back
+to Argos (`capabilities.resolve_effective_service`), a rule #32 left as it was.
 
 ### PDF viewer
 
@@ -1034,6 +1087,7 @@ deliberately not implemented: the panes scroll and zoom independently.
 - Defaults / reference: `config/default_config.toml`.
 - `.env` is auto-loaded via `python-dotenv` and overrides the TOML. It's searched at the **repo root** (resolved from `__file__`, not `cwd` — `cwd` is non-writable `C:\Program Files\…` on an installed launch) and in the AppData config dir. See `config/manager.py:_load_dotenv`.
 - Singleton: `get_config_manager()` / `get_settings()` from `desktop_pdf_translator.config`.
+- A saved model its provider has shut down loads as the service's current default (`RETIRED_MODELS`); see "LLM endpoints and models".
 - Cache-related settings live under `[translation]` in `AppSettings` (`config/models.py`): `cache_translations` (paragraph cache, default on), `cache_translated_pdfs` (whole-PDF cache, default on), `pdf_cache_max_size_mb` (LRU cap, default 1000). Changing `pdf_cache_max_size_mb` applies without a sidecar restart (re-read on every eviction pass).
 
 ## Tauri shell details
@@ -1180,8 +1234,9 @@ and `shell.log`.
 ## Tests and code quality
 
 - **What is covered, and what still isn't.** The PDF-export path, the language
-  contract, key storage and config read/write, the job registry, both SQLite
-  caches, Argos's batching, translator failure/retry accounting, the records
+  contract, key storage and config read/write, the config API's endpoint and
+  key rules, the job registry, both SQLite caches, Argos's batching,
+  translator failure/retry accounting and per-model parameter adaptation, the records
   database, and chat's document isolation (`test_rag_isolation.py` runs a real ChromaDB under
   `tmp_path` with a deterministic embedding function, so nothing downloads).
   Still uncovered: the BabelDOC pipeline in `processors/processor.py` proper, and
@@ -1210,7 +1265,8 @@ and `shell.log`.
                                    # test_sbd_compat.py, test_onnx_embeddings.py,
                                    # test_rag_isolation.py, test_rag_api.py,
                                    # test_storage_migrations.py, test_storage_paths.py,
-                                   # test_records_store.py, test_keyword_search.py
+                                   # test_records_store.py, test_keyword_search.py,
+                                   # test_config_api.py, test_param_compat.py
   python -m pytest tests -m smoke  # test_sidecar_smoke.py — excluded by default
 
   # Frontend (vitest, node environment — no jsdom)
