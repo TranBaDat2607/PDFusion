@@ -24,6 +24,14 @@ export type PdfReference = components["schemas"]["PdfReferencePayload"];
 /** The `answer` / `done` SSE payload from `POST /rag/ask`. */
 export type RagAnswer = components["schemas"]["AskResultPayload"];
 
+/** `POST /rag/ask` was refused because the document has no ready chat index
+ *  (HTTP 409). */
+export const NOT_INDEXED = "not_indexed";
+
+/** The question's index was missing or damaged, and the sidecar cleared it:
+ *  the `code` of the `error` event (`api/routes/rag.py:INDEX_UNAVAILABLE`). */
+export const INDEX_UNAVAILABLE = "index_unavailable";
+
 export interface ActionEvent {
   id: number;
   description: string;
@@ -39,6 +47,9 @@ export interface AskState {
   progress: number;
   answer: RagAnswer | null;
   error?: string;
+  /** Set when the chat panel should act on a failure rather than only show
+   *  `error`: `NOT_INDEXED` or `INDEX_UNAVAILABLE`. */
+  errorCode?: string;
 }
 
 /** The part of an `SseEvent` the reducer reads. */
@@ -60,8 +71,14 @@ export function startAsk(documentId: string): AskState {
   return { ...IDLE_ASK, status: "asking", documentId };
 }
 
-export function failAsk(state: AskState, error: string): AskState {
-  return { ...state, status: "error", error };
+export function failAsk(
+  state: AskState,
+  error: string,
+  errorCode?: string | null,
+): AskState {
+  return errorCode
+    ? { ...state, status: "error", error, errorCode }
+    : { ...state, status: "error", error };
 }
 
 /** Fold one event from `/rag/ask/{job_id}/events` into the state. */
@@ -103,11 +120,10 @@ export function reduceAskEvent(state: AskState, event: AskEvent): AskState {
         progress: 100,
         answer: state.answer ?? (event.data as RagAnswer),
       };
-    case "error":
-      return failAsk(
-        state,
-        (event.data as components["schemas"]["JobErrorPayload"]).message,
-      );
+    case "error": {
+      const e = event.data as components["schemas"]["JobErrorPayload"];
+      return failAsk(state, e.message, e.code);
+    }
     default:
       return state;
   }
@@ -133,4 +149,21 @@ export function answerForDocument(
     return null;
   }
   return state.answer;
+}
+
+/**
+ * Whether the question failed because the open document has no usable chat
+ * index, so the chat panel should index it again (#31). Only when the question
+ * was about the document open now: the panel may have moved on to another.
+ */
+export function needsReindex(
+  state: AskState,
+  openDocumentId: string | null,
+): boolean {
+  return (
+    state.status === "error" &&
+    openDocumentId !== null &&
+    state.documentId === openDocumentId &&
+    (state.errorCode === NOT_INDEXED || state.errorCode === INDEX_UNAVAILABLE)
+  );
 }

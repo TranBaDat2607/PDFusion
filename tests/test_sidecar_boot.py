@@ -84,6 +84,9 @@ def _run_probe(code: str) -> str:
         # pre-flight can answer from the records without loading chromadb.
         "desktop_pdf_translator.storage.records",
         "desktop_pdf_translator.rag.index_spec",
+        # Also imported at module level by `api/routes/rag.py`, to tell an
+        # ask's failures apart.
+        "desktop_pdf_translator.rag.errors",
     ],
 )
 def test_boot_path_does_not_import_the_heavy_stack(module: str) -> None:

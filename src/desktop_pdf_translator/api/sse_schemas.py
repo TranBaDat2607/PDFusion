@@ -110,10 +110,14 @@ class CompletionEventPayload(BaseModel):
 
 class JobErrorPayload(BaseModel):
     """The terminal `error` event on all three SSE streams — an uncaught
-    exception in the job worker. Every caller in `api/jobs.py`'s consumers
-    only ever passes `{"message": str(exc)}`."""
+    exception in the job worker, as `{"message": str(exc)}`.
+
+    `code` is set only where the client acts on the failure rather than just
+    showing it: `index_unavailable` from `/rag/ask`, when the document's chat
+    index had to be cleared and the panel should index it again."""
 
     message: str
+    code: Optional[str] = None
 
 
 class CancelPayload(BaseModel):
@@ -183,12 +187,8 @@ class AskResultPayload(BaseModel):
     """The `answer` and `done` payload for `/rag/ask/{job_id}/events` — the
     dict `EnhancedRAGChain.answer_question` returns, verbatim.
 
-    Deliberately loose: `answer_question`'s success path and its own internal
-    exception handler return genuinely different shapes — different
-    `quality_metrics` keys (`total_sources` vs. `confidence`/`completeness`),
-    and `processing_time`/`sources_used`/`timestamp` absent on the exception
-    path, `error` present only there. This models the real union rather than
-    unifying two shapes that are inconsistent in the running code.
+    Only ever a real answer. A failure ends the stream with `error` instead;
+    it used to arrive here, as an answer whose text was the error (#31).
     `elapsed_seconds` is added by `_run_ask` only for the `done` event, never
     for `answer`.
     """
@@ -199,5 +199,4 @@ class AskResultPayload(BaseModel):
     processing_time: Optional[float] = None
     sources_used: Optional[Dict[str, int]] = None
     timestamp: Optional[str] = None
-    error: Optional[str] = None
     elapsed_seconds: Optional[float] = None

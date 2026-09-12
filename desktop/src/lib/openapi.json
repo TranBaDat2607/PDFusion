@@ -58,6 +58,16 @@
           "question": {
             "title": "Question",
             "type": "string"
+          },
+          "target_lang": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/LanguageCode"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "required": [
@@ -68,7 +78,7 @@
         "type": "object"
       },
       "AskResultPayload": {
-        "description": "The `answer` and `done` payload for `/rag/ask/{job_id}/events` \u2014 the\ndict `EnhancedRAGChain.answer_question` returns, verbatim.\n\nDeliberately loose: `answer_question`'s success path and its own internal\nexception handler return genuinely different shapes \u2014 different\n`quality_metrics` keys (`total_sources` vs. `confidence`/`completeness`),\nand `processing_time`/`sources_used`/`timestamp` absent on the exception\npath, `error` present only there. This models the real union rather than\nunifying two shapes that are inconsistent in the running code.\n`elapsed_seconds` is added by `_run_ask` only for the `done` event, never\nfor `answer`.",
+        "description": "The `answer` and `done` payload for `/rag/ask/{job_id}/events` \u2014 the\ndict `EnhancedRAGChain.answer_question` returns, verbatim.\n\nOnly ever a real answer. A failure ends the stream with `error` instead;\nit used to arrive here, as an answer whose text was the error (#31).\n`elapsed_seconds` is added by `_run_ask` only for the `done` event, never\nfor `answer`.",
         "properties": {
           "answer": {
             "title": "Answer",
@@ -85,18 +95,6 @@
             ],
             "default": null,
             "title": "Elapsed Seconds"
-          },
-          "error": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null,
-            "title": "Error"
           },
           "pdf_references": {
             "items": {
@@ -948,8 +946,20 @@
         "type": "object"
       },
       "JobErrorPayload": {
-        "description": "The terminal `error` event on all three SSE streams \u2014 an uncaught\nexception in the job worker. Every caller in `api/jobs.py`'s consumers\nonly ever passes `{\"message\": str(exc)}`.",
+        "description": "The terminal `error` event on all three SSE streams \u2014 an uncaught\nexception in the job worker, as `{\"message\": str(exc)}`.\n\n`code` is set only where the client acts on the failure rather than just\nshowing it: `index_unavailable` from `/rag/ask`, when the document's chat\nindex had to be cleared and the panel should index it again.",
         "properties": {
+          "code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Code"
+          },
           "message": {
             "title": "Message",
             "type": "string"

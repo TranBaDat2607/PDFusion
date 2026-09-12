@@ -20,6 +20,8 @@ from chromadb.config import Settings
 from chromadb.errors import NotFoundError
 
 from ..utils.paths import appdata_dir
+from .errors import IndexUnavailableError
+from .keyword_search import Bm25Index
 from .onnx_embeddings import OnnxEmbeddingFunction
 
 logger = logging.getLogger(__name__)
@@ -137,11 +139,15 @@ class ChromaDBManager:
         """Every chunk of an index, in reading order.
 
         The one full read a question makes; the keyword pass and the
-        surrounding-context step both work from the list this returns.
+        surrounding-context step both work from the list this returns. Raises
+        `IndexUnavailableError` when the index has no collection.
         """
-        results = await asyncio.to_thread(
-            lambda: self._collection(index_id).get(include=['documents', 'metadatas'])
-        )
+        try:
+            results = await asyncio.to_thread(
+                lambda: self._collection(index_id).get(include=['documents', 'metadatas'])
+            )
+        except NotFoundError as e:
+            raise IndexUnavailableError(index_id) from e
         chunks = [
             {'text': text, 'metadata': metadata, 'chunk_id': chunk_id}
             for chunk_id, text, metadata in zip(
@@ -156,7 +162,13 @@ class ChromaDBManager:
 
     async def search_similar(self, index_id: str, query: str,
                              n_results: int = 5) -> List[Dict[str, Any]]:
-        """Semantic search within one index."""
+        """Semantic search within one index.
+
+        Raises on failure: `IndexUnavailableError` when the index has no
+        collection, anything else as ChromaDB raised it. An empty result used to
+        stand in for a failure, and chat then answered as if the document had
+        nothing on the question (#31).
+        """
 
         def search():
             collection = self._collection(index_id)
@@ -172,9 +184,8 @@ class ChromaDBManager:
         try:
             # Embeds the query: off the event loop.
             results = await asyncio.to_thread(search)
-        except Exception as e:
-            logger.error(f"Similarity search failed: {e}")
-            return []
+        except NotFoundError as e:
+            raise IndexUnavailableError(index_id) from e
 
         if not results or not results['documents']:
             return []
@@ -192,16 +203,18 @@ class ChromaDBManager:
         return formatted_results
 
     async def hybrid_search(self, index_id: str, query: str,
-                            chunks: List[Dict[str, Any]], n_results: int = 5,
+                            chunks: List[Dict[str, Any]], keywords: Bm25Index,
+                            n_results: int = 5,
                             alpha: float = 0.7) -> List[Dict[str, Any]]:
         """
-        Blend semantic search with keyword matching, within one index.
+        Blend semantic search with BM25 keyword scores, within one index.
 
         Args:
             index_id: The index to search
             query: Search query
             chunks: The index's chunks, as `get_chunks` returned them — read once
                 by the caller, not once per search
+            keywords: BM25 statistics built from `chunks`, in the same order
             n_results: Number of results to return
             alpha: Weight for semantic search (1-alpha for keyword search)
 
@@ -210,17 +223,18 @@ class ChromaDBManager:
         """
         semantic_results = await self.search_similar(index_id, query, n_results * 2)
 
-        # Simple keyword search (can be enhanced with BM25)
-        keyword_results = []
-        query_words = query.lower().split()
-        if query_words:
-            for chunk in chunks:
-                text = chunk['text'].lower()
-                keyword_score = sum(1 for word in query_words if word in text)
-                if keyword_score > 0:
-                    keyword_results.append(
-                        {**chunk, 'keyword_score': keyword_score / len(query_words)}
-                    )
+        # Scoring every chunk is CPU work, so it runs off the event loop. It
+        # used to be a substring count, on the loop (#31). Only the best keyword
+        # hits join the blend, as only the nearest chunks do on the semantic side.
+        keyword_scores = await asyncio.to_thread(keywords.scores, query)
+        best_keyword_hits = sorted(
+            (i for i, score in enumerate(keyword_scores) if score > 0),
+            key=lambda i: keyword_scores[i],
+            reverse=True,
+        )[:n_results * 2]
+        keyword_results = [
+            {**chunks[i], 'keyword_score': keyword_scores[i]} for i in best_keyword_hits
+        ]
 
         # Combine and rank results
         combined_results: Dict[str, Dict[str, Any]] = {}
@@ -243,6 +257,14 @@ class ChromaDBManager:
             combined_results.values(), key=lambda x: x['final_score'], reverse=True
         )
         return final_results[:n_results]
+
+    def has_index(self, index_id: str) -> bool:
+        """Whether an index has a collection. Blocking."""
+        try:
+            self._collection(index_id)
+        except NotFoundError:
+            return False
+        return True
 
     def drop_index(self, index_id: str) -> bool:
         """Delete an index's collection; `False` if it had none.

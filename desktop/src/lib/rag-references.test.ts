@@ -29,7 +29,6 @@ function makeAnswer(overrides: Partial<RagAnswer> = {}): RagAnswer {
   return {
     answer: "…",
     elapsed_seconds: 1.0,
-    error: null,
     processing_time: 1.0,
     sources_used: { pdf_sources: 1 },
     timestamp: "2026-09-09T00:00:00",

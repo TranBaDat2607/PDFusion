@@ -11,8 +11,12 @@ import { ChatInput } from "@/components/chat/ChatInput";
 import { UserMessage } from "@/components/chat/UserMessage";
 import { useRagAsk } from "@/hooks/useRagAsk";
 import { useRagIndex } from "@/hooks/useRagIndex";
-import { useUpdateConfig } from "@/hooks/useConfig";
-import { answerForDocument, type RagAnswer } from "@/lib/rag-ask";
+import { useConfig, useUpdateConfig } from "@/hooks/useConfig";
+import {
+  answerForDocument,
+  needsReindex,
+  type RagAnswer,
+} from "@/lib/rag-ask";
 import { useAppStore } from "@/lib/store";
 
 interface ChatPanelProps {
@@ -38,6 +42,7 @@ export function ChatPanel({
   const index = useRagIndex();
   const ask = useRagAsk();
   const update = useUpdateConfig();
+  const { data: config } = useConfig();
   const setChatOpen = useAppStore((s) => s.setChatOpen);
   const setRagEnabled = useAppStore((s) => s.setRagEnabled);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -79,6 +84,15 @@ export function ChatPanel({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ask.state.status, ask.state.answer]);
 
+  // The question failed because this document's chat index is missing, or was
+  // damaged and has been cleared: index the document again (#31).
+  useEffect(() => {
+    if (documentPath && needsReindex(ask.state, index.state.documentId)) {
+      void index.start(documentPath);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ask.state.status, ask.state.errorCode]);
+
   // Auto-scroll to bottom when content changes
   useEffect(() => {
     if (!scrollRef.current) return;
@@ -94,9 +108,14 @@ export function ChatPanel({
         { id: ++messageCounter, kind: "user", text },
       ]);
       setPendingQuestion(text);
-      void ask.ask({ question: text, documentId });
+      // The toolbar's "To" language, which is also what Translate sends.
+      void ask.ask({
+        question: text,
+        documentId,
+        targetLang: config?.translation.default_target_lang,
+      });
     },
-    [ask, index.state.documentId],
+    [ask, index.state.documentId, config?.translation.default_target_lang],
   );
 
   const inputDisabled = !documentPath || index.state.status !== "ready";

@@ -2,8 +2,11 @@ import { describe, expect, it } from "vitest";
 
 import {
   IDLE_ASK,
+  INDEX_UNAVAILABLE,
+  NOT_INDEXED,
   answerForDocument,
   failAsk,
+  needsReindex,
   reduceAskEvent,
   startAsk,
   streamEnded,
@@ -15,7 +18,6 @@ function makeAnswer(answer: string): RagAnswer {
   return {
     answer,
     elapsed_seconds: 1.0,
-    error: null,
     processing_time: 1.0,
     sources_used: { pdf_sources: 1 },
     timestamp: "2026-09-09T00:00:00",
@@ -82,6 +84,20 @@ describe("reduceAskEvent", () => {
       documentId: "doc-b",
       error: "This document isn't indexed yet.",
     });
+    expect(state).not.toHaveProperty("errorCode");
+  });
+
+  it("keeps the code of an error the panel acts on", () => {
+    const state = reduceAskEvent(startAsk("doc-b"), {
+      type: "error",
+      data: { message: "The index was cleared.", code: INDEX_UNAVAILABLE },
+    });
+
+    expect(state).toMatchObject({
+      status: "error",
+      error: "The index was cleared.",
+      errorCode: INDEX_UNAVAILABLE,
+    });
   });
 
   it("ignores events it doesn't know", () => {
@@ -130,5 +146,37 @@ describe("answerForDocument", () => {
     expect(
       answerForDocument(failAsk(startAsk("doc-a"), "boom"), "doc-a"),
     ).toBeNull();
+  });
+});
+
+describe("needsReindex", () => {
+  it("indexes the open document again when it has no usable index", () => {
+    expect(
+      needsReindex(failAsk(startAsk("doc-a"), "409", NOT_INDEXED), "doc-a"),
+    ).toBe(true);
+    expect(
+      needsReindex(
+        failAsk(startAsk("doc-a"), "cleared", INDEX_UNAVAILABLE),
+        "doc-a",
+      ),
+    ).toBe(true);
+  });
+
+  it("leaves every other failure, and every other state, alone", () => {
+    expect(
+      needsReindex(
+        failAsk(startAsk("doc-a"), "OpenAI rejected the API key"),
+        "doc-a",
+      ),
+    ).toBe(false);
+    expect(needsReindex(startAsk("doc-a"), "doc-a")).toBe(false);
+    expect(needsReindex(IDLE_ASK, "doc-a")).toBe(false);
+  });
+
+  // The question was about A and B is open now: indexing B fixes nothing.
+  it("only for the document the question was about", () => {
+    const failed = failAsk(startAsk("doc-a"), "cleared", INDEX_UNAVAILABLE);
+    expect(needsReindex(failed, "doc-b")).toBe(false);
+    expect(needsReindex(failed, null)).toBe(false);
   });
 });

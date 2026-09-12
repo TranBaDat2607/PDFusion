@@ -365,6 +365,7 @@ corrupting) the cooldown key for that purpose.
 | `src/desktop_pdf_translator/translators/rate_limiter.py` | Process-wide token-bucket QPS limiter, one singleton per LLM service |
 | `src/desktop_pdf_translator/rag/` | `EnhancedRAGChain`, and chat-index storage as one ChromaDB collection per index (`vector_store.py`); `index_spec.py` names the embedding model and chunker version every index records. Deep-search/web-research was dropped in `35bca2c` |
 | `src/desktop_pdf_translator/rag/onnx_embeddings.py` | MiniLM embeddings on onnxruntime — what replaced sentence-transformers |
+| `src/desktop_pdf_translator/rag/keyword_search.py` | BM25 over one index's chunks, the keyword half of `hybrid_search`. Stdlib-only — see "Chat answers" |
 | `src/desktop_pdf_translator/translators/_sbd_compat.py` | The `stanza` stub that lets the bundle drop torch |
 | `src/desktop_pdf_translator/utils/` | API key encryption; `file_export.py` (durable copy of a translated PDF); `logging_setup.py` (shared rotating `app.log` config); `paths.py` (`appdata_dir()`, resolved from `%LOCALAPPDATA%` exactly as the shell resolves it, and `logs_dir()`) |
 | `src/desktop_pdf_translator/storage/` | SQLite plumbing every store shares: `sqlite.py` (connection pragmas, per-thread connections, UTC-millisecond timestamps) and `migrations.py` (versioned schema migrations on `PRAGMA user_version`); `records.py` is `pdfusion.db`, the records database of documents and their chat indexes. Stdlib-only, re-exports nothing — see "Local data layer" |
@@ -393,8 +394,8 @@ All routes (except `GET /health`) require `Authorization: Bearer <token>`.
 | POST | `/translate/{job_id}/cancel` | Cancel an in-flight translation |
 | POST | `/rag/index` | Index a PDF into ChromaDB → returns `{ job_id }`. A document's id is the **SHA-256 of its bytes**, derived by the sidecar — the request carries no `document_id`, and `done` returns it. It used to be the file name stem, so two different `paper.pdf`s shared one index (#59). The index is recorded in `pdfusion.db` and is `ready` only once every chunk is stored; a PDF with no extractable text ends in an `error` event |
 | GET | `/rag/index/{job_id}/events` | SSE: `progress`, `done`, `error` |
-| POST | `/rag/ask` | Ask the RAG chain → returns `{ job_id }`. `document_id` is **required** (422 without it): a question is about exactly one document, and there is no "search every document" mode. A document with no ready index is refused with **409** before a job is created |
-| GET | `/rag/ask/{job_id}/events` | SSE: `progress`, `answer`, `done`, `error`. Retrieved chunks ride on `answer.pdf_references` (**not** `pdf_sources`); their `page` is **1-indexed**, or `null` when the chunk has none. Chunk metadata is 0-indexed and `PdfViewer.scrollToPage` counts from 1, so `rag_chain._display_page` converts at that one boundary |
+| POST | `/rag/ask` | Ask the RAG chain → returns `{ job_id }`. `document_id` is **required** (422 without it): a question is about exactly one document, and there is no "search every document" mode. A document with no ready index is refused with **409** before a job is created. `target_lang` is the language to answer in, `None`-defaulted to `default_target_lang` like `/translate`'s |
+| GET | `/rag/ask/{job_id}/events` | SSE: `progress`, `answer`, `done`, `error`. Retrieved chunks ride on `answer.pdf_references` (**not** `pdf_sources`); their `page` is **1-indexed**, or `null` when the chunk has none. Chunk metadata is 0-indexed and `PdfViewer.scrollToPage` counts from 1, so `rag_chain._display_page` converts at that one boundary. A question that can't be answered ends in `error`, never in an `answer`; `error.code` is `index_unavailable` when the document's index had to be cleared, and the chat panel then indexes it again (see "Chat answers") |
 | DELETE | `/rag/document/{document_id}` | Remove a document's chat indexes and their collections: **204** removed, **404** no index, **500** storage failure |
 | GET | `/pdf/file?path=...` | Stream a PDF from disk (used by pdf.js client-side) |
 | POST | `/pdf/export` | Copy a translated PDF to a user-chosen permanent path (`{source_path, destination_path, protect_path?}` → `{saved_path, bytes_written}`). `protect_path` is the opened document; it's refused as a destination |
@@ -727,7 +728,8 @@ that true:
   cancelled job fails the row and drops the collection (`_abandon`). Whatever
   that misses, `_recover` catches when a process first opens the vector store:
   `indexing` rows a dead process left are failed and their collections dropped,
-  and so is any collection no row accounts for.
+  any collection no row accounts for is dropped, and a `ready` row whose
+  collection is gone is deleted.
 - **Indexing and deleting are serialized per document** (`_document_lock`). The
   chat panel starts an index job whenever a PDF opens, so one document can be
   requested twice at once; the second job finds the first one's index ready.
@@ -740,6 +742,44 @@ that true:
   (`server.py:_remove_legacy_vector_stores`), the stores older builds used.
   `sidecar.rs:ensure_appdata_layout` creates `vectors/`, and must never create
   `chroma_db_v2` again.
+
+### Chat answers
+
+`rag/rag_chain.py` answers from one index's chunks, as above. What else it has
+to keep (#31), each with a test in `test_rag_isolation.py`:
+
+- **A failure is an `error` event, never an answer.** `answer_question` raises,
+  and `_run_ask` ends the job with `error`. The chain used to catch everything
+  and return "Sorry, I cannot answer…" as the answer, and a failing LLM fell
+  back to the template answer, which hid a rejected key behind excerpts that
+  looked like one. `generate()` on every LLM backend now goes through
+  `_call_with_backoff` and raises, the same as `translate()`'s SDK calls.
+- **Retrieval that finds nothing never reaches the model**
+  (`NOTHING_FOUND_ANSWER`). Given an empty context, a model answers from its
+  own knowledge, as if the document had said it.
+- **The answer model is looked up for every question**
+  (`EnhancedRAGChain._answer_model`), from `get_settings()` as it is at that
+  moment, and rebuilt only when the service, key or model changed. `PUT /config`
+  replaces the settings object, so a chain that kept the one it started with
+  ignored a key saved later. **Never rebuild the chain or rerun `_recover` to
+  pick up settings**: `_recover` fails every `indexing` row, so an index being
+  built right then would be failed and its collection dropped mid-write.
+- **Keyword scores are BM25** (`rag/keyword_search.py`). `rank-bm25` is not a
+  dependency and is excluded from the bundle. The index is built once per
+  question from the list `get_chunks` returned, so it only ever scores that
+  document. It runs off the event loop, and so does the surrounding-context
+  step. It folds case, diacritics and `đ` the way the viewer's find does.
+- **The answer language goes in the answer prompt only.**
+  `AskRequest.target_lang` is `None`-defaulted to `default_target_lang` and
+  resolved when the question is accepted, as `/translate` does. The HyDE prompt
+  gets no language instruction: its text is a search query, and in the answer's
+  language it would miss the words of a document written in another. With no
+  key, the template answer stays English.
+- **A ready index whose collection is gone is repaired in three places.**
+  `_recover` deletes the row. `_run_index` rebuilds the index instead of
+  reporting "Already indexed". `_run_ask` clears the row and ends with `error`
+  `code: index_unavailable`, which makes the chat panel index the document
+  again, as a 409 from `/rag/ask` does.
 
 ### Two-tier translation caching
 
@@ -1153,7 +1193,7 @@ and `shell.log`.
                                    # test_sbd_compat.py, test_onnx_embeddings.py,
                                    # test_rag_isolation.py, test_rag_api.py,
                                    # test_storage_migrations.py, test_storage_paths.py,
-                                   # test_records_store.py
+                                   # test_records_store.py, test_keyword_search.py
   python -m pytest tests -m smoke  # test_sidecar_smoke.py — excluded by default
 
   # Frontend (vitest, node environment — no jsdom)
