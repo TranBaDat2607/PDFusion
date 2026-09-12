@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { motion, AnimatePresence } from "motion/react";
 import { MessageSquare, Sparkles, Trash2, X } from "lucide-react";
+import { toast } from "sonner";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -9,14 +11,18 @@ import { ActionLog } from "@/components/chat/ActionLog";
 import { AssistantMessage } from "@/components/chat/AssistantMessage";
 import { ChatInput } from "@/components/chat/ChatInput";
 import { UserMessage } from "@/components/chat/UserMessage";
+import { useChatHistory, useClearChatHistory } from "@/hooks/useChatHistory";
 import { useRagAsk } from "@/hooks/useRagAsk";
 import { useRagIndex } from "@/hooks/useRagIndex";
 import { useConfig, useUpdateConfig } from "@/hooks/useConfig";
 import {
-  answerForDocument,
-  needsReindex,
-  type RagAnswer,
-} from "@/lib/rag-ask";
+  CHAT_DOCUMENTS_KEY,
+  appendExchange,
+  chatHistoryKey,
+  type ChatHistory,
+  type ChatMessage,
+} from "@/lib/chat-history";
+import { answerForDocument, needsReindex } from "@/lib/rag-ask";
 import { useAppStore } from "@/lib/store";
 
 interface ChatPanelProps {
@@ -24,15 +30,6 @@ interface ChatPanelProps {
   onJumpToPage?: (page: number) => void;
   showing?: boolean;
 }
-
-interface ChatMessage {
-  id: number;
-  kind: "user" | "assistant";
-  text?: string;
-  answer?: RagAnswer;
-}
-
-let messageCounter = 0;
 
 export function ChatPanel({
   documentPath,
@@ -43,11 +40,35 @@ export function ChatPanel({
   const ask = useRagAsk();
   const update = useUpdateConfig();
   const { data: config } = useConfig();
+  const queryClient = useQueryClient();
+  // Saved by the sidecar and read back by document id, so a conversation
+  // survives the panel closing, another PDF being opened, and a restart (#31).
+  const history = useChatHistory(index.state.documentId);
+  const clearHistory = useClearChatHistory();
   const setChatOpen = useAppStore((s) => s.setChatOpen);
   const setRagEnabled = useAppStore((s) => s.setRagEnabled);
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
   const scrollRef = useRef<HTMLDivElement>(null);
   const [pendingQuestion, setPendingQuestion] = useState<string | null>(null);
+
+  const saved = history.data?.messages ?? [];
+  // A question being answered, or one that failed, shows after the saved
+  // conversation. It takes the position its saved copy will have, so nothing
+  // re-animates when that copy arrives.
+  const showPending =
+    pendingQuestion !== null &&
+    (ask.state.status === "asking" || ask.state.status === "error");
+  const messages: ChatMessage[] = showPending
+    ? [
+        ...saved,
+        {
+          id: 0,
+          role: "user",
+          text: pendingQuestion,
+          answer: null,
+          created_at: "",
+        },
+      ]
+    : saved;
 
   const handleClose = useCallback(() => {
     setChatOpen(false);
@@ -55,13 +76,13 @@ export function ChatPanel({
     update.mutate({ rag_enabled: false });
   }, [setChatOpen, setRagEnabled, update]);
 
-  // A new document starts a new conversation, and indexes itself. Whatever
-  // the panel was asking belongs to the previous document, so it is aborted
-  // first: left running, its answer landed in this document's chat, with page
-  // links into the wrong PDF (#59).
+  // A new document has its own conversation, and indexes itself. Whatever the
+  // panel was asking belongs to the previous document, so it is aborted first:
+  // left running, its answer landed in this document's chat, with page links
+  // into the wrong PDF (#59). The sidecar still saves that answer under the
+  // document it was about.
   useEffect(() => {
     ask.reset();
-    setMessages([]);
     setPendingQuestion(null);
     if (!documentPath) {
       index.reset();
@@ -71,15 +92,25 @@ export function ChatPanel({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [documentPath]);
 
-  // When an answer arrives, append it — to the chat of the document it was
-  // asked about, and no other.
+  // When an answer about the open document arrives, show it at once. The
+  // sidecar saved it before sending it, and the refetch brings that copy.
   useEffect(() => {
     const answer = answerForDocument(ask.state, index.state.documentId);
-    if (!answer) return;
-    setMessages((prev) => [
-      ...prev,
-      { id: ++messageCounter, kind: "assistant", answer },
-    ]);
+    const documentId = ask.state.documentId;
+    if (!answer || !documentId) return;
+    const key = chatHistoryKey(documentId);
+    if (pendingQuestion !== null) {
+      queryClient.setQueryData<ChatHistory>(key, (current) =>
+        appendExchange(
+          current,
+          pendingQuestion,
+          answer,
+          new Date().toISOString(),
+        ),
+      );
+    }
+    void queryClient.invalidateQueries({ queryKey: key });
+    void queryClient.invalidateQueries({ queryKey: CHAT_DOCUMENTS_KEY });
     setPendingQuestion(null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ask.state.status, ask.state.answer]);
@@ -103,10 +134,6 @@ export function ChatPanel({
     ({ text }: { text: string }) => {
       const documentId = index.state.documentId;
       if (!documentId) return;
-      setMessages((prev) => [
-        ...prev,
-        { id: ++messageCounter, kind: "user", text },
-      ]);
       setPendingQuestion(text);
       // The toolbar's "To" language, which is also what Translate sends.
       void ask.ask({
@@ -117,6 +144,17 @@ export function ChatPanel({
     },
     [ask, index.state.documentId, config?.translation.default_target_lang],
   );
+
+  const handleClear = useCallback(() => {
+    const documentId = index.state.documentId;
+    if (!documentId) return;
+    clearHistory.mutate(documentId, {
+      onError: (e) =>
+        toast.error("Could not clear the conversation", {
+          description: (e as Error).message,
+        }),
+    });
+  }, [clearHistory, index.state.documentId]);
 
   const inputDisabled = !documentPath || index.state.status !== "ready";
 
@@ -145,8 +183,8 @@ export function ChatPanel({
           <Button
             size="sm"
             variant="ghost"
-            onClick={() => setMessages([])}
-            disabled={messages.length === 0}
+            onClick={handleClear}
+            disabled={saved.length === 0 || clearHistory.isPending}
           >
             <Trash2 className="mr-1.5 h-3.5 w-3.5" />
             Clear
@@ -180,16 +218,18 @@ export function ChatPanel({
 
         <div className="space-y-3">
           <AnimatePresence initial={false}>
-            {messages.map((m) => (
+            {messages.map((m, position) => (
+              // Keyed by position: the copy shown while a new answer is saved
+              // and the saved copy the refetch brings differ only in their ids.
               <motion.div
-                key={m.id}
+                key={position}
                 initial={{ opacity: 0, y: 8 }}
                 animate={{ opacity: 1, y: 0 }}
                 exit={{ opacity: 0 }}
                 transition={{ duration: 0.18 }}
               >
-                {m.kind === "user" && m.text && <UserMessage text={m.text} />}
-                {m.kind === "assistant" && m.answer && (
+                {m.role === "user" && <UserMessage text={m.text} />}
+                {m.role === "assistant" && m.answer && (
                   <AssistantMessage
                     answer={m.answer}
                     onJumpToPage={onJumpToPage}
@@ -251,4 +291,3 @@ function EmptyState({ ready }: { ready: boolean }) {
     </div>
   );
 }
-

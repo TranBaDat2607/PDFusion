@@ -263,6 +263,65 @@
         "title": "CancelPayload",
         "type": "object"
       },
+      "ChatHistoryResponse": {
+        "properties": {
+          "messages": {
+            "items": {
+              "$ref": "#/components/schemas/ChatMessageResponse"
+            },
+            "title": "Messages",
+            "type": "array"
+          }
+        },
+        "required": [
+          "messages"
+        ],
+        "title": "ChatHistoryResponse",
+        "type": "object"
+      },
+      "ChatMessageResponse": {
+        "description": "One saved chat message (#31).",
+        "properties": {
+          "answer": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AskResultPayload"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "created_at": {
+            "title": "Created At",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "integer"
+          },
+          "role": {
+            "enum": [
+              "user",
+              "assistant"
+            ],
+            "title": "Role",
+            "type": "string"
+          },
+          "text": {
+            "title": "Text",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "role",
+          "text",
+          "created_at"
+        ],
+        "title": "ChatMessageResponse",
+        "type": "object"
+      },
       "ChunkReadyEventPayload": {
         "description": "`ChunkReadyEvent.to_dict()` \u2014 the `chunk_ready` SSE event.",
         "properties": {
@@ -640,6 +699,89 @@
         "title": "ConfigUpdateRequest",
         "type": "object"
       },
+      "DocumentListResponse": {
+        "properties": {
+          "documents": {
+            "items": {
+              "$ref": "#/components/schemas/DocumentSummaryResponse"
+            },
+            "title": "Documents",
+            "type": "array"
+          }
+        },
+        "required": [
+          "documents"
+        ],
+        "title": "DocumentListResponse",
+        "type": "object"
+      },
+      "DocumentSummaryResponse": {
+        "description": "A recorded document, as Settings \u2192 Chat lists it (#31). Metadata only.",
+        "properties": {
+          "chunk_count": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Chunk Count"
+          },
+          "display_name": {
+            "title": "Display Name",
+            "type": "string"
+          },
+          "document_id": {
+            "title": "Document Id",
+            "type": "string"
+          },
+          "last_opened_at": {
+            "title": "Last Opened At",
+            "type": "string"
+          },
+          "page_count": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Page Count"
+          },
+          "path": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Path"
+          },
+          "question_count": {
+            "title": "Question Count",
+            "type": "integer"
+          },
+          "size_bytes": {
+            "title": "Size Bytes",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "document_id",
+          "display_name",
+          "size_bytes",
+          "question_count",
+          "last_opened_at"
+        ],
+        "title": "DocumentSummaryResponse",
+        "type": "object"
+      },
       "EmptyPayload": {
         "description": "The terminal `cancelled` event on both RAG streams \u2014 `api/routes/rag.py`\nsends a literal `{}` for it today.",
         "properties": {},
@@ -889,7 +1031,7 @@
         "type": "object"
       },
       "IndexProgressPayload": {
-        "description": "`progress` events from `_run_index`. `chunks` is only sent from two of\nthe three call sites.",
+        "description": "`progress` events from `_run_index`. `chunks` is sent only once there is\na count. `document_id` is on the first event only: the document is named\nbefore the vector store loads, so the chat panel can show its history\nmeanwhile (#31).",
         "properties": {
           "chunks": {
             "anyOf": [
@@ -902,6 +1044,18 @@
             ],
             "default": null,
             "title": "Chunks"
+          },
+          "document_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Document Id"
           },
           "progress": {
             "title": "Progress",
@@ -1302,6 +1456,19 @@
           }
         },
         "title": "RAGSettings",
+        "type": "object"
+      },
+      "ResetIndexesResponse": {
+        "properties": {
+          "removed": {
+            "title": "Removed",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "removed"
+        ],
+        "title": "ResetIndexesResponse",
         "type": "object"
       },
       "ServiceCredentialUpdate": {
@@ -2283,6 +2450,7 @@
     },
     "/rag/document/{document_id}": {
       "delete": {
+        "description": "Forget a document: its record, the paths it was opened from, its chat\nindexes and its chat history. Opening the PDF again starts afresh.",
         "operationId": "delete_document_rag_document__document_id__delete",
         "parameters": [
           {
@@ -2327,6 +2495,164 @@
           }
         },
         "summary": "Delete Document",
+        "tags": [
+          "rag"
+        ]
+      }
+    },
+    "/rag/document/{document_id}/messages": {
+      "delete": {
+        "operationId": "clear_chat_history_rag_document__document_id__messages_delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "document_id",
+            "required": true,
+            "schema": {
+              "title": "Document Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Clear Chat History",
+        "tags": [
+          "rag"
+        ]
+      },
+      "get": {
+        "description": "One document's chat history, oldest first; empty when it has none.",
+        "operationId": "get_chat_history_rag_document__document_id__messages_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "document_id",
+            "required": true,
+            "schema": {
+              "title": "Document Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChatHistoryResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Chat History",
+        "tags": [
+          "rag"
+        ]
+      }
+    },
+    "/rag/documents": {
+      "get": {
+        "description": "Every recorded document, most recently opened first.\n\nA records query: listing never loads the vector store or the embedding model.",
+        "operationId": "list_documents_rag_documents_get",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DocumentListResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Documents",
         "tags": [
           "rag"
         ]
@@ -2468,6 +2794,56 @@
           }
         },
         "summary": "Stream Index Events",
+        "tags": [
+          "rag"
+        ]
+      }
+    },
+    "/rag/reset": {
+      "post": {
+        "description": "Delete every chat index and its chunks: the recovery action for a damaged\nvector store (#31).\n\nDocuments and chat history stay, and each document is indexed again the\nnext time chat opens it. An index being built right now is left to finish.\nRuns under `_init_lock`, so the store can't open partway through. When it\nisn't open, `vectors/` is deleted outright, which works even on a store too\ndamaged to open.",
+        "operationId": "reset_indexes_rag_reset_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResetIndexesResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Reset Indexes",
         "tags": [
           "rag"
         ]

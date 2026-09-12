@@ -1,11 +1,12 @@
-"""The records database: the documents the app knows, and their chat indexes.
+"""The records database: the documents the app knows, their chat indexes, and
+what was said about them.
 
 `pdfusion.db`, under the app's data root, is the system of record (#59). A
 document is identified by the SHA-256 of its bytes; the paths it has been
 opened from are attributes of it, not its key. Each chat index over a document
 is a row here, and its chunks live in a ChromaDB collection named after that
 row (`rag/vector_store.py`) — derived data, which `api/routes/rag.py:_recover`
-reconciles with these rows.
+reconciles with these rows. A document's chat history is kept here too (#31).
 
 The caches keep files of their own (`translation_cache/`,
 `translated_pdf_cache/`): they are disposable, and clearing or deleting them
@@ -17,12 +18,13 @@ Stdlib-only.
 
 from __future__ import annotations
 
+import json
 import sqlite3
 import threading
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
-from typing import List, Optional, Set
+from typing import Any, Dict, List, Optional, Set
 
 from ..utils.paths import appdata_dir
 from .migrations import Migration, migrate
@@ -81,8 +83,33 @@ def _v1_documents_and_chat_indexes(conn: sqlite3.Connection) -> None:
     )
 
 
+def _v2_chat_messages(conn: sqlite3.Connection) -> None:
+    # A message belongs to a document, not to one of its indexes:
+    # `complete_index` deletes a document's other indexes, so history keyed by
+    # index would vanish whenever `rag/index_spec.py` changed. The page numbers
+    # in a saved answer stay right, because a document's id is the hash of its
+    # bytes. The `chunk_id`s in it name chunks of the index it was answered
+    # from, and nothing may rely on them.
+    conn.execute(
+        """
+        CREATE TABLE chat_messages (
+            id           INTEGER PRIMARY KEY AUTOINCREMENT,
+            document_id  TEXT NOT NULL REFERENCES documents (id) ON DELETE CASCADE,
+            role         TEXT NOT NULL CHECK (role IN ('user', 'assistant')),
+            content      TEXT NOT NULL,   -- the question, or the answer's text
+            answer_json  TEXT,            -- assistant only: the answer as sent, citations included
+            created_at   INTEGER NOT NULL
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX chat_messages_by_document ON chat_messages (document_id, id)"
+    )
+
+
 _MIGRATIONS = (
     Migration(1, "documents and chat indexes", _v1_documents_and_chat_indexes),
+    Migration(2, "chat history", _v2_chat_messages),
 )
 
 
@@ -98,6 +125,30 @@ class IndexRecord:
     error: Optional[str]
     created_at: int
     completed_at: Optional[int]
+
+
+@dataclass(frozen=True)
+class ChatMessageRecord:
+    id: int
+    document_id: str
+    role: str  # 'user' | 'assistant'
+    content: str
+    answer: Optional[Dict[str, Any]]  # assistant only: the answer as it was sent
+    created_at: int
+
+
+@dataclass(frozen=True)
+class DocumentSummary:
+    """A recorded document, as Settings lists it. Metadata only."""
+
+    id: str
+    display_name: str
+    size_bytes: int
+    page_count: Optional[int]
+    last_opened_at: int
+    path: Optional[str]  # where it was most recently opened from
+    chunk_count: Optional[int]  # of its ready index, `None` without one
+    question_count: int
 
 
 class RecordsStore:
@@ -160,6 +211,103 @@ class RecordsStore:
             (document_id,),
         ).fetchone()
         return row["path"] if row else None
+
+    def list_documents(
+        self, embedding_model: str, chunker_version: str
+    ) -> List[DocumentSummary]:
+        """Every recorded document, most recently opened first.
+
+        `chunk_count` is that of the document's ready index for this embedding
+        model and chunker, the one a question would use; `None` without one.
+        """
+        rows = self._conn().execute(
+            """
+            SELECT d.id, d.display_name, d.size_bytes, d.page_count, d.last_opened_at,
+                   (SELECT l.path FROM document_locations l
+                     WHERE l.document_id = d.id
+                     ORDER BY l.last_seen_at DESC, l.rowid DESC LIMIT 1) AS path,
+                   i.chunk_count,
+                   (SELECT COUNT(*) FROM chat_messages m
+                     WHERE m.document_id = d.id AND m.role = 'user') AS question_count
+              FROM documents d
+              LEFT JOIN rag_indexes i
+                ON i.document_id = d.id AND i.status = 'ready'
+               AND i.embedding_model = ? AND i.chunker_version = ?
+             ORDER BY d.last_opened_at DESC, d.rowid DESC
+            """,
+            (embedding_model, chunker_version),
+        ).fetchall()
+        return [DocumentSummary(**{key: row[key] for key in row.keys()}) for row in rows]
+
+    def delete_document(self, document_id: str) -> Optional[List[str]]:
+        """Forget a document: its record, the paths it was opened from, its chat
+        indexes and its chat history, in one transaction.
+
+        Returns the deleted indexes' ids, whose collections are the caller's to
+        drop, or `None` when the document isn't recorded.
+        """
+        conn = self._conn()
+        with self._write_lock, conn:
+            index_ids = [
+                r["id"]
+                for r in conn.execute(
+                    "SELECT id FROM rag_indexes WHERE document_id = ?", (document_id,)
+                )
+            ]
+            cursor = conn.execute("DELETE FROM documents WHERE id = ?", (document_id,))
+        return index_ids if cursor.rowcount else None
+
+    # -- chat history --------------------------------------------------------
+
+    def add_exchange(
+        self, document_id: str, question: str, answer: Dict[str, Any]
+    ) -> None:
+        """Record a question and its answer, both or neither.
+
+        Raises `sqlite3.IntegrityError` when the document isn't recorded, which
+        happens when it was removed while the question was being answered.
+        """
+        now = now_ms()
+        conn = self._conn()
+        with self._write_lock, conn:
+            conn.execute(
+                "INSERT INTO chat_messages (document_id, role, content, created_at) "
+                "VALUES (?, 'user', ?, ?)",
+                (document_id, question, now),
+            )
+            conn.execute(
+                "INSERT INTO chat_messages "
+                "(document_id, role, content, answer_json, created_at) "
+                "VALUES (?, 'assistant', ?, ?, ?)",
+                (document_id, answer.get("answer", ""), json.dumps(answer, default=str), now),
+            )
+
+    def messages(self, document_id: str) -> List[ChatMessageRecord]:
+        """A document's chat history, oldest first."""
+        rows = self._conn().execute(
+            "SELECT * FROM chat_messages WHERE document_id = ? ORDER BY id",
+            (document_id,),
+        ).fetchall()
+        return [
+            ChatMessageRecord(
+                id=row["id"],
+                document_id=row["document_id"],
+                role=row["role"],
+                content=row["content"],
+                answer=json.loads(row["answer_json"]) if row["answer_json"] else None,
+                created_at=row["created_at"],
+            )
+            for row in rows
+        ]
+
+    def clear_messages(self, document_id: str) -> int:
+        """Delete a document's chat history; return how many messages went."""
+        conn = self._conn()
+        with self._write_lock, conn:
+            cursor = conn.execute(
+                "DELETE FROM chat_messages WHERE document_id = ?", (document_id,)
+            )
+        return cursor.rowcount
 
     # -- chat indexes --------------------------------------------------------
 
@@ -274,17 +422,21 @@ class RecordsStore:
             )
         return stale
 
-    def delete_document_indexes(self, document_id: str) -> List[str]:
-        """Delete every index of a document; return their ids, `[]` if none."""
+    def delete_settled_indexes(self) -> List[str]:
+        """Delete every index that isn't being built; return their ids.
+
+        An index still `indexing` belongs to a job in flight, which completes
+        or fails it. Documents and chat history stay.
+        """
         conn = self._conn()
         with self._write_lock, conn:
             ids = [
                 r["id"]
                 for r in conn.execute(
-                    "SELECT id FROM rag_indexes WHERE document_id = ?", (document_id,)
+                    "SELECT id FROM rag_indexes WHERE status != 'indexing'"
                 )
             ]
-            conn.execute("DELETE FROM rag_indexes WHERE document_id = ?", (document_id,))
+            conn.execute("DELETE FROM rag_indexes WHERE status != 'indexing'")
         return ids
 
     def delete_index(self, index_id: str) -> bool:

@@ -147,6 +147,7 @@ def sidecar(store: ChromaDBManager, records: RecordsStore, monkeypatch: pytest.M
         return store
 
     monkeypatch.setattr(rag_routes, "_get_store", get_store)
+    monkeypatch.setattr(rag_routes, "_loaded_store", lambda: store)
     monkeypatch.setattr(rag_routes, "get_records_store", lambda: records)
     monkeypatch.setattr(rag_routes, "_load_document_processor", lambda: _FakeProcessor)
     monkeypatch.setattr(rag_routes, "_document_locks", {})
@@ -349,16 +350,20 @@ def test_a_question_reads_its_index_once_and_cites_its_document(
 # ---------------------------------------------------------------------------
 
 
-def test_deleting_a_document_drops_its_collection_and_only_its(
+def test_removing_a_document_forgets_its_index_and_conversation_and_only_its(
     sidecar, two_papers, records: RecordsStore, store: ChromaDBManager
 ):
     index_first = _ready(records, run_index(two_papers[0]))
     index_second = _ready(records, run_index(two_papers[1]))
+    records.add_exchange(index_first.document_id, QUESTION, {"answer": "Alpha."})
+    records.add_exchange(index_second.document_id, QUESTION, {"answer": "Beta."})
 
     asyncio.run(rag_routes.delete_document(index_first.document_id))
 
     assert store.index_ids() == {index_second.id}
     assert records.index_ids() == {index_second.id}
+    assert records.messages(index_first.document_id) == []
+    assert len(records.messages(index_second.document_id)) == 2
     with pytest.raises(HTTPException) as again:
         asyncio.run(rag_routes.delete_document(index_first.document_id))
     assert again.value.status_code == 404
@@ -608,3 +613,85 @@ def test_a_question_whose_index_is_gone_ends_in_an_error_and_clears_the_index(
         },
     )
     assert records.index_ids() == set()
+
+
+# ---------------------------------------------------------------------------
+# chat history and reset (#31)
+# ---------------------------------------------------------------------------
+
+
+def test_an_answer_is_saved_under_the_document_it_was_asked_about(
+    asking: EnhancedRAGChain, two_papers, records: RecordsStore
+):
+    """The question was accepted for the first paper; the second was opened
+    before the answer arrived. The panel shows neither in the second's chat."""
+    index_first = _ready(records, run_index(two_papers[0]))
+    index_second = _ready(records, run_index(two_papers[1]))
+
+    result = run_ask(index_first)
+
+    assert result["type"] == "done"
+    user, assistant = records.messages(index_first.document_id)
+    assert (user.role, user.content) == ("user", QUESTION)
+    assert assistant.answer["answer"] == result["data"]["answer"]
+    assert {r["document_id"] for r in assistant.answer["pdf_references"]} == {
+        index_first.document_id
+    }
+    assert records.messages(index_second.document_id) == []
+
+
+def test_a_question_that_fails_is_not_saved(
+    asking: EnhancedRAGChain, two_papers, records: RecordsStore,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    index = _ready(records, run_index(two_papers[0]))
+    _answer_with(asking, monkeypatch, _Translator(_SdkError(401)))
+
+    assert run_ask(index)["type"] == "error"
+
+    assert records.messages(index.document_id) == []
+
+
+def test_indexing_names_the_document_before_the_vector_store_opens(
+    sidecar, two_papers, monkeypatch: pytest.MonkeyPatch
+):
+    """Opening the store loads the embedding model, seconds on first use. The
+    chat panel shows the document's saved conversation meanwhile."""
+    job = Job(job_id="index")
+    events_before_store: List[int] = []
+    get_store = rag_routes._get_store
+
+    async def counting_get_store():
+        events_before_store.append(len(job.history))
+        return await get_store()
+
+    monkeypatch.setattr(rag_routes, "_get_store", counting_get_store)
+
+    asyncio.run(rag_routes._run_index(job, IndexRequest(file_path=str(two_papers[0]))))
+
+    first = job.history[0]
+    assert first["type"] == "progress"
+    assert first["data"]["document_id"] == compute_file_hash(two_papers[0])
+    assert events_before_store == [1]
+
+
+def test_reset_deletes_every_index_but_one_being_built_and_keeps_conversations(
+    sidecar, two_papers, store: ChromaDBManager, records: RecordsStore, tmp_path: Path
+):
+    index_first = _ready(records, run_index(two_papers[0]))
+    _ready(records, run_index(two_papers[1]))
+    records.add_exchange(index_first.document_id, QUESTION, {"answer": "Alpha."})
+    third = _write_paper(tmp_path / "third.pdf", b"gamma")
+    records.upsert_document(
+        compute_file_hash(third), third.name, third.stat().st_size, str(third)
+    )
+    building = records.begin_index(
+        compute_file_hash(third), EMBEDDING_MODEL, EMBEDDING_DIMENSIONS, CHUNKER_VERSION
+    )
+    asyncio.run(store.add_chunks(building.id, _chunks(ALPHA)))
+
+    result = asyncio.run(rag_routes.reset_indexes())
+
+    assert result.removed == 2
+    assert records.index_ids() == store.index_ids() == {building.id}
+    assert len(records.messages(index_first.document_id)) == 2

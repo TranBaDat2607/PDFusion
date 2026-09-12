@@ -11,6 +11,7 @@ import {
   XCircle,
 } from "lucide-react";
 
+import { ChatIndexTab } from "@/components/settings/ChatIndexTab";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -47,8 +48,18 @@ type LlmServiceCode = Exclude<ServiceCode, "argos">;
 const LLM_SERVICES: LlmServiceCode[] = ["openai", "gemini", "anthropic"];
 const ALL_SERVICES: ServiceCode[] = ["argos", "openai", "gemini", "anthropic"];
 
-// Pseudo-tab value for the cache panel — not a real translation service.
-type TabValue = ServiceCode | "cache";
+// Pseudo-tab values for the cache and chat panels — not translation services.
+type TabValue = ServiceCode | "cache" | "chat";
+
+// Short names for the tab row. The services' full names ("Argos Translate
+// (offline)") are wider than a column and overlapped their neighbours; each
+// stays available as its tab's tooltip.
+const TAB_LABELS: Record<ServiceCode, string> = {
+  argos: "Argos",
+  openai: "OpenAI",
+  gemini: "Gemini",
+  anthropic: "Claude",
+};
 
 interface SettingsSheetProps {
   open: boolean;
@@ -129,13 +140,18 @@ export function SettingsSheet({ open, onOpenChange }: SettingsSheetProps) {
 
         <div className="flex-1 overflow-y-auto px-4">
           <Tabs value={tab} onValueChange={(v) => setTab(v as TabValue)}>
-            <TabsList className="grid w-full grid-cols-5">
+            <TabsList className="grid w-full grid-cols-6">
               {ALL_SERVICES.map((c) => (
-                <TabsTrigger key={c} value={c}>
-                  {options?.services.find((s) => s.code === c)?.label ?? c}
+                <TabsTrigger
+                  key={c}
+                  value={c}
+                  title={options?.services.find((s) => s.code === c)?.label ?? c}
+                >
+                  {TAB_LABELS[c]}
                 </TabsTrigger>
               ))}
               <TabsTrigger value="cache">Cache</TabsTrigger>
+              <TabsTrigger value="chat">Chat</TabsTrigger>
             </TabsList>
 
             <TabsContent value="argos" className="mt-4">
@@ -147,6 +163,10 @@ export function SettingsSheet({ open, onOpenChange }: SettingsSheetProps) {
               <div className="mt-6 border-t border-border pt-6">
                 <PerformanceSection />
               </div>
+            </TabsContent>
+
+            <TabsContent value="chat" className="mt-4">
+              <ChatIndexTab open={open && tab === "chat"} />
             </TabsContent>
 
             {LLM_SERVICES.map((code) => {

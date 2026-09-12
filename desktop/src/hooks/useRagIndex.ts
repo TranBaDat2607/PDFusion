@@ -71,6 +71,10 @@ export function useRagIndex() {
               ...s,
               stage: p.stage ?? s.stage,
               progress: p.progress ?? s.progress,
+              // The first event names the document, before the embedding model
+              // has loaded, so the panel can show its saved chat meanwhile. The
+              // status stays `indexing`: nothing can be asked until `done`.
+              documentId: p.document_id ?? s.documentId,
             }));
           } else if (type === "done") {
             const c = data as components["schemas"]["IndexDonePayload"];
