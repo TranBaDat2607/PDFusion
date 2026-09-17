@@ -184,6 +184,43 @@ def test_an_environment_override_merges_rather_than_replaces_its_section(
     assert settings.openai.model == "gpt-4o-mini"
 
 
+def test_an_environment_key_is_not_used_with_a_saved_endpoint(
+    manager: ConfigManager, monkeypatch: pytest.MonkeyPatch
+):
+    """The environment key is the provider's. A service pointed elsewhere keeps
+    the key saved with its endpoint, or has none (#32)."""
+    write_config(
+        manager,
+        {
+            "openai": {"api_key": "ollama", "base_url": "http://localhost:11434/v1"},
+            "anthropic": {"base_url": "http://localhost:11434"},
+        },
+    )
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-from-env")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-from-env")
+    monkeypatch.setenv("OPENAI_MODEL", "llama3.2:3b")
+    settings = manager.load_settings()
+
+    assert settings.openai.api_key == "ollama"
+    assert settings.openai.base_url == "http://localhost:11434/v1"
+    assert settings.openai.model == "llama3.2:3b"
+    assert settings.anthropic.api_key is None
+    assert settings.anthropic.base_url == "http://localhost:11434"
+
+
+def test_an_environment_key_is_used_when_the_saved_endpoint_is_dropped(
+    manager: ConfigManager, monkeypatch: pytest.MonkeyPatch
+):
+    """An endpoint that fails validation is dropped, so requests go to the
+    provider, and the provider's key goes with them."""
+    write_config(manager, {"openai": {"base_url": "localhost:11434"}})
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-from-env")
+    settings = manager.load_settings()
+
+    assert settings.openai.base_url is None
+    assert settings.openai.api_key == "sk-from-env"
+
+
 def test_numeric_environment_overrides_are_parsed(
     manager: ConfigManager, monkeypatch: pytest.MonkeyPatch
 ):
