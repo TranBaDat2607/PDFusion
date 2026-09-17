@@ -194,6 +194,28 @@ class TranslateRequest(BaseModel):
     )
 
 
+class EstimateRequest(BaseModel):
+    """What a translation of these pages would cost an LLM, before it runs."""
+
+    file_path: str
+    page_ranges: Optional[PageRangeList] = Field(
+        None, description="As in TranslateRequest; omitted or null: every page"
+    )
+    # `None`: the configured default, as for /translate.
+    target_lang: Optional[LanguageCode] = None
+
+
+class TranslationEstimate(BaseModel):
+    """A rough count (`translators/usage_estimate.py`): PyMuPDF's text blocks
+    stand in for BabelDOC's paragraphs, and characters for tokens."""
+
+    page_count: int
+    pages_selected: int
+    paragraphs: int
+    input_tokens: int
+    output_tokens: int
+
+
 class JobAccepted(BaseModel):
     job_id: str
 

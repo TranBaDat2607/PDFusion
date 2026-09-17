@@ -385,6 +385,28 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/translate/estimate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Estimate Translation
+         * @description Roughly how many tokens translating these pages would take (#33). The
+         *     toolbar shows it when an LLM will run. Off the event loop: it reads every
+         *     selected page's text.
+         */
+        post: operations["estimate_translation_translate_estimate_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/translate/prewarm": {
         parameters: {
             query?: never;
@@ -904,6 +926,23 @@ export interface components {
             ready: boolean;
         };
         /**
+         * EstimateRequest
+         * @description What a translation of these pages would cost an LLM, before it runs.
+         */
+        EstimateRequest: {
+            /** File Path */
+            file_path: string;
+            /**
+             * Page Ranges
+             * @description As in TranslateRequest; omitted or null: every page
+             */
+            page_ranges?: [
+                number,
+                number
+            ][] | null;
+            target_lang?: components["schemas"]["LanguageCode"] | null;
+        };
+        /**
          * ExportPdfRequest
          * @description Save a translated PDF to a permanent location the user picked.
          *
@@ -1317,6 +1356,23 @@ export interface components {
              * @default 1
              */
             visible_page: number;
+        };
+        /**
+         * TranslationEstimate
+         * @description A rough count (`translators/usage_estimate.py`): PyMuPDF's text blocks
+         *     stand in for BabelDOC's paragraphs, and characters for tokens.
+         */
+        TranslationEstimate: {
+            /** Input Tokens */
+            input_tokens: number;
+            /** Output Tokens */
+            output_tokens: number;
+            /** Page Count */
+            page_count: number;
+            /** Pages Selected */
+            pages_selected: number;
+            /** Paragraphs */
+            paragraphs: number;
         };
         /**
          * TranslationService
@@ -2143,6 +2199,41 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["JobAccepted"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    estimate_translation_translate_estimate_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["EstimateRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TranslationEstimate"];
                 };
             };
             /** @description Validation Error */

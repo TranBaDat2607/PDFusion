@@ -22,6 +22,7 @@ from desktop_pdf_translator.processors.pdf_pages import (
     inspect_pdf,
     rebuild_rolling_pdf,
     split_into_chunks,
+    text_stats,
 )
 
 
@@ -71,6 +72,51 @@ def test_an_unreadable_pdf_is_refused(tmp_path: Path):
     broken.write_bytes(b"not a pdf at all")
     with pytest.raises(FileValidationError, match="Cannot open PDF file"):
         inspect_pdf(broken)
+
+
+# ---------------------------------------------------------------------------
+# text_stats
+# ---------------------------------------------------------------------------
+
+
+def test_text_is_counted_on_the_selected_pages_only(source: Path):
+    everything = text_stats(source, None, 0)
+    two = text_stats(source, [3, 7], 0)
+    assert everything.paragraphs == 10
+    assert two.paragraphs == 2
+    # "original 3" and "original 7": ten characters each, none of them CJK.
+    assert (two.cjk_chars, two.other_chars) == (0, 20)
+
+
+def test_short_blocks_are_skipped_like_a_run_skips_them(tmp_path: Path):
+    pdf = tmp_path / "short.pdf"
+    with fitz.open() as doc:
+        page = doc.new_page()
+        page.insert_text((72, 72), "4")
+        page.insert_text((72, 400), "A sentence long enough to translate.")
+        doc.save(pdf)
+    assert text_stats(pdf, None, 5).paragraphs == 1
+    assert text_stats(pdf, None, 0).paragraphs == 2
+
+
+def test_images_are_not_paragraphs(tmp_path: Path):
+    pdf = tmp_path / "picture.pdf"
+    with fitz.open() as doc:
+        page = doc.new_page()
+        pix = fitz.Pixmap(fitz.csRGB, fitz.IRect(0, 0, 20, 20), False)
+        page.insert_image(fitz.Rect(72, 72, 172, 172), pixmap=pix)
+        doc.save(pdf)
+    assert text_stats(pdf, None, 0).paragraphs == 0
+
+
+def test_cjk_text_is_counted_as_such(tmp_path: Path):
+    pdf = tmp_path / "japanese.pdf"
+    with fitz.open() as doc:
+        page = doc.new_page()
+        page.insert_text((72, 72), "山の天気", fontname="japan")
+        doc.save(pdf)
+    stats = text_stats(pdf, None, 0)
+    assert (stats.paragraphs, stats.cjk_chars, stats.other_chars) == (1, 4, 0)
 
 
 # ---------------------------------------------------------------------------

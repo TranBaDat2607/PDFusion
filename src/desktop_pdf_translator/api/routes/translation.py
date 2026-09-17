@@ -19,20 +19,28 @@ from sse_starlette.sse import EventSourceResponse
 from ...config import TranslationService, get_settings
 from ...engine_assets import MISSING_ASSETS_MESSAGE, argos_pack_ready, engine_ready
 from ...processors.exceptions import FileValidationError
-from ...processors.page_selection import PageSelectionError, validate_selection
-from ...processors.pdf_pages import inspect_pdf
+from ...processors.page_selection import (
+    PageSelectionError,
+    limit_problem,
+    selected_pages,
+    validate_selection,
+)
+from ...processors.pdf_pages import inspect_pdf, text_stats
 from ...translators.capabilities import (
     resolve_effective_service,
     resolve_languages,
     unsupported_reason,
 )
+from ...translators.usage_estimate import estimate_tokens
 from ..auth import require_token
 from ..jobs import get_registry, serialize_sse_event
 from ..schemas import (
+    EstimateRequest,
     JobAccepted,
     PrewarmRequest,
     PrewarmResponse,
     TranslateRequest,
+    TranslationEstimate,
 )
 
 if TYPE_CHECKING:
@@ -219,6 +227,53 @@ async def start_translation(payload: TranslateRequest) -> JobAccepted:
     job = await registry.create()
     job.task = asyncio.create_task(_run_translation(job.job_id, payload))
     return JobAccepted(job_id=job.job_id)
+
+
+def _measure(payload: EstimateRequest, settings) -> TranslationEstimate:
+    """Blocking: opens the PDF and reads the selected pages' text."""
+    path = Path(payload.file_path)
+    info = inspect_pdf(path)
+    # A file too big to translate isn't read through for an estimate. The page
+    # limit is left out: over it, Translate offers the pages that fit, and the
+    # estimate describes what the user selected.
+    too_big = limit_problem(
+        page_count=info.page_count,
+        selected_count=0,
+        size_mb=info.size_mb,
+        max_pages=settings.translation.max_pages,
+        max_size_mb=settings.translation.max_file_size_mb,
+    )
+    if too_big:
+        raise PageSelectionError(too_big)
+    pages = selected_pages(payload.page_ranges, info.page_count)
+    stats = text_stats(path, pages, settings.translation.min_text_length)
+    _, target_lang = resolve_languages(settings, None, payload.target_lang)
+    tokens = estimate_tokens(
+        paragraphs=stats.paragraphs,
+        cjk_chars=stats.cjk_chars,
+        other_chars=stats.other_chars,
+        target_lang=target_lang.value,
+    )
+    return TranslationEstimate(
+        page_count=info.page_count,
+        pages_selected=info.page_count if pages is None else len(pages),
+        paragraphs=stats.paragraphs,
+        input_tokens=tokens.input_tokens,
+        output_tokens=tokens.output_tokens,
+    )
+
+
+@router.post("/estimate", response_model=TranslationEstimate)
+async def estimate_translation(payload: EstimateRequest) -> TranslationEstimate:
+    """Roughly how many tokens translating these pages would take (#33). The
+    toolbar shows it when an LLM will run. Off the event loop: it reads every
+    selected page's text."""
+    if not Path(payload.file_path).exists():
+        raise HTTPException(status_code=400, detail=f"File not found: {payload.file_path}")
+    try:
+        return await asyncio.to_thread(_measure, payload, get_settings())
+    except (FileValidationError, PageSelectionError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
 
 
 @router.get("/{job_id}/events")

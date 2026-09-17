@@ -1,5 +1,6 @@
-"""The PyMuPDF work around a translation: inspecting the input, splitting it
-into chunks, and assembling the rolling PDF the viewer shows (#33).
+"""The PyMuPDF work around a translation: inspecting the input, measuring its
+text, splitting it into chunks, and assembling the rolling PDF the viewer
+shows (#33).
 
 `fitz` is imported inside each function. `api/routes/translation.py` calls
 `inspect_pdf` for its pre-flight, and that module is imported while the
@@ -15,6 +16,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Optional, Sequence, Tuple
 
+from ..translators.usage_estimate import count_cjk
 from .exceptions import FileValidationError
 from .page_selection import PageRange, Segment
 
@@ -48,6 +50,44 @@ def inspect_pdf(path: Path) -> PdfInfo:
         raise
     except Exception as exc:  # noqa: BLE001
         raise FileValidationError(f"File validation failed: {exc}")
+
+
+@dataclass(frozen=True)
+class TextStats:
+    """The text a translation would send, as PyMuPDF sees it."""
+
+    paragraphs: int
+    cjk_chars: int
+    other_chars: int
+
+
+def text_stats(
+    path: Path, pages: Optional[Sequence[int]], min_length: int
+) -> TextStats:
+    """Text blocks and their characters on `pages` (1-indexed; `None` for all).
+
+    A text block stands in for a paragraph: BabelDOC finds its own, and sends
+    each one to the translator separately. Blocks shorter than `min_length`
+    are skipped, as `translation.min_text_length` skips them in a run.
+    Whitespace runs count as one character.
+    """
+    import fitz  # PyMuPDF
+
+    paragraphs = cjk = other = 0
+    with fitz.open(path) as doc:
+        for number in pages or range(1, doc.page_count + 1):
+            for block in doc[number - 1].get_text("blocks"):
+                # (x0, y0, x1, y1, text, block_no, block_type); type 1 is an image.
+                if block[6] != 0:
+                    continue
+                text = " ".join(block[4].split())
+                if len(text) < max(1, min_length):
+                    continue
+                paragraphs += 1
+                wide = count_cjk(text)
+                cjk += wide
+                other += len(text) - wide
+    return TextStats(paragraphs=paragraphs, cjk_chars=cjk, other_chars=other)
 
 
 def split_into_chunks(
