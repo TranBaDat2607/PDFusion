@@ -964,7 +964,13 @@ provider (#32). README has the recipe. Four rules hold that together:
   sheet mirrors the rule (`lib/service-settings.ts:endpointNeedsKey`) so the
   user meets it before the 422. Endpoints are normalized in one place,
   `config/models.py:normalize_base_url` (trimmed, no trailing slash), so a URL
-  typed again is not a change.
+  typed again is not a change. The environment is held to the same rule:
+  `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` replace the saved key on every load,
+  and the sidecar inherits the user's whole environment, so
+  `ConfigManager._keep_environment_keys_off_endpoints` ignores them for a
+  service that has its own endpoint. Without that, the key a `PUT` had to carry
+  gave way to the environment's on the next start, and the environment's went
+  to the new endpoint.
 - **A parameter a model refuses is left out, not failed on.** Claude Opus 4.7
   and later answer 400 to a non-default `temperature`, and OpenAI's reasoning
   models refuse `temperature` and `max_tokens`; PDFusion sends them on every
@@ -1087,7 +1093,7 @@ deliberately not implemented: the panes scroll and zoom independently.
 
 - Runtime config: `%LOCALAPPDATA%\PDFusion\config.toml` (encrypted API keys). Every store resolves that root through `utils/paths.appdata_dir()`, the same way the shell's `sidecar.rs:appdata_dir` does. Python used to hardcode `~/AppData/Local/PDFusion`, which is a different folder wherever Local AppData has been relocated; on such a machine `ConfigManager` copies a `config.toml` left at the old root, once (`adopt_legacy_config`), so settings and keys survive the move.
 - Defaults / reference: `config/default_config.toml`.
-- `.env` is auto-loaded via `python-dotenv` and overrides the TOML. It's searched at the **repo root** (resolved from `__file__`, not `cwd` — `cwd` is non-writable `C:\Program Files\…` on an installed launch) and in the AppData config dir. See `config/manager.py:_load_dotenv`.
+- `.env` is auto-loaded via `python-dotenv` and overrides the TOML, except an API key for a service set to its own endpoint (see "LLM endpoints and models"). It's searched at the **repo root** (resolved from `__file__`, not `cwd` — `cwd` is non-writable `C:\Program Files\…` on an installed launch) and in the AppData config dir. See `config/manager.py:_load_dotenv`.
 - Singleton: `get_config_manager()` / `get_settings()` from `desktop_pdf_translator.config`.
 - A saved model its provider has shut down loads as the service's current default (`RETIRED_MODELS`); see "LLM endpoints and models".
 - Cache-related settings live under `[translation]` in `AppSettings` (`config/models.py`): `cache_translations` (paragraph cache, default on), `cache_translated_pdfs` (whole-PDF cache, default on), `pdf_cache_max_size_mb` (LRU cap, default 1000). Changing `pdf_cache_max_size_mb` applies without a sidecar restart (re-read on every eviction pass).

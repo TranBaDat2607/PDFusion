@@ -10,7 +10,7 @@ from typing import Optional, Dict, Any
 import tomlkit
 from pydantic import ValidationError
 
-from .models import RETIRED_MODELS, AppSettings
+from .models import RETIRED_MODELS, AppSettings, normalize_base_url
 from ..utils import (
     DPAPI_PREFIX,
     adopt_legacy_config,
@@ -82,6 +82,7 @@ class ConfigManager:
         
         # Override with environment variables
         env_config = self._load_from_environment()
+        self._keep_environment_keys_off_endpoints(config_data, env_config)
         self._deep_merge(config_data, env_config)
 
         self._replace_retired_models(config_data)
@@ -299,6 +300,38 @@ class ConfigManager:
         
         return env_config
     
+    @staticmethod
+    def _keep_environment_keys_off_endpoints(
+        config_data: Dict[str, Any], env_config: Dict[str, Any]
+    ) -> None:
+        """Use an environment key only with the provider's own endpoint.
+
+        `OPENAI_API_KEY` and `ANTHROPIC_API_KEY` replace the saved key on every
+        load, and the sidecar inherits the user's whole environment. `PUT
+        /config` lets an endpoint change only when the request carries a key,
+        but here that key would give way to the environment's on the next
+        start, which would then go to whatever endpoint was saved (#32). So a
+        service with an endpoint of its own keeps the key saved with it.
+        """
+        for service in KEYED_SERVICES:
+            env_section = env_config.get(service)
+            if not env_section or "api_key" not in env_section:
+                continue
+            section = config_data.get(service)
+            base_url = section.get("base_url") if isinstance(section, dict) else None
+            try:
+                base_url = normalize_base_url(base_url)
+            except ValueError:
+                # Dropped as the settings validate, leaving the provider's own.
+                base_url = None
+            if base_url:
+                del env_section["api_key"]
+                logger.info(
+                    "%s_API_KEY is not used: %s is set to its own endpoint",
+                    service.upper(),
+                    service,
+                )
+
     def _load_dotenv(self) -> None:
         """Load environment variables from .env file if available."""
         # Look for .env in two well-known locations:

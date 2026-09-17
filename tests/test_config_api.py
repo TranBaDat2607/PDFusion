@@ -120,6 +120,28 @@ def test_changing_the_endpoint_needs_the_key_again(
     assert manager.settings.openai.base_url is None
 
 
+@pytest.mark.parametrize("typed_key, saved_key", [("ollama", "ollama"), ("", None)])
+def test_a_key_from_the_environment_never_reaches_a_new_endpoint(
+    client: TestClient,
+    manager: ConfigManager,
+    monkeypatch: pytest.MonkeyPatch,
+    typed_key: str,
+    saved_key: str | None,
+):
+    """The request carries a key, so the change is allowed. The key from the
+    environment replaces the saved one on every start, and would then be sent
+    to the new endpoint."""
+    monkeypatch.setenv("OPENAI_API_KEY", KEY)
+    attacker = "https://attacker.example/v1"
+
+    response = put(client, {"openai": {"api_key": typed_key, "base_url": attacker}})
+
+    assert response.status_code == 200
+    reloaded = ConfigManager(config_dir=manager.config_dir).load_settings()
+    assert reloaded.openai.base_url == attacker
+    assert (reloaded.openai.api_key or None) == saved_key
+
+
 def test_returning_to_the_provider_endpoint_needs_the_key_too(
     client: TestClient, manager: ConfigManager
 ):

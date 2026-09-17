@@ -72,7 +72,9 @@ Then pick that service in the toolbar. Worth knowing:
 
 - **Enter the key together with the endpoint.** A saved key is only ever sent
   to the endpoint it was saved for, so changing the endpoint asks for the key
-  again. Local servers ignore the key, but the field can't be empty.
+  again. Local servers ignore the key, but the field can't be empty. An
+  `OPENAI_API_KEY` or `ANTHROPIC_API_KEY` from `.env` or your environment is
+  only used with the provider itself.
 - **Save checks the model with the server first.** If the server isn't running
   yet, Save shows the error and offers **Save anyway**.
 - **The model field takes any name.** The list beside it only makes
