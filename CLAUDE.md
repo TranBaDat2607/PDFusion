@@ -553,6 +553,18 @@ Three non-obvious invariants in this area, each with a test:
    `keep=2` — see "Loading the layout model once"). So `TranslationState.status` has a `cancelling` state covering
    the window until the terminal SSE event. Anything that touches the artifact
    must gate on `isTranslationBusy()`, never on `status === "running"`.
+
+   That window is the in-flight chunks' drain and nothing more, **because a
+   chunk worker checks `task.cancelling()` before each page**
+   (`_process_with_babeldoc.worker`). BabelDOC's `async_translate` catches the
+   `CancelledError` a cancel delivers, waits for its thread and returns as if
+   finished, so `run_one_chunk` sees only a chunk with no output. Without the
+   check the worker went on to the next page, the `gather` in the pipeline's
+   `finally` waited for all of them, and Cancel on a 50-page run sat at
+   "Cancelling…" for minutes. The same `finally` runs on every error, so the
+   check matters there too. This one has no unit test — the workers live in
+   `processor.py`, which the suite doesn't import — so exercise Cancel on a
+   long run in `pnpm tauri dev` after touching that loop.
 3. **`export_pdf(protect=...)` refuses to overwrite the opened document.** The
    Save dialog lets the user type their source document's own name and confirm
    "Replace?", which would destroy their input with no undo. Relatedly,

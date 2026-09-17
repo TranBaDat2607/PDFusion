@@ -893,13 +893,28 @@ class PDFProcessor:
                             f"{idx + 1} in {chunk_out_dir}"
                         )
                     chunk_results[idx] = translated
+                except asyncio.CancelledError:
+                    # The workers are being stopped (see `worker`). Not a
+                    # chunk failure.
+                    raise
                 except BaseException as exc:
                     chunk_errors[idx] = exc
                 finally:
                     await completion_queue.put(idx)
 
             async def worker() -> None:
+                task = asyncio.current_task()
                 while True:
+                    # A cancelled worker stops before its next page. The
+                    # `finally` below cancels the workers on Cancel and on any
+                    # error, but BabelDOC's `async_translate` catches the
+                    # CancelledError, waits for its thread and returns as if
+                    # done — so `run_one_chunk` only sees a chunk with no
+                    # output. Without this check the worker carried on, and
+                    # the `gather` below waited for every remaining page:
+                    # Cancel sat at "Cancelling…" for minutes.
+                    if task is not None and task.cancelling():
+                        raise asyncio.CancelledError
                     nxt = await pick_next()
                     if nxt is None:
                         return
