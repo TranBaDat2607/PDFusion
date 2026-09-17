@@ -90,6 +90,27 @@ describe("buildTranslateBody", () => {
     expect(body).not.toHaveProperty("target_lang");
     expect(body).not.toHaveProperty("service");
   });
+
+  it("sends the Pages box's ranges", () => {
+    const body = buildTranslateBody({
+      filePath: FILE,
+      visiblePage: 1,
+      pageRanges: [
+        [1, 20],
+        [35, 35],
+      ],
+    });
+    expect(body.page_ranges).toEqual([
+      [1, 20],
+      [35, 35],
+    ]);
+  });
+
+  // No selection is the whole document, said by leaving the field out.
+  it("omits page_ranges for the whole document", () => {
+    const body = buildTranslateBody({ filePath: FILE, visiblePage: 1, pageRanges: null });
+    expect(body).not.toHaveProperty("page_ranges");
+  });
 });
 
 describe("effectiveService", () => {

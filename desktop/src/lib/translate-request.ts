@@ -16,6 +16,7 @@
 
 import type { ConfigResponse, OptionsResponse, ServiceCode } from "@/hooks/useConfig";
 import type { components } from "@/lib/api-types";
+import type { PageRange } from "@/lib/page-range";
 
 export interface TranslateBodyInput {
   filePath: string;
@@ -27,6 +28,8 @@ export interface TranslateBodyInput {
   sourceLang?: string | null;
   targetLang?: string | null;
   service?: string | null;
+  /** The Pages box, parsed. Omitted when null/undefined — the whole document. */
+  pageRanges?: PageRange[] | null;
 }
 
 type TranslateRequest = components["schemas"]["TranslateRequest"];
@@ -57,6 +60,7 @@ export function buildTranslateBody(input: TranslateBodyInput): TranslateRequest 
     ...(input.service
       ? { service: input.service as TranslateRequest["service"] }
       : {}),
+    ...(input.pageRanges ? { page_ranges: input.pageRanges } : {}),
   };
 }
 

@@ -13,10 +13,12 @@
  *
  * Two more things it gets right, both invisible until they bite:
  *
- * - **A chunk is not always a page.** Argos uses 3-page chunks
- *   (`_PAGES_PER_CHUNK_ARGOS`) to amortise BabelDOC's layout-model reload, so
- *   `total_chunks` is not a page count. Pages come from the event's own
- *   `pages_in_chunk` span and the total from `total_pages`.
+ * - **A chunk is not always a page.** Every backend runs 1-page chunks today,
+ *   but the processor's chunk size is a knob (`_effective_pages_per_chunk`),
+ *   so `total_chunks` is not a page count. Pages come from the event's own
+ *   `pages_in_chunk` span, and the total from `pages_to_translate` — which is
+ *   fewer than the document's `total_pages` when only some pages were asked
+ *   for (#33).
  * - **The same chunk can arrive twice** (an SSE re-attach replays it), so
  *   completions are keyed by index rather than counted.
  */
@@ -31,12 +33,16 @@ export interface ChunkReadyLike {
    *  this field — the UI then reports progress without a denominator rather
    *  than inventing one. */
   total_pages?: number | null;
+  /** Pages this run translates: `total_pages`, or fewer for a page
+   *  selection. Absent on a sidecar that predates page selections. */
+  pages_to_translate?: number | null;
 }
 
 export interface ChunkProgress {
   /** chunk index → pages that chunk covers. */
   pagesByChunk: Record<number, number>;
   totalChunks: number;
+  /** Pages this run translates — the denominator of "N of M". */
   totalPages: number | null;
 }
 
@@ -55,7 +61,11 @@ export function applyChunkReady(
       [event.chunk_index]: pagesIn(event),
     },
     totalChunks: event.total_chunks,
-    totalPages: event.total_pages ?? previous?.totalPages ?? null,
+    totalPages:
+      event.pages_to_translate ??
+      event.total_pages ??
+      previous?.totalPages ??
+      null,
   };
 }
 

@@ -10,6 +10,10 @@ import { Header } from "@/components/layout/Header";
 import { ContextBar } from "@/components/layout/ContextBar";
 import { DropOverlay } from "@/components/layout/DropOverlay";
 import { MainLayout } from "@/components/layout/MainLayout";
+import {
+  PageLimitDialog,
+  type OverLimit,
+} from "@/components/translation/PageLimitDialog";
 import { ProgressOverlay } from "@/components/translation/ProgressOverlay";
 import { SettingsSheet } from "@/components/settings/SettingsSheet";
 import { SetupScreen } from "@/components/setup/SetupScreen";
@@ -23,6 +27,11 @@ import { useFileDrop } from "@/hooks/useFileDrop";
 import { useSidecar } from "@/hooks/useSidecar";
 import { isTranslationBusy, useTranslation } from "@/hooks/useTranslation";
 import { readSkipped, shouldShowSetup } from "@/lib/engine-setup";
+import {
+  checkPageLimit,
+  formatPageRanges,
+  parsePageRanges,
+} from "@/lib/page-range";
 import { useAppStore } from "@/lib/store";
 import { api } from "@/lib/api-client";
 
@@ -112,6 +121,14 @@ function EngineGate() {
 function Workspace() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [aboutOpen, setAboutOpen] = useState(false);
+  // A Translate click that covered more pages than one translation may, held
+  // while the user answers the offer. `path` guards against a document opened
+  // (dropped, say) while the dialog was up.
+  const [limitPrompt, setLimitPrompt] = useState<{
+    check: OverLimit;
+    path: string;
+    bypassCache: boolean;
+  } | null>(null);
   const setOriginalPath = useAppStore((s) => s.setOriginalPdfPath);
   const setTranslatedPath = useAppStore((s) => s.setTranslatedPdfPath);
   const setExportedPath = useAppStore((s) => s.setExportedPdfPath);
@@ -144,6 +161,7 @@ function Workspace() {
       // The saved copy belongs to the *previous* document — keeping it would
       // make the toolbar offer "Open" on an unrelated file.
       setExportedPath(null);
+      setLimitPrompt(null);
       translation.reset();
       // Fire-and-forget pre-warm: by the time the user clicks Translate, the
       // Argos pack should be installed (or the LLM client should be live).
@@ -221,15 +239,64 @@ function Workspace() {
     };
   }, []);
 
-  const handleTranslate = useCallback(() => {
-    if (!originalPath) return;
-    void translation.start(originalPath, selection);
-  }, [originalPath, translation, selection]);
+  // Translate, Re-translate and Retry all come through here. The Pages box is
+  // read at click time, and a request over the page limit becomes an offer of
+  // the pages that fit (#33) instead of a job the sidecar would refuse. With
+  // the page count not known yet, the sidecar's own check is what applies.
+  const requestTranslation = useCallback(
+    (bypassCache: boolean) => {
+      if (!originalPath) return;
+      const { pageRangeText, originalPageCount } = useAppStore.getState();
+      const parsed = parsePageRanges(pageRangeText, originalPageCount);
+      if (!parsed.ok) {
+        toast.error("Check the pages to translate", { description: parsed.error });
+        return;
+      }
+      const maxPages = config?.translation.max_pages;
+      if (originalPageCount != null && maxPages != null) {
+        const check = checkPageLimit(originalPageCount, parsed.ranges, maxPages);
+        if (check.over) {
+          setLimitPrompt({ check, path: originalPath, bypassCache });
+          return;
+        }
+      }
+      void translation.start(originalPath, {
+        ...selection,
+        bypassCache,
+        pageRanges: parsed.ranges,
+      });
+    },
+    [originalPath, config, translation, selection],
+  );
 
-  const handleReTranslate = useCallback(() => {
-    if (!originalPath) return;
-    void translation.start(originalPath, { ...selection, bypassCache: true });
-  }, [originalPath, translation, selection]);
+  const handleTranslate = useCallback(
+    () => requestTranslation(false),
+    [requestTranslation],
+  );
+
+  const handleReTranslate = useCallback(
+    () => requestTranslation(true),
+    [requestTranslation],
+  );
+
+  // The offer accepted: the Pages box shows what is being translated, so the
+  // next click (and Re-translate) asks for the same pages.
+  const confirmLimit = useCallback(
+    (check: OverLimit) => {
+      const prompt = limitPrompt;
+      setLimitPrompt(null);
+      if (!prompt || prompt.path !== originalPath) return;
+      useAppStore
+        .getState()
+        .setPageRangeText(formatPageRanges(check.suggestion, "-"));
+      void translation.start(prompt.path, {
+        ...selection,
+        bypassCache: prompt.bypassCache,
+        pageRanges: check.suggestion,
+      });
+    },
+    [limitPrompt, originalPath, translation, selection],
+  );
 
   return (
     <div className="relative flex h-full w-full flex-col bg-background text-foreground">
@@ -265,6 +332,11 @@ function Workspace() {
       </div>
 
       <DropOverlay state={fileDrop} />
+      <PageLimitDialog
+        check={limitPrompt?.check ?? null}
+        onCancel={() => setLimitPrompt(null)}
+        onConfirm={confirmLimit}
+      />
       <SettingsSheet open={settingsOpen} onOpenChange={setSettingsOpen} />
       <AboutDialog open={aboutOpen} onOpenChange={setAboutOpen} />
     </div>

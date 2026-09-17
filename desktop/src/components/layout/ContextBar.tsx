@@ -8,6 +8,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { PageRangeInput } from "@/components/translation/PageRangeInput";
 import { TranslatedFileActions } from "@/components/translation/TranslatedFileActions";
 import {
   Tooltip,
@@ -23,6 +24,7 @@ import {
 import { api } from "@/lib/api-client";
 import type { components } from "@/lib/api-types";
 import { basename } from "@/lib/export-pdf";
+import { parsePageRanges } from "@/lib/page-range";
 import { effectiveService, isPairSupported } from "@/lib/translate-request";
 import { useAppStore } from "@/lib/store";
 import { cn } from "@/lib/utils";
@@ -62,6 +64,8 @@ export function ContextBar({
   const update = useUpdateConfig();
 
   const originalPath = useAppStore((s) => s.originalPdfPath);
+  const pageRangeText = useAppStore((s) => s.pageRangeText);
+  const pageCount = useAppStore((s) => s.originalPageCount);
   const chatEnabled = useChatEnabled();
   const chatOpen = useAppStore((s) => s.chatOpen);
   const toggleChat = useAppStore((s) => s.toggleChat);
@@ -88,7 +92,9 @@ export function ContextBar({
   );
 
   const ready = config && options;
-  const canTranslate = !!originalPath && !translating && ready;
+  // A Pages box the toolbar can't read keeps Translate off; its tooltip says why.
+  const pagesValid = parsePageRanges(pageRangeText, pageCount).ok;
+  const canTranslate = !!originalPath && !translating && ready && pagesValid;
 
   return (
     <div className="flex flex-wrap items-center gap-3 border-b border-border bg-background px-4 py-2.5">
@@ -108,9 +114,17 @@ export function ContextBar({
       </Tooltip>
 
       {originalPath && (
-        <div className="flex max-w-[260px] items-center gap-1.5 rounded-md bg-muted px-2.5 py-1 text-xs">
-          <span className="truncate font-medium">{basename(originalPath)}</span>
-        </div>
+        <>
+          <div className="flex max-w-[260px] items-center gap-1.5 rounded-md bg-muted px-2.5 py-1 text-xs">
+            <span className="truncate font-medium">{basename(originalPath)}</span>
+          </div>
+          <PageRangeInput
+            disabled={translating}
+            onSubmit={() => {
+              if (canTranslate) onTranslate();
+            }}
+          />
+        </>
       )}
 
       <div className="mx-1 h-5 w-px bg-border" />
@@ -268,6 +282,7 @@ export function ContextBar({
             <TooltipTrigger asChild>
               <Button
                 onClick={onReTranslate}
+                disabled={!pagesValid}
                 variant="outline"
                 size="sm"
                 className="gap-2"

@@ -55,6 +55,16 @@ import {
   type ClearScope,
 } from "@/lib/cache-settings";
 import {
+  PAGE_LIMIT_HELP,
+  PAGE_LIMIT_PRESETS,
+  SIZE_LIMIT_HELP,
+  SIZE_LIMIT_PRESETS_MB,
+  formatPageLimit,
+  formatSizeLimit,
+  limitOptions,
+  type LimitOption,
+} from "@/lib/performance-settings";
+import {
   useConfig,
   useOptions,
   useUpdateConfig,
@@ -825,10 +835,59 @@ const PARALLELISM_PRESETS: Array<{
   { value: 8, label: "Max", hint: "8 chunks — maximum pipeline depth" },
 ];
 
+function LimitSelect({
+  id,
+  label,
+  help,
+  value,
+  options,
+  onChange,
+}: {
+  id: string;
+  label: string;
+  help: string;
+  value: number | undefined;
+  options: LimitOption[];
+  /** Absent until the config has loaded, which disables the Select. */
+  onChange?: (value: number) => void;
+}) {
+  return (
+    <div className="space-y-2">
+      <Label htmlFor={id}>{label}</Label>
+      <Select
+        value={value === undefined ? undefined : String(value)}
+        disabled={!onChange}
+        onValueChange={(v) => onChange?.(Number(v))}
+      >
+        <SelectTrigger id={id}>
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent>
+          {options.map((o) => (
+            <SelectItem key={o.value} value={String(o.value)}>
+              {o.label}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+      <p className="text-xs text-muted-foreground">{help}</p>
+    </div>
+  );
+}
+
 function PerformanceSection() {
   const { data: config } = useConfig();
   const update = useUpdateConfig();
   const current = config?.processing?.max_parallel_chunks ?? 0;
+  const maxPages = config?.translation.max_pages;
+  const maxSize = config?.translation.max_file_size_mb;
+  const saveLimit = (body: { max_pages?: number; max_file_size_mb?: number }) =>
+    update.mutate(body, {
+      onError: (e) =>
+        toast.error("Could not save the limit", {
+          description: (e as Error).message,
+        }),
+    });
 
   return (
     <div className="space-y-4">
@@ -836,6 +895,24 @@ function PerformanceSection() {
         <Sparkles className="h-4 w-4 text-primary" />
         <span className="text-sm font-medium">Performance</span>
       </div>
+
+      <LimitSelect
+        id="max-pages"
+        label="Pages per translation"
+        help={PAGE_LIMIT_HELP}
+        value={maxPages}
+        options={limitOptions(PAGE_LIMIT_PRESETS, maxPages, formatPageLimit)}
+        onChange={config ? (v) => saveLimit({ max_pages: v }) : undefined}
+      />
+
+      <LimitSelect
+        id="max-file-size"
+        label="Largest PDF"
+        help={SIZE_LIMIT_HELP}
+        value={maxSize}
+        options={limitOptions(SIZE_LIMIT_PRESETS_MB, maxSize, formatSizeLimit)}
+        onChange={config ? (v) => saveLimit({ max_file_size_mb: v }) : undefined}
+      />
 
       <div className="space-y-2">
         <Label htmlFor="parallel-chunks">Parallel pages</Label>

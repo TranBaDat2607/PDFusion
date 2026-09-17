@@ -37,6 +37,7 @@ export function MainLayout({ onPickFile }: MainLayoutProps) {
     (s) => s.setOriginalFirstPageSize,
   );
   const setVisiblePage = useAppStore((s) => s.setVisiblePage);
+  const setOriginalPageCount = useAppStore((s) => s.setOriginalPageCount);
   const chatOpen = useAppStore((s) => s.chatOpen);
   const chatEnabled = useChatEnabled();
   const [scrollToPage, setScrollToPage] = useState<number | undefined>();
@@ -179,6 +180,7 @@ export function MainLayout({ onPickFile }: MainLayoutProps) {
             active={activePane === "original"}
             scrollToPage={scrollToPage}
             onFirstPageSize={setOriginalFirstPageSize}
+            onPageCount={setOriginalPageCount}
             onVisiblePageChange={setVisiblePage}
             emptyState={
               <div className="flex flex-col items-center gap-2 text-center">
