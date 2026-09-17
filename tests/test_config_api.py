@@ -288,6 +288,41 @@ def test_chat_is_on_until_it_is_turned_off(client: TestClient, manager: ConfigMa
 
 
 # ---------------------------------------------------------------------------
+# translation limits (#33)
+# ---------------------------------------------------------------------------
+
+
+def test_the_translation_limits_are_saved(client: TestClient, manager: ConfigManager):
+    response = put(client, {"max_pages": 75, "max_file_size_mb": 120})
+
+    assert response.status_code == 200
+    translation = response.json()["translation"]
+    assert (translation["max_pages"], translation["max_file_size_mb"]) == (75, 120.0)
+    reloaded = ConfigManager(config_dir=manager.config_dir).load_settings()
+    assert reloaded.translation.max_pages == 75
+    assert reloaded.translation.max_file_size_mb == 120.0
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        {"max_pages": 0},
+        {"max_pages": 101},
+        {"max_file_size_mb": 0.5},
+        {"max_file_size_mb": 201},
+    ],
+)
+def test_a_limit_outside_its_bounds_is_refused(
+    client: TestClient, manager: ConfigManager, body: dict
+):
+    """422 from the request, not 500 from the settings model: both read the
+    same bounds (`config/models.py:MaxPages`, `MaxFileSizeMB`)."""
+    assert put(client, body).status_code == 422
+    reloaded = ConfigManager(config_dir=manager.config_dir).load_settings()
+    assert reloaded.translation.max_pages == 50
+
+
+# ---------------------------------------------------------------------------
 # caches
 # ---------------------------------------------------------------------------
 

@@ -216,6 +216,10 @@ async def update_config(payload: ConfigUpdateRequest) -> ConfigResponse:
         current["rag"]["chat_enabled"] = payload.chat_enabled
     if payload.max_parallel_chunks is not None:
         current["processing"]["max_parallel_chunks"] = payload.max_parallel_chunks
+    if payload.max_pages is not None:
+        current["translation"]["max_pages"] = payload.max_pages
+    if payload.max_file_size_mb is not None:
+        current["translation"]["max_file_size_mb"] = payload.max_file_size_mb
     if payload.cache_translations is not None:
         current["translation"]["cache_translations"] = payload.cache_translations
     if payload.cache_translated_pdfs is not None:

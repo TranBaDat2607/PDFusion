@@ -88,9 +88,9 @@ class ChunkReadyEvent(ProcessingEvent):
     """A chunk of the source PDF has finished translating.
 
     `rolling_pdf_path` is always a *full-length* document:
-    `_rebuild_sparse_rolling_pdf` fills the finished slots with translated
-    chunks and the rest with the original pages, so the viewer keeps its
-    scroll position. Chunks are scheduled nearest the reader's page first, so
+    `pdf_pages.rebuild_rolling_pdf` fills the finished slots with translated
+    chunks and every other page — pending, or outside the page selection —
+    with the original's, so the viewer keeps its scroll position. Chunks are scheduled nearest the reader's page first, so
     `chunk_index` is not a completion count and `pages_in_chunk` names only
     the pages *this* chunk covers — never a range starting at page 1 (#15).
     """
@@ -105,10 +105,12 @@ class ChunkReadyEvent(ProcessingEvent):
     elapsed_seconds: Optional[float] = None
     eta_seconds: Optional[float] = None
     pages_per_second: Optional[float] = None
-    # Pages in the whole document. `total_chunks` is NOT a page count — Argos
-    # runs 3-page chunks (`_PAGES_PER_CHUNK_ARGOS`) — so the UI needs this to
-    # say "N of M pages" without guessing.
+    # Pages in the whole document. `total_chunks` is not a page count — a
+    # chunk may span several pages (`_effective_pages_per_chunk`).
     total_pages: Optional[int] = None
+    # Pages this run translates: `total_pages`, or fewer when the request named
+    # a page selection (#33). The denominator of "N of M pages translated".
+    pages_to_translate: Optional[int] = None
     # Set when this chunk was served from the PDF-level cache (synthetic event
     # emitted from process_pdf's cache-hit short-circuit). `cached_at` is the
     # ISO8601 timestamp the cache entry was originally written.
@@ -126,6 +128,7 @@ class ChunkReadyEvent(ProcessingEvent):
             "eta_seconds": self.eta_seconds,
             "pages_per_second": self.pages_per_second,
             "total_pages": self.total_pages,
+            "pages_to_translate": self.pages_to_translate,
             "cache_hit": self.cache_hit,
             "cached_at": self.cached_at,
         }

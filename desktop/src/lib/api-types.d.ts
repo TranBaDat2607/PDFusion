@@ -699,6 +699,11 @@ export interface components {
              * @default null
              */
             pages_per_second: number | null;
+            /**
+             * Pages To Translate
+             * @default null
+             */
+            pages_to_translate: number | null;
             /** Progress Percent */
             progress_percent: number;
             /** Rolling Pdf Path */
@@ -800,6 +805,10 @@ export interface components {
             default_source_lang?: components["schemas"]["LanguageCode"] | null;
             default_target_lang?: components["schemas"]["LanguageCode"] | null;
             gemini?: components["schemas"]["ServiceCredentialUpdate"] | null;
+            /** Max File Size Mb */
+            max_file_size_mb?: number | null;
+            /** Max Pages */
+            max_pages?: number | null;
             /** Max Parallel Chunks */
             max_parallel_chunks?: number | null;
             openai?: components["schemas"]["EndpointCredentialUpdate"] | null;
@@ -1291,6 +1300,14 @@ export interface components {
             bypass_cache: boolean;
             /** File Path */
             file_path: string;
+            /**
+             * Page Ranges
+             * @description Pages to translate, as [first, last] ranges (1-indexed, inclusive). Omitted or null: the whole document. The other pages stay in the output untranslated, and `max_pages` limits the pages selected.
+             */
+            page_ranges?: [
+                number,
+                number
+            ][] | null;
             service?: components["schemas"]["TranslationService"] | null;
             source_lang?: components["schemas"]["LanguageCode"] | null;
             target_lang?: components["schemas"]["LanguageCode"] | null;
@@ -1354,7 +1371,7 @@ export interface components {
             max_file_size_mb: number;
             /**
              * Max Pages
-             * @description Maximum pages per PDF
+             * @description Maximum pages per translation
              * @default 50
              */
             max_pages: number;

@@ -134,6 +134,24 @@ def test_every_field_separates_the_key(field, value):
     assert _make_cache_key(**base) != _make_cache_key(**{**base, field: value})
 
 
+def test_a_whole_document_key_is_unchanged_by_page_selections():
+    """#33 added an optional field. Every entry cached before it must still
+    match, so the key without a selection is exactly the old payload's."""
+    import hashlib
+
+    old = hashlib.sha256(
+        f"abc|en|vi|openai|gpt-4o|{PIPELINE_VERSION}".encode("utf-8")
+    ).hexdigest()
+    assert _make_cache_key("abc", "en", "vi", "openai", "gpt-4o", PIPELINE_VERSION) == old
+
+
+def test_a_page_selection_separates_the_key():
+    args = ("abc", "en", "vi", "openai", "gpt-4o", PIPELINE_VERSION)
+    whole = _make_cache_key(*args)
+    assert _make_cache_key(*args, "1-20") != whole
+    assert _make_cache_key(*args, "1-20") != _make_cache_key(*args, "1-21")
+
+
 # ---------------------------------------------------------------------------
 # lookup / store
 # ---------------------------------------------------------------------------
@@ -222,6 +240,50 @@ def test_a_precomputed_hash_is_honoured(
     digest = compute_file_hash(source_pdf)
     put(cache, source_pdf, translated_pdf, file_hash=digest)
     assert look(cache, source_pdf, file_hash=digest) is not None
+
+
+def test_a_partial_translation_is_never_served_as_the_whole_document(
+    cache: PDFTranslationCache, source_pdf: Path, translated_pdf: Path
+):
+    """Its other pages are untranslated. Stored under the whole document's
+    key, it would be served for every later open of the file (#33)."""
+    put(cache, source_pdf, translated_pdf, pages="1-20")
+    assert look(cache, source_pdf) is None
+
+    hit = look(cache, source_pdf, pages="1-20")
+    assert hit is not None and hit.pages == "1-20"
+
+
+def test_a_different_selection_is_a_miss(
+    cache: PDFTranslationCache, source_pdf: Path, translated_pdf: Path
+):
+    put(cache, source_pdf, translated_pdf, pages="1-20")
+    assert look(cache, source_pdf, pages="21-40") is None
+
+
+def test_the_whole_document_answers_any_selection(
+    cache: PDFTranslationCache, source_pdf: Path, translated_pdf: Path
+):
+    """A full translation has every selected page translated too, so it is
+    tried first and counts as one hit."""
+    put(cache, source_pdf, translated_pdf)
+    translated_pdf.write_bytes(MINIMAL_PDF + b"% pages 1-20\n")
+    put(cache, source_pdf, translated_pdf, pages="1-20")
+
+    hit = look(cache, source_pdf, pages="1-20")
+    assert hit is not None and hit.pages is None
+    assert not hit.cached_path.read_bytes().endswith(b"% pages 1-20\n")
+    stats = cache.stats()
+    assert (stats["hits"], stats["misses"]) == (1, 0)
+
+
+def test_a_selection_miss_counts_once(
+    cache: PDFTranslationCache, source_pdf: Path
+):
+    """Two keys are tried; the hit rate in Settings sees one lookup."""
+    assert look(cache, source_pdf, pages="1-20") is None
+    stats = cache.stats()
+    assert (stats["hits"], stats["misses"]) == (0, 1)
 
 
 def test_storing_a_missing_artifact_is_refused(

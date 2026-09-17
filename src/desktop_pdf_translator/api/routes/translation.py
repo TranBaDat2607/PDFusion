@@ -18,6 +18,9 @@ from sse_starlette.sse import EventSourceResponse
 
 from ...config import TranslationService, get_settings
 from ...engine_assets import MISSING_ASSETS_MESSAGE, argos_pack_ready, engine_ready
+from ...processors.exceptions import FileValidationError
+from ...processors.page_selection import PageSelectionError, validate_selection
+from ...processors.pdf_pages import inspect_pdf
 from ...translators.capabilities import (
     resolve_effective_service,
     resolve_languages,
@@ -50,6 +53,26 @@ def _build_cancel_payload(processor: PDFProcessor, file_path: Path) -> dict:
         "translated_file": str(partial) if partial else None,
         "original_file": str(file_path),
     }
+
+
+def _selection_problem(payload: TranslateRequest, settings) -> str | None:
+    """Why this file, or the pages it asks for, can't be translated.
+
+    Blocking: it opens the PDF to count its pages, and `inspect_pdf` imports
+    PyMuPDF on first use. Callers run it off the event loop.
+    """
+    try:
+        info = inspect_pdf(Path(payload.file_path))
+        validate_selection(
+            payload.page_ranges,
+            page_count=info.page_count,
+            size_mb=info.size_mb,
+            max_pages=settings.translation.max_pages,
+            max_size_mb=settings.translation.max_file_size_mb,
+        )
+    except (FileValidationError, PageSelectionError) as exc:
+        return str(exc)
+    return None
 
 
 def _load_engine() -> tuple[type, type]:
@@ -105,6 +128,7 @@ async def _run_translation(job_id: str, payload: TranslateRequest) -> None:
             translation_service=payload.service,
             visible_page=payload.visible_page,
             bypass_cache=payload.bypass_cache,
+            page_ranges=payload.page_ranges,
         ):
             if job.cancelled:
                 await job.finish("cancelled", _build_cancel_payload(processor, file_path))
@@ -167,6 +191,14 @@ async def start_translation(payload: TranslateRequest) -> JobAccepted:
         settings, payload.service or settings.translation.preferred_service
     )
     reason = unsupported_reason(effective_service, source_lang, target_lang)
+    if reason:
+        raise HTTPException(status_code=422, detail=reason)
+
+    # The document's size and the pages asked of it (#33). Checked inside the
+    # job alone, a 120-page PDF opened the progress overlay and then failed
+    # with "Too many pages: 120 > 50". Here it is a sentence the toolbar can
+    # show before anything starts. Off the event loop: it opens the PDF.
+    reason = await asyncio.to_thread(_selection_problem, payload, settings)
     if reason:
         raise HTTPException(status_code=422, detail=reason)
 

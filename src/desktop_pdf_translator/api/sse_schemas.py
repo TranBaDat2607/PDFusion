@@ -71,6 +71,9 @@ class ChunkReadyEventPayload(BaseModel):
     eta_seconds: Optional[float] = None
     pages_per_second: Optional[float] = None
     total_pages: Optional[int] = None
+    # Pages this run translates — fewer than `total_pages` when the request
+    # named a page selection.
+    pages_to_translate: Optional[int] = None
     cache_hit: bool = False
     cached_at: Optional[str] = None
 

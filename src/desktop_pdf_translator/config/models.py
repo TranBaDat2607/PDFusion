@@ -4,7 +4,7 @@ Configuration models for desktop PDF translator application.
 
 from enum import Enum 
 from pathlib import Path
-from typing import Dict, FrozenSet, Optional, Literal
+from typing import Annotated, Dict, FrozenSet, List, Optional, Literal
 from urllib.parse import urlsplit
 
 from pydantic import BaseModel, Field, field_validator
@@ -145,6 +145,14 @@ class ArgosSettings(BaseModel):
     model: str = Field("argostranslate", description="Argos identifier (fixed)")
 
 
+# Bounds shared with `PUT /config` (`api/schemas.py`), so the API answers 422
+# for exactly what this model would refuse. The caps stay where they were
+# before #33: the rolling PDF is rewritten after every page, so a run's cost
+# grows with the document's length and size, not only with its page count.
+MaxPages = Annotated[int, Field(ge=1, le=100)]
+MaxFileSizeMB = Annotated[float, Field(ge=1.0, le=200.0)]
+
+
 class TranslationSettings(BaseModel):
     """Translation-specific settings."""
     
@@ -160,8 +168,10 @@ class TranslationSettings(BaseModel):
         TranslationService.ARGOS,
         description="Preferred translation service"
     )
-    max_pages: int = Field(50, ge=1, le=100, description="Maximum pages per PDF")
-    max_file_size_mb: float = Field(50.0, ge=1.0, le=200.0, description="Maximum file size in MB")
+    # Pages one translation may cover — the selected pages, not the document's
+    # length (#33). A longer PDF is translated part by part.
+    max_pages: MaxPages = Field(50, description="Maximum pages per translation")
+    max_file_size_mb: MaxFileSizeMB = Field(50.0, description="Maximum file size in MB")
     cache_translations: bool = Field(True, description="Enable translation caching")
     cache_ttl_days: int = Field(30, ge=1, le=365, description="Days before cached translations expire")
     cache_max_size_mb: float = Field(500.0, ge=10.0, le=5000.0, description="Soft cap for translation cache size (MB)")
@@ -304,3 +314,5 @@ class FileMetadata(BaseModel):
     filename: str
     file_size_mb: float
     page_count: int
+    # The pages a translation covers, ascending; `None` for all of them.
+    selected_pages: Optional[List[int]] = None

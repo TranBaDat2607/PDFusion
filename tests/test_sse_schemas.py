@@ -108,6 +108,7 @@ def test_chunk_ready_event_matches_payload_model() -> None:
         eta_seconds=18.0,
         pages_per_second=0.4,
         total_pages=10,
+        pages_to_translate=4,
         cache_hit=False,
         cached_at=None,
     )
