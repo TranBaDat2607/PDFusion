@@ -19,6 +19,10 @@ from desktop_pdf_translator.api import auth
 from desktop_pdf_translator.api.routes import config as config_routes
 from desktop_pdf_translator.config import AppSettings, TranslationService
 from desktop_pdf_translator.config.manager import ConfigManager
+from desktop_pdf_translator.processors.pdf_cache import PDFTranslationCache
+from desktop_pdf_translator.translators.translation_cache import TranslationCache
+
+from conftest import MINIMAL_PDF
 
 TOKEN = "test-token-for-config-api"
 AUTH = {"Authorization": f"Bearer {TOKEN}"}
@@ -266,3 +270,96 @@ def test_a_probe_names_the_endpoint_even_when_it_is_the_default():
         {"api_key": KEY, "model": "gpt-4.1", "base_url": None, "temperature": 0.3}
     ) == {"api_key": KEY, "base_url": None, "model": "gpt-4.1"}
     assert config_routes._probe_kwargs({"api_key": KEY, "model": ""}) == {"api_key": KEY}
+
+
+# ---------------------------------------------------------------------------
+# chat
+# ---------------------------------------------------------------------------
+
+
+def test_chat_is_on_until_it_is_turned_off(client: TestClient, manager: ConfigManager):
+    assert client.get("/config", headers=AUTH).json()["rag"]["chat_enabled"] is True
+
+    response = put(client, {"chat_enabled": False})
+
+    assert response.json()["rag"]["chat_enabled"] is False
+    reloaded = ConfigManager(config_dir=manager.config_dir).load_settings()
+    assert reloaded.rag.chat_enabled is False
+
+
+# ---------------------------------------------------------------------------
+# caches
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def caches(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> Tuple[TranslationCache, PDFTranslationCache]:
+    """One entry in each cache, both under `tmp_path` rather than the
+    singletons, with the PDF cache's settings lookup stubbed out."""
+    monkeypatch.setattr(
+        PDFTranslationCache, "_refresh_cap_from_settings", lambda self: None
+    )
+    paragraph = TranslationCache(cache_dir=tmp_path / "translation_cache")
+    pdf = PDFTranslationCache(cache_dir=tmp_path / "translated_pdf_cache")
+    monkeypatch.setattr(config_routes, "get_translation_cache", lambda: paragraph)
+    monkeypatch.setattr(config_routes, "get_pdf_cache", lambda: pdf)
+
+    paragraph.set(
+        "Hello", "Xin chào", lang_in="en", lang_out="vi", service="openai", model="gpt-4.1"
+    )
+    source = tmp_path / "paper.pdf"
+    source.write_bytes(MINIMAL_PDF)
+    translated = tmp_path / "job" / "paper_translated_v001.pdf"
+    translated.parent.mkdir()
+    translated.write_bytes(MINIMAL_PDF + b"% translated\n")
+    assert pdf.store(
+        source, translated, source_lang="en", target_lang="vi", service="openai", model="gpt-4.1"
+    )
+    return paragraph, pdf
+
+
+def test_the_cache_stats_cover_both_caches(client: TestClient, caches):
+    body = client.get("/config/cache", headers=AUTH).json()
+
+    assert body["paragraph"]["entries"] == 1
+    assert body["pdf"]["entries"] == 1
+    assert body["pdf"]["max_size_mb"] == 1000.0
+
+
+@pytest.mark.parametrize(
+    "target, left",
+    [("paragraph", (0, 1)), ("pdf", (1, 0)), ("all", (0, 0))],
+)
+def test_clearing_one_cache_leaves_the_other(
+    client: TestClient, caches, target: str, left: Tuple[int, int]
+):
+    """The tab's "Clear all" used to empty the PDF cache too, while showing
+    only the paragraph cache."""
+    paragraph, pdf = caches
+
+    response = client.delete(f"/config/cache?scope=all&target={target}", headers=AUTH)
+
+    assert response.status_code == 200
+    assert response.json()["target"] == target
+    assert (paragraph.stats()["entries"], pdf.stats()["entries"]) == left
+
+
+def test_removing_expired_entries_never_touches_the_pdf_cache(
+    client: TestClient, caches
+):
+    _, pdf = caches
+
+    client.delete("/config/cache?scope=expired&target=all", headers=AUTH)
+
+    assert pdf.stats()["entries"] == 1
+
+
+@pytest.mark.parametrize("query", ["target=everything", "scope=some"])
+def test_an_unknown_cache_or_scope_is_refused(client: TestClient, caches, query: str):
+    """Both used to fall through to clearing everything."""
+    paragraph, pdf = caches
+
+    assert client.delete(f"/config/cache?{query}", headers=AUTH).status_code == 422
+    assert (paragraph.stats()["entries"], pdf.stats()["entries"]) == (1, 1)

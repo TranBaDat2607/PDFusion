@@ -74,14 +74,12 @@ interface AppState {
   translatedReloadKey: number;
   bumpTranslatedReloadKey: () => void;
 
-  /** Whether the chat drawer is expanded. */
+  /** Whether the chat panel is showing. Showing and hiding is all this does:
+   *  whether chat is on at all is `config.rag.chat_enabled` (`useChatEnabled`),
+   *  which is server state. */
   chatOpen: boolean;
   toggleChat: () => void;
   setChatOpen: (open: boolean) => void;
-
-  /** RAG enabled toggle (mirrors the value in /config). */
-  ragEnabled: boolean;
-  setRagEnabled: (enabled: boolean) => void;
 
   /** Active translation job ID (null = idle). */
   activeTranslationJob: string | null;
@@ -144,9 +142,6 @@ export const useAppStore = create<AppState>((set) => ({
   chatOpen: false,
   toggleChat: () => set((s) => ({ chatOpen: !s.chatOpen })),
   setChatOpen: (chatOpen) => set({ chatOpen }),
-
-  ragEnabled: false,
-  setRagEnabled: (ragEnabled) => set({ ragEnabled }),
 
   activeTranslationJob: null,
   setActiveTranslationJob: (activeTranslationJob) =>

@@ -18,6 +18,9 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { Label } from "@/components/ui/label";
+import { Switch } from "@/components/ui/switch";
+import { useConfig, useUpdateConfig } from "@/hooks/useConfig";
 import { api } from "@/lib/api-client";
 import type { components } from "@/lib/api-types";
 import { describeDocument, type ChatDocument } from "@/lib/chat-documents";
@@ -26,6 +29,7 @@ import {
   chatHistoryKey,
   type ChatHistory,
 } from "@/lib/chat-history";
+import { useAppStore } from "@/lib/store";
 
 type DocumentList = components["schemas"]["DocumentListResponse"];
 type ResetResult = components["schemas"]["ResetIndexesResponse"];
@@ -35,12 +39,16 @@ type Confirmation =
   | { kind: "reset" };
 
 /**
- * Settings → Chat: every document chat has recorded, with Remove, and Reset for
- * a damaged chat index (#31). The list is read from the records alone, so
- * opening this tab never loads the embedding model.
+ * Settings → Chat: whether chat is on (#32), and every document chat has
+ * recorded, with Remove, and Reset for a damaged chat index (#31). The list is
+ * read from the records alone, so opening this tab never loads the embedding
+ * model.
  */
 export function ChatIndexTab({ open }: { open: boolean }) {
   const queryClient = useQueryClient();
+  const { data: config } = useConfig();
+  const update = useUpdateConfig();
+  const setChatOpen = useAppStore((s) => s.setChatOpen);
   // Kept after the dialog closes, so its text doesn't change mid-animation.
   const [confirmation, setConfirmation] = useState<Confirmation>({
     kind: "reset",
@@ -104,6 +112,33 @@ export function ChatIndexTab({ open }: { open: boolean }) {
 
   return (
     <div className="space-y-4 py-2">
+      <div className="space-y-2">
+        <Label htmlFor="chat-enabled" className="flex items-center gap-2">
+          <Switch
+            id="chat-enabled"
+            checked={config?.rag.chat_enabled ?? true}
+            disabled={!config || update.isPending}
+            onCheckedChange={(checked) => {
+              if (!checked) setChatOpen(false);
+              update.mutate(
+                { chat_enabled: checked },
+                {
+                  onError: (e) =>
+                    toast.error("Could not change the chat setting", {
+                      description: (e as Error).message,
+                    }),
+                },
+              );
+            }}
+          />
+          <span className="text-sm">Enable chat</span>
+        </Label>
+        <p className="pl-10 text-xs text-muted-foreground">
+          Ask questions about the open PDF. Turning chat off removes the Chat
+          button and stops indexing PDFs. Saved conversations are kept.
+        </p>
+      </div>
+
       <div className="space-y-3 rounded-md border border-border bg-muted/40 p-4">
         <div className="flex items-center gap-2">
           <MessageSquare className="h-4 w-4 text-primary" />
@@ -123,7 +158,7 @@ export function ChatIndexTab({ open }: { open: boolean }) {
         <div className="text-sm text-muted-foreground">Loading…</div>
       ) : list.length === 0 ? (
         <div className="text-sm text-muted-foreground">
-          No documents yet. Turn on chat and open a PDF to add one.
+          No documents yet. Show the chat panel with a PDF open to add one.
         </div>
       ) : (
         <ul className="divide-y divide-border rounded-md border border-border">

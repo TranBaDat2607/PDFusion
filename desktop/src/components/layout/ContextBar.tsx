@@ -8,14 +8,18 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Switch } from "@/components/ui/switch";
 import { TranslatedFileActions } from "@/components/translation/TranslatedFileActions";
 import {
   Tooltip,
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
-import { useConfig, useOptions, useUpdateConfig } from "@/hooks/useConfig";
+import {
+  useChatEnabled,
+  useConfig,
+  useOptions,
+  useUpdateConfig,
+} from "@/hooks/useConfig";
 import { api } from "@/lib/api-client";
 import type { components } from "@/lib/api-types";
 import { basename } from "@/lib/export-pdf";
@@ -58,10 +62,9 @@ export function ContextBar({
   const update = useUpdateConfig();
 
   const originalPath = useAppStore((s) => s.originalPdfPath);
-  const ragEnabled = useAppStore((s) => s.ragEnabled);
-  const setRagEnabled = useAppStore((s) => s.setRagEnabled);
+  const chatEnabled = useChatEnabled();
   const chatOpen = useAppStore((s) => s.chatOpen);
-  const setChatOpen = useAppStore((s) => s.setChatOpen);
+  const toggleChat = useAppStore((s) => s.toggleChat);
 
   const sourceLang = config?.translation.default_source_lang ?? "auto";
   const targetLang = config?.translation.default_target_lang ?? "vi";
@@ -215,41 +218,36 @@ export function ContextBar({
       )}
 
       <div className="ml-auto flex items-center gap-2">
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <div
-              className={cn(
-                "flex items-center gap-2 rounded-md border px-2.5 py-1 transition-colors",
-                ragEnabled && chatOpen
-                  ? "border-primary/50 bg-primary/5"
-                  : "border-border",
-              )}
-            >
-              <MessageSquare
-                className={cn(
-                  "h-3.5 w-3.5 transition-colors",
-                  ragEnabled && chatOpen
-                    ? "text-primary"
-                    : "text-muted-foreground",
-                )}
-              />
-              <span className="text-xs">Chat</span>
-              <Switch
-                checked={ragEnabled && chatOpen}
-                onCheckedChange={(checked) => {
-                  setRagEnabled(checked);
-                  setChatOpen(checked);
-                  if (checked !== ragEnabled) {
-                    update.mutate({ rag_enabled: checked });
-                  }
-                }}
-              />
-            </div>
-          </TooltipTrigger>
-          <TooltipContent>Enable AI chat about the document</TooltipContent>
-        </Tooltip>
+        {/* Shows or hides the panel, and does nothing else: Settings → Chat
+            turns chat off. This used to be one switch that also turned RAG
+            on and off and wrote the config (#32). */}
+        {chatEnabled && (
+          <>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  aria-pressed={chatOpen}
+                  onClick={toggleChat}
+                  className={cn(
+                    "gap-2",
+                    chatOpen &&
+                      "border-primary/50 bg-primary/5 text-primary hover:text-primary",
+                  )}
+                >
+                  <MessageSquare className="h-3.5 w-3.5" />
+                  Chat
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>
+                {chatOpen ? "Hide the chat panel" : "Ask questions about the document"}
+              </TooltipContent>
+            </Tooltip>
 
-        <div className="mx-1 h-5 w-px bg-border" />
+            <div className="mx-1 h-5 w-px bg-border" />
+          </>
+        )}
 
         <Button
           onClick={onTranslate}

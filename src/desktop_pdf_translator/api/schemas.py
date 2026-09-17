@@ -114,7 +114,7 @@ class ConfigUpdateRequest(BaseModel):
     preferred_service: Optional[TranslationService] = None
     default_source_lang: Optional[LanguageCode] = None
     default_target_lang: Optional[LanguageCode] = None
-    rag_enabled: Optional[bool] = None
+    chat_enabled: Optional[bool] = None
     # Performance / cache toggles
     max_parallel_chunks: Optional[int] = Field(None, ge=0, le=16)
     cache_translations: Optional[bool] = None
@@ -232,6 +232,8 @@ class ExportPdfResponse(BaseModel):
 
 
 class CacheStatsResponse(BaseModel):
+    """The paragraph cache (`translators/translation_cache.py`)."""
+
     entries: int = 0
     active: int = 0
     expired: int = 0
@@ -245,9 +247,33 @@ class CacheStatsResponse(BaseModel):
     max_size_mb: float = 500.0
 
 
+class PdfCacheStatsResponse(BaseModel):
+    """The whole-PDF cache (`processors/pdf_cache.py`)."""
+
+    entries: int = 0
+    size_mb: float = 0.0
+    # Past this, the least recently used PDFs are evicted.
+    max_size_mb: float = 1000.0
+    by_service: Dict[str, int] = Field(default_factory=dict)
+    hits: int = 0
+    misses: int = 0
+    hit_rate: float = 0.0
+    cache_dir: str = ""
+
+
+class CacheOverviewResponse(BaseModel):
+    """Both translation caches, which Settings → Cache shows side by side. It
+    used to show only the paragraph cache, while its "Clear all" emptied both
+    (#32)."""
+
+    paragraph: CacheStatsResponse
+    pdf: PdfCacheStatsResponse
+
+
 class CacheClearResponse(BaseModel):
     removed: int
-    scope: str  # "expired" | "all"
+    scope: Literal["expired", "all"]
+    target: Literal["paragraph", "pdf", "all"]
 
 
 # ---------------------------------------------------------------------------
