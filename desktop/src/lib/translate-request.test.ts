@@ -4,6 +4,7 @@ import {
   buildTranslateBody,
   effectiveService,
   isPairSupported,
+  isSourceSupported,
 } from "./translate-request";
 import type { ConfigResponse, OptionsResponse } from "@/hooks/useConfig";
 
@@ -150,5 +151,22 @@ describe("isPairSupported", () => {
   // dropdown — the server still pre-flights and answers 422.
   it("treats an unknown service as unrestricted", () => {
     expect(isPairSupported(OPTIONS, "gemini", "en", "ja")).toBe(true);
+  });
+});
+
+describe("isSourceSupported", () => {
+  it("offers only the sources Argos can translate from", () => {
+    expect(isSourceSupported(OPTIONS, "argos", "auto")).toBe(true);
+    expect(isSourceSupported(OPTIONS, "argos", "en")).toBe(true);
+    expect(isSourceSupported(OPTIONS, "argos", "ja")).toBe(false);
+    expect(isSourceSupported(OPTIONS, "argos", "vi")).toBe(false);
+  });
+
+  it("leaves an LLM unrestricted", () => {
+    expect(isSourceSupported(OPTIONS, "openai", "ja")).toBe(true);
+  });
+
+  it("treats a service it doesn't know as unrestricted", () => {
+    expect(isSourceSupported(OPTIONS, "gemini", "ja")).toBe(true);
   });
 });
