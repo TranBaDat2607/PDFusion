@@ -92,8 +92,51 @@ def test_file_values_override_the_model_defaults(manager: ConfigManager):
 def test_sections_absent_from_the_file_keep_their_defaults(manager: ConfigManager):
     write_config(manager, {"openai": {"model": "gpt-4o-mini"}})
     settings = manager.load_settings()
-    assert settings.gemini.model == "gemini-1.5-flash"
+    assert settings.gemini.model == "gemini-3.8-flash"
     assert settings.translation.cache_translations is True
+
+
+def test_a_saved_model_its_provider_shut_down_loads_as_the_default(
+    manager: ConfigManager,
+):
+    """`save_settings` writes the defaults into the file, so every config ever
+    saved still named `gemini-1.5-flash` after Google retired it. A new default
+    alone reached none of them (#32)."""
+    write_config(
+        manager,
+        {
+            "gemini": {"model": "gemini-1.5-flash"},
+            "anthropic": {"model": "claude-3-5-sonnet-20241022"},
+        },
+    )
+    settings = manager.load_settings()
+    assert settings.gemini.model == "gemini-3.8-flash"
+    assert settings.anthropic.model == AppSettings().anthropic.model
+
+
+def test_a_model_the_app_has_never_heard_of_is_left_alone(manager: ConfigManager):
+    """A local server's model, or one newer than this build."""
+    write_config(
+        manager,
+        {"openai": {"model": "llama3.2:3b"}, "gemini": {"model": "gemini-9-flash"}},
+    )
+    settings = manager.load_settings()
+    assert settings.openai.model == "llama3.2:3b"
+    assert settings.gemini.model == "gemini-9-flash"
+
+
+def test_an_endpoint_is_stored_without_its_trailing_slash(manager: ConfigManager):
+    write_config(manager, {"openai": {"base_url": " http://localhost:11434/v1/ "}})
+    assert manager.load_settings().openai.base_url == "http://localhost:11434/v1"
+
+
+def test_an_endpoint_that_is_not_a_web_url_is_dropped(manager: ConfigManager):
+    write_config(
+        manager, {"openai": {"model": "gpt-4o-mini", "base_url": "localhost:11434"}}
+    )
+    settings = manager.load_settings()
+    assert settings.openai.base_url is None
+    assert settings.openai.model == "gpt-4o-mini"
 
 
 def test_a_corrupt_file_does_not_stop_the_sidecar(manager: ConfigManager):
@@ -139,6 +182,43 @@ def test_an_environment_override_merges_rather_than_replaces_its_section(
     settings = manager.load_settings()
     assert settings.openai.api_key == "sk-from-env"
     assert settings.openai.model == "gpt-4o-mini"
+
+
+def test_an_environment_key_is_not_used_with_a_saved_endpoint(
+    manager: ConfigManager, monkeypatch: pytest.MonkeyPatch
+):
+    """The environment key is the provider's. A service pointed elsewhere keeps
+    the key saved with its endpoint, or has none (#32)."""
+    write_config(
+        manager,
+        {
+            "openai": {"api_key": "ollama", "base_url": "http://localhost:11434/v1"},
+            "anthropic": {"base_url": "http://localhost:11434"},
+        },
+    )
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-from-env")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-from-env")
+    monkeypatch.setenv("OPENAI_MODEL", "llama3.2:3b")
+    settings = manager.load_settings()
+
+    assert settings.openai.api_key == "ollama"
+    assert settings.openai.base_url == "http://localhost:11434/v1"
+    assert settings.openai.model == "llama3.2:3b"
+    assert settings.anthropic.api_key is None
+    assert settings.anthropic.base_url == "http://localhost:11434"
+
+
+def test_an_environment_key_is_used_when_the_saved_endpoint_is_dropped(
+    manager: ConfigManager, monkeypatch: pytest.MonkeyPatch
+):
+    """An endpoint that fails validation is dropped, so requests go to the
+    provider, and the provider's key goes with them."""
+    write_config(manager, {"openai": {"base_url": "localhost:11434"}})
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-from-env")
+    settings = manager.load_settings()
+
+    assert settings.openai.base_url is None
+    assert settings.openai.api_key == "sk-from-env"
 
 
 def test_numeric_environment_overrides_are_parsed(

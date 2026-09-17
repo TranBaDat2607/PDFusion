@@ -12,6 +12,7 @@ import {
 } from "lucide-react";
 
 import { ChatIndexTab } from "@/components/settings/ChatIndexTab";
+import { ModelCombobox } from "@/components/settings/ModelCombobox";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -39,13 +40,26 @@ import {
   useOptions,
   useUpdateConfig,
   useValidateCredentials,
+  validateCredentials,
   type ServiceCode,
   type ServiceOption,
 } from "@/hooks/useConfig";
+import {
+  LLM_SERVICES,
+  buildConfigUpdate,
+  draftProblem,
+  draftsFrom,
+  endpointNeedsKey,
+  isValidEndpoint,
+  servicesToProbe,
+  takesEndpoint,
+  validateRequestFor,
+  type LlmServiceCode,
+  type SavedServices,
+  type ServiceDraft,
+  type ServiceDrafts,
+} from "@/lib/service-settings";
 
-// LLM service codes — exclude argos (no api_key / model edits).
-type LlmServiceCode = Exclude<ServiceCode, "argos">;
-const LLM_SERVICES: LlmServiceCode[] = ["openai", "gemini", "anthropic"];
 const ALL_SERVICES: ServiceCode[] = ["argos", "openai", "gemini", "anthropic"];
 
 // Pseudo-tab values for the cache and chat panels — not translation services.
@@ -61,24 +75,26 @@ const TAB_LABELS: Record<ServiceCode, string> = {
   anthropic: "Claude",
 };
 
+// Where a service with a blank endpoint sends its requests, shown as the
+// field's placeholder.
+const DEFAULT_ENDPOINTS: Partial<Record<LlmServiceCode, string>> = {
+  openai: "https://api.openai.com/v1",
+  anthropic: "https://api.anthropic.com",
+};
+
+const ENDPOINT_HINTS: Partial<Record<LlmServiceCode, string>> = {
+  openai:
+    "Leave blank for OpenAI. For a local model, use Ollama at http://localhost:11434/v1 or LM Studio at http://localhost:1234/v1, with any API key.",
+  anthropic:
+    "Leave blank for Anthropic. For a local model, use Ollama at http://localhost:11434, with any API key.",
+};
+
+type Problems = Partial<Record<LlmServiceCode, string>>;
+
 interface SettingsSheetProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
 }
-
-interface DraftService {
-  apiKey: string;          // empty = unchanged from server-side state
-  apiKeyTouched: boolean;  // user actually typed something
-  model: string;
-}
-
-type Drafts = Record<LlmServiceCode, DraftService>;
-
-const EMPTY_DRAFTS: Drafts = {
-  openai: { apiKey: "", apiKeyTouched: false, model: "" },
-  gemini: { apiKey: "", apiKeyTouched: false, model: "" },
-  anthropic: { apiKey: "", apiKeyTouched: false, model: "" },
-};
 
 export function SettingsSheet({ open, onOpenChange }: SettingsSheetProps) {
   const { data: config } = useConfig();
@@ -86,36 +102,81 @@ export function SettingsSheet({ open, onOpenChange }: SettingsSheetProps) {
   const updateConfig = useUpdateConfig();
 
   const [tab, setTab] = useState<TabValue>("argos");
-  const [drafts, setDrafts] = useState<Drafts>(EMPTY_DRAFTS);
+  const [drafts, setDrafts] = useState<ServiceDrafts | null>(null);
+  // Why the last Save stopped, per service: a draft the sidecar would refuse,
+  // or what the provider said when Save checked it.
+  const [problems, setProblems] = useState<Problems>({});
+  // The provider turned a draft down. Another Save saves without checking:
+  // a local server may just not be running yet.
+  const [saveAnyway, setSaveAnyway] = useState(false);
+  const [checking, setChecking] = useState(false);
 
   // Reset drafts whenever the sheet opens (or config changes)
   useEffect(() => {
     if (!open || !config) return;
-    setDrafts({
-      openai: { apiKey: "", apiKeyTouched: false, model: config.openai.model },
-      gemini: { apiKey: "", apiKeyTouched: false, model: config.gemini.model },
-      anthropic: {
-        apiKey: "",
-        apiKeyTouched: false,
-        model: config.anthropic.model,
-      },
-    });
+    setDrafts(draftsFrom(config));
+    setProblems({});
+    setSaveAnyway(false);
   }, [open, config]);
 
-  const handleSave = async () => {
-    const update: Parameters<typeof updateConfig.mutate>[0] = {};
-    (Object.entries(drafts) as Array<[LlmServiceCode, DraftService]>).forEach(
-      ([code, d]) => {
-        const change: { api_key?: string | null; model?: string } = {};
-        if (d.apiKeyTouched) change.api_key = d.apiKey || null;
-        if (config && d.model !== config[code].model) change.model = d.model;
-        if (Object.keys(change).length > 0) update[code] = change;
-      },
-    );
+  const editDraft = (code: LlmServiceCode, patch: Partial<ServiceDraft>) => {
+    setDrafts((prev) => prev && { ...prev, [code]: { ...prev[code], ...patch } });
+    setProblems((prev) => ({ ...prev, [code]: undefined }));
+    setSaveAnyway(false);
+  };
 
+  const handleSave = async () => {
+    if (!config || !drafts) {
+      onOpenChange(false);
+      return;
+    }
+
+    // What the sidecar would refuse is shown on its own tab instead.
+    const refused: Problems = {};
+    for (const code of LLM_SERVICES) {
+      const problem = draftProblem(code, drafts[code], config);
+      if (problem) refused[code] = problem;
+    }
+    const firstRefused = LLM_SERVICES.find((code) => refused[code]);
+    if (firstRefused) {
+      setProblems(refused);
+      setTab(firstRefused);
+      return;
+    }
+
+    const update = buildConfigUpdate(drafts, config);
     if (Object.keys(update).length === 0) {
       onOpenChange(false);
       return;
+    }
+
+    // A changed key, model or endpoint is checked with the provider before it
+    // is saved, so a mistyped model name turns up here and not as a document
+    // that fails one paragraph at a time.
+    if (!saveAnyway) {
+      const probes = servicesToProbe(drafts, config);
+      if (probes.length > 0) {
+        setChecking(true);
+        const results = await Promise.all(
+          probes.map(async ({ code, request }) => {
+            try {
+              return { code, ...(await validateCredentials(request)) };
+            } catch (e) {
+              return { code, valid: false, message: (e as Error).message };
+            }
+          }),
+        );
+        setChecking(false);
+        const failed = results.filter((result) => !result.valid);
+        if (failed.length > 0) {
+          setProblems(
+            Object.fromEntries(failed.map((result) => [result.code, result.message])),
+          );
+          setTab(failed[0].code);
+          setSaveAnyway(true);
+          return;
+        }
+      }
     }
 
     try {
@@ -133,8 +194,8 @@ export function SettingsSheet({ open, onOpenChange }: SettingsSheetProps) {
         <SheetHeader>
           <SheetTitle>Settings</SheetTitle>
           <SheetDescription>
-            Manage API keys and models for each translation service. Keys are
-            encrypted at rest.
+            Manage API keys, models and endpoints for each translation service.
+            Keys are encrypted at rest.
           </SheetDescription>
         </SheetHeader>
 
@@ -169,26 +230,24 @@ export function SettingsSheet({ open, onOpenChange }: SettingsSheetProps) {
               <ChatIndexTab open={open && tab === "chat"} />
             </TabsContent>
 
-            {LLM_SERVICES.map((code) => {
-              const opt = options?.services.find((s) => s.code === code);
-              if (!opt) return null;
-              return (
-                <TabsContent key={code} value={code} className="mt-4">
-                  <ServiceTab
-                    code={code}
-                    option={opt}
-                    hasExistingKey={!!config?.[code].has_key}
-                    draft={drafts[code]}
-                    onChange={(patch) =>
-                      setDrafts((prev) => ({
-                        ...prev,
-                        [code]: { ...prev[code], ...patch },
-                      }))
-                    }
-                  />
-                </TabsContent>
-              );
-            })}
+            {config &&
+              drafts &&
+              LLM_SERVICES.map((code) => {
+                const opt = options?.services.find((s) => s.code === code);
+                if (!opt) return null;
+                return (
+                  <TabsContent key={code} value={code} className="mt-4">
+                    <ServiceTab
+                      code={code}
+                      option={opt}
+                      saved={config}
+                      draft={drafts[code]}
+                      problem={problems[code]}
+                      onChange={(patch) => editDraft(code, patch)}
+                    />
+                  </TabsContent>
+                );
+              })}
           </Tabs>
         </div>
 
@@ -196,12 +255,22 @@ export function SettingsSheet({ open, onOpenChange }: SettingsSheetProps) {
           <Button variant="outline" onClick={() => onOpenChange(false)}>
             Cancel
           </Button>
-          <Button onClick={handleSave} disabled={updateConfig.isPending}>
-            {updateConfig.isPending ? (
+          <Button
+            onClick={handleSave}
+            disabled={checking || updateConfig.isPending}
+          >
+            {checking ? (
+              <>
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                Checking…
+              </>
+            ) : updateConfig.isPending ? (
               <>
                 <Loader2 className="mr-2 h-4 w-4 animate-spin" />
                 Saving…
               </>
+            ) : saveAnyway ? (
+              "Save anyway"
             ) : (
               "Save"
             )}
@@ -293,16 +362,19 @@ function ArgosTab() {
 interface ServiceTabProps {
   code: LlmServiceCode;
   option: ServiceOption;
-  hasExistingKey: boolean;
-  draft: DraftService;
-  onChange: (patch: Partial<DraftService>) => void;
+  saved: SavedServices;
+  draft: ServiceDraft;
+  /** Why the last Save stopped on this service. */
+  problem?: string;
+  onChange: (patch: Partial<ServiceDraft>) => void;
 }
 
 function ServiceTab({
   code,
   option,
-  hasExistingKey,
+  saved,
   draft,
+  problem,
   onChange,
 }: ServiceTabProps) {
   const [show, setShow] = useState(false);
@@ -311,23 +383,31 @@ function ServiceTab({
     valid: boolean;
     message: string;
   } | null>(null);
+  const hasSavedKey = saved[code].has_key;
+  const endpointValid = isValidEndpoint(draft.baseUrl);
 
   const handleValidate = async () => {
-    const apiKey = draft.apiKey.trim();
-    if (!apiKey) {
+    if (!endpointValid) {
       setValidation({
         valid: false,
-        message: "Enter an API key first",
+        message: "The endpoint must be an http:// or https:// URL",
       });
       return;
     }
-    try {
-      const result = await validate.mutateAsync({
-        service: code,
-        api_key: apiKey,
-        model: draft.model,
+    if (endpointNeedsKey(code, draft, saved)) {
+      setValidation({
+        valid: false,
+        message: "Enter the API key to check a different endpoint",
       });
-      setValidation(result);
+      return;
+    }
+    const request = validateRequestFor(code, draft, saved);
+    if (!request) {
+      setValidation({ valid: false, message: "Enter an API key first" });
+      return;
+    }
+    try {
+      setValidation(await validate.mutateAsync(request));
     } catch (e) {
       setValidation({ valid: false, message: (e as Error).message });
     }
@@ -344,9 +424,11 @@ function ServiceTab({
               type={show ? "text" : "password"}
               autoComplete="off"
               value={draft.apiKey}
-              placeholder={hasExistingKey ? "•••••••• (saved)" : "Paste key…"}
+              placeholder={
+                hasSavedKey && !draft.clearKey ? "•••••••• (saved)" : "Paste key…"
+              }
               onChange={(e) =>
-                onChange({ apiKey: e.target.value, apiKeyTouched: true })
+                onChange({ apiKey: e.target.value, clearKey: false })
               }
             />
             <button
@@ -360,46 +442,73 @@ function ServiceTab({
           </div>
           <Button
             variant="outline"
-            onClick={() =>
-              onChange({ apiKey: "", apiKeyTouched: true })
-            }
-            disabled={!draft.apiKey && !hasExistingKey}
+            onClick={() => onChange({ apiKey: "", clearKey: true })}
+            disabled={!draft.apiKey && (!hasSavedKey || draft.clearKey)}
           >
             Clear
           </Button>
         </div>
-        {hasExistingKey && !draft.apiKeyTouched && (
+        {draft.clearKey ? (
           <p className="text-xs text-muted-foreground">
-            A key is currently saved. Type a new one to replace, or click Clear
-            and Save to remove.
+            The saved key is removed when you save.
           </p>
+        ) : (
+          hasSavedKey &&
+          !draft.apiKey && (
+            <p className="text-xs text-muted-foreground">
+              A key is currently saved. Type a new one to replace, or click
+              Clear and Save to remove.
+            </p>
+          )
         )}
       </div>
 
       <div className="space-y-2">
         <Label htmlFor={`${code}-model`}>Model</Label>
-        <Select
+        <ModelCombobox
+          id={`${code}-model`}
           value={draft.model}
-          onValueChange={(model) => onChange({ model })}
-        >
-          <SelectTrigger id={`${code}-model`}>
-            <SelectValue placeholder="Select model" />
-          </SelectTrigger>
-          <SelectContent>
-            {option.models.map((m) => (
-              <SelectItem key={m} value={m}>
-                {m}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
+          suggestions={option.models}
+          onChange={(model) => onChange({ model })}
+        />
+        <p className="text-xs text-muted-foreground">
+          Any model the service offers. The list only makes suggestions.
+        </p>
       </div>
 
-      <div className="flex items-center gap-3">
+      {takesEndpoint(code) && (
+        <div className="space-y-2">
+          <Label htmlFor={`${code}-endpoint`}>Endpoint</Label>
+          <Input
+            id={`${code}-endpoint`}
+            value={draft.baseUrl}
+            placeholder={DEFAULT_ENDPOINTS[code]}
+            autoComplete="off"
+            spellCheck={false}
+            aria-invalid={!endpointValid || undefined}
+            className="font-mono"
+            onChange={(e) => onChange({ baseUrl: e.target.value })}
+          />
+          <p className="text-xs text-muted-foreground">{ENDPOINT_HINTS[code]}</p>
+        </div>
+      )}
+
+      {problem && (
+        <p className="flex items-start gap-1.5 text-sm text-destructive">
+          <XCircle className="mt-0.5 h-4 w-4 shrink-0" />
+          <span className="min-w-0 break-words">{problem}</span>
+        </p>
+      )}
+
+      <div className="flex items-start gap-3">
         <Button
           onClick={handleValidate}
-          disabled={validate.isPending || (!draft.apiKey && !draft.apiKeyTouched)}
+          disabled={
+            validate.isPending ||
+            (!draft.apiKey.trim() && (!hasSavedKey || draft.clearKey))
+          }
           variant="secondary"
+          className="shrink-0"
         >
           {validate.isPending ? (
             <>
@@ -412,16 +521,16 @@ function ServiceTab({
         </Button>
         {validation && (
           <span
-            className={`flex items-center gap-1 text-sm ${
+            className={`flex min-w-0 items-start gap-1 pt-2 text-sm ${
               validation.valid ? "text-primary" : "text-destructive"
             }`}
           >
             {validation.valid ? (
-              <CheckCircle2 className="h-4 w-4" />
+              <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0" />
             ) : (
-              <XCircle className="h-4 w-4" />
+              <XCircle className="mt-0.5 h-4 w-4 shrink-0" />
             )}
-            {validation.message}
+            <span className="min-w-0 break-words">{validation.message}</span>
           </span>
         )}
       </div>

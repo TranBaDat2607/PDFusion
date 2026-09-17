@@ -10,7 +10,7 @@ from typing import Optional, Dict, Any
 import tomlkit
 from pydantic import ValidationError
 
-from .models import AppSettings
+from .models import RETIRED_MODELS, AppSettings, normalize_base_url
 from ..utils import (
     DPAPI_PREFIX,
     adopt_legacy_config,
@@ -82,7 +82,10 @@ class ConfigManager:
         
         # Override with environment variables
         env_config = self._load_from_environment()
+        self._keep_environment_keys_off_endpoints(config_data, env_config)
         self._deep_merge(config_data, env_config)
+
+        self._replace_retired_models(config_data)
         
         # Create settings model with validation
         try:
@@ -155,6 +158,30 @@ class ConfigManager:
                 return
         if isinstance(node, dict):
             node.pop(loc[-1], None)
+
+    @staticmethod
+    def _replace_retired_models(config_data: Dict[str, Any]) -> None:
+        """Swap a saved model its provider has shut down for today's default.
+
+        `save_settings` writes the defaults into `config.toml`, so a default
+        that later went away sits in every file that was ever saved, and a new
+        default alone reaches none of them (#32). Only the IDs in
+        `RETIRED_MODELS` move: a model this app has never heard of is the
+        user's to name, and may well be served by their own endpoint.
+        """
+        defaults = AppSettings()
+        for service, retired in RETIRED_MODELS.items():
+            section = config_data.get(service)
+            if not isinstance(section, dict):
+                continue
+            model = section.get("model")
+            if isinstance(model, str) and model.strip() in retired:
+                replacement = getattr(defaults, service).model
+                logger.info(
+                    "%s model %s has been shut down by its provider; using %s",
+                    service, model, replacement,
+                )
+                section["model"] = replacement
     
     def save_settings(self, settings: AppSettings) -> bool:
         """Save settings to the TOML file, atomically.
@@ -273,6 +300,38 @@ class ConfigManager:
         
         return env_config
     
+    @staticmethod
+    def _keep_environment_keys_off_endpoints(
+        config_data: Dict[str, Any], env_config: Dict[str, Any]
+    ) -> None:
+        """Use an environment key only with the provider's own endpoint.
+
+        `OPENAI_API_KEY` and `ANTHROPIC_API_KEY` replace the saved key on every
+        load, and the sidecar inherits the user's whole environment. `PUT
+        /config` lets an endpoint change only when the request carries a key,
+        but here that key would give way to the environment's on the next
+        start, which would then go to whatever endpoint was saved (#32). So a
+        service with an endpoint of its own keeps the key saved with it.
+        """
+        for service in KEYED_SERVICES:
+            env_section = env_config.get(service)
+            if not env_section or "api_key" not in env_section:
+                continue
+            section = config_data.get(service)
+            base_url = section.get("base_url") if isinstance(section, dict) else None
+            try:
+                base_url = normalize_base_url(base_url)
+            except ValueError:
+                # Dropped as the settings validate, leaving the provider's own.
+                base_url = None
+            if base_url:
+                del env_section["api_key"]
+                logger.info(
+                    "%s_API_KEY is not used: %s is set to its own endpoint",
+                    service.upper(),
+                    service,
+                )
+
     def _load_dotenv(self) -> None:
         """Load environment variables from .env file if available."""
         # Look for .env in two well-known locations:

@@ -93,7 +93,12 @@ export interface paths {
         put?: never;
         /**
          * Validate Credentials
-         * @description Spin up a translator instance with the supplied credentials and validate.
+         * @description Check credentials with the provider.
+         *
+         *     Whatever the request leaves out comes from the saved settings: the key,
+         *     the model, the endpoint. The saved key is only sent to the saved endpoint,
+         *     the rule `PUT /config` keeps; checking another endpoint needs the key typed
+         *     alongside it.
          */
         post: operations["validate_credentials_config_validate_post"];
         delete?: never;
@@ -462,6 +467,8 @@ export interface components {
          * @description Service config with the API key masked. The frontend never sees real keys.
          */
         APIKeyMaskedSettings: {
+            /** Base Url */
+            base_url?: string | null;
             /** Extra */
             extra?: {
                 [key: string]: unknown;
@@ -762,7 +769,7 @@ export interface components {
         };
         /** ConfigUpdateRequest */
         ConfigUpdateRequest: {
-            anthropic?: components["schemas"]["ServiceCredentialUpdate"] | null;
+            anthropic?: components["schemas"]["EndpointCredentialUpdate"] | null;
             /** Cache Translated Pdfs */
             cache_translated_pdfs?: boolean | null;
             /** Cache Translations */
@@ -772,7 +779,7 @@ export interface components {
             gemini?: components["schemas"]["ServiceCredentialUpdate"] | null;
             /** Max Parallel Chunks */
             max_parallel_chunks?: number | null;
-            openai?: components["schemas"]["ServiceCredentialUpdate"] | null;
+            openai?: components["schemas"]["EndpointCredentialUpdate"] | null;
             preferred_service?: components["schemas"]["TranslationService"] | null;
             /** Rag Enabled */
             rag_enabled?: boolean | null;
@@ -810,6 +817,24 @@ export interface components {
          *     sends a literal `{}` for it today.
          */
         EmptyPayload: Record<string, never>;
+        /**
+         * EndpointCredentialUpdate
+         * @description For a service that can talk to another server speaking its API: Ollama,
+         *     LM Studio, a proxy (#32).
+         *
+         *     `base_url=None` leaves the endpoint unchanged and `""` returns to the
+         *     provider's own. Changing it while a key is saved needs the key in the same
+         *     update, because a saved key is only ever sent to the endpoint it was saved
+         *     for (`routes/config.py:update_config`).
+         */
+        EndpointCredentialUpdate: {
+            /** Api Key */
+            api_key?: string | null;
+            /** Base Url */
+            base_url?: string | null;
+            /** Model */
+            model?: string | null;
+        };
         /** EngineAssetGroup */
         EngineAssetGroup: {
             /** Detail */
@@ -1170,7 +1195,8 @@ export interface components {
         /**
          * ServiceCredentialUpdate
          * @description Update payload for one service. `api_key=None` means leave unchanged;
-         *     `api_key=""` means clear it.
+         *     `api_key=""` means clear it. `model` is any name the provider serves, not
+         *     only one `/config/options` suggests.
          */
         ServiceCredentialUpdate: {
             /** Api Key */
@@ -1290,10 +1316,17 @@ export interface components {
              */
             preserve_formatting: boolean;
         };
-        /** ValidateRequest */
+        /**
+         * ValidateRequest
+         * @description What to check against the provider. Whatever is left out comes from the
+         *     saved settings, and the saved key is only checked against the saved
+         *     endpoint: naming another one needs the key typed alongside it.
+         */
         ValidateRequest: {
             /** Api Key */
-            api_key: string;
+            api_key?: string | null;
+            /** Base Url */
+            base_url?: string | null;
             /** Model */
             model?: string | null;
             service: components["schemas"]["TranslationService"];

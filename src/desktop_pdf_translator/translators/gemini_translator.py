@@ -8,6 +8,7 @@ from typing import Optional
 from google import genai
 from google.genai import types as genai_types
 
+from ..config import GeminiSettings
 from .base import BaseTranslator, LANGUAGE_DISPLAY_NAMES, TranslationCancelled
 from .translation_cache import llm_cache_get as _llm_cache_get, llm_cache_set as _llm_cache_set
 
@@ -33,7 +34,7 @@ class GeminiTranslator(BaseTranslator):
         if not self.api_key:
             raise ValueError("Gemini API key is required")
 
-        self.model_name = kwargs.get("model", "gemini-pro")
+        self.model_name = kwargs.get("model") or GeminiSettings.model_fields["model"].default
         self.temperature = kwargs.get("temperature", 0.3)
 
         # Set once here rather than per-GenerateContentConfig so it also

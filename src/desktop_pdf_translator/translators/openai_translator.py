@@ -3,10 +3,11 @@ OpenAI translator implementation with Vietnamese optimization.
 """
 
 import logging
-from typing import Optional, List, Dict
+from typing import Any, Dict, FrozenSet, List, Optional
 
 from openai import OpenAI
 
+from ..config import OpenAISettings
 from .base import BaseTranslator, LANGUAGE_DISPLAY_NAMES, TranslationCancelled
 from .translation_cache import llm_cache_get as _llm_cache_get, llm_cache_set as _llm_cache_set
 
@@ -24,6 +25,11 @@ class OpenAITranslator(BaseTranslator):
 
     _SERVICE_NAME = "openai"
 
+    # What an OpenAI-compatible endpoint may refuse for a particular model:
+    # reasoning models take no `temperature`, and want `max_completion_tokens`
+    # in place of `max_tokens`. See `BaseTranslator._call_adapting`.
+    _ADAPTABLE_PARAMS = ("temperature", "max_tokens")
+
     def __init__(self, lang_in: str, lang_out: str, **kwargs):
         super().__init__(lang_in, lang_out, **kwargs)
 
@@ -32,7 +38,7 @@ class OpenAITranslator(BaseTranslator):
         if not self.api_key:
             raise ValueError("OpenAI API key is required")
 
-        self.model = kwargs.get("model", "gpt-4")
+        self.model = kwargs.get("model") or OpenAISettings.model_fields["model"].default
         self.temperature = kwargs.get("temperature", 0.3)
         self.max_tokens = kwargs.get("max_tokens", 4000)
         self.base_url = kwargs.get("base_url")
@@ -42,6 +48,21 @@ class OpenAITranslator(BaseTranslator):
         self.client = OpenAI(api_key=self.api_key, base_url=self.base_url, max_retries=0)
 
         logger.info(f"OpenAI translator configured with model: {self.model}")
+
+    @staticmethod
+    def _sampling_kwargs(
+        rejected: FrozenSet[str],
+        temperature: Optional[float],
+        max_tokens: Optional[int],
+    ) -> Dict[str, Any]:
+        """The temperature and token cap, shaped to what this model takes."""
+        kwargs: Dict[str, Any] = {}
+        if temperature is not None and "temperature" not in rejected:
+            kwargs["temperature"] = temperature
+        if max_tokens is not None:
+            name = "max_completion_tokens" if "max_tokens" in rejected else "max_tokens"
+            kwargs[name] = max_tokens
+        return kwargs
     
     def translate(self, text: str, **kwargs) -> str:
         self._note_translate_call()
@@ -58,14 +79,17 @@ class OpenAITranslator(BaseTranslator):
                 self._fire_paragraph_callback(processed_text, cached)
                 return cached
 
-            response = self._call_with_backoff(
-                lambda: self.client.chat.completions.create(
+            messages = self._create_translation_prompt(processed_text)
+            response = self._call_adapting(
+                lambda rejected: self.client.chat.completions.create(
                     model=self.model,
-                    messages=self._create_translation_prompt(processed_text),
-                    temperature=self.temperature,
-                    max_tokens=self.max_tokens,
+                    messages=messages,
                     timeout=30,
+                    **self._sampling_kwargs(
+                        rejected, self.temperature, self.max_tokens
+                    ),
                 ),
+                self._ADAPTABLE_PARAMS,
             )
             content = response.choices[0].message.content
             translated_text = (content or "").strip()
@@ -102,14 +126,14 @@ class OpenAITranslator(BaseTranslator):
         if system:
             messages.append({"role": "system", "content": system})
         messages.append({"role": "user", "content": prompt})
-        response = self._call_with_backoff(
-            lambda: self.client.chat.completions.create(
+        response = self._call_adapting(
+            lambda rejected: self.client.chat.completions.create(
                 model=self.model,
                 messages=messages,
-                max_tokens=max_tokens,
-                temperature=0.3,
                 timeout=60,
-            )
+                **self._sampling_kwargs(rejected, 0.3, max_tokens),
+            ),
+            self._ADAPTABLE_PARAMS,
         )
         content = response.choices[0].message.content
         return content.strip() if content else None
@@ -156,12 +180,17 @@ Translate ONLY the text content. Do not add explanations, notes, or commentary."
             if not self.api_key:
                 return False, "API key is missing"
             
-            # Test API connection with a minimal request
-            response = self.client.chat.completions.create(
-                model=self.model,
-                messages=[{"role": "user", "content": "Hello"}],
-                max_tokens=5,
-                timeout=10
+            # A minimal request, shaped like a translation's: a model that
+            # refuses what `translate` sends must not come back as valid.
+            response = self._call_adapting(
+                lambda rejected: self.client.chat.completions.create(
+                    model=self.model,
+                    messages=[{"role": "user", "content": "Hello"}],
+                    timeout=10,
+                    **self._sampling_kwargs(rejected, self.temperature, 16),
+                ),
+                self._ADAPTABLE_PARAMS,
+                backoff=False,
             )
             
             if response.choices:

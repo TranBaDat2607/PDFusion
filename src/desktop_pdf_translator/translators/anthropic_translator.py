@@ -8,9 +8,11 @@ placeholders), so this class plugs in the same way OpenAITranslator/GeminiTransl
 """
 
 import logging
+from typing import Any, Dict, FrozenSet, Optional
 
 import anthropic
 
+from ..config import AnthropicSettings
 from .base import BaseTranslator, LANGUAGE_DISPLAY_NAMES, TranslationCancelled
 from .translation_cache import llm_cache_get as _llm_cache_get, llm_cache_set as _llm_cache_set
 
@@ -28,6 +30,11 @@ class AnthropicTranslator(BaseTranslator):
 
     _SERVICE_NAME = "anthropic"
 
+    # Claude Opus 4.7 and later answer 400 to a non-default `temperature`.
+    # `max_tokens` is required by the Messages API, so it is never left out.
+    # See `BaseTranslator._call_adapting`.
+    _ADAPTABLE_PARAMS = ("temperature",)
+
     def __init__(self, lang_in: str, lang_out: str, **kwargs):
         super().__init__(lang_in, lang_out, **kwargs)
 
@@ -36,7 +43,7 @@ class AnthropicTranslator(BaseTranslator):
         if not self.api_key:
             raise ValueError("Anthropic API key is required")
 
-        self.model = kwargs.get("model", "claude-sonnet-4-6")
+        self.model = kwargs.get("model") or AnthropicSettings.model_fields["model"].default
         self.temperature = kwargs.get("temperature", 0.3)
         self.max_tokens = kwargs.get("max_tokens", 4000)
         self.base_url = kwargs.get("base_url")
@@ -49,6 +56,15 @@ class AnthropicTranslator(BaseTranslator):
         self.client = anthropic.Anthropic(**client_kwargs)
 
         logger.info(f"Anthropic translator configured with model: {self.model}")
+
+    @staticmethod
+    def _sampling_kwargs(
+        rejected: FrozenSet[str], temperature: Optional[float]
+    ) -> Dict[str, Any]:
+        """The temperature, unless this model refused one."""
+        if temperature is None or "temperature" in rejected:
+            return {}
+        return {"temperature": temperature}
 
     def translate(self, text: str, **kwargs) -> str:
         self._note_translate_call()
@@ -67,15 +83,16 @@ class AnthropicTranslator(BaseTranslator):
 
             system_prompt, user_prompt = self._create_translation_prompt(processed_text)
 
-            response = self._call_with_backoff(
-                lambda: self.client.messages.create(
+            response = self._call_adapting(
+                lambda rejected: self.client.messages.create(
                     model=self.model,
                     max_tokens=self.max_tokens,
-                    temperature=self.temperature,
                     system=system_prompt,
                     messages=[{"role": "user", "content": user_prompt}],
                     timeout=30,
+                    **self._sampling_kwargs(rejected, self.temperature),
                 ),
+                self._ADAPTABLE_PARAMS,
             )
 
             translated_text = "".join(
@@ -115,15 +132,16 @@ class AnthropicTranslator(BaseTranslator):
         kwargs = {}
         if system:
             kwargs["system"] = system
-        response = self._call_with_backoff(
-            lambda: self.client.messages.create(
+        response = self._call_adapting(
+            lambda rejected: self.client.messages.create(
                 model=self.model,
                 max_tokens=max_tokens,
-                temperature=0.3,
                 messages=[{"role": "user", "content": prompt}],
                 timeout=60,
                 **kwargs,
-            )
+                **self._sampling_kwargs(rejected, 0.3),
+            ),
+            self._ADAPTABLE_PARAMS,
         )
         text = "".join(
             block.text
@@ -169,11 +187,18 @@ Translate ONLY the text content. Do not add explanations, notes, or commentary."
             if not self.api_key:
                 return False, "API key is missing"
 
-            response = self.client.messages.create(
-                model=self.model,
-                max_tokens=5,
-                messages=[{"role": "user", "content": "Hello"}],
-                timeout=10,
+            # Shaped like a translation's request: a model that refuses what
+            # `translate` sends must not come back as valid.
+            response = self._call_adapting(
+                lambda rejected: self.client.messages.create(
+                    model=self.model,
+                    max_tokens=16,
+                    messages=[{"role": "user", "content": "Hello"}],
+                    timeout=10,
+                    **self._sampling_kwargs(rejected, self.temperature),
+                ),
+                self._ADAPTABLE_PARAMS,
+                backoff=False,
             )
 
             if response.content:
