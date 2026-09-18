@@ -147,6 +147,36 @@ async def update_config(payload: ConfigUpdateRequest) -> ConfigResponse:
     )
     newly_keyed: list[TranslationService] = []
 
+    # Endpoint changes are all vetted before anything is applied. The check
+    # reads only the saved section and this service's own update, so hoisting
+    # it changes no answer — but it means a refusal leaves `current` and the
+    # manager's preserved-key records untouched, instead of part-way through.
+    for service in LLM_SERVICES:
+        update = getattr(payload, service.value)
+        if update is None or update.api_key is not None:
+            continue
+        base_url = getattr(update, "base_url", None)
+        if base_url is None:
+            continue
+        section = current[service.value]
+        if (base_url or None) == section.get("base_url"):
+            continue
+        # A saved key is only ever sent to the endpoint it was saved for.
+        # `GET /config` never hands a key out; without this, anything able to
+        # call `PUT /config` could point the endpoint at a server of its own
+        # and read the key off the next request (#32). A key the manager is
+        # preserving unread counts as saved: it decrypts again once the
+        # keystore is reachable, and would then go to whatever endpoint was
+        # set meanwhile.
+        if section.get("api_key") or mgr.has_unreadable_key(service.value):
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    f"Enter the {SERVICE_LABELS[service]} API key again "
+                    "to change its endpoint."
+                ),
+            )
+
     for service in LLM_SERVICES:
         update = getattr(payload, service.value)
         if update is None:
@@ -155,24 +185,16 @@ async def update_config(payload: ConfigUpdateRequest) -> ConfigResponse:
         if update.api_key is not None:
             new_key = update.api_key or None
             section["api_key"] = new_key
+            # Set or cleared, this is now the only key for the service: an
+            # earlier ciphertext the manager is preserving because it could not
+            # read it must not come back on the save below.
+            mgr.forget_unreadable_key(service.value)
             if new_key:
                 newly_keyed.append(service)
         if update.model is not None:
             section["model"] = update.model
         base_url = getattr(update, "base_url", None)
         if base_url is not None and (base_url or None) != section.get("base_url"):
-            # A saved key is only ever sent to the endpoint it was saved for.
-            # `GET /config` never hands a key out; without this, anything able
-            # to call `PUT /config` could point the endpoint at a server of its
-            # own and read the key off the next request (#32).
-            if section.get("api_key") and update.api_key is None:
-                raise HTTPException(
-                    status_code=422,
-                    detail=(
-                        f"Enter the {SERVICE_LABELS[service]} API key again "
-                        "to change its endpoint."
-                    ),
-                )
             section["base_url"] = base_url or None
 
     if payload.preferred_service is not None:
@@ -229,6 +251,10 @@ async def update_config(payload: ConfigUpdateRequest) -> ConfigResponse:
     # Off the loop thread: `save_settings` fsyncs and rewrites the backup, and
     # this loop is also carrying any in-flight translation's SSE stream.
     if not await asyncio.to_thread(mgr.save_settings, new_settings):
+        # Nothing was written, so a key dropped from the preserved-ciphertext
+        # records above is still in the file. Re-read it, or a later unrelated
+        # save would blank the value this request failed to replace.
+        await asyncio.to_thread(mgr.load_settings)
         raise HTTPException(status_code=500, detail="Failed to save settings")
     mgr._settings = new_settings  # refresh cached singleton
     return await get_config()

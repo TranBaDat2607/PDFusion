@@ -3,9 +3,15 @@
 # Build with:
 #     pyinstaller pdfusion-sidecar.spec --clean --noconfirm
 #
-# Output: dist/pdfusion-sidecar/pdfusion-sidecar.exe (+ _internal/ tree).
-# The build-sidecar.ps1 helper then stages this into
-# desktop/src-tauri/binaries/ with the triple-suffixed name Tauri expects.
+# Output: dist/pdfusion-sidecar/{pdfusion-sidecar[.exe], _internal/}.
+#
+# The spec itself is platform-neutral -- PyInstaller adds the .exe suffix only
+# on Windows, and the excludes below name packages that simply aren't installed
+# elsewhere. What differs is where the result is *staged*, which
+# scripts/build_sidecar.py owns: an `externalBin` plus a sibling `_internal/`
+# resource on Windows, one resource directory holding both on Linux and macOS
+# (#69). Run it through ./build-sidecar.ps1 or ./build-sidecar.sh rather than
+# invoking pyinstaller by hand.
 
 # -*- mode: python ; coding: utf-8 -*-
 
@@ -103,6 +109,21 @@ hiddenimports += collect_submodules("minisbd")
 hiddenimports += collect_submodules("huggingface_hub")
 # chromadb has dynamic plugin loading throughout.
 hiddenimports += collect_submodules("chromadb")
+# `keyring` finds its backends through entry points, which means both the
+# submodules (never statically imported) and the dist-info that lists them.
+# Only installed off Windows, where DPAPI needs no package -- hence the guard
+# rather than an unconditional collect that would fail the Windows build.
+try:
+    hiddenimports += collect_submodules("keyring")
+    # The Secret Service client and its pure-python D-Bus transport. Both are
+    # keyring's Linux dependency chain; absent on Windows and macOS.
+    for _optional in ("secretstorage", "jeepney"):
+        try:
+            hiddenimports += collect_submodules(_optional)
+        except Exception:  # noqa: BLE001 — not this platform's backend
+            pass
+except Exception:  # noqa: BLE001 — Windows, where keyring is not installed
+    pass
 
 
 # ---------------------------------------------------------------------------
@@ -131,6 +152,9 @@ for pkg in (
     "fastapi",
     "uvicorn",
     "babeldoc",
+    # Entry-point metadata, not just package data: this is how `keyring`
+    # discovers which backends exist at all.
+    "keyring",
 ):
     try:
         datas += copy_metadata(pkg)
@@ -155,9 +179,10 @@ if _os.path.exists(_argos_pack):
     datas += [(_argos_pack, "argos_pack")]
 else:
     print(
-        f"WARN: {_argos_pack} not found — bundled exe will download Argos "
-        "pack on first translate. Run ./fetch-offline-assets.ps1 to "
-        "ship an offline-first installer."
+        f"WARN: {_argos_pack} not found — the bundled sidecar will download "
+        "the Argos pack on first translate. Run ./fetch-offline-assets.ps1 "
+        "(Windows) or ./fetch-offline-assets.sh (Linux, macOS) to ship an "
+        "offline-first installer."
     )
 
 # BabelDOC's layout models, embedding fonts and cmaps, pre-packaged as its own
@@ -176,9 +201,11 @@ if _babeldoc_zips:
     datas += [(sorted(_babeldoc_zips)[0], "babeldoc_assets")]
 else:
     print(
-        f"WARN: no offline_assets_*.zip in {_babeldoc_assets_dir} — bundled exe "
-        "will download BabelDOC's ~210 MB of layout models and fonts on first "
-        "run. Run ./fetch-offline-assets.ps1 to ship an offline-first installer."
+        f"WARN: no offline_assets_*.zip in {_babeldoc_assets_dir} — the bundled "
+        "sidecar will download BabelDOC's ~210 MB of layout models and fonts on "
+        "first run. Run ./fetch-offline-assets.ps1 (Windows) or "
+        "./fetch-offline-assets.sh (Linux, macOS) to ship an offline-first "
+        "installer."
     )
 
 
@@ -306,6 +333,8 @@ excludes = [
     "pyproject_hooks",
 
     # --- pywin32 GUI/COM bits (sidecar only needs the core, not Pythonwin) ---
+    # Inert off Windows, where pywin32 isn't installed at all: an exclude for a
+    # package PyInstaller never sees is a no-op, not an error.
     "win32com",
     "Pythonwin",
 
@@ -364,6 +393,7 @@ exe = EXE(
     strip=False,          # PyInstaller strip can corrupt PDBs on Windows.
     upx=False,            # UPX often breaks numpy/torch DLLs and trips AV.
     console=True,         # MUST stay True — the Rust shell reads the READY line from stdout.
+                          # (No-op off Windows; the shell pipes stdio either way.)
     disable_windowed_traceback=False,
     argv_emulation=False,
     target_arch=None,
@@ -379,5 +409,5 @@ coll = COLLECT(
     strip=False,
     upx=False,
     upx_exclude=[],
-    name="pdfusion-sidecar",   # → dist/pdfusion-sidecar/{pdfusion-sidecar.exe, _internal/}
+    name="pdfusion-sidecar",   # → dist/pdfusion-sidecar/{pdfusion-sidecar[.exe], _internal/}
 )

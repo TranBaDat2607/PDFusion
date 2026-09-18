@@ -17,7 +17,7 @@ spawns real interpreters and costs tens of seconds. Run it with
 `python -m pytest tests -m smoke`, which is what CI does in a job of its own.
 
 The source-mode parameter runs anywhere. The frozen-exe one skips unless
-`build-sidecar.ps1` has actually been run — a `-Stub` placeholder is 0 bytes and
+the build-sidecar script has actually been run — a stub placeholder is 0 bytes and
 is skipped by the same check.
 """
 
@@ -48,16 +48,23 @@ READY_RE = re.compile(r"^READY port=(\d+) token=(\S+)$")
 
 
 def staged_sidecar_exe() -> Path | None:
-    """The exe `build-sidecar.ps1` leaves behind, in either location it writes:
-    PyInstaller's own `dist/`, or the triple-suffixed copy Tauri bundles."""
-    candidates = [REPO_ROOT / "dist" / "pdfusion-sidecar" / "pdfusion-sidecar.exe"]
-    candidates += sorted(
-        (REPO_ROOT / "desktop" / "src-tauri" / "binaries").glob(
-            "pdfusion-sidecar-*.exe"
-        )
-    )
+    """The binary the build script leaves behind, in every location it writes.
+
+    PyInstaller's own `dist/` is common to both platforms; where it is *staged*
+    for Tauri is not, because the packaging differs (#69). Windows gets a
+    triple-suffixed `externalBin` under `binaries/`; Linux and macOS get the
+    whole one-dir tree under `sidecar/`, so the executable and its `_internal/`
+    stay siblings after the bundler has moved them.
+    """
+    suffix = ".exe" if sys.platform == "win32" else ""
+    src_tauri = REPO_ROOT / "desktop" / "src-tauri"
+    candidates = [REPO_ROOT / "dist" / "pdfusion-sidecar" / f"pdfusion-sidecar{suffix}"]
+    if sys.platform == "win32":
+        candidates += sorted((src_tauri / "binaries").glob("pdfusion-sidecar-*.exe"))
+    else:
+        candidates.append(src_tauri / "sidecar" / "pdfusion-sidecar")
     for path in candidates:
-        # A `-Stub` placeholder is a real file of zero bytes.
+        # A `--stub` placeholder is a real file of zero bytes.
         if path.is_file() and path.stat().st_size > 0:
             return path
     return None
@@ -129,14 +136,17 @@ def await_ready(process: subprocess.Popen) -> Sidecar:
 def launch_args(mode: str, home: Path) -> tuple[list[str], dict]:
     """Command + environment for one launch mode.
 
-    The environment keeps the run out of the developer's real
-    `~/AppData/Local/PDFusion` — the lifespan creates cache directories there
-    and GCs the paragraph cache.
+    The environment keeps the run out of the developer's real data root — the
+    lifespan creates cache directories there and GCs the paragraph cache.
+    `PDFUSION_DATA_DIR` is what actually pins it, the same variable the Tauri
+    shell exports; the home variables are still redirected because other things
+    (`~/.cache/babeldoc`, the Argos pack) resolve against them (#69).
     """
     env = {
         "HOME": str(home),
         "USERPROFILE": str(home),
         "LOCALAPPDATA": str(home / "AppData" / "Local"),
+        "PDFUSION_DATA_DIR": str(home / "PDFusion"),
         "PDFUSION_ARGOS_DEBUG": "0",
     }
     if mode == "source":
@@ -147,7 +157,10 @@ def launch_args(mode: str, home: Path) -> tuple[list[str], dict]:
 
     exe = staged_sidecar_exe()
     if exe is None:
-        pytest.skip("no built sidecar staged — run ./build-sidecar.ps1")
+        pytest.skip(
+            "no built sidecar staged — run ./build-sidecar.ps1 (Windows) or "
+            "./build-sidecar.sh (Linux, macOS)"
+        )
     return [str(exe)], env
 
 

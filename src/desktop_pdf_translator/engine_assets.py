@@ -73,7 +73,8 @@ def _bundled_dirs(frozen_name: str, repo_name: str) -> list[Path]:
 
     Same two-step shape as `translators/argos_translator.py:_find_bundled_pack`:
     the PyInstaller extraction root first (that's the shipped app), then the
-    checkout's `assets/` (that's a developer who ran `fetch-offline-assets.ps1`).
+    checkout's `assets/` (that's a developer who ran the fetch-offline-assets
+    script).
     """
     candidates: list[Path] = []
     meipass = getattr(sys, "_MEIPASS", None)

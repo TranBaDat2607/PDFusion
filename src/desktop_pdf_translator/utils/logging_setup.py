@@ -37,7 +37,8 @@ _BACKUP_COUNT = 5  # app.log + 5 rotated backups
 def configure_logging(log_dir: Path | None = None) -> None:
     """Configure the root logger: rotating file handler + stderr.
 
-    `log_dir` defaults to `logs_dir()` (`~/AppData/Local/PDFusion/logs`).
+    `log_dir` defaults to `logs_dir()` — `logs/` under the platform's data root
+    (`utils/paths.appdata_dir`).
     Tests should always pass an explicit `tmp_path` — this is a process-wide
     singleton (the root logger), and never touches the real AppData dir when
     given one.

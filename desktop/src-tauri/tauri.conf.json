@@ -8,7 +8,6 @@
     "beforeDevCommand": "pnpm dev",
     "devUrl": "http://localhost:1420",
     "beforeBuildCommand": "pnpm build",
-    "beforeBundleCommand": "powershell -ExecutionPolicy Bypass -File ../build-sidecar.ps1",
     "frontendDist": "../dist"
   },
   "app": {
@@ -31,23 +30,12 @@
   },
   "bundle": {
     "active": true,
-    "targets": ["nsis"],
-    "externalBin": ["binaries/pdfusion-sidecar"],
-    "resources": ["_internal/**/*"],
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
       "icons/128x128@2x.png",
       "icons/icon.icns",
       "icons/icon.ico"
-    ],
-    "windows": {
-      "nsis": {
-        "installMode": "currentUser",
-        "installerHooks": "./windows/installer-hooks.nsh"
-      },
-      "digestAlgorithm": "sha256",
-      "timestampUrl": "http://timestamp.digicert.com"
-    }
+    ]
   }
 }

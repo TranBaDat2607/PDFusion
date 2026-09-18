@@ -209,3 +209,7 @@ DesktopPDFTranslator/
 # Staged sidecar binary + PyInstaller runtime tree (rebuilt by build-sidecar.ps1):
 desktop/src-tauri/binaries/pdfusion-sidecar-*.exe
 desktop/src-tauri/_internal/
+# Linux / macOS stage the whole PyInstaller one-dir tree as a single resource
+# directory instead, so the executable and its `_internal/` stay siblings after
+# the bundler is done with them (#69). See scripts/build_sidecar.py.
+desktop/src-tauri/sidecar/

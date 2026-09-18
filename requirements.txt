@@ -38,3 +38,10 @@ tokenizers>=0.15.0,<1.0.0
 huggingface-hub>=0.20.0,<1.0.0
 
 colorama>=0.4.6; sys_platform == "win32"
+
+# Where API keys in config.toml are protected off Windows: Secret Service on
+# Linux, the login Keychain on macOS (utils/encryption.py). Windows uses DPAPI
+# through ctypes and needs nothing installed. Without this the fallback is a
+# key derived from the machine's hostname, which anyone who can read the file
+# can reproduce -- see the module docstring (#69).
+keyring>=25.0; sys_platform != "win32"

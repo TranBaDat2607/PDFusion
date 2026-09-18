@@ -1,10 +1,24 @@
 name: Release
 
-# Builds the installer on a version tag and attaches it to a draft release.
+# Builds the installers on a version tag and attaches them to a draft release.
 #
-# windows-latest for the same reasons ci.yml is: DPAPI key store, %LOCALAPPDATA%
-# sidecar lookup, Job Object confinement. Unlike ci.yml this is not a gate —
-# nothing here runs on a PR.
+# Two build jobs, not a matrix: the Windows one carries a signing step with no
+# Linux equivalent, and the two produce differently-named artifacts from
+# differently staged sidecars (see scripts/build_sidecar.py). Unlike ci.yml
+# neither is a gate — nothing here runs on a PR.
+#
+# They attach their files to one draft release and deliberately carry no
+# `body`. Both ran in parallel against the same tag, and softprops/action-gh-release
+# updates the release it finds, so whichever finished second replaced the
+# other's notes — a Windows-only or Linux-only description on a release
+# carrying both. `release-notes` below is the single writer of that text, and
+# it runs after both, so the description describes what is actually attached.
+#
+# macOS is absent on purpose. A `dmg` target and a `~/Library/Application
+# Support` data root are already wired up (tauri.macos.conf.json,
+# utils/paths.py), but an unsigned, un-notarized .dmg is refused by Gatekeeper
+# with no useful way for a user to get past it, so shipping one would be worse
+# than shipping none. That is Phase B of #69.
 on:
   push:
     tags: ["v*"]
@@ -15,7 +29,7 @@ env:
   NODE_VERSION: "22"
 
 jobs:
-  installer:
+  windows-installer:
     name: Build NSIS installer
     runs-on: windows-latest
     timeout-minutes: 120
@@ -108,14 +122,204 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
+      # No `body` — see the header. `release-notes` writes the description once,
+      # after both platforms have attached their files. The action keeps the
+      # existing body when this input is absent, so this never clobbers it.
       - name: Attach to a draft release
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
           draft: true
           files: desktop/src-tauri/target/release/bundle/nsis/*-setup.exe
-          body: |
-            Per-user install — no admin rights required; installs under
-            `%LOCALAPPDATA%\Programs\PDFusion`.
 
-            See the commit log for ${{ github.ref_name }}.
+  linux-bundles:
+    name: Build .deb + AppImage
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            pyproject.toml
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+          cache-dependency-path: desktop/pnpm-lock.yaml
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: desktop/src-tauri
+
+      # webkit2gtk 4.1 is the Tauri 2 series; 4.0 is Tauri 1 and does not
+      # satisfy the build. `patchelf` and `librsvg2-dev` are what the AppImage
+      # target itself shells out to.
+      - name: Install webview and bundler dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libgtk-3-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            patchelf \
+            build-essential \
+            curl \
+            wget \
+            file \
+            libssl-dev \
+            libxdo-dev
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install -e ".[dev]"
+
+      # ~290 MB of engine assets, deliberately not wired into
+      # beforeBundleCommand (see scripts/fetch_offline_assets.py). Without this
+      # the bundle still succeeds and the app downloads them on first run
+      # instead — which is exactly what shipping them is meant to avoid.
+      - name: Stage offline engine assets
+        run: ./fetch-offline-assets.sh
+
+      - name: Install frontend dependencies
+        working-directory: desktop
+        run: pnpm install --frozen-lockfile
+
+      # beforeBundleCommand runs build-sidecar.sh (PyInstaller, ~10-20 min).
+      - name: Build the bundles
+        working-directory: desktop
+        run: pnpm tauri build
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pdfusion-linux-bundles
+          path: |
+            desktop/src-tauri/target/release/bundle/deb/*.deb
+            desktop/src-tauri/target/release/bundle/appimage/*.AppImage
+          if-no-files-found: error
+          retention-days: 14
+
+      # No `body` — see the Windows job and the header.
+      - name: Attach to a draft release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          draft: true
+          files: |
+            desktop/src-tauri/target/release/bundle/deb/*.deb
+            desktop/src-tauri/target/release/bundle/appimage/*.AppImage
+
+  release-notes:
+    name: Write the release description
+    runs-on: ubuntu-latest
+    needs: [windows-installer, linux-bundles]
+    if: startsWith(github.ref, 'refs/tags/v')
+    permissions:
+      contents: write
+
+    steps:
+      # The only writer of the release body. It runs after both builds, so
+      # every file the notes mention is already attached, and one description
+      # covers both platforms instead of the last job to finish deciding which
+      # platform the release appears to be for.
+      #
+      # `generate_release_notes` makes GitHub append its own commit/PR summary
+      # under this text, which is what replaced the "see the commit log" line
+      # each job used to carry.
+      - name: Publish the description
+        uses: softprops/action-gh-release@v2
+        with:
+          draft: true
+          generate_release_notes: true
+          body: |
+            PDFusion translates PDFs into Vietnamese (or another language)
+            while keeping the original layout, and can answer questions about
+            the document you have open.
+
+            ## Downloads
+
+            | Platform | File | Notes |
+            |---|---|---|
+            | Windows 10/11 (x64) | `*-setup.exe` | Per-user install, no admin rights |
+            | Debian / Ubuntu (x64) | `*.deb` | Needs `libwebkit2gtk-4.1-0` and `libgtk-3-0` |
+            | Other Linux (x64) | `*.AppImage` | Self-contained; `chmod +x` it and run |
+
+            ### Windows
+
+            Installs under `%LOCALAPPDATA%\Programs\PDFusion` — no UAC prompt,
+            and nothing is written to `Program Files`. The installer adds
+            PDFusion to the "Open with" list for `.pdf`; it never makes itself
+            your default PDF reader.
+
+            **The installer is unsigned**, so SmartScreen warns the first time:
+            *More info* → *Run anyway*. A signing certificate is on the roadmap
+            and is not configured yet.
+
+            ### Linux
+
+            The `.deb` takes its webview from the system. On Debian/Ubuntu:
+
+            ```
+            sudo apt install ./PDFusion_*_amd64.deb
+            ```
+
+            The AppImage needs nothing installed:
+
+            ```
+            chmod +x PDFusion_*_amd64.AppImage && ./PDFusion_*_amd64.AppImage
+            ```
+
+            Both are unsigned. webkit2gtk **4.1** is required — 4.0 is the
+            Tauri 1 series and will not run this build.
+
+            ## First run
+
+            The translation engine ships **inside** the installer (~290 MB of
+            layout models, fonts and the offline English→Vietnamese pack), so
+            the first translation works with no network and no API key.
+
+            Chat is the exception: its embedding model (~470 MB) downloads on
+            first use, into `~/.cache/huggingface`.
+
+            Translating with OpenAI, Gemini or Anthropic needs your own API key,
+            entered in Settings. Each service can also be pointed at a
+            compatible endpoint — Ollama, LM Studio, or a proxy.
+
+            ## Where your data lives
+
+            | | Windows | Linux |
+            |---|---|---|
+            | Settings, caches, chat index | `%LOCALAPPDATA%\PDFusion` | `~/.local/share/PDFusion` |
+            | Logs | `%LOCALAPPDATA%\PDFusion\logs` | `~/.local/share/PDFusion/logs` |
+            | API keys protected by | DPAPI, scoped to your Windows account | Secret Service (gnome-keyring, KWallet) |
+
+            On Linux with no keyring running — a headless box, or a session
+            with no D-Bus — keys fall back to an obfuscated value in
+            `config.toml` that anyone who can read the file can recover. The
+            app says so in `app.log` rather than refusing to start.
+
+            Translated PDFs are temporary until you **Save** them. Nothing else
+            the pipeline writes is meant to be kept.
+
+            ## Not in this release
+
+            macOS. The build is wired up, but an unsigned, un-notarized `.dmg`
+            is refused by Gatekeeper with no useful way past it, so shipping one
+            would be worse than shipping none.
