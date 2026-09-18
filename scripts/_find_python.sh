@@ -13,15 +13,21 @@ pdfusion_find_python() {
         return 0
     fi
 
-    for dist in anaconda3 miniconda3 miniforge3; do
-        for env_name in pdfusion pdfusion-env; do
-            candidate="$HOME/$dist/envs/$env_name/bin/python"
-            if [ -x "$candidate" ]; then
-                PDFUSION_PY="$candidate"
-                return 0
-            fi
+    # `${HOME:-}`, and skipped entirely when it is empty: the launchers run
+    # under `set -eu`, so dereferencing an unset HOME aborts the build — in
+    # exactly the case this file exists for, a bare shell spawned by
+    # beforeBundleCommand, and before the PATH fallback below has been tried.
+    if [ -n "${HOME:-}" ]; then
+        for dist in anaconda3 miniconda3 miniforge3; do
+            for env_name in pdfusion pdfusion-env; do
+                candidate="$HOME/$dist/envs/$env_name/bin/python"
+                if [ -x "$candidate" ]; then
+                    PDFUSION_PY="$candidate"
+                    return 0
+                fi
+            done
         done
-    done
+    fi
 
     for name in python3 python; do
         if command -v "$name" >/dev/null 2>&1; then
