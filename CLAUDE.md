@@ -109,7 +109,29 @@ had a keyring in the first place.
 Keychain Access. And **the decrypt path never mints one**: a missing entry
 means the ciphertext is unrecoverable, and generating a replacement would turn
 "the keyring is locked" (temporary) into "those keys are gone" (permanent).
-The key comes back blank and the user re-enters it.
+The key comes back blank.
+
+**The save path is the other half of that, and without it the decrypt path's
+restraint bought nothing.** A key that came back blank is indistinguishable, by
+the time `_remove_sensitive_data` sees it, from a key the user cleared — so any
+`PUT /config` at all (Chat on, a new target language) wrote `api_key = ""` over
+the ciphertext, and since `_write_backup` strips keys, it went from both files
+at once. A locked keyring cost the user every provider key they had. So
+`ConfigManager` remembers what it could not read (`_unreadable_keys`) and
+writes it back **verbatim**, and `PUT /config` calls `forget_unreadable_key`
+whenever the body carries that service's `api_key` — which is the only way a
+key is set or cleared, so clearing one still clears it. Two consequences.
+`reset_to_defaults` drops the records first, being an explicit wipe. And a
+preserved key counts as saved for the endpoint rule below (#32): it decrypts
+again once the keystore is reachable, and would otherwise go to whatever
+endpoint was set meanwhile — `has_unreadable_key` is what `PUT /config` asks.
+
+Relatedly, **a failed decrypt is `pop`ped, never assigned**. `config_data`
+holds tomlkit tables and those refuse a `None` value; assigning one raised out
+of `load_settings`'s whole file branch, which left the *ciphertext* standing as
+`api_key` — sent to the provider as a credential, reported by `GET /config` as
+a configured key, and every other setting in the file silently back to its
+default.
 
 Values written by any earlier scheme still decrypt and are upgraded to the
 current platform's on the next save, so nobody re-enters a key. A stored value
@@ -398,6 +420,14 @@ one of those is how a records store gets corrupted. Its old location is named
 in the log instead. A relative `XDG_DATA_HOME` is ignored rather than resolved,
 per the spec and because the cwd it would resolve against *is* the directory
 being chosen.
+
+Each candidate in that list is resolved **on its own terms**, and
+`_platform_data_dirs` is the Python mirror of `data_dir_candidates` in this
+too: `_home_dir()` answers `None` rather than raising, exactly as the shell's
+`home_dir()` returns an `Option`. Built as one expression instead, a home that
+cannot be resolved — no `HOME`, no passwd entry — discarded the `%LOCALAPPDATA%`
+candidate standing beside it, and the root fell through to the temp dir, where
+config, keys and caches are lost on the next reboot.
 
 **2. Off Windows the sidecar is not an `externalBin`.** PyInstaller's one-dir
 bootloader resolves `_internal/` relative to its executable, so the two must

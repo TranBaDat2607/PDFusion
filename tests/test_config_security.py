@@ -418,3 +418,144 @@ def test_a_migrating_save_rewrites_the_key_as_a_dpapi_blob(manager: ConfigManage
     assert DPAPI_PREFIX in saved
     assert "api_key_salt" not in saved
     assert ConfigManager(config_dir=manager.config_dir).load_settings().openai.api_key == KEY
+
+
+# ---------------------------------------------------------------------------
+# A key the keystore cannot open right now
+# ---------------------------------------------------------------------------
+
+
+def _lock_the_keystore(fake_keystore) -> dict[tuple[str, str], str]:
+    """Take the master key away and return it, so it can be handed back.
+
+    Stands in for every way the entry stops being readable without stopping
+    being *there*: a locked keyring, an unlock prompt the user dismissed, a
+    login with no session bus, a `config.toml` carried to another machine.
+    The cache has to be reset too, or the key stays available in-process and
+    the test proves nothing.
+    """
+    entries = dict(fake_keystore.stored)
+    fake_keystore.stored.clear()
+    encryption._reset_master_key_cache()
+    return entries
+
+
+def _unlock_the_keystore(fake_keystore, entries) -> None:
+    fake_keystore.stored.update(entries)
+    encryption._reset_master_key_cache()
+
+
+def test_a_key_that_cannot_be_decrypted_survives_an_unrelated_save(
+    manager: ConfigManager, fake_keystore
+):
+    """The regression: a locked keystore used to cost the user every key.
+
+    The decrypt path deliberately never mints a replacement master key, so
+    that "the keystore is locked" stays temporary. But the key came back
+    blank, and the save path could not tell blank-because-unreadable from
+    blank-because-cleared — so the next `PUT /config` for anything at all
+    (Chat on, a new target language) wrote `api_key = ""`, and since the
+    backup strips keys, the ciphertext went from both files at once.
+    """
+    assert manager.save_settings(_with_key(model="gpt-first"))
+    stored_value = tomlkit.parse(manager.config_file.read_text(encoding="utf-8"))[
+        "openai"
+    ]["api_key"]
+    assert str(stored_value).startswith(KEYSTORE_PREFIX)
+
+    entries = _lock_the_keystore(fake_keystore)
+
+    locked = ConfigManager(config_dir=manager.config_dir)
+    settings = locked.load_settings()
+    assert settings.openai.api_key is None, "an unreadable key is never handed out"
+
+    settings.openai.model = "gpt-second"  # an unrelated change, saved
+    assert locked.save_settings(settings)
+
+    saved = tomlkit.parse(manager.config_file.read_text(encoding="utf-8"))
+    assert saved["openai"]["api_key"] == stored_value
+    assert saved["openai"]["model"] == "gpt-second"
+
+    # And when the keystore comes back, nobody re-enters anything.
+    _unlock_the_keystore(fake_keystore, entries)
+    reloaded = ConfigManager(config_dir=manager.config_dir).load_settings()
+    assert reloaded.openai.api_key == KEY
+    assert reloaded.openai.model == "gpt-second"
+
+
+def test_a_key_that_cannot_be_decrypted_never_becomes_the_key(
+    manager: ConfigManager, fake_keystore
+):
+    """The second half of the same defect, and the sharper one.
+
+    The failed decrypt was assigned straight back into the config table — and
+    those are tomlkit tables, which refuse a None value. The raise aborted the
+    whole file branch of `load_settings`, which left the *ciphertext* standing
+    as `openai.api_key`: sent to the provider as a credential, and reported by
+    `GET /config` as a key that is configured. The rest of the file went with
+    it, silently reverting to defaults.
+    """
+    assert manager.save_settings(_with_key(model="gpt-configured"))
+    stored_value = tomlkit.parse(manager.config_file.read_text(encoding="utf-8"))[
+        "openai"
+    ]["api_key"]
+    _lock_the_keystore(fake_keystore)
+
+    settings = ConfigManager(config_dir=manager.config_dir).load_settings()
+
+    assert settings.openai.api_key is None
+    assert settings.openai.api_key != str(stored_value)
+    assert settings.openai.model == "gpt-configured", "the file still loaded"
+
+
+def test_the_backup_of_a_preserved_key_still_holds_no_key_material(
+    manager: ConfigManager, fake_keystore
+):
+    """Preserving the ciphertext in `config.toml` must not leak it into
+    `config.toml.bak`, which is held to "never more readable than the file it
+    backs up" for every format at once."""
+    assert manager.save_settings(_with_key())
+    _lock_the_keystore(fake_keystore)
+
+    locked = ConfigManager(config_dir=manager.config_dir)
+    assert locked.save_settings(locked.load_settings())
+
+    backup = (manager.config_dir / "config.toml.bak").read_text(encoding="utf-8")
+    assert "api_key" not in backup  # covers `api_key_salt` too
+
+
+def test_clearing_a_key_that_cannot_be_decrypted_still_clears_it(
+    manager: ConfigManager, fake_keystore
+):
+    """The other half of the rule. Preserving is for a key nobody touched;
+    an explicit set-or-clear drops the record first (`PUT /config` calls
+    `forget_unreadable_key` whenever the body carries `api_key` at all), so
+    the user can still get rid of a key they can no longer read."""
+    assert manager.save_settings(_with_key())
+    _lock_the_keystore(fake_keystore)
+
+    locked = ConfigManager(config_dir=manager.config_dir)
+    settings = locked.load_settings()
+    assert locked.has_unreadable_key("openai")
+
+    locked.forget_unreadable_key("openai")
+    settings.openai.api_key = None
+    assert locked.save_settings(settings)
+
+    saved = tomlkit.parse(manager.config_file.read_text(encoding="utf-8"))
+    assert saved["openai"]["api_key"] == ""
+    assert "api_key_salt" not in saved["openai"]
+
+
+def test_resetting_to_defaults_does_not_write_a_preserved_key_back(
+    manager: ConfigManager, fake_keystore
+):
+    assert manager.save_settings(_with_key())
+    _lock_the_keystore(fake_keystore)
+
+    locked = ConfigManager(config_dir=manager.config_dir)
+    locked.load_settings()
+    locked.reset_to_defaults()
+
+    saved = tomlkit.parse(manager.config_file.read_text(encoding="utf-8"))
+    assert saved["openai"]["api_key"] == ""

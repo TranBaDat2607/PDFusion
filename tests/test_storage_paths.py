@@ -23,6 +23,7 @@ from typing import Tuple
 
 import pytest
 
+from desktop_pdf_translator.utils import paths
 from desktop_pdf_translator.utils.paths import (
     DATA_DIR_ENV,
     adopt_legacy_config,
@@ -150,6 +151,90 @@ def test_on_linux_the_legacy_appdata_folder_is_not_a_fallback(home: Path):
     legacy.mkdir(parents=True)
 
     assert appdata_dir() != legacy
+
+
+# ---------------------------------------------------------------------------
+# no home directory at all
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def no_home(monkeypatch: pytest.MonkeyPatch) -> None:
+    """`Path.home()` raising, as it does where neither `HOME` nor a passwd
+    entry resolves. The environment variables are gone too, since `Path.home()`
+    is what reads them."""
+
+    def raise_no_home() -> Path:
+        raise RuntimeError("Could not determine home directory")
+
+    monkeypatch.delenv("USERPROFILE", raising=False)
+    monkeypatch.delenv("HOME", raising=False)
+    monkeypatch.setattr(Path, "home", staticmethod(raise_no_home))
+
+
+def test_a_candidate_that_needs_no_home_survives_one_that_does(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, no_home: None
+):
+    """A candidate that needs a home costs only itself.
+
+    The regression, and the one place it bites: on Windows the candidates were
+    built in a single expression, so the legacy home-based path raising
+    discarded the `%LOCALAPPDATA%` entry *beside* it and the root became the
+    temp dir — volatile, so config, keys and caches were lost on reboot. The
+    shell never had this; `data_dir_candidates` pushes `local_appdata`
+    independently of an `Option`-returning `home_dir()`.
+
+    Driven through `sys.platform` rather than a marker so it runs on every
+    runner: it is the Windows branch that regressed, and the `%LOCALAPPDATA%`
+    candidate is a plain path with nothing platform-specific about resolving
+    it. The end-to-end Windows case is below.
+    """
+    monkeypatch.setattr(paths.sys, "platform", "win32")
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "local"))
+
+    assert paths._platform_data_dirs() == [tmp_path / "local" / "PDFusion"]
+
+
+@on_windows
+def test_without_a_home_the_root_still_follows_localappdata(
+    tmp_path: Path, home: Path, monkeypatch: pytest.MonkeyPatch, no_home: None
+):
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "local"))
+
+    assert appdata_dir() == tmp_path / "local" / "PDFusion"
+
+
+@on_linux
+def test_without_a_home_the_root_still_follows_xdg_data_home(
+    tmp_path: Path, home: Path, monkeypatch: pytest.MonkeyPatch, no_home: None
+):
+    """The mirror of the case above, and an invariant rather than a regression
+    guard: `XDG_DATA_HOME` never needed a home to begin with, so this is what
+    stops one being resolved eagerly here later."""
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "xdg"))
+
+    assert appdata_dir() == tmp_path / "xdg" / "PDFusion"
+
+
+def test_the_shells_answer_needs_no_home_either(
+    tmp_path: Path, home: Path, monkeypatch: pytest.MonkeyPatch, no_home: None
+):
+    """The override is what makes the two resolvers provably agree, so it has
+    to survive the case where this platform's own rules cannot answer."""
+    exported = tmp_path / "exported" / "PDFusion"
+    monkeypatch.setenv(DATA_DIR_ENV, str(exported))
+
+    assert appdata_dir() == exported
+
+
+def test_without_a_home_there_is_nothing_to_adopt(tmp_path: Path, no_home: None):
+    """`adopt_legacy_config` names a home-based folder, so with no home there
+    is no source — and reporting that is not the same as raising out of
+    `ConfigManager.__init__`, which runs on the sidecar's boot path."""
+    root = tmp_path / "root"
+    root.mkdir()
+
+    assert adopt_legacy_config(root) is False
 
 
 def test_a_config_left_at_the_legacy_root_is_adopted(relocated: Tuple[Path, Path]):

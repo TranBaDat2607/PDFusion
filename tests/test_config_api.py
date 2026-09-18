@@ -21,6 +21,7 @@ from desktop_pdf_translator.config import AppSettings, TranslationService
 from desktop_pdf_translator.config.manager import ConfigManager
 from desktop_pdf_translator.processors.pdf_cache import PDFTranslationCache
 from desktop_pdf_translator.translators.translation_cache import TranslationCache
+from desktop_pdf_translator.utils.encryption import KEYSTORE_PREFIX
 
 from conftest import MINIMAL_PDF
 
@@ -162,6 +163,105 @@ def test_an_endpoint_needs_no_key_when_none_is_saved(
 ):
     assert put(client, {"openai": {"base_url": OLLAMA}}).status_code == 200
     assert manager.settings.openai.base_url == OLLAMA
+
+
+# ---------------------------------------------------------------------------
+# a saved key this process cannot read
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def unreadable_key(manager: ConfigManager) -> str:
+    """A key that is stored but undecryptable here: a `keystore:` value with no
+    keystore to open it.
+
+    Which is the state a locked keyring, a dismissed unlock prompt or a config
+    carried between machines leaves behind. conftest's autouse
+    `_no_real_keystore` guarantees the "no keystore" half on every platform, so
+    this needs no marker.
+    """
+    stored = KEYSTORE_PREFIX + "c3RvcmVkLWNpcGhlcnRleHQ="
+    manager.config_file.write_text(
+        f'[openai]\napi_key = "{stored}"\n', encoding="utf-8"
+    )
+    manager._settings = None
+    assert manager.settings.openai.api_key is None
+    assert manager.has_unreadable_key("openai")
+    return stored
+
+
+def test_an_unrelated_save_keeps_a_key_it_could_not_read(
+    client: TestClient, manager: ConfigManager, unreadable_key: str
+):
+    """Any `PUT /config` used to blank it — the key came back empty, and the
+    save path could not tell that from the user clearing it."""
+    assert put(client, {"chat_enabled": True}).status_code == 200
+
+    assert unreadable_key in manager.config_file.read_text(encoding="utf-8")
+
+
+def test_changing_the_endpoint_needs_a_key_that_could_not_be_read_again(
+    client: TestClient, manager: ConfigManager, unreadable_key: str
+):
+    """Preserving the ciphertext brings the #32 rule back into play: the key
+    decrypts again once the keystore is reachable, and would then go to
+    whatever endpoint was set meanwhile. `GET /config` reports no key for this
+    service, so the sheet does not pre-empt this one — the 422 names the fix."""
+    response = put(client, {"openai": {"base_url": "https://attacker.example/v1"}})
+
+    assert response.status_code == 422
+    assert "API key" in response.json()["detail"]
+    assert manager.settings.openai.base_url is None
+    assert unreadable_key in manager.config_file.read_text(encoding="utf-8")
+
+
+def test_a_key_typed_over_one_that_could_not_be_read_replaces_it(
+    client: TestClient, manager: ConfigManager, unreadable_key: str
+):
+    response = put(client, {"openai": {"api_key": KEY, "base_url": OLLAMA}})
+
+    assert response.status_code == 200
+    assert unreadable_key not in manager.config_file.read_text(encoding="utf-8")
+    assert not manager.has_unreadable_key("openai")
+    reloaded = ConfigManager(config_dir=manager.config_dir).load_settings()
+    assert reloaded.openai.api_key == KEY
+    assert reloaded.openai.base_url == OLLAMA
+
+
+def test_clearing_a_key_that_could_not_be_read_clears_it(
+    client: TestClient, manager: ConfigManager, unreadable_key: str
+):
+    assert put(client, {"openai": {"api_key": ""}}).status_code == 200
+
+    assert unreadable_key not in manager.config_file.read_text(encoding="utf-8")
+    assert not manager.has_unreadable_key("openai")
+
+
+def test_a_refused_endpoint_change_forgets_no_preserved_key(
+    client: TestClient, manager: ConfigManager, unreadable_key: str
+):
+    """Why the endpoint checks all happen before anything is applied.
+
+    Services are walked in order, openai first. A body that types an openai
+    key and moves anthropic's endpoint would drop openai's preserved
+    ciphertext on its way to anthropic's 422 — nothing saved, the record gone,
+    and the next unrelated save blanking a key the file still held.
+    """
+    assert put(client, {"anthropic": {"api_key": "sk-anthropic"}}).status_code == 200
+
+    refused = put(
+        client,
+        {
+            "openai": {"api_key": "sk-typed"},
+            "anthropic": {"base_url": "https://attacker.example"},
+        },
+    )
+
+    assert refused.status_code == 422
+    assert manager.has_unreadable_key("openai")
+    assert manager.settings.openai.api_key is None  # nothing was applied
+    assert put(client, {"chat_enabled": True}).status_code == 200
+    assert unreadable_key in manager.config_file.read_text(encoding="utf-8")
 
 
 @pytest.mark.parametrize(

@@ -39,25 +39,48 @@ _APP_DIR = "PDFusion"
 DATA_DIR_ENV = "PDFUSION_DATA_DIR"
 
 
-def _legacy_appdata_dir() -> Path:
+def _home_dir() -> Path | None:
+    """`Path.home()`, or `None` where there is no home to resolve.
+
+    It raises where neither `HOME` nor a passwd entry exists. Every caller here
+    treats that as "this one candidate doesn't exist", never as "no candidate
+    exists": a Windows box with a good `%LOCALAPPDATA%` and an unresolvable
+    home must still find its own data root rather than fall through to the temp
+    dir, which is volatile. The shell says the same thing structurally — its
+    `home_dir()` returns an `Option` and the `local_appdata` candidate is
+    pushed independently of it (`sidecar.rs:data_dir_candidates`).
+    """
+    try:
+        return Path.home()
+    except (OSError, RuntimeError):
+        logger.debug("The home directory could not be resolved", exc_info=True)
+        return None
+
+
+def _legacy_appdata_dir() -> Path | None:
     """`~/AppData/Local/PDFusion` — where every Python store put its data
-    before #59, whatever `%LOCALAPPDATA%` said.
+    before #59, whatever `%LOCALAPPDATA%` said. `None` without a home.
 
     Off Windows this is a literal `AppData` folder in the user's home, which is
     where a from-source run on Linux or macOS landed before #69. Nothing ever
     shipped there, but a developer's config is worth carrying over — see
     `adopt_legacy_config`.
     """
-    return Path.home() / "AppData" / "Local" / _APP_DIR
+    home = _home_dir()
+    return None if home is None else home / "AppData" / "Local" / _APP_DIR
 
 
 def _platform_data_dirs() -> list[Path]:
     """Candidate roots for this platform, best first.
 
-    More than one, because the first entry can be unresolvable: `%LOCALAPPDATA%`
-    can be unset or corrupt, and `Path.home()` itself can raise where neither
-    `HOME` nor a passwd entry exists. Every caller treats the list as ordered
-    preference and takes the first one it can create.
+    More than one, because any single entry can be unresolvable: `%LOCALAPPDATA%`
+    can be unset or corrupt, and the home directory can be missing entirely.
+    Every caller treats the list as ordered preference and takes the first one
+    it can create.
+
+    Each candidate is appended on its own terms, so one that can't be resolved
+    costs only itself. Building them in a single expression is how a missing
+    home came to discard a working `%LOCALAPPDATA%` alongside it.
     """
     candidates: list[Path] = []
     if sys.platform == "win32":
@@ -67,11 +90,15 @@ def _platform_data_dirs() -> list[Path]:
         # The legacy home-based path is a real fallback on Windows rather than
         # only a migration source: it is where the app wrote before #59, so a
         # machine with a broken %LOCALAPPDATA% still finds its own data.
-        candidates.append(_legacy_appdata_dir())
+        legacy = _legacy_appdata_dir()
+        if legacy is not None:
+            candidates.append(legacy)
         return candidates
 
     if sys.platform == "darwin":
-        candidates.append(Path.home() / "Library" / "Application Support" / _APP_DIR)
+        home = _home_dir()
+        if home is not None:
+            candidates.append(home / "Library" / "Application Support" / _APP_DIR)
         return candidates
 
     # Linux and every other POSIX. XDG says relative paths in XDG_DATA_HOME are
@@ -82,7 +109,9 @@ def _platform_data_dirs() -> list[Path]:
     if xdg and Path(xdg).is_absolute():
         candidates.append(Path(xdg) / _APP_DIR)
     else:
-        candidates.append(Path.home() / ".local" / "share" / _APP_DIR)
+        home = _home_dir()
+        if home is not None:
+            candidates.append(home / ".local" / "share" / _APP_DIR)
     return candidates
 
 
@@ -101,8 +130,9 @@ def appdata_dir() -> Path:
     try:
         candidates.extend(_platform_data_dirs())
     except (OSError, RuntimeError):
-        # `Path.home()` raises where the home directory can't be determined.
-        pass
+        # Belt and braces: nothing in there resolves a home eagerly any more,
+        # so this should not fire. A data root is not worth a crash if it does.
+        logger.debug("No platform data root could be resolved", exc_info=True)
     for candidate in candidates:
         try:
             candidate.mkdir(parents=True, exist_ok=True)
@@ -139,7 +169,10 @@ def adopt_legacy_config(root: Path) -> bool:
     config was copied.
     """
     target = root / "config.toml"
-    source = _legacy_appdata_dir() / "config.toml"
+    legacy_root = _legacy_appdata_dir()
+    if legacy_root is None:
+        return False
+    source = legacy_root / "config.toml"
     if target.exists() or not source.is_file():
         return False
     for name in ("config.toml", "config.toml.bak"):
