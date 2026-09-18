@@ -1,0 +1,19 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "build": {
+    "beforeBundleCommand": "powershell -ExecutionPolicy Bypass -File ../build-sidecar.ps1"
+  },
+  "bundle": {
+    "targets": ["nsis"],
+    "externalBin": ["binaries/pdfusion-sidecar"],
+    "resources": ["_internal/**/*"],
+    "windows": {
+      "nsis": {
+        "installMode": "currentUser",
+        "installerHooks": "./windows/installer-hooks.nsh"
+      },
+      "digestAlgorithm": "sha256",
+      "timestampUrl": "http://timestamp.digicert.com"
+    }
+  }
+}

@@ -15,6 +15,8 @@ classifiers = [
     "Intended Audience :: Developers",
     "License :: OSI Approved :: MIT License",
     "Operating System :: Microsoft :: Windows",
+    "Operating System :: POSIX :: Linux",
+    "Operating System :: MacOS :: MacOS X",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
@@ -56,6 +58,11 @@ dependencies = [
 
     # Logging
     "colorama>=0.4.6; sys_platform == 'win32'",
+
+    # OS keystore for the API keys in config.toml, off Windows (Secret Service
+    # on Linux, Keychain on macOS). Windows reaches DPAPI through ctypes and
+    # needs no package. See utils/encryption.py (#69).
+    "keyring>=25.0; sys_platform != 'win32'",
 ]
 
 [project.optional-dependencies]

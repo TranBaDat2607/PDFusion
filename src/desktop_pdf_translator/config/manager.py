@@ -5,14 +5,14 @@ Configuration manager for desktop PDF translator.
 import os
 import logging
 from pathlib import Path
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, Tuple
 
 import tomlkit
 from pydantic import ValidationError
 
 from .models import RETIRED_MODELS, AppSettings, normalize_base_url
 from ..utils import (
-    DPAPI_PREFIX,
+    SELF_DESCRIBING_PREFIXES,
     adopt_legacy_config,
     appdata_dir,
     decrypt_api_key,
@@ -53,6 +53,10 @@ class ConfigManager:
         
         # Initialize with default settings
         self._settings: Optional[AppSettings] = None
+
+        # Ciphertext this process could not read, per keyed service:
+        # service -> (stored_value, api_key_salt). See `_remove_sensitive_data`.
+        self._unreadable_keys: Dict[str, Tuple[str, str]] = {}
         
         # Load .env file if available
         self._load_dotenv()
@@ -68,7 +72,11 @@ class ConfigManager:
         """Load settings from file and environment variables."""
         # Start with default settings
         config_data = {}
-        
+
+        # A read of the file is authoritative about what it holds, including
+        # which of its keys this process cannot decrypt.
+        self._unreadable_keys.clear()
+
         # Load from TOML file if it exists
         if self.config_file.exists():
             try:
@@ -358,7 +366,20 @@ class ConfigManager:
                     logger.warning(f"Failed to load .env file {env_file}: {e}")
     
     def _remove_sensitive_data(self, config_dict: Dict[str, Any]) -> Dict[str, Any]:
-        """Remove sensitive data like API keys from config before saving."""
+        """Remove sensitive data like API keys from config before saving.
+
+        A key this process could not decrypt is written back **exactly as it
+        was found** rather than blanked. `_decrypt_sensitive_data` leaves such a
+        service with no usable key, and a blank key here is indistinguishable
+        from the user clearing one — so a single `PUT /config` for something
+        unrelated (Chat on, a different target language) used to overwrite the
+        ciphertext with `""`, and `_write_backup` strips keys, so it went from
+        both files at once. `decrypt_api_key` refuses to mint a replacement
+        master key precisely so that a locked keyring stays temporary; this is
+        the other half of that. An explicit change — a key typed, a key
+        cleared, `reset_to_defaults` — drops the record first (see
+        `forget_unreadable_key`), so clearing a key still clears it.
+        """
         safe_config = config_dict.copy()
 
         for service in KEYED_SERVICES:
@@ -366,6 +387,15 @@ class ConfigManager:
                 safe_config[service] = safe_config[service].copy()
                 api_key = safe_config[service].get("api_key")
                 if not api_key:
+                    preserved = self._unreadable_keys.get(service)
+                    if preserved is not None:
+                        stored, stored_salt = preserved
+                        safe_config[service]["api_key"] = stored
+                        if stored_salt:
+                            safe_config[service]["api_key_salt"] = stored_salt
+                        else:
+                            safe_config[service].pop("api_key_salt", None)
+                        continue
                     safe_config[service]["api_key"] = ""
                     safe_config[service].pop("api_key_salt", None)
                     continue
@@ -384,11 +414,13 @@ class ConfigManager:
     def _decrypt_sensitive_data(self, config_data: Dict[str, Any]) -> None:
         """Turn stored ciphertext back into usable keys, in place.
 
-        Two formats can be on disk: a DPAPI blob (self-contained, no salt) and
-        the legacy machine-key Fernet value (needs its `api_key_salt`
-        sibling). `encryption.decrypt_api_key` picks by prefix; the salt is
-        only required for the legacy one. Re-encryption to DPAPI happens on
-        the next `save_settings`.
+        Two shapes can be on disk: a value carrying one of
+        `SELF_DESCRIBING_PREFIXES` (a Windows DPAPI blob, or a keystore-backed
+        Fernet token on Linux/macOS — both self-contained, no salt), and the
+        legacy machine-key Fernet value, which needs its `api_key_salt`
+        sibling. `encryption.decrypt_api_key` picks by prefix; the salt is
+        only required for the legacy one. Re-encryption into this platform's
+        current scheme happens on the next `save_settings`.
         """
         for service in KEYED_SERVICES:
             if service not in config_data or not isinstance(config_data[service], dict):
@@ -398,15 +430,37 @@ class ConfigManager:
             salt = service_data.get("api_key_salt")
             if not isinstance(salt, str):
                 salt = ""
-            # Either a DPAPI blob, or a legacy value with its salt beside it.
-            # `is_encrypted` can't separate the second from plaintext on its own
-            # — it answers True for anything that base64-decodes — so the salt
-            # is what says a legacy value was stored rather than typed.
+            # Either a self-describing blob, or a legacy value with its salt
+            # beside it. `is_encrypted` can't separate the second from plaintext
+            # on its own — it answers True for anything that base64-decodes — so
+            # the salt is what says a legacy value was stored rather than typed.
             if isinstance(encrypted_key, str) and (
-                encrypted_key.startswith(DPAPI_PREFIX)
+                encrypted_key.startswith(SELF_DESCRIBING_PREFIXES)
                 or (salt and is_encrypted(encrypted_key))
             ):
-                service_data["api_key"] = decrypt_api_key(encrypted_key, salt)
+                plaintext = decrypt_api_key(encrypted_key, salt)
+                if plaintext is None:
+                    # Stored fine; unreadable *here, now* — a locked keyring, a
+                    # declined unlock prompt, no session bus, or a config
+                    # carried to another machine. Remember the ciphertext so
+                    # the next save preserves it instead of blanking it.
+                    self._unreadable_keys[service] = (encrypted_key, salt)
+                    logger.warning(
+                        "The stored %s API key could not be decrypted; it is "
+                        "kept in config.toml as-is. Unlock the system keystore "
+                        "and restart, or enter the key again in Settings.",
+                        service,
+                    )
+                    # Dropped, not set to None: `service_data` is a tomlkit
+                    # table and those refuse a None value. Assigning one raised
+                    # out of the whole `load_settings` file branch, which left
+                    # the *ciphertext* standing as the key — sent verbatim to
+                    # the provider as a credential. Removing the field lets
+                    # `AppSettings`'s own default (None) apply.
+                    service_data.pop("api_key", None)
+                else:
+                    self._unreadable_keys.pop(service, None)
+                    service_data["api_key"] = plaintext
             service_data.pop("api_key_salt", None)
 
     def _clean_none_values(self, config_dict: Dict[str, Any]) -> Dict[str, Any]:
@@ -439,6 +493,9 @@ class ConfigManager:
     
     def reset_to_defaults(self) -> AppSettings:
         """Reset settings to defaults and save."""
+        # An explicit wipe, so a preserved-but-unreadable key goes with it
+        # rather than being written back by `_remove_sensitive_data`.
+        self._unreadable_keys.clear()
         self._settings = AppSettings()
         self.save_settings(self._settings)
         logger.info("Settings reset to defaults")
@@ -476,6 +533,26 @@ class ConfigManager:
             logger.error(f"Failed to update settings: {e}")
             return False
     
+    def has_unreadable_key(self, service: str) -> bool:
+        """Whether `service` has a stored key this process could not decrypt.
+
+        `GET /config` reports no key for such a service — there is no usable
+        one — but the ciphertext is still on disk and will decrypt again once
+        the keystore is reachable. `PUT /config` needs to know, because the
+        rule that a saved key only ever reaches the endpoint it was saved for
+        (#32) has to hold for a key we are holding on to but cannot read.
+        """
+        return service in self._unreadable_keys
+
+    def forget_unreadable_key(self, service: str) -> None:
+        """Stop preserving `service`'s undecryptable ciphertext.
+
+        Called when the user sets or clears that service's key: from then on
+        the new value is the only one, and the old ciphertext must not come
+        back on the next save.
+        """
+        self._unreadable_keys.pop(service, None)
+
     def get_default_config_path(self) -> Path:
         """Get the default configuration file path."""
         return self.config_file

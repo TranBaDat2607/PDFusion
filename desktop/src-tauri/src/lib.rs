@@ -83,7 +83,8 @@ fn open_path_in_default_app(app: tauri::AppHandle, path: String) -> Result<(), S
         .map_err(|e| e.to_string())
 }
 
-/// Reveal a file in the OS file manager (Explorer on Windows), selecting it.
+/// Reveal a file in the OS file manager, selecting it — Explorer on Windows,
+/// Finder on macOS, whatever owns `org.freedesktop.FileManager1` on Linux.
 #[tauri::command]
 fn reveal_path_in_file_manager(app: tauri::AppHandle, path: String) -> Result<(), String> {
     check_pdf_path(&path)?;

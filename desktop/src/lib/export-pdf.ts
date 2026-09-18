@@ -15,8 +15,8 @@
 import type { components } from "@/lib/api-types";
 
 // ---------------------------------------------------------------------------
-// Path helpers — the sidecar hands us Windows paths, but dev-mode/tests may
-// use POSIX ones, so everything here handles both separators.
+// Path helpers — the sidecar hands back whatever shape its platform uses, so
+// everything here handles both separators rather than picking one.
 // ---------------------------------------------------------------------------
 
 /** Separator used by a path; defaults to the platform-ish `\` on Windows paths. */

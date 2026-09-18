@@ -444,7 +444,10 @@ def test_reset_deletes_a_vector_store_this_process_has_not_opened(
 ):
     """The way out of a store too damaged to open: no client holds its files,
     so the directory itself goes."""
-    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
+    # `PDFUSION_DATA_DIR`, not `%LOCALAPPDATA%`: it is the one override
+    # `appdata_dir()` honours on every platform, and on Windows it is also the
+    # one that wins (#69).
+    monkeypatch.setenv("PDFUSION_DATA_DIR", str(tmp_path / "PDFusion"))
     vectors = tmp_path / "PDFusion" / "vectors"
     (vectors / "segment").mkdir(parents=True)
     (vectors / "chroma.sqlite3").write_bytes(b"SQLite format 3\x00")
@@ -476,7 +479,7 @@ def test_reset_that_cannot_delete_the_files_says_to_restart(
 def test_the_legacy_vector_stores_are_removed_and_the_current_one_kept(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
-    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
+    monkeypatch.setenv("PDFUSION_DATA_DIR", str(tmp_path / "PDFusion"))
     root = tmp_path / "PDFusion"
     for name in ("chroma_db_v2", "chroma_db", "vectors"):
         (root / name).mkdir(parents=True)
