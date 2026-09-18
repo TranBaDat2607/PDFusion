@@ -40,9 +40,20 @@ def inspect_pdf(path: Path) -> PdfInfo:
         size_mb = path.stat().st_size / (1024 * 1024)
         try:
             with fitz.open(path) as doc:
+                needs_pass = bool(doc.needs_pass)
                 page_count = doc.page_count
         except Exception as exc:  # noqa: BLE001 — PyMuPDF raises several types
             raise FileValidationError(f"Cannot open PDF file: {exc}")
+        # `fitz.open` does not raise on a PDF that wants an open password: it
+        # answers a document whose `page_count` is 1, and raises `ValueError`
+        # only once something reads a page. Refused here rather than there, so
+        # every caller — the `/translate` pre-flight, `/translate/estimate`,
+        # `_validate_file` — gets a sentence instead of a crash mid-read.
+        if needs_pass:
+            raise FileValidationError(
+                "PDF is password-protected. Open it in a PDF reader and save "
+                "an unprotected copy, then try again."
+            )
         if page_count == 0:
             raise FileValidationError("PDF has no pages")
         return PdfInfo(page_count=page_count, size_mb=size_mb)

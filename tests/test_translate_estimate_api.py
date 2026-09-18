@@ -141,6 +141,20 @@ def test_an_unreadable_file_is_refused(client, tmp_path, settings):
     assert response.json()["detail"].startswith("Cannot open PDF file")
 
 
+def test_a_password_protected_file_is_refused_rather_than_read(
+    client, tmp_path, settings
+):
+    """It opens, reports one page, and raises only once a page is read — so
+    without the pre-flight's guard this was a 500 on every open (#68)."""
+    locked = tmp_path / "locked.pdf"
+    with fitz.open() as doc:
+        doc.new_page().insert_text((72, 72), LINE)
+        doc.save(locked, encryption=fitz.PDF_ENCRYPT_AES_256, user_pw="open-me")
+    response = _estimate(client, locked)
+    assert response.status_code == 422
+    assert "password-protected" in response.json()["detail"]
+
+
 def test_the_estimate_needs_the_token(client, book, settings):
     response = client.post("/translate/estimate", json={"file_path": str(book)})
     assert response.status_code == 401
