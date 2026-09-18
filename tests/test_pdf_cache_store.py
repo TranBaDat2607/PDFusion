@@ -8,7 +8,10 @@ more than its line count suggests. What's covered:
   than served, and a store that fails leaves neither a row nor a stray `.tmp`;
 * the atomic copy, which is what stops a concurrent reader (pdf.js, or another
   job materializing the same entry) from seeing a half-written PDF;
-* LRU eviction, and the size accounting it depends on.
+* LRU eviction, and the size accounting it depends on;
+* the two rules that keep a page selection's entry from costing a user their
+  whole-document ones — it is evicted first, and superseded outright once the
+  whole document is cached (#33).
 
 `is_cacheable_artifact` — the "may this run be written at all" rule — lives in
 `test_translation_failure_reporting.py`, next to the failure counting it reads.
@@ -31,11 +34,16 @@ from desktop_pdf_translator.processors import pdf_cache as pdf_cache_module
 from desktop_pdf_translator.processors.pdf_cache import (
     PIPELINE_VERSION,
     PDFTranslationCache,
+    _MIGRATIONS,
     _make_cache_key,
     compute_file_hash,
 )
 
 from conftest import MINIMAL_PDF
+
+# The schema every new file lands on. Read off `_MIGRATIONS` rather than
+# written out, so appending one doesn't fail these tests for saying so.
+CURRENT_SCHEMA = max(m.version for m in _MIGRATIONS)
 
 
 @pytest.fixture(autouse=True)
@@ -277,6 +285,63 @@ def test_the_whole_document_answers_any_selection(
     assert (stats["hits"], stats["misses"]) == (1, 0)
 
 
+def test_the_selection_is_recorded_on_the_row(
+    cache: PDFTranslationCache, source_pdf: Path, translated_pdf: Path
+):
+    """`pages` is what both the eviction order and the supersede rule read."""
+    put(cache, source_pdf, translated_pdf, pages="1-20,35")
+    assert [
+        row[0] for row in cache._conn().execute("SELECT pages FROM pdf_translations")
+    ] == ["1-20,35"]
+
+
+def test_a_whole_document_store_supersedes_this_documents_partials(
+    cache: PDFTranslationCache, source_pdf: Path, translated_pdf: Path
+):
+    """`lookup` reaches the whole document's entry first and it answers any
+    selection, so from that store on the partials are unreachable full-size
+    PDFs. Their rows and their files both go."""
+    put(cache, source_pdf, translated_pdf, pages="1-20")
+    put(cache, source_pdf, translated_pdf, pages="21-40")
+    assert cache.stats()["entries"] == 2  # two partials, no whole yet
+
+    put(cache, source_pdf, translated_pdf)
+
+    rows = cache._conn().execute(
+        "SELECT pages FROM pdf_translations"
+    ).fetchall()
+    assert [row[0] for row in rows] == [None]
+    # No orphaned file left behind under `files/`.
+    assert len(list(cache.files_dir.glob("*.pdf"))) == 1
+    assert look(cache, source_pdf, pages="1-20") is not None
+
+
+def test_another_documents_partial_entry_is_left_alone(
+    cache: PDFTranslationCache, tmp_path: Path
+):
+    """The supersede predicate is the cache key's own components; a different
+    input hash is a different document."""
+    other = make_entry(cache, tmp_path, "other", 1, pages="1-20")
+    mine = make_entry(cache, tmp_path, "mine", 1, pages="1-20")
+
+    make_entry(cache, tmp_path, "mine", 1)
+
+    assert look(cache, other, pages="1-20") is not None
+    assert look(cache, mine, pages="1-20") is not None  # via the whole document
+
+
+def test_a_different_model_keeps_its_partial_entry(
+    cache: PDFTranslationCache, source_pdf: Path, translated_pdf: Path
+):
+    """`model` is nullable, so the predicate compares it through COALESCE —
+    which must still tell two real model names apart."""
+    put(cache, source_pdf, translated_pdf, pages="1-20", model="gpt-4o-mini")
+
+    put(cache, source_pdf, translated_pdf)
+
+    assert look(cache, source_pdf, pages="1-20", model="gpt-4o-mini") is not None
+
+
 def test_a_selection_miss_counts_once(
     cache: PDFTranslationCache, source_pdf: Path
 ):
@@ -409,13 +474,19 @@ def test_a_stat_failure_falls_back_to_the_source_size(
 # ---------------------------------------------------------------------------
 
 
-def make_entry(cache: PDFTranslationCache, tmp_path: Path, name: str, kb: int) -> Path:
+def make_entry(
+    cache: PDFTranslationCache,
+    tmp_path: Path,
+    name: str,
+    kb: int,
+    pages: str | None = None,
+) -> Path:
     src = tmp_path / f"{name}.pdf"
     src.write_bytes(MINIMAL_PDF + name.encode())
     out = tmp_path / "job" / f"{name}_translated_v001.pdf"
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_bytes(b"%PDF-1.4\n" + b"x" * (kb * 1024))
-    put(cache, src, out)
+    put(cache, src, out, pages=pages)
     return src
 
 
@@ -437,6 +508,24 @@ def test_the_cap_evicts_least_recently_used_first(tmp_path: Path):
 
     assert look(cache, old) is None
     assert look(cache, keep) is not None
+
+
+def test_a_partial_entry_is_evicted_before_a_whole_document_one(tmp_path: Path):
+    """The workflow `PAGE_LIMIT_HELP` recommends — a long book a part at a
+    time — writes a full-length PDF per part. Ordered by `last_used_seq`
+    alone, those evict the whole-document entries that answer every request
+    for their file, which is what the cache is actually for."""
+    cache = PDFTranslationCache(cache_dir=tmp_path / "c", max_size_mb=10.0)
+    whole = make_entry(cache, tmp_path, "whole", 400)
+    # Stored later, so strictly newer by `last_used_seq`: only the class
+    # ordering can save `whole`.
+    part = make_entry(cache, tmp_path, "part", 400, pages="1-20")
+
+    cache.max_size_mb = 0.5
+    cache._enforce_lru_cap()
+
+    assert look(cache, part, pages="1-20") is None
+    assert look(cache, whole) is not None
 
 
 def test_eviction_deletes_the_files_too(tmp_path: Path):
@@ -594,7 +683,9 @@ def _unversioned_cache(
 
 
 def test_a_new_cache_starts_at_the_current_schema(cache: PDFTranslationCache):
-    assert cache._conn().execute("PRAGMA user_version").fetchone()[0] == 1
+    assert (
+        cache._conn().execute("PRAGMA user_version").fetchone()[0] == CURRENT_SCHEMA
+    )
 
 
 @pytest.mark.parametrize(
@@ -607,9 +698,16 @@ def test_an_unversioned_cache_is_upgraded_in_place(tmp_path: Path, with_sequence
     cache = PDFTranslationCache(cache_dir=cache_dir)
     conn = cache._conn()
 
-    assert conn.execute("PRAGMA user_version").fetchone()[0] == 1
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == CURRENT_SCHEMA
     types = {row["name"]: row["type"] for row in conn.execute("PRAGMA table_info(pdf_translations)")}
     assert types["cached_at"] == types["last_used"] == types["last_used_seq"] == "INTEGER"
+    # v2's column arrives NULL, which is what every pre-#33 row is: a
+    # whole-document translation.
+    assert "pages" in types
+    assert [row[0] for row in conn.execute("SELECT pages FROM pdf_translations")] == [
+        None,
+        None,
+    ]
     # Eviction order survives: derived from `last_used` where the sequence
     # column was missing, carried over where it existed.
     order = [

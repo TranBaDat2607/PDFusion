@@ -32,6 +32,22 @@ function threePageChunk(index: number, totalPages = 10): ChunkReadyLike {
   };
 }
 
+/**
+ * The single synthetic `chunk_ready` a PDF-cache hit emits. Its span is always
+ * the whole document — the viewer swaps the file rather than repainting a
+ * chunk — while `pages_to_translate` is what the served file has translated.
+ */
+function cacheHit(pagesTranslated: number, totalPages = 120): ChunkReadyLike {
+  return {
+    chunk_index: 0,
+    total_chunks: 1,
+    pages_in_chunk: [1, totalPages],
+    total_pages: totalPages,
+    pages_to_translate: pagesTranslated,
+    cache_hit: true,
+  };
+}
+
 function accumulate(events: ChunkReadyLike[]): ChunkProgress {
   return events.reduce<ChunkProgress | null>(
     (acc, e) => applyChunkReady(acc, e),
@@ -119,6 +135,33 @@ describe("applyChunkReady", () => {
     expect(progress.totalPages).toBe(50);
     expect(pagesReady(progress)).toBe(3);
     expect(pagesRemaining(progress)).toBe(47);
+  });
+
+  // A partial run served from the cache: the span says 120 because every page
+  // repaints, `pages_to_translate` says 2 because that is what was asked for.
+  // Counting the span against that denominator rendered "120 of 2 pages
+  // translated".
+  it("counts a partial cache hit as the pages it translated", () => {
+    const progress = accumulate([cacheHit(2)]);
+    expect(pagesReady(progress)).toBe(2);
+    expect(progress.totalPages).toBe(2);
+    expect(pagesRemaining(progress)).toBe(0);
+  });
+
+  it("leaves a whole-document cache hit counting every page", () => {
+    const progress = accumulate([cacheHit(120)]);
+    expect(pagesReady(progress)).toBe(120);
+    expect(progress.totalPages).toBe(120);
+    expect(pagesRemaining(progress)).toBe(0);
+  });
+
+  // A sidecar predating `pages_to_translate` still sends `cache_hit`. With
+  // nothing better to read, the span is the only answer available.
+  it("falls back to the span when a cache hit names no page count", () => {
+    const progress = accumulate([
+      { chunk_index: 0, total_chunks: 1, pages_in_chunk: [1, 120], cache_hit: true },
+    ]);
+    expect(pagesReady(progress)).toBe(120);
   });
 
   it("keeps a totalPages it already learned", () => {

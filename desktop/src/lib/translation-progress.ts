@@ -19,6 +19,12 @@
  *   `pages_in_chunk` span, and the total from `pages_to_translate` — which is
  *   fewer than the document's `total_pages` when only some pages were asked
  *   for (#33).
+ * - **A cache hit's span is not what it translated.** The one synthetic
+ *   `chunk_ready` a cache hit emits claims the whole document, because the
+ *   viewer is swapping in a different file and every page has to repaint.
+ *   Read as a page count on a partial entry, that says 120 pages finished out
+ *   of the 2 the run asked for. `pagesIn` takes `pages_to_translate` there
+ *   instead.
  * - **The same chunk can arrive twice** (an SSE re-attach replays it), so
  *   completions are keyed by index rather than counted.
  */
@@ -36,6 +42,10 @@ export interface ChunkReadyLike {
   /** Pages this run translates: `total_pages`, or fewer for a page
    *  selection. Absent on a sidecar that predates page selections. */
   pages_to_translate?: number | null;
+  /** This event is the synthetic one a PDF-cache hit emits, not a chunk the
+   *  pipeline finished. The accumulator has to know because such an event's
+   *  `pages_in_chunk` is a repaint hint rather than a span of work. */
+  cache_hit?: boolean;
 }
 
 export interface ChunkProgress {
@@ -47,6 +57,13 @@ export interface ChunkProgress {
 }
 
 function pagesIn(event: ChunkReadyLike): number {
+  // A cache hit's span is the whole document on purpose — the viewer is
+  // swapping in a different file, so every page repaints — and that is not
+  // what the run translated. The two agree for a whole-document entry and
+  // differ for a partial one, where the span is 120 and the run is 2.
+  if (event.cache_hit && event.pages_to_translate != null) {
+    return event.pages_to_translate;
+  }
   const [first, last] = event.pages_in_chunk;
   return Math.max(1, last - first + 1);
 }
