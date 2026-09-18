@@ -27,20 +27,35 @@ interface TokenEstimateProps {
 export function TokenEstimate({ filePath, targetLang }: TokenEstimateProps) {
   const text = useAppStore((s) => s.pageRangeText);
   const pageCount = useAppStore((s) => s.originalPageCount);
-  const [settled, setSettled] = useState(text);
+  // The Pages box belongs to a document, so what was settled records which.
+  // `setOriginalPdfPath` clears the box in the same tick the path changes, so
+  // a pause left over from the previous document would spend TYPING_PAUSE_MS
+  // holding *its* pages against this one — a wrong number on screen, or a 422
+  // if this document is shorter. Re-anchor the pause to the new document, and
+  // until that has landed read the box as it stands.
+  const [settled, setSettled] = useState({ path: filePath, text });
+  if (settled.path !== filePath) setSettled({ path: filePath, text });
+  const pages = settled.path === filePath ? settled.text : text;
   useEffect(() => {
-    const timer = window.setTimeout(() => setSettled(text), TYPING_PAUSE_MS);
+    const timer = window.setTimeout(
+      () => setSettled({ path: filePath, text }),
+      TYPING_PAUSE_MS,
+    );
     return () => window.clearTimeout(timer);
-  }, [text]);
+  }, [filePath, text]);
 
-  const parsed = parsePageRanges(settled, pageCount);
+  const parsed = parsePageRanges(pages, pageCount);
   const estimate = useTranslationEstimate({
     filePath,
     ranges: parsed.ok ? parsed.ranges : null,
     targetLang,
     enabled: parsed.ok,
   });
-  if (!estimate.data || estimate.isError) return null;
+  // `enabled: false` does not hide what is already cached, and an unreadable
+  // Pages box asks the same question as a blank one — so without the first
+  // clause, typing garbage would show the whole document's cached answer as
+  // if it were the answer for what was typed.
+  if (!parsed.ok || !estimate.data || estimate.isError) return null;
 
   return (
     <Tooltip>

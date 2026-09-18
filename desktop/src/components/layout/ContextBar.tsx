@@ -138,6 +138,19 @@ export function ContextBar({
   const canTranslate =
     !!originalPath && !translating && ready && pagesValid && pairSupported;
 
+  const reTranslateButton = (
+    <Button
+      onClick={onReTranslate}
+      disabled={!pagesValid || !pairSupported}
+      variant="outline"
+      size="sm"
+      className="gap-2"
+    >
+      <RefreshCw className="h-4 w-4" />
+      Re-translate
+    </Button>
+  );
+
   const translateButton = (
     <Button
       onClick={onTranslate}
@@ -330,19 +343,21 @@ export function ContextBar({
         {canReTranslate && !translating && (
           <Tooltip>
             <TooltipTrigger asChild>
-              <Button
-                onClick={onReTranslate}
-                disabled={!pagesValid || !pairSupported}
-                variant="outline"
-                size="sm"
-                className="gap-2"
-              >
-                <RefreshCw className="h-4 w-4" />
-                Re-translate
-              </Button>
+              {pairSupported ? (
+                reTranslateButton
+              ) : (
+                // Disabled for the same reason Translate is, and disabled
+                // buttons get no pointer events — so it needs the same
+                // wrapper, or it greys out with nothing to explain it.
+                <span tabIndex={0} className="inline-flex">
+                  {reTranslateButton}
+                </span>
+              )}
             </TooltipTrigger>
-            <TooltipContent>
-              Run translation again, bypassing the cached result
+            <TooltipContent className="max-w-xs">
+              {pairSupported
+                ? "Run translation again, bypassing the cached result"
+                : ARGOS_ONLY}
             </TooltipContent>
           </Tooltip>
         )}

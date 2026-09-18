@@ -1,4 +1,4 @@
-import { keepPreviousData, useQuery } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
 
 import { api } from "@/lib/api-client";
 import type { components } from "@/lib/api-types";
@@ -16,10 +16,14 @@ interface EstimateInput {
   enabled: boolean;
 }
 
+/** Where `filePath` sits in the query key below. */
+const FILE_PATH = 2;
+
 /**
  * Roughly how many tokens translating these pages would take (#33). The file,
  * pages and language are the whole question, so an answer is kept for the
- * session; while a new one loads, the previous one stays on screen.
+ * session; while a new one loads, the previous one for *this document* stays
+ * on screen.
  */
 export function useTranslationEstimate({
   filePath,
@@ -42,6 +46,10 @@ export function useTranslationEstimate({
     enabled: enabled && filePath !== null,
     staleTime: Infinity,
     retry: false,
-    placeholderData: keepPreviousData,
+    // Held over only within one document. Kept across a switch, the previous
+    // file's count renders under the new file's name for as long as reading
+    // the new one's text takes — seconds, on a large PDF.
+    placeholderData: (previous, query) =>
+      query?.queryKey[FILE_PATH] === filePath ? previous : undefined,
   });
 }
