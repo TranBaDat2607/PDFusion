@@ -4,7 +4,7 @@
     "beforeBundleCommand": "sh ../build-sidecar.sh"
   },
   "bundle": {
-    "targets": ["deb", "appimage"],
+    "targets": ["deb"],
     "externalBin": [],
     "resources": ["sidecar/**/*"]
   }

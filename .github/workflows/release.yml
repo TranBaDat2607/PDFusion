@@ -147,7 +147,7 @@ jobs:
           files: desktop/src-tauri/target/release/bundle/nsis/*-setup.exe
 
   linux-bundles:
-    name: Build .deb + AppImage
+    name: Build .deb
     runs-on: ubuntu-latest
     timeout-minutes: 120
     permissions:
@@ -181,8 +181,9 @@ jobs:
           workspaces: desktop/src-tauri
 
       # webkit2gtk 4.1 is the Tauri 2 series; 4.0 is Tauri 1 and does not
-      # satisfy the build. `patchelf` and `librsvg2-dev` are what the AppImage
-      # target itself shells out to.
+      # satisfy the build. `patchelf` and `librsvg2-dev` are kept from the
+      # AppImage attempt: the .deb target does not shell out to them, but they
+      # cost seconds and are what a re-enabled `appimage` would need again.
       - name: Install webview and bundler dependencies
         run: |
           sudo apt-get update
@@ -200,11 +201,11 @@ jobs:
             libxdo-dev
 
       # The staged sidecar tree is ~1.2 GB and is copied again into the .deb
-      # payload and once more into the AppImage's AppDir, on top of a
-      # torch-carrying pip env and a release cargo target. An ubuntu-24.04
-      # runner starts with little headroom over that, and these three SDKs are
-      # ~25 GB that nothing here touches. `df` is left in the log because
-      # running out of disk and linuxdeploy failing read identically below.
+      # payload, on top of a torch-carrying pip env and a release cargo target.
+      # An ubuntu-24.04 runner starts with little headroom over that, and these
+      # three SDKs are ~25 GB that nothing here touches. `df` is left in the log
+      # because running out of disk looks like whatever step happened to be
+      # holding the file when it ran out.
       - name: Reclaim disk
         run: |
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc
@@ -236,27 +237,18 @@ jobs:
       # beforeBundleCommand runs build-sidecar.sh for real (PyInstaller,
       # ~10-20 min) before the bundler collects the `sidecar/` resource tree.
       #
-      # NO_STRIP is for the AppImage target: linuxdeploy shells out to `strip`,
-      # which fails on system libraries carrying a `.relr.dyn` section
-      # (`unknown type [0x13]`) — see tauri-apps/tauri#14796. The .deb built
-      # fine and the AppImage died here on the first v1.1.0 release with
-      # nothing but `failed to run linuxdeploy`, because tauri-bundler
-      # *discards* linuxdeploy's stderr at its default log level
-      # (`linuxdeploy.rs`: "Linuxdeploy logs everything into stderr so we have
-      # to ignore the output ourselves here"). `--verbose` raises that level to
-      # the branch that surfaces it, so the next failure here says what it was.
-      - name: Build the bundles
+      # `.deb` only — see "Why there is no AppImage" in CLAUDE.md. `--verbose`
+      # stays because tauri-bundler *discards* a bundler tool's stderr at its
+      # default log level, which is how the AppImage attempt cost two release
+      # runs to diagnose.
+      - name: Build the bundle
         working-directory: desktop
-        env:
-          NO_STRIP: "true"
         run: pnpm tauri build --verbose
 
       - uses: actions/upload-artifact@v4
         with:
           name: pdfusion-linux-bundles
-          path: |
-            desktop/src-tauri/target/release/bundle/deb/*.deb
-            desktop/src-tauri/target/release/bundle/appimage/*.AppImage
+          path: desktop/src-tauri/target/release/bundle/deb/*.deb
           if-no-files-found: error
           retention-days: 14
 
@@ -266,9 +258,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           draft: true
-          files: |
-            desktop/src-tauri/target/release/bundle/deb/*.deb
-            desktop/src-tauri/target/release/bundle/appimage/*.AppImage
+          files: desktop/src-tauri/target/release/bundle/deb/*.deb
 
   release-notes:
     name: Write the release description
@@ -303,7 +293,6 @@ jobs:
             |---|---|---|
             | Windows 10/11 (x64) | `*-setup.exe` | Per-user install, no admin rights |
             | Debian / Ubuntu (x64) | `*.deb` | Needs `libwebkit2gtk-4.1-0` and `libgtk-3-0` |
-            | Other Linux (x64) | `*.AppImage` | Self-contained; `chmod +x` it and run |
 
             ### Windows
 
@@ -324,14 +313,15 @@ jobs:
             sudo apt install ./PDFusion_*_amd64.deb
             ```
 
-            The AppImage needs nothing installed:
+            It is unsigned. webkit2gtk **4.1** is required — 4.0 is the Tauri 1
+            series and will not run this build.
 
-            ```
-            chmod +x PDFusion_*_amd64.AppImage && ./PDFusion_*_amd64.AppImage
-            ```
-
-            Both are unsigned. webkit2gtk **4.1** is required — 4.0 is the
-            Tauri 1 series and will not run this build.
+            **There is no AppImage in this release.** The translation engine
+            ships as a ~1.2 GB embedded Python runtime, and the AppImage
+            bundler insists on re-resolving the shared-library dependencies of
+            every binary inside it — including vendored libraries that only
+            resolve through their own `RPATH` at runtime. If you are not on a
+            Debian derivative, build from source for now.
 
             ## First run
 
@@ -363,6 +353,8 @@ jobs:
             the pipeline writes is meant to be kept.
 
             ## Not in this release
+
+            A Linux AppImage — see the Linux section above.
 
             macOS. The build is wired up, but an unsigned, un-notarized `.dmg`
             is refused by Gatekeeper with no useful way past it, so shipping one

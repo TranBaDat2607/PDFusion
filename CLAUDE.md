@@ -485,7 +485,7 @@ through one `exits_with_code_3()` helper.
 
 **What is still unverified.** Everything above compiles and its pure parts are
 tested, and CI gates Linux. Nobody has run `pnpm tauri build` on Linux to
-completion, opened the resulting `.deb`/AppImage, or touched macOS at all — so
+completion, opened the resulting `.deb`, or touched macOS at all — so
 the resource-directory layout in rule 2 in particular is reasoned from the
 bundler's source, not observed. The `frozen-sidecar` workflow (dispatch-only,
 now a Windows + Linux matrix) is what settles the PyInstaller half.
@@ -1403,7 +1403,7 @@ pip install -e ".[dev]"          # ensures pyinstaller is available
 cd desktop
 pnpm tauri build
 # Windows → target/release/bundle/nsis/PDFusion_<version>_x64-setup.exe
-# Linux   → target/release/bundle/{deb/*.deb, appimage/*.AppImage}
+# Linux   → target/release/bundle/deb/*.deb   (no AppImage — see below)
 # macOS   → target/release/bundle/{macos/*.app, dmg/*.dmg}   (unverified)
 ```
 
@@ -1449,13 +1449,16 @@ install dir is now writable — that does **not** make the AppData cwd work in
 `lib.rs::setup` redundant, since a machine upgraded from an MSI install is
 still out there, and `/usr/lib` on Linux is not writable either.
 
-**On Linux the targets are `deb` and `appimage`.** Neither is signed.
+**On Linux the only target is `deb`**, and it is not signed. `appimage` was
+enabled for v1.1.0 and taken back out — see "Why there is no AppImage" below.
 `bundle.linux.deb.depends` is deliberately left unset: tauri-bundler derives
 `libwebkit2gtk-4.1-0` and `libgtk-3-0` itself and *appends* anything listed
 there, so spelling them out again only risks the list drifting from what the
 crate actually links — and adding `libayatana-appindicator3-1` by hand would
 make users install a tray library this app never asks for. `rpm` is available
-to Tauri and not enabled; add it to `tauri.linux.conf.json` if someone asks.
+to Tauri and not enabled; add it to `tauri.linux.conf.json` if someone asks —
+unlike `appimage`, it ships the resource tree verbatim, so it should not hit
+what the AppImage hit.
 
 On top of that, the fetch-offline-assets script stages two runtime asset sets that
 the spec bundles when present (`_internal/argos_pack/`,
@@ -1487,15 +1490,41 @@ signing step. Signing is opt-in and Windows-only — set the
 neither, the job warns and ships unsigned, which is also what the Linux job
 always does.
 
-The Linux job carries two things the Windows one doesn't need. It builds under
-**`NO_STRIP=true`**, because the AppImage target's `linuxdeploy` shells out to
-`strip`, which fails on system libraries carrying a `.relr.dyn` section
-(`unknown type [0x13]`, tauri-apps/tauri#14796) — the `.deb` is unaffected. And
-it passes **`--verbose`**, which is not noise for its own sake:
-`tauri-bundler`'s `linuxdeploy.rs` *discards* linuxdeploy's stderr at the
-default log level and only surfaces it on the verbose branch, so without it an
-AppImage failure is the bare string `failed to run linuxdeploy` with no cause
-attached. Keep both if you touch that step.
+**Why there is no AppImage.** `tauri.linux.conf.json` names `deb` alone.
+`appimage` was enabled for v1.1.0 and removed after it failed twice: the
+AppImage bundler runs `linuxdeploy`, which walks **every** ELF file in the
+AppDir and re-resolves its shared-library dependencies — and our AppDir
+contains the whole ~1.2 GB PyInstaller tree under
+`usr/lib/PDFusion/sidecar/_internal/`. That tree is full of wheel-vendored
+libraries whose names only resolve through their own `RPATH`/`$ORIGIN` at
+runtime, and the first one linuxdeploy could not account for aborted the
+bundle:
+
+```
+Deploying dependencies for ELF file .../sidecar/_internal/scipy.libs/libgfortran-8f1e9814.so.5.0.0
+ERROR: Could not find dependency: libquadmath-828275a7.so.0.0.0
+ERROR: Failed to deploy dependencies for existing files
+```
+
+It had processed **four** of the tree's hundreds of `.so` files at that point,
+so fixing that one file would only have bought the next one. This is
+structural, not a bad dependency: nothing in the target lets us tell
+linuxdeploy to leave a resource directory alone, and an embedded CPython
+distribution is exactly what it is built to take apart. The `.deb` has none of
+this problem — it ships the tree verbatim — and it is what the release
+publishes. Re-enabling `appimage` means solving that walk, not retrying it.
+
+Two things that attempt left behind and that are worth keeping. The job builds
+with **`--verbose`**, because `tauri-bundler` *discards* a bundler tool's
+stderr at its default log level (`linuxdeploy.rs`: "Linuxdeploy logs everything
+into stderr so we have to ignore the output ourselves here") — the first
+failure was the bare string `failed to run linuxdeploy`, with nothing else in
+the log, and it cost a whole release run to get a cause out of. And
+**`NO_STRIP=true`** is the documented workaround for the *other* linuxdeploy
+failure, its `strip` choking on a `.relr.dyn` section
+(`unknown type [0x13]`, tauri-apps/tauri#14796); it is not set today because
+nothing runs linuxdeploy, but it is the first thing to set if anyone re-enables
+the target.
 
 Hidden-import additions for chromadb / babeldoc / etc. live in
 `pdfusion-sidecar.spec`, which is itself platform-neutral — PyInstaller adds the
@@ -1692,9 +1721,8 @@ and `shell.log`.
   `tauri.windows.conf.json` carries `digestAlgorithm`/`timestampUrl` and
   `release.yml` reads a `WINDOWS_SIGN_COMMAND` secret — but no certificate is
   configured, so shipped installers are unsigned and SmartScreen warns on first
-  install. The Linux bundles are unsigned too, with no plumbing at all: `.deb`
-  signing wants a GPG key in the workflow and AppImage signing wants
-  `appimagetool --sign`.
+  install. The Linux `.deb` is unsigned too, with no plumbing at all: signing
+  it wants a GPG key in the workflow.
 - **macOS packaging and verification** — the plumbing is in place (a `dmg`/`app`
   target in `tauri.macos.conf.json`, Keychain-backed keys, the
   `~/Library/Application Support` data root), but nobody has run it on a Mac
