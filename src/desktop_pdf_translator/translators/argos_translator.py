@@ -65,7 +65,7 @@ def _preview(s: str, n: int = 60) -> str:
 # Debug instrumentation
 #
 # Dumps the *input* (and key intermediates) of every Argos translation step to
-# a JSON file under AppData: ~/AppData/Local/PDFusion/logs/argos_debug.json.
+# a JSON file under the app's data root: <appdata_dir>/logs/argos_debug.json.
 # Disabled by default; set the env var PDFUSION_ARGOS_DEBUG=1 to enable.
 #
 # Previous location was `<repo_root>/argos_debug.json` resolved via
@@ -79,7 +79,7 @@ def _preview(s: str, n: int = 60) -> str:
 # threads (BabelDOC's worker pool), so every write is guarded by a lock.
 # ---------------------------------------------------------------------------
 def _debug_json_path() -> Path:
-    """Location of argos_debug.json — under the writable AppData logs dir."""
+    """Location of argos_debug.json — under the writable logs dir."""
     return logs_dir() / "argos_debug.json"
 
 

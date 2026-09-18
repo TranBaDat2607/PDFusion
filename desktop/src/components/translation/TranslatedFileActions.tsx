@@ -40,7 +40,7 @@ export function TranslatedFileActions({
     {
       Icon: FolderOpen,
       label: "Show in folder",
-      tooltip: "Show the file in Explorer",
+      tooltip: "Show the file in your file manager",
       onClick: revealFile,
     },
   ];

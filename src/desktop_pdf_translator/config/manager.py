@@ -12,7 +12,7 @@ from pydantic import ValidationError
 
 from .models import RETIRED_MODELS, AppSettings, normalize_base_url
 from ..utils import (
-    DPAPI_PREFIX,
+    SELF_DESCRIBING_PREFIXES,
     adopt_legacy_config,
     appdata_dir,
     decrypt_api_key,
@@ -384,11 +384,13 @@ class ConfigManager:
     def _decrypt_sensitive_data(self, config_data: Dict[str, Any]) -> None:
         """Turn stored ciphertext back into usable keys, in place.
 
-        Two formats can be on disk: a DPAPI blob (self-contained, no salt) and
-        the legacy machine-key Fernet value (needs its `api_key_salt`
-        sibling). `encryption.decrypt_api_key` picks by prefix; the salt is
-        only required for the legacy one. Re-encryption to DPAPI happens on
-        the next `save_settings`.
+        Two shapes can be on disk: a value carrying one of
+        `SELF_DESCRIBING_PREFIXES` (a Windows DPAPI blob, or a keystore-backed
+        Fernet token on Linux/macOS — both self-contained, no salt), and the
+        legacy machine-key Fernet value, which needs its `api_key_salt`
+        sibling. `encryption.decrypt_api_key` picks by prefix; the salt is
+        only required for the legacy one. Re-encryption into this platform's
+        current scheme happens on the next `save_settings`.
         """
         for service in KEYED_SERVICES:
             if service not in config_data or not isinstance(config_data[service], dict):
@@ -398,12 +400,12 @@ class ConfigManager:
             salt = service_data.get("api_key_salt")
             if not isinstance(salt, str):
                 salt = ""
-            # Either a DPAPI blob, or a legacy value with its salt beside it.
-            # `is_encrypted` can't separate the second from plaintext on its own
-            # — it answers True for anything that base64-decodes — so the salt
-            # is what says a legacy value was stored rather than typed.
+            # Either a self-describing blob, or a legacy value with its salt
+            # beside it. `is_encrypted` can't separate the second from plaintext
+            # on its own — it answers True for anything that base64-decodes — so
+            # the salt is what says a legacy value was stored rather than typed.
             if isinstance(encrypted_key, str) and (
-                encrypted_key.startswith(DPAPI_PREFIX)
+                encrypted_key.startswith(SELF_DESCRIBING_PREFIXES)
                 or (salt and is_encrypted(encrypted_key))
             ):
                 service_data["api_key"] = decrypt_api_key(encrypted_key, salt)

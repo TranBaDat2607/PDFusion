@@ -1,13 +1,23 @@
-"""How API keys are stored, and how `config.toml` is written (#17).
+"""How API keys are stored, and how `config.toml` is written (#17, #69).
 
 Both are cheap to import — `config/` and `utils/` pull in tomlkit, pydantic and
 cryptography, none of the BabelDOC/torch stack the other suites document
 avoiding.
+
+The storage scheme is per-platform, and only one of the three can be exercised
+for real on any given runner. So the platform-specific assertions are marked,
+and the keystore scheme — the one that replaced a key derived from the
+machine's *hostname* — is driven through a stand-in backend (`fake_keystore`)
+rather than a live Secret Service. That is not a weaker test than the real
+thing: what it has to prove is that the ciphertext depends on a secret held
+outside `config.toml`, and an in-memory backend shows that as plainly as
+gnome-keyring would — on a CI runner, where no keyring is running at all.
 """
 
 from __future__ import annotations
 
 import platform
+import sys
 from unittest import mock
 
 import pytest
@@ -18,16 +28,62 @@ from desktop_pdf_translator.config.models import AppSettings
 from desktop_pdf_translator.utils import encryption
 from desktop_pdf_translator.utils.encryption import (
     DPAPI_PREFIX,
+    KEYSTORE_PREFIX,
     decrypt_api_key,
     encrypt_api_key,
     is_encrypted,
 )
 
+#: The real `_usable_keyring`, captured at import — before `conftest.py`'s
+#: autouse `_no_real_keystore` fixture replaces it for every test. The one test
+#: below that is *about* that function has to call the original, and without
+#: this its assertions would pass against the stub instead (which also answers
+#: `None`, so the failure would look like a pass).
+_real_usable_keyring = encryption._usable_keyring
+
 on_windows = pytest.mark.skipif(
     platform.system() != "Windows", reason="DPAPI is Windows-only"
 )
+off_windows = pytest.mark.skipif(
+    platform.system() == "Windows",
+    reason="Windows uses DPAPI; the keystore path is for Linux and macOS",
+)
 
 KEY = "sk-test-0123456789abcdef"
+
+
+class _FakeKeyring:
+    """A `keyring` stand-in: one dict, and the two calls this module makes."""
+
+    def __init__(self, backend_module: str = "keyring.backends.SecretService"):
+        self.stored: dict[tuple[str, str], str] = {}
+        self._backend = type("Backend", (), {"__module__": backend_module})
+
+    def get_keyring(self):
+        return self._backend()
+
+    def get_password(self, service: str, username: str):
+        return self.stored.get((service, username))
+
+    def set_password(self, service: str, username: str, password: str) -> None:
+        self.stored[(service, username)] = password
+
+
+@pytest.fixture
+def fake_keystore(monkeypatch: pytest.MonkeyPatch):
+    """A working OS keystore, on whatever platform the suite is running.
+
+    `_keystore_supported()` and `_dpapi_available()` are both forced: without
+    them this fixture would silently do nothing on a Windows runner and the
+    tests below would pass by exercising DPAPI instead of the thing they name.
+    """
+    fake = _FakeKeyring()
+    monkeypatch.setattr(encryption, "_keystore_supported", lambda: True)
+    monkeypatch.setattr(encryption, "_dpapi_available", lambda: False)
+    monkeypatch.setattr(encryption, "_usable_keyring", lambda: fake)
+    encryption._reset_master_key_cache()
+    yield fake
+    encryption._reset_master_key_cache()
 
 
 # ---------------------------------------------------------------------------
@@ -64,15 +120,115 @@ def test_windows_keys_are_stored_with_dpapi():
     assert salt == ""
 
 
+@off_windows
+def test_off_windows_the_keystore_is_the_scheme_that_applies():
+    """Which branch the *real* platform takes, asserted without taking it.
+
+    Actually running `encrypt_api_key` here would file a master key in the
+    developer's login keyring — real, persistent state, which `conftest.py`'s
+    `_no_real_keystore` exists to keep every test out of. So this checks the
+    decision and leaves the mechanism to `fake_keystore` below.
+    """
+    assert encryption._keystore_supported()
+    assert not encryption._dpapi_available()
+
+
+@on_windows
+def test_on_windows_the_keystore_is_not_reached_at_all():
+    """DPAPI is strictly better there — no second secret to lose, no prompt —
+    and a keystore branch that could fire on Windows would be a fourth format
+    to migrate later."""
+    assert not encryption._keystore_supported()
+
+
+def test_a_keystore_key_round_trips(fake_keystore):
+    stored, salt = encrypt_api_key(KEY)
+
+    assert stored.startswith(KEYSTORE_PREFIX)
+    assert decrypt_api_key(stored, salt) == KEY
+    assert is_encrypted(stored)
+
+
+def test_the_secret_that_protects_the_file_is_not_in_the_file(fake_keystore):
+    """The whole reason this scheme exists. The legacy one derived its key from
+    `platform.node() + platform.machine()` and stored the salt beside the
+    ciphertext, so anything that could read `config.toml` could reproduce the
+    key. Here the ciphertext is worthless without the keystore entry."""
+    stored, _ = encrypt_api_key(KEY)
+
+    assert fake_keystore.stored, "nothing was filed in the keystore"
+    fake_keystore.stored.clear()
+    encryption._reset_master_key_cache()
+
+    assert decrypt_api_key(stored, "") is None
+
+
+def test_a_missing_master_key_is_never_replaced_with_a_fresh_one(fake_keystore):
+    """Minting one on the decrypt path would turn "the keyring is locked" —
+    temporary — into "those keys are gone" — permanent."""
+    stored, _ = encrypt_api_key(KEY)
+    fake_keystore.stored.clear()
+    encryption._reset_master_key_cache()
+
+    assert decrypt_api_key(stored, "") is None
+    assert fake_keystore.stored == {}
+
+
+def test_every_key_shares_one_master_key(fake_keystore):
+    """One entry the user can see and revoke in Seahorse / Keychain Access,
+    not one per provider."""
+    encrypt_api_key(KEY)
+    encrypt_api_key("sk-another")
+
+    assert len(fake_keystore.stored) == 1
+
+
+def test_an_unusable_backend_is_recognised_as_unusable(monkeypatch: pytest.MonkeyPatch):
+    """`keyring.backends.fail` is the sentinel keyring hands back when it found
+    nothing; `keyrings.alt` is a real, installable distribution whose backends
+    keep secrets in a plaintext or lightly-obfuscated file — the exact property
+    the legacy scheme is being retired for. Neither may be mistaken for a
+    keystore."""
+    monkeypatch.setattr(encryption, "_keystore_supported", lambda: True)
+    for module in ("keyring.backends.fail", "keyrings.alt.file"):
+        monkeypatch.setitem(sys.modules, "keyring", _FakeKeyring(backend_module=module))
+        assert _real_usable_keyring() is None, module
+
+    real = _FakeKeyring(backend_module="keyring.backends.macOS")
+    monkeypatch.setitem(sys.modules, "keyring", real)
+    assert _real_usable_keyring() is real
+
+
+def test_without_a_keystore_the_legacy_scheme_still_stores_something_usable(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """A headless Linux box with no D-Bus session — most obviously CI. The key
+    is only obfuscated there, which `encrypt_api_key` warns about, but the app
+    still starts and the key still works. Falling through to it *with* that
+    warning is the documented behaviour; failing to save would not be."""
+    monkeypatch.setattr(encryption, "_dpapi_available", lambda: False)
+    monkeypatch.setattr(encryption, "_usable_keyring", lambda: None)
+    encryption._reset_master_key_cache()
+
+    stored, salt = encrypt_api_key(KEY)
+
+    assert not stored.startswith((DPAPI_PREFIX, KEYSTORE_PREFIX))
+    assert salt, "the legacy path stores a salt beside the ciphertext"
+    assert decrypt_api_key(stored, salt) == KEY
+
+
 def _make_legacy_ciphertext(key: str = KEY) -> tuple[str, str]:
     """A pre-DPAPI stored value: `(ciphertext, salt_b64)`.
 
-    Produced by the code that used to write it — with DPAPI forced off,
-    `encrypt_api_key` *is* the legacy branch — rather than by restating the
-    HKDF-over-MachineGuid + double-base64 encoding here, where it could drift
-    into a format nothing ever wrote while these tests kept passing.
+    Produced by the code that used to write it — with DPAPI and the keystore
+    both forced off, `encrypt_api_key` *is* the legacy branch — rather than by
+    restating the HKDF-over-machine-id + double-base64 encoding here, where it
+    could drift into a format nothing ever wrote while these tests kept
+    passing.
     """
-    with mock.patch.object(encryption, "_dpapi_available", return_value=False):
+    with mock.patch.object(
+        encryption, "_dpapi_available", return_value=False
+    ), mock.patch.object(encryption, "_usable_keyring", return_value=None):
         return encrypt_api_key(key)
 
 
@@ -230,6 +386,24 @@ def test_the_backup_of_a_legacy_config_holds_no_legacy_key(manager: ConfigManage
     backup = (manager.config_dir / "config.toml.bak").read_text(encoding="utf-8")
     assert ciphertext not in backup
     assert salt_b64 not in backup
+
+
+def test_a_migrating_save_rewrites_the_key_in_the_keystore_scheme(
+    manager: ConfigManager, fake_keystore
+):
+    """The off-Windows half of the migration: a config written by the hostname
+    scheme loads, and the next save replaces it with a value the file alone
+    cannot decrypt. Nobody re-enters a key."""
+    _write_legacy_config(manager.config_file)
+
+    settings = ConfigManager(config_dir=manager.config_dir).load_settings()
+    assert settings.openai.api_key == KEY
+    assert manager.save_settings(settings)
+
+    saved = manager.config_file.read_text(encoding="utf-8")
+    assert KEYSTORE_PREFIX in saved
+    assert "api_key_salt" not in saved
+    assert ConfigManager(config_dir=manager.config_dir).load_settings().openai.api_key == KEY
 
 
 @on_windows

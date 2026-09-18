@@ -2,8 +2,9 @@
 //!
 //! Lifecycle:
 //!   1. Locate the sidecar binary:
-//!        - production: bundled `pdfusion-sidecar-<triple>.exe` next to the app
-//!          (shipped via Tauri `externalBin`),
+//!        - production: the bundled PyInstaller build — an `externalBin` next
+//!          to the app on Windows, a resource directory on Linux and macOS
+//!          (see `BUNDLED_SIDECAR_FILENAME`),
 //!        - development: a Python interpreter (`PDFUSION_PYTHON`, conda env, or
 //!          `python` on PATH) invoking `-m desktop_pdf_translator.api.server`.
 //!   2. Spawn the process with stdout piped.
@@ -113,18 +114,31 @@ pub fn current() -> Option<&'static SidecarHandle> {
     SIDECAR.get()
 }
 
-/// Filename of the bundled sidecar binary at install time.
-/// Tauri's `externalBin` requires the triple suffix on the *source* file,
-/// but renames it at bundle time to drop the suffix — so post-install
-/// (and what `BaseDirectory::Resource` resolves against) it's just the
-/// bare name.
+/// Where the bundled sidecar lands at install time, relative to
+/// `BaseDirectory::Resource`. It differs by platform because the *packaging*
+/// does, and PyInstaller's one-dir bootloader hard-requires `_internal/` to sit
+/// next to the executable it belongs to.
+///
+/// **Windows.** Shipped through Tauri's `externalBin`, which requires the
+/// rustc-triple suffix on the source file and renames it at bundle time to drop
+/// the suffix — so post-install it is the bare name, at the install root, which
+/// is also the resource root. `_internal/**/*` is shipped as a resource and
+/// lands beside it.
+///
+/// **Linux and macOS.** `externalBin` would put it in `/usr/bin` (deb,
+/// AppImage) or `Contents/MacOS` (.app) while `resources` go to
+/// `/usr/lib/<product>` / `Contents/Resources` — different directories, so
+/// `_internal/` would no longer be a sibling and the bootloader would fail to
+/// find `libpython3.11.so`. So off Windows the sidecar is not an `externalBin`
+/// at all: the whole PyInstaller one-dir tree ships as a single resource
+/// directory, which keeps the two together wherever the bundler puts it (#69).
 #[cfg(windows)]
 const BUNDLED_SIDECAR_FILENAME: &str = "pdfusion-sidecar.exe";
 #[cfg(not(windows))]
-const BUNDLED_SIDECAR_FILENAME: &str = "pdfusion-sidecar";
+const BUNDLED_SIDECAR_FILENAME: &str = "sidecar/pdfusion-sidecar";
 
-/// A staged exe below this is `build-sidecar.ps1 -Stub`'s placeholder, not a
-/// real build. The PyInstaller exe is ~80 MiB.
+/// A staged binary below this is `build-sidecar --stub`'s placeholder, not a
+/// real build. The PyInstaller executable is ~80 MiB.
 const STUB_THRESHOLD_BYTES: u64 = 1024 * 1024; // 1 MiB
 
 /// Whether a staged file is a real sidecar rather than a `-Stub` placeholder.
@@ -160,10 +174,13 @@ fn resolve_bundled_sidecar(app: &AppHandle) -> Option<PathBuf> {
         return None;
     }
     match check_staged_size(&path) {
-        Ok(()) => Some(path),
+        Ok(()) => {
+            ensure_executable(&path);
+            Some(path)
+        }
         Err(Some(len)) => {
             log::warn!(
-                "Ignoring bundled sidecar {}: {} bytes is below the {} byte stub threshold. This is a `build-sidecar.ps1 -Stub` placeholder, not a real build — falling back to local Python.",
+                "Ignoring bundled sidecar {}: {} bytes is below the {} byte stub threshold. This is a `build-sidecar --stub` placeholder, not a real build — falling back to local Python.",
                 path.display(),
                 len,
                 STUB_THRESHOLD_BYTES
@@ -180,6 +197,89 @@ fn resolve_bundled_sidecar(app: &AppHandle) -> Option<PathBuf> {
     }
 }
 
+/// The user's home directory, however this platform spells it.
+///
+/// `USERPROFILE` first so a Windows machine running under an MSYS/Git-Bash
+/// shell — which exports a POSIX-shaped `HOME` — still gets the Windows
+/// profile the conda installers actually wrote to.
+fn home_dir() -> Option<PathBuf> {
+    std::env::var_os("USERPROFILE")
+        .or_else(|| std::env::var_os("HOME"))
+        .filter(|h| !h.is_empty())
+        .map(PathBuf::from)
+}
+
+/// Where a conda-style `pdfusion` env's interpreter would be, best first.
+///
+/// Pure so it can be tested off the machine it describes. `pdfusion` is the
+/// name in the project's setup docs; `pdfusion-env` is accepted too since
+/// nothing enforces one canonical name across machines. `miniforge3` is the
+/// usual conda-forge install on macOS and on Linux boxes that never wanted
+/// Anaconda's defaults channel. Anything else needs `PDFUSION_PYTHON`.
+///
+/// The layouts genuinely differ: Windows envs put the interpreter at the env
+/// root (`envs/pdfusion/python.exe`), every POSIX one puts it in `bin/`
+/// (`envs/pdfusion/bin/python`). Looking only for `python.exe` under
+/// `%USERPROFILE%` — which is what this did — misses on Linux and macOS twice
+/// over, and the fall-through to `which` then picks up whatever interpreter is
+/// on `$PATH` rather than the project's env (#69).
+fn conda_python_candidates(home: &Path) -> Vec<PathBuf> {
+    const CONDA_DISTS: [&str; 3] = ["anaconda3", "miniconda3", "miniforge3"];
+    const ENV_NAMES: [&str; 2] = ["pdfusion", "pdfusion-env"];
+    #[cfg(windows)]
+    const INTERPRETER: [&str; 1] = ["python.exe"];
+    #[cfg(not(windows))]
+    const INTERPRETER: [&str; 2] = ["bin", "python"];
+
+    let mut out = Vec::new();
+    for dist in CONDA_DISTS {
+        for env_name in ENV_NAMES {
+            let mut candidate = home.join(dist).join("envs").join(env_name);
+            for part in INTERPRETER {
+                candidate = candidate.join(part);
+            }
+            out.push(candidate);
+        }
+    }
+    out
+}
+
+/// Make sure the staged sidecar still carries its executable bit.
+///
+/// Off Windows it can lose it: the bundler copies `resources` file by file,
+/// and an AppImage, a `.deb` built on a machine with an unusual umask, or a
+/// checkout restored from a zip can all arrive without `+x`. A `Permission
+/// denied` on spawn would otherwise read as "no sidecar" and send a shipped
+/// install down the local-Python fallback. Best-effort, and it never rejects
+/// the binary — if the chmod fails too, spawning it produces a far clearer
+/// error than silently pretending it isn't there.
+#[cfg(unix)]
+fn ensure_executable(path: &Path) {
+    use std::os::unix::fs::PermissionsExt;
+
+    let Ok(metadata) = std::fs::metadata(path) else {
+        return;
+    };
+    let mut perms = metadata.permissions();
+    if perms.mode() & 0o111 != 0 {
+        return;
+    }
+    perms.set_mode(perms.mode() | 0o755);
+    match std::fs::set_permissions(path, perms) {
+        Ok(()) => log::warn!(
+            "Bundled sidecar {} was not executable; restored its executable bit",
+            path.display()
+        ),
+        Err(e) => log::error!(
+            "Bundled sidecar {} is not executable and could not be made so: {e}",
+            path.display()
+        ),
+    }
+}
+
+#[cfg(not(unix))]
+fn ensure_executable(_path: &Path) {}
+
 fn locate_python() -> Result<PathBuf, SidecarError> {
     if let Ok(explicit) = std::env::var("PDFUSION_PYTHON") {
         let p = PathBuf::from(explicit);
@@ -187,30 +287,22 @@ fn locate_python() -> Result<PathBuf, SidecarError> {
             return Ok(p);
         }
     }
-    // Common conda env locations on Windows. `pdfusion` is the name used in
-    // the project's setup docs; `pdfusion-env` is accepted too since nothing
-    // enforces one canonical name across machines. Anything else needs
-    // PDFUSION_PYTHON.
-    const CONDA_DISTS: [&str; 2] = ["anaconda3", "miniconda3"];
-    const ENV_NAMES: [&str; 2] = ["pdfusion", "pdfusion-env"];
-    if let Ok(home) = std::env::var("USERPROFILE") {
-        for dist in CONDA_DISTS {
-            for env_name in ENV_NAMES {
-                let candidate = PathBuf::from(&home)
-                    .join(dist)
-                    .join("envs")
-                    .join(env_name)
-                    .join("python.exe");
-                if candidate.exists() {
-                    return Ok(candidate);
-                }
+    if let Some(home) = home_dir() {
+        for candidate in conda_python_candidates(&home) {
+            if candidate.exists() {
+                return Ok(candidate);
             }
         }
     }
-    // Fall back to PATH
-    which::which("python")
-        .or_else(|_| which::which("python3"))
-        .map_err(|_| SidecarError::PythonNotFound)
+    // Fall back to PATH. `python3` first off Windows, where `python` is as
+    // likely to be absent as to be Python 2; `python` first on Windows, where
+    // `python3` is usually the Microsoft Store stub that opens the Store
+    // instead of running anything.
+    #[cfg(windows)]
+    let found = which::which("python").or_else(|_| which::which("python3"));
+    #[cfg(not(windows))]
+    let found = which::which("python3").or_else(|_| which::which("python"));
+    found.map_err(|_| SidecarError::PythonNotFound)
 }
 
 fn project_root() -> Option<PathBuf> {
@@ -275,33 +367,108 @@ fn parse_ready_line(line: &str) -> Result<SidecarInfo, SidecarError> {
     Ok(SidecarInfo { port, token })
 }
 
-/// Writable working directory for the spawned sidecar. The bundled exe lives
-/// in `C:\Program Files\PDFusion\` (per-machine MSI install), which is
-/// non-writable for non-admin users. If we let the sidecar inherit that as its
-/// cwd, every `Path.cwd()` / relative-path write in Python lands on a
-/// read-only path and raises `WinError 5`. Pointing the child at
-/// `%LOCALAPPDATA%\PDFusion\` matches where the rest of the app already
-/// writes (config, logs, caches, translated PDFs) and defuses the whole
-/// class of cwd-write bugs.
+/// The name of every data root below, and of the folder the installer creates.
+const APP_DIR: &str = "PDFusion";
+
+/// Handed to the sidecar so the two resolvers cannot disagree. `utils/paths.py`
+/// reads it first and falls back to the same rules as `data_dir_candidates`
+/// below — the fallback is for a sidecar run by hand, not for the shipped app.
+const DATA_DIR_ENV: &str = "PDFUSION_DATA_DIR";
+
+/// The ordered data-root candidates, given what the environment answered.
+///
+/// Pure, and every input passed in rather than read here, so the table below
+/// can be tested for the platform the test is describing rather than the one
+/// the test happens to run on.
+///
+/// | Platform | Root |
+/// |---|---|
+/// | Windows | `%LOCALAPPDATA%\PDFusion`, then `~/AppData/Local/PDFusion` |
+/// | macOS | `~/Library/Application Support/PDFusion` |
+/// | Linux / other | `$XDG_DATA_HOME/PDFusion`, else `~/.local/share/PDFusion` |
+///
+/// `explicit` (`$PDFUSION_DATA_DIR`) wins everywhere. Off Windows the literal
+/// `AppData` folder the pre-#69 code used is *not* a candidate: it is nobody's
+/// convention, and a config left there is carried across once by
+/// `utils/paths.adopt_legacy_config` instead of being written to forever.
+fn data_dir_candidates(
+    explicit: Option<PathBuf>,
+    local_appdata: Option<PathBuf>,
+    xdg_data_home: Option<PathBuf>,
+    home: Option<PathBuf>,
+) -> Vec<PathBuf> {
+    // Every platform arm below reads a different subset of these, and the two
+    // it doesn't read would otherwise be `unused_variables` warnings on that
+    // platform. Borrowing them here is the use; each arm still consumes them.
+    let _ = (&local_appdata, &xdg_data_home);
+
+    let mut out = Vec::new();
+    if let Some(dir) = explicit {
+        out.push(dir);
+    }
+
+    #[cfg(windows)]
+    {
+        if let Some(local) = local_appdata {
+            out.push(local.join(APP_DIR));
+        }
+        // Where the app wrote before #59, so a machine with a broken
+        // %LOCALAPPDATA% still finds its own data rather than starting fresh.
+        if let Some(home) = home {
+            out.push(home.join("AppData").join("Local").join(APP_DIR));
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        if let Some(home) = home {
+            out.push(home.join("Library").join("Application Support").join(APP_DIR));
+        }
+    }
+
+    #[cfg(all(not(windows), not(target_os = "macos")))]
+    {
+        // The spec says a relative XDG_DATA_HOME is invalid and must be
+        // ignored. Not a nicety here: the shell makes the data root the
+        // sidecar's cwd, so a relative value would resolve against the very
+        // directory it is supposed to be choosing.
+        match xdg_data_home.filter(|p| p.is_absolute()) {
+            Some(xdg) => out.push(xdg.join(APP_DIR)),
+            None => {
+                if let Some(home) = home {
+                    out.push(home.join(".local").join("share").join(APP_DIR));
+                }
+            }
+        }
+    }
+
+    out
+}
+
+/// Writable working directory for the spawned sidecar, and the root every
+/// store the app owns lives under.
+///
+/// Two reasons it is not simply the install directory. On Windows a
+/// per-machine install lands in `C:\Program Files\PDFusion\`, which is
+/// non-writable for non-admin users — inherit that as the child's cwd and
+/// every `Path.cwd()` / relative-path write in Python raises `WinError 5`. On
+/// Linux the install directory is `/usr/lib/...`, which is worse. Pointing the
+/// child at the platform's user data directory matches where the rest of the
+/// app already writes (config, logs, caches) and defuses the whole class of
+/// cwd-write bugs.
 pub(crate) fn appdata_dir() -> PathBuf {
-    if let Some(local) = std::env::var_os("LOCALAPPDATA") {
-        let dir = PathBuf::from(local).join("PDFusion");
+    let candidates = data_dir_candidates(
+        std::env::var_os(DATA_DIR_ENV).filter(|v| !v.is_empty()).map(PathBuf::from),
+        std::env::var_os("LOCALAPPDATA").filter(|v| !v.is_empty()).map(PathBuf::from),
+        std::env::var_os("XDG_DATA_HOME").filter(|v| !v.is_empty()).map(PathBuf::from),
+        home_dir(),
+    );
+    for dir in candidates {
         if std::fs::create_dir_all(&dir).is_ok() {
             return dir;
         }
     }
-    // Cross-platform fallback (also covers a corrupt %LOCALAPPDATA%): try
-    // ~/AppData/Local/PDFusion, then finally the system temp dir so we never
-    // hand the child a non-writable path.
-    if let Some(home) = std::env::var_os("USERPROFILE").or_else(|| std::env::var_os("HOME")) {
-        let dir = PathBuf::from(home)
-            .join("AppData")
-            .join("Local")
-            .join("PDFusion");
-        if std::fs::create_dir_all(&dir).is_ok() {
-            return dir;
-        }
-    }
+    // Last resort, so we never hand the child a path it cannot write to.
     std::env::temp_dir()
 }
 
@@ -419,6 +586,11 @@ fn base_command(program: impl AsRef<OsStr>, cwd: &Path) -> Command {
     let mut cmd = Command::new(program);
     cmd.current_dir(cwd)
         .env("PYTHONUNBUFFERED", "1")
+        // The cwd *is* the data root, and `utils/paths.appdata_dir()` reads
+        // this first. Both sides implement the same platform rules, but saying
+        // it outright is what makes them agree by construction rather than by
+        // two implementations staying in step (#69).
+        .env(DATA_DIR_ENV, cwd)
         .env("PDFUSION_DEV_ORIGINS", dev_origins_flag())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -441,9 +613,13 @@ fn build_command(app: &AppHandle) -> Result<Command, SidecarError> {
     log::info!("Sidecar (dev) python: {}", python.display());
     log::info!("Sidecar (dev) PYTHONPATH: {}", src_dir.display());
 
+    // The dev spawn runs from the repo root, not the data root — `-m` needs
+    // the package importable — so `base_command`'s "cwd is the data root"
+    // assumption does not hold here and the variable is corrected.
     let mut cmd = base_command(python, &root);
     cmd.arg("-m")
         .arg("desktop_pdf_translator.api.server")
+        .env(DATA_DIR_ENV, appdata_dir())
         .env("PYTHONPATH", &src_dir);
     Ok(cmd)
 }
@@ -647,12 +823,31 @@ async fn health_check(port: u16, token: &str) -> Result<(), SidecarError> {
 #[cfg(test)]
 mod tests {
     use super::{
-        check_staged_size, ensure_appdata_layout_in, parse_ready_line, redact_ready_line,
-        unexpected_exit, Command, STUB_THRESHOLD_BYTES,
+        check_staged_size, conda_python_candidates, data_dir_candidates,
+        ensure_appdata_layout_in, parse_ready_line, redact_ready_line, unexpected_exit,
+        Child, Command, PathBuf, STUB_THRESHOLD_BYTES,
     };
+    use std::path::Path;
     use std::sync::atomic::AtomicBool;
     use std::sync::Mutex;
     use std::time::Duration;
+
+    /// A child that exits with status 3, spelled for whichever OS is running
+    /// the suite. `cmd /C exit 3` is what these two tests used, which made
+    /// `cargo test` fail on Linux and macOS for reasons that had nothing to do
+    /// with what they assert (#69).
+    fn exits_with_code_3() -> Child {
+        let mut cmd = if cfg!(windows) {
+            let mut c = Command::new("cmd");
+            c.args(["/C", "exit", "3"]);
+            c
+        } else {
+            let mut c = Command::new("sh");
+            c.args(["-c", "exit 3"]);
+            c
+        };
+        cmd.spawn().expect("spawn a process that exits with 3")
+    }
 
     #[test]
     fn ready_line_is_logged_without_its_token() {
@@ -690,11 +885,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_crash_that_was_not_requested_is_reported_with_its_exit_code() {
-        let child = Command::new("cmd")
-            .args(["/C", "exit", "3"])
-            .spawn()
-            .expect("spawn cmd");
-        let child = Mutex::new(Some(child));
+        let child = Mutex::new(Some(exits_with_code_3()));
         let shutting_down = AtomicBool::new(false);
 
         let status = unexpected_exit(&child, &shutting_down, Duration::from_millis(10)).await;
@@ -704,11 +895,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_shutdown_that_already_took_the_child_produces_no_report() {
-        let child = Command::new("cmd")
-            .args(["/C", "exit", "3"])
-            .spawn()
-            .expect("spawn cmd");
-        let child = Mutex::new(Some(child));
+        let child = Mutex::new(Some(exits_with_code_3()));
         let shutting_down = AtomicBool::new(true);
         // Mirrors what `shutdown()` does before the supervisor's next poll tick.
         child.lock().unwrap().take();
@@ -737,6 +924,82 @@ mod tests {
     fn an_unreadable_path_is_rejected_without_a_size() {
         let missing = std::env::temp_dir().join("pdfusion-does-not-exist.exe");
         assert_eq!(check_staged_size(&missing), Err(None));
+    }
+
+    #[test]
+    fn the_project_env_is_preferred_over_whatever_python_is_on_path() {
+        let home = Path::new("/home/dev");
+        let candidates = conda_python_candidates(home);
+
+        // All three distributions, both env names, and nothing else.
+        assert_eq!(candidates.len(), 6);
+        assert!(candidates.iter().all(|c| c.starts_with(home)));
+        for dist in ["anaconda3", "miniconda3", "miniforge3"] {
+            assert!(
+                candidates.iter().any(|c| c.starts_with(home.join(dist))),
+                "{dist} is not looked for"
+            );
+        }
+    }
+
+    #[test]
+    fn the_interpreter_is_looked_for_where_this_platform_puts_it() {
+        let candidates = conda_python_candidates(Path::new("/home/dev"));
+        let first = &candidates[0];
+
+        if cfg!(windows) {
+            assert!(first.ends_with("envs/pdfusion/python.exe"));
+        } else {
+            // The bug: a Windows-shaped `envs/pdfusion/python.exe` never
+            // exists on Linux or macOS, so discovery fell through to `$PATH`.
+            assert!(first.ends_with("envs/pdfusion/bin/python"));
+        }
+    }
+
+    #[test]
+    fn an_explicit_data_dir_wins_over_every_platform_default() {
+        let candidates = data_dir_candidates(
+            Some(PathBuf::from("/srv/pdfusion-data")),
+            Some(PathBuf::from("/c/Users/dev/AppData/Local")),
+            Some(PathBuf::from("/home/dev/.local/share")),
+            Some(PathBuf::from("/home/dev")),
+        );
+
+        assert_eq!(candidates[0], PathBuf::from("/srv/pdfusion-data"));
+    }
+
+    #[test]
+    fn the_default_root_follows_this_platforms_convention() {
+        let candidates = data_dir_candidates(
+            None,
+            Some(PathBuf::from("/c/Users/dev/AppData/Local")),
+            Some(PathBuf::from("/home/dev/.local/share")),
+            Some(PathBuf::from("/home/dev")),
+        );
+
+        let expected = if cfg!(windows) {
+            "/c/Users/dev/AppData/Local/PDFusion"
+        } else if cfg!(target_os = "macos") {
+            "/home/dev/Library/Application Support/PDFusion"
+        } else {
+            "/home/dev/.local/share/PDFusion"
+        };
+        assert_eq!(candidates[0], PathBuf::from(expected));
+    }
+
+    #[cfg(all(not(windows), not(target_os = "macos")))]
+    #[test]
+    fn a_relative_xdg_data_home_is_ignored_rather_than_resolved_against_the_cwd() {
+        // The shell makes the data root the sidecar's cwd, so honouring a
+        // relative value would mean resolving the choice against itself.
+        let candidates = data_dir_candidates(
+            None,
+            None,
+            Some(PathBuf::from("relative/share")),
+            Some(PathBuf::from("/home/dev")),
+        );
+
+        assert_eq!(candidates, vec![PathBuf::from("/home/dev/.local/share/PDFusion")]);
     }
 
     #[test]

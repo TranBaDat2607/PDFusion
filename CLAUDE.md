@@ -4,7 +4,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-PDFusion is a Windows desktop app for translating PDFs (default target: Vietnamese) while preserving layout/formatting. It uses BabelDOC as the translation engine and integrates an optional RAG (Retrieval-Augmented Generation) chat for asking questions about the loaded document.
+PDFusion is a desktop app for translating PDFs (default target: Vietnamese) while preserving layout/formatting. It uses BabelDOC as the translation engine and integrates an optional RAG (Retrieval-Augmented Generation) chat for asking questions about the loaded document.
+
+It shipped Windows-only and still leads with Windows; **Linux is supported and gated by CI, macOS builds but is unverified** (#69). See "Cross-platform" below — the parts that differ are the data root, the key store, the bundle targets and where the sidecar is staged, and each of those has a rule you can break by "simplifying" it back to one platform.
 
 The UI was migrated from PySide6/qfluentwidgets to **Tauri (Rust shell) + React + TypeScript + Tailwind + shadcn/ui** in 2026. The Python translation/RAG/config/utils modules are unchanged — they're now exposed as a **FastAPI sidecar** that the Tauri shell spawns at app startup.
 
@@ -28,15 +30,20 @@ python main.py          # equivalent to: pdfusion-sidecar (console script from p
 ```
 
 > The examples above name the env `pdfusion`; the Tauri shell also auto-detects
-> `pdfusion-env` under `~/anaconda3/envs/` or `~/miniconda3/envs/`. Neither name
-> is required — set `PDFUSION_PYTHON` to your env's `python.exe` path if you
-> used something else.
+> `pdfusion-env`, under `anaconda3`, `miniconda3` or `miniforge3` in the home
+> directory, on every platform (`sidecar.rs:conda_python_candidates`). Neither
+> name is required — set `PDFUSION_PYTHON` to your env's interpreter if you
+> used something else. Note the interpreter's path inside an env is
+> platform-shaped: `python.exe` at the env root on Windows, `bin/python`
+> everywhere else.
 
 **External system dependencies:**
 - Ghostscript (optional — only needed by Camelot for table extraction during RAG indexing; pdfplumber fallback runs without it)
-- WebView2 Runtime (ships with Windows 11)
-- Rust toolchain (rustup + cargo, `stable-x86_64-pc-windows-msvc`) — required to build/run the Tauri shell (`cargo check` / `pnpm tauri dev` / `pnpm tauri build`)
-- MSVC Build Tools 2022/2026 (Rust's linker on Windows)
+- Rust toolchain (rustup + cargo) — required to build/run the Tauri shell (`cargo check` / `pnpm tauri dev` / `pnpm tauri build`)
+- The system webview, which is the one dependency that is genuinely different per platform:
+  - **Windows**: WebView2 Runtime (ships with Windows 11), plus MSVC Build Tools 2022/2026 for Rust's linker.
+  - **Linux**: webkit2gtk **4.1** and its headers — `libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev patchelf build-essential libssl-dev libxdo-dev` on Debian/Ubuntu. 4.0 is the Tauri 1 series and does **not** satisfy the build; the error it produces names a missing `webkit2gtk-4.1.pc` and reads like a broken install.
+  - **macOS**: WKWebView is part of the OS; Xcode command line tools for the linker.
 
 **Environment setup:**
 ```bash
@@ -76,18 +83,48 @@ GEMINI_API_KEY=...
 ANTHROPIC_API_KEY=...    # optional
 ```
 Or use the in-app Settings sheet — keys are encrypted via `utils/encryption.py`
-before being written to `~/AppData/Local/PDFusion/config.toml`. On Windows that
-is **DPAPI** (`CryptProtectData`, user-scoped, with app entropy); values written
-by the older MachineGuid-derived Fernet scheme still decrypt and are upgraded on
-the next save, so nobody re-enters a key. `config.toml` is written to a temp file
+before being written to `config.toml` under the data root (see "Cross-platform"
+below). Which scheme protects them is per-platform, and the distinction that
+matters is *where the key that unlocks them lives*:
+
+| Platform | Scheme | The unlocking key is held by |
+|---|---|---|
+| Windows | **DPAPI** — `CryptProtectData`, user-scoped, with app entropy | the OS, scoped to the logged-in account |
+| Linux | Fernet under a master key in the **Secret Service** (gnome-keyring, KWallet) | the user's keyring |
+| macOS | Fernet under a master key in the **login Keychain** | the Keychain |
+| any, as a last resort | Fernet under a key derived from the machine id | *the file itself* |
+
+Three things about that table. **The last row is not encryption** and is only
+reached where the platform's store is unavailable — a headless Linux box with
+no D-Bus session, most obviously CI. Off Windows the derivation input is
+`platform.node() + platform.machine()` (hostname and CPU architecture) and the
+KDF salt is stored beside the ciphertext in the same file, so anyone who can
+read `config.toml` can reproduce the key. `encrypt_api_key` logs a warning
+naming the fix when it lands there; it does not refuse to save, because "the
+app won't start" is worse than "the key is obfuscated" for a user who never
+had a keyring in the first place.
+
+**The keystore holds one master key, not one entry per provider** — a single
+`PDFusion / config-encryption-key` the user can see and revoke in Seahorse or
+Keychain Access. And **the decrypt path never mints one**: a missing entry
+means the ciphertext is unrecoverable, and generating a replacement would turn
+"the keyring is locked" (temporary) into "those keys are gone" (permanent).
+The key comes back blank and the user re-enters it.
+
+Values written by any earlier scheme still decrypt and are upgraded to the
+current platform's on the next save, so nobody re-enters a key. A stored value
+carries its own marker (`SELF_DESCRIBING_PREFIXES` — `dpapi:`, `keystore:`); a
+legacy one carries none, which is why `ConfigManager._decrypt_sensitive_data`
+falls back to "is there an `api_key_salt` beside it?" to tell a legacy
+ciphertext from a key someone typed in by hand. `config.toml` is written to a temp file
 and `os.replace`d into position — an in-place write that crashed used to truncate
 the file, and a truncated config loads as defaults, i.e. silently discards every
 setting including the keys. The outgoing generation is kept as `config.toml.bak`
 **with the API keys stripped out** (`manager.py:_write_backup`): a backup must
 never be more readable than the file it backs up, and holding that as an
 unconditional invariant is what avoids having to detect the one migration
-(legacy → DPAPI) where copying verbatim would have parked a machine-readable key
-beside the hardened one. A key is re-enterable; the rest of the file is what is
+(legacy → DPAPI, legacy → keystore) where copying verbatim would have parked a
+machine-readable key beside the hardened one. A key is re-enterable; the rest of the file is what is
 worth recovering by hand.
 
 ## Architecture
@@ -326,14 +363,117 @@ the restart, consumed and cleared the next time `ready()` runs — is what tells
 the user their session just got reset, without reusing (and thereby
 corrupting) the cooldown key for that purpose.
 
+### Cross-platform
+
+Windows, Linux and macOS (#69). The Python sidecar was already portable —
+every dependency has a Linux and macOS wheel, and nothing under `src/` reached
+for a Windows API except the key store. What was Windows-only was everything
+*around* it: packaging, the data root, the build scripts and CI. Five rules
+came out of fixing that, and each one is easy to undo by collapsing it back to
+the platform in front of you.
+
+**1. The data root is the platform's, and the shell and the sidecar agree by
+construction.**
+
+| Platform | Root |
+|---|---|
+| Windows | `%LOCALAPPDATA%\PDFusion`, then `~/AppData/Local/PDFusion` |
+| macOS | `~/Library/Application Support/PDFusion` |
+| Linux / other POSIX | `$XDG_DATA_HOME/PDFusion`, else `~/.local/share/PDFusion` |
+
+Two implementations of that table exist — `utils/paths.py:_platform_data_dirs`
+and `sidecar.rs:data_dir_candidates` — because either side can run without the
+other. They are not what keeps them in step: the shell resolves the root, makes
+it the sidecar's cwd, pre-creates the layout in it, **and exports it as
+`PDFUSION_DATA_DIR`**, which `appdata_dir()` reads before anything else. The
+Python table is the fallback for a sidecar run by hand. Keep the export, and
+keep it on *both* spawn paths — the dev path runs from the repo root, so its
+cwd is not the data root and `build_command` sets the variable explicitly.
+
+Off Windows the literal `~/AppData/Local/PDFusion` is **not** a fallback root.
+A from-source run predating #69 did write there, so `adopt_legacy_config`
+carries a config across from it once; `pdfusion.db` deliberately does not come
+along, because it is a live SQLite database with its own WAL and a byte copy of
+one of those is how a records store gets corrupted. Its old location is named
+in the log instead. A relative `XDG_DATA_HOME` is ignored rather than resolved,
+per the spec and because the cwd it would resolve against *is* the directory
+being chosen.
+
+**2. Off Windows the sidecar is not an `externalBin`.** PyInstaller's one-dir
+bootloader resolves `_internal/` relative to its executable, so the two must
+stay siblings after the bundler has moved them. On Windows they do:
+`externalBin` lands at the install root and so does a `resources` glob. On
+Linux `externalBin` goes to `/usr/bin` while resources go to
+`/usr/lib/<product>`; on macOS it is `Contents/MacOS` vs `Contents/Resources`.
+Either way the pair is split and the sidecar dies looking for
+`libpython3.11.so`. So off Windows the whole one-dir tree ships as a single
+resource directory (`desktop/src-tauri/sidecar/`), and
+`sidecar.rs:BUNDLED_SIDECAR_FILENAME` is `sidecar/pdfusion-sidecar` rather than
+the bare name. `ensure_executable` is the other half: a resource copied through
+an archive or an unusual umask can arrive without `+x`, and a `Permission
+denied` on spawn would otherwise read as "no sidecar" and send a *shipped*
+install down the local-Python fallback.
+
+**3. Packaging lives in `tauri.<platform>.conf.json`, not in the shared
+config.** Tauri merges `tauri.windows.conf.json` / `tauri.linux.conf.json` /
+`tauri.macos.conf.json` over `tauri.conf.json` for the target being built, and
+each one carries that platform's `bundle.targets`, its `externalBin` /
+`resources` arrangement and its `beforeBundleCommand`. The shared file now
+carries none of those. This is not stylistic: `bundle.targets` cannot name a
+target the host platform can't build, and `beforeBundleCommand` is a shell
+command — `powershell … build-sidecar.ps1` on Windows, `sh ../build-sidecar.sh`
+elsewhere.
+
+**4. One build script, two launchers.** `scripts/build_sidecar.py` and
+`scripts/fetch_offline_assets.py` decide *what* happens;
+`build-sidecar.{ps1,sh}` and `fetch-offline-assets.{ps1,sh}` only resolve an
+interpreter and hand over. The launchers exist because
+`beforeBundleCommand` spawns a bare shell that inherits none of a conda
+activation, so `pnpm tauri build` arrives with no project `python` on PATH —
+`PDFUSION_PYTHON` is the variable that survives that, and the same order is
+implemented in `sidecar.rs:locate_python`, `scripts/_find_python.sh` and the
+two `.ps1` files. Don't move build logic back into a launcher: two copies of it
+is how the platforms drift.
+
+**5. `windows-sys` is target-gated** (`[target.'cfg(windows)'.dependencies]`),
+so a Linux or macOS build never resolves or compiles it. The Job Object
+confinement and `CREATE_NO_WINDOW` that use it were already behind
+`#[cfg(windows)]`; the dependency was not. Note the consequence: **there is no
+Job Object equivalent off Windows.** The supervisor poll and
+`RunEvent::ExitRequested` still stop the sidecar on a normal exit, but a
+`SIGKILL` of the shell orphans the child. `prctl(PR_SET_PDEATHSIG)` on Linux
+would be the analogue; nothing implements it yet.
+
+Two smaller things that were Windows-shaped and are not any more.
+`sidecar.rs:conda_python_candidates` looks for `envs/<name>/bin/python` off
+Windows and `envs/<name>/python.exe` on it, and knows `miniforge3` as well as
+`anaconda3`/`miniconda3` — the old code looked only for `python.exe` under
+`%USERPROFILE%`, so on Linux and macOS it always missed and fell through to
+whatever `python` was on `$PATH`. And the `cargo test` cases that needed a
+child process to exit with status 3 spelled it `cmd /C exit 3`; they now go
+through one `exits_with_code_3()` helper.
+
+**What is still unverified.** Everything above compiles and its pure parts are
+tested, and CI gates Linux. Nobody has run `pnpm tauri build` on Linux to
+completion, opened the resulting `.deb`/AppImage, or touched macOS at all — so
+the resource-directory layout in rule 2 in particular is reasoned from the
+bundler's source, not observed. The `frozen-sidecar` workflow (dispatch-only,
+now a Windows + Linux matrix) is what settles the PyInstaller half.
+
 ### Module layout
 
 | Path | Responsibility |
 |---|---|
 | `desktop/src-tauri/src/main.rs` | Tauri entry; defers to `desktop_lib::run()` |
 | `desktop/src-tauri/src/lib.rs` | Builder + plugins + sidecar spawn on setup + shutdown hook |
-| `desktop/src-tauri/src/sidecar.rs` | Python locate, child process, READY parsing, health-poll |
+| `desktop/src-tauri/src/sidecar.rs` | Python locate, child process, READY parsing, health-poll, the data root |
+| `desktop/src-tauri/tauri.conf.json` | Everything the platforms share — window, CSP, icons. Carries no `bundle.targets`, `externalBin`, `resources` or `beforeBundleCommand` |
+| `desktop/src-tauri/tauri.{windows,linux,macos}.conf.json` | Per-platform packaging, merged over the above by Tauri — see "Cross-platform" |
 | `desktop/src-tauri/windows/installer-hooks.nsh` | NSIS hooks: register PDFusion under `.pdf` "Open with" (and never as the default) |
+| `scripts/build_sidecar.py` | The PyInstaller build and how its output is staged, for every platform |
+| `scripts/fetch_offline_assets.py` | Staging the ~290 MB of engine assets, for every platform |
+| `scripts/_find_python.sh` | Interpreter resolution shared by the two POSIX launchers |
+| `build-sidecar.{ps1,sh}`, `fetch-offline-assets.{ps1,sh}` | Launchers: resolve an interpreter, hand over to `scripts/` |
 | `desktop/src/App.tsx` | Shell: ThemeProvider → QueryClientProvider → Workspace |
 | `desktop/src/components/layout/` | `Header`, `ContextBar`, `MainLayout` (resizable splits + the workspace's keyboard shortcuts), `DropOverlay` |
 | `desktop/src/components/pdf-viewer/` | `PdfViewer` (layout, scroll, zoom), `page-renderer.ts` (canvas recycling, text layers), `text-selection.ts`, `find-highlight.ts`, `FindBar`, `ViewerToolbar`, `pdf-viewer.css` — see "PDF viewer" |
@@ -372,7 +512,7 @@ corrupting) the cooldown key for that purpose.
 | `src/desktop_pdf_translator/rag/onnx_embeddings.py` | MiniLM embeddings on onnxruntime — what replaced sentence-transformers |
 | `src/desktop_pdf_translator/rag/keyword_search.py` | BM25 over one index's chunks, the keyword half of `hybrid_search`. Stdlib-only — see "Chat answers" |
 | `src/desktop_pdf_translator/translators/_sbd_compat.py` | The `stanza` stub that lets the bundle drop torch |
-| `src/desktop_pdf_translator/utils/` | API key encryption; `file_export.py` (durable copy of a translated PDF); `logging_setup.py` (shared rotating `app.log` config); `paths.py` (`appdata_dir()`, resolved from `%LOCALAPPDATA%` exactly as the shell resolves it, and `logs_dir()`) |
+| `src/desktop_pdf_translator/utils/` | API key encryption (DPAPI / OS keystore / legacy, see above); `file_export.py` (durable copy of a translated PDF); `logging_setup.py` (shared rotating `app.log` config); `paths.py` (`appdata_dir()`, resolved per platform exactly as the shell resolves it, and `logs_dir()`) |
 | `src/desktop_pdf_translator/storage/` | SQLite plumbing every store shares: `sqlite.py` (connection pragmas, per-thread connections, UTC-millisecond timestamps) and `migrations.py` (versioned schema migrations on `PRAGMA user_version`); `records.py` is `pdfusion.db`, the records database of documents and their chat indexes. Stdlib-only, re-exports nothing — see "Local data layer" |
 | `src/desktop_pdf_translator/translators/translation_cache.py` | Persistent **paragraph-level** SQLite cache (singleton `get_translation_cache()`) |
 | `src/desktop_pdf_translator/processors/pdf_cache.py` | Persistent **whole-PDF** SQLite cache (singleton `get_pdf_cache()`) |
@@ -713,8 +853,9 @@ signature still works. The ~470 MB first-use download is unchanged.
 ### Local data layer
 
 Everything the sidecar persists lives under one root, `utils/paths.appdata_dir()`
-(`%LOCALAPPDATA%\PDFusion`, resolved exactly as `sidecar.rs:appdata_dir` does),
-in three kinds of store with different rules (#59):
+— `%LOCALAPPDATA%\PDFusion` on Windows, the platform's equivalent elsewhere,
+resolved exactly as `sidecar.rs:appdata_dir` does (see "Cross-platform") — in
+three kinds of store with different rules (#59):
 
 | Store | Holds | Rules |
 |---|---|---|
@@ -1091,7 +1232,7 @@ deliberately not implemented: the panes scroll and zoom independently.
 
 ## Configuration
 
-- Runtime config: `%LOCALAPPDATA%\PDFusion\config.toml` (encrypted API keys). Every store resolves that root through `utils/paths.appdata_dir()`, the same way the shell's `sidecar.rs:appdata_dir` does. Python used to hardcode `~/AppData/Local/PDFusion`, which is a different folder wherever Local AppData has been relocated; on such a machine `ConfigManager` copies a `config.toml` left at the old root, once (`adopt_legacy_config`), so settings and keys survive the move.
+- Runtime config: `config.toml` under the data root (encrypted API keys) — `%LOCALAPPDATA%\PDFusion` on Windows, `~/.local/share/PDFusion` on Linux, `~/Library/Application Support/PDFusion` on macOS. Every store resolves that root through `utils/paths.appdata_dir()`, the same way the shell's `sidecar.rs:appdata_dir` does, and the shell exports its answer as `PDFUSION_DATA_DIR` so the two cannot disagree (see "Cross-platform"). Python used to hardcode `~/AppData/Local/PDFusion`, which is a different folder wherever Local AppData has been relocated and nobody's convention off Windows; `ConfigManager` copies a `config.toml` left at the old root, once (`adopt_legacy_config`), so settings and keys survive the move.
 - Defaults / reference: `config/default_config.toml`.
 - `.env` is auto-loaded via `python-dotenv` and overrides the TOML, except an API key for a service set to its own endpoint (see "LLM endpoints and models"). It's searched at the **repo root** (resolved from `__file__`, not `cwd` — `cwd` is non-writable `C:\Program Files\…` on an installed launch) and in the AppData config dir. See `config/manager.py:_load_dotenv`.
 - Singleton: `get_config_manager()` / `get_settings()` from `desktop_pdf_translator.config`.
@@ -1117,31 +1258,37 @@ deliberately not implemented: the panes scroll and zoom independently.
 
 ## Building the desktop installer
 
-```powershell
+Same three steps on every platform; only the launcher's extension changes
+(`.ps1` on Windows, `.sh` elsewhere — see "Cross-platform" for why there are
+launchers at all).
+
+```bash
 # 1. Stage the engine assets the installer ships (~290 MB into assets/).
 #    Network + several minutes; skips whatever is already staged. Omit this
 #    and the build still succeeds — it prints a WARN per missing asset and the
 #    app downloads them on first run instead. This also repacks the Argos pack
 #    off stanza and onto MiniSBD; see "Argos does not need torch".
 conda activate pdfusion
-./fetch-offline-assets.ps1
+./fetch-offline-assets.sh        # Windows: ./fetch-offline-assets.ps1
 
 # 2. Build the standalone sidecar (PyInstaller, one-dir).
-#    Output: dist/pdfusion-sidecar/{pdfusion-sidecar.exe, _internal/}
-#    Then staged into desktop/src-tauri/binaries/.
+#    Output: dist/pdfusion-sidecar/{pdfusion-sidecar[.exe], _internal/}
+#    Then staged where this platform's bundler needs it (table below).
 pip install -e ".[dev]"          # ensures pyinstaller is available
-./build-sidecar.ps1
+./build-sidecar.sh               # Windows: ./build-sidecar.ps1
 
-# 3. Build the Tauri installer.
-#    tauri.conf.json's beforeBundleCommand also re-runs build-sidecar.ps1 so
-#    step 2 is technically optional, but doing it first lets you sanity-check
-#    the bundled sidecar in isolation before the slow Tauri bundle step.
-#    `fetch-offline-assets.ps1` is NOT wired into that hook: it needs the
-#    network, and a bundle step that silently downloads a third of a gigabyte
-#    is the problem this staging exists to fix.
+# 3. Build the Tauri bundle.
+#    The beforeBundleCommand in tauri.<platform>.conf.json re-runs the
+#    build-sidecar script, so step 2 is technically optional — but doing it
+#    first lets you sanity-check the bundled sidecar in isolation before the
+#    slow Tauri bundle step. The fetch-offline-assets script is NOT wired into
+#    that hook: it needs the network, and a bundle step that silently downloads
+#    a third of a gigabyte is the problem this staging exists to fix.
 cd desktop
 pnpm tauri build
-# → desktop/src-tauri/target/release/bundle/nsis/PDFusion_<version>_x64-setup.exe
+# Windows → target/release/bundle/nsis/PDFusion_<version>_x64-setup.exe
+# Linux   → target/release/bundle/{deb/*.deb, appimage/*.AppImage}
+# macOS   → target/release/bundle/{macos/*.app, dmg/*.dmg}   (unverified)
 ```
 
 > **Dev-mode bootstrap caveat**: Tauri's build script validates `externalBin`
@@ -1150,35 +1297,51 @@ pnpm tauri build
 > exists. If you don't want to wait for the full PyInstaller build just to
 > hack on the React/Rust side, run:
 >
-> ```powershell
-> ./build-sidecar.ps1 -Stub
+> ```bash
+> ./build-sidecar.sh --stub        # Windows: ./build-sidecar.ps1 -Stub
 > ```
 >
-> This drops empty placeholder files into `desktop/src-tauri/binaries/`. The
-> Rust shell's sidecar discovery still falls back to your local Python at
-> runtime, so `pnpm tauri dev` works exactly like before. Just don't ship the
-> stubbed installer — the bundled exe will be zero bytes.
+> This drops empty placeholder files wherever this platform stages. The Rust
+> shell rejects anything under `STUB_THRESHOLD_BYTES` (1 MiB) and falls back to
+> your local Python at runtime, so `pnpm tauri dev` works exactly like before.
+> Just don't ship the stubbed installer — the bundled binary is zero bytes.
 
-The sidecar is shipped as `externalBin` (the `.exe` next to `pdfusion.exe`)
-plus a sibling `_internal/` tree (PyInstaller runtime — Python stdlib +
-native .pyd + bundled package data). The `_internal/` tree is staged at
-`desktop/src-tauri/_internal/` (not inside `binaries/`) so that Tauri's
-`resources` glob installs it at `<install>/_internal/`, sibling to the
-renamed `pdfusion-sidecar.exe` — which is what PyInstaller's onedir
-bootloader requires to find `pythonXYZ.dll` (e.g. `python311.dll` for this project's Python 3.11) et al. First build is slow (~10-20 min).
+Where the build lands, and why it differs, is the subject of rule 2 in
+"Cross-platform" above; the short version:
 
-**NSIS is the only bundle target, and it installs per user.**
-`bundle.targets` is `["nsis"]` with `nsis.installMode: "currentUser"`, so the
-app lands in `%LOCALAPPDATA%\Programs\PDFusion` with no UAC prompt. The
-per-machine WiX `.msi` is gone: it was the origin of the read-only-cwd bug class
-the code works around (`C:\Program Files\` is not writable for non-admins), and
-pushing the thousands of `_internal/**/*` files through WiX was slow. Re-add
-`"msi"` to `bundle.targets` if an IT-deploy story ever needs one. Note the
+| | Staged to | Shipped as |
+|---|---|---|
+| Windows | `src-tauri/binaries/pdfusion-sidecar-<triple>.exe` + `src-tauri/_internal/` | `externalBin` (renamed, at the install root) + a `resources` glob beside it |
+| Linux, macOS | `src-tauri/sidecar/` — the whole one-dir tree | one `resources` directory |
+
+On Windows the `_internal/` tree is staged at `desktop/src-tauri/_internal/`
+(not inside `binaries/`) so that Tauri's `resources` glob installs it at
+`<install>/_internal/`, sibling to the renamed `pdfusion-sidecar.exe` — which
+is what PyInstaller's onedir bootloader requires to find `pythonXYZ.dll` (e.g.
+`python311.dll` for this project's Python 3.11) et al. First build is slow
+(~10-20 min).
+
+**On Windows, NSIS is the only bundle target, and it installs per user.**
+`bundle.targets` in `tauri.windows.conf.json` is `["nsis"]` with
+`nsis.installMode: "currentUser"`, so the app lands in
+`%LOCALAPPDATA%\Programs\PDFusion` with no UAC prompt. The per-machine WiX
+`.msi` is gone: it was the origin of the read-only-cwd bug class the code works
+around (`C:\Program Files\` is not writable for non-admins), and pushing the
+thousands of `_internal/**/*` files through WiX was slow. Re-add `"msi"` to
+that file's `bundle.targets` if an IT-deploy story ever needs one. Note the
 install dir is now writable — that does **not** make the AppData cwd work in
 `lib.rs::setup` redundant, since a machine upgraded from an MSI install is
-still out there.
+still out there, and `/usr/lib` on Linux is not writable either.
 
-On top of that, `fetch-offline-assets.ps1` stages two runtime asset sets that
+**On Linux the targets are `deb` and `appimage`.** Neither is signed.
+`bundle.linux.deb.depends` is deliberately left unset: tauri-bundler derives
+`libwebkit2gtk-4.1-0` and `libgtk-3-0` itself and *appends* anything listed
+there, so spelling them out again only risks the list drifting from what the
+crate actually links — and adding `libayatana-appindicator3-1` by hand would
+make users install a tray library this app never asks for. `rpm` is available
+to Tauri and not enabled; add it to `tauri.linux.conf.json` if someone asks.
+
+On top of that, the fetch-offline-assets script stages two runtime asset sets that
 the spec bundles when present (`_internal/argos_pack/`,
 `_internal/babeldoc_assets/`) and warns about when absent:
 
@@ -1198,20 +1361,27 @@ and still downloads on first use to `~/.cache/huggingface` — now as
 `onnx/model.onnx` + `tokenizer.json` fetched by `rag/onnx_embeddings.py`, rather
 than by sentence-transformers.
 
-Releases are built by `.github/workflows/release.yml` on a `v*` tag: it stages
-the offline assets, runs `pnpm tauri build`, and attaches the installer to a
-**draft** release. Signing is opt-in — set the `WINDOWS_SIGN_COMMAND` secret
-(Azure Trusted Signing) or `bundle.windows.certificateThumbprint` (an OV cert in
-the runner's store); with neither, the job warns and ships unsigned.
+Releases are built by `.github/workflows/release.yml` on a `v*` tag, in two
+jobs — `windows-installer` and `linux-bundles` — each staging the offline
+assets, running `pnpm tauri build`, and attaching its artifacts to the same
+**draft** release. Two jobs rather than a matrix because only one of them has a
+signing step. Signing is opt-in and Windows-only — set the
+`WINDOWS_SIGN_COMMAND` secret (Azure Trusted Signing) or
+`bundle.windows.certificateThumbprint` (an OV cert in the runner's store); with
+neither, the job warns and ships unsigned, which is also what the Linux job
+always does.
 
 Hidden-import additions for chromadb / babeldoc / etc. live in
-`pdfusion-sidecar.spec`. Extend that file (then rerun `build-sidecar.ps1`)
-when the bundled exe raises `ModuleNotFoundError` at startup.
+`pdfusion-sidecar.spec`, which is itself platform-neutral — PyInstaller adds the
+`.exe` suffix only on Windows, and the excludes name packages that simply aren't
+installed elsewhere. Extend that file (then rerun the build-sidecar script) when
+the bundled sidecar raises `ModuleNotFoundError` at startup.
 
 ## Logs
 
-Both streams land in `~/AppData/Local/PDFusion/logs/`, rotating at 5 MB with 5
-backups kept:
+Both streams land in `logs/` under the data root (`%LOCALAPPDATA%\PDFusion\logs`
+on Windows, `~/.local/share/PDFusion/logs` on Linux, `~/Library/Application
+Support/PDFusion/logs` on macOS), rotating at 5 MB with 5 backups kept:
 
 - **Python sidecar** → `app.log`, via `utils/logging_setup.py::configure_logging`
   — one shared, `RotatingFileHandler`-backed setup called from all three ways
@@ -1247,6 +1417,12 @@ and `shell.log`.
   translator failure/retry accounting and per-model parameter adaptation, the records
   database, and chat's document isolation (`test_rag_isolation.py` runs a real ChromaDB under
   `tmp_path` with a deterministic embedding function, so nothing downloads).
+  Cross-platform (#69), `test_storage_paths.py` covers the data root per
+  platform — the marked cases run only where they apply, the shell-override
+  ones run everywhere — `test_config_security.py` covers the keystore scheme
+  through a stand-in backend, and `test_packaging_config.py` holds together the
+  three files that have to agree about where the sidecar is staged, shipped and
+  found.
   Still uncovered: the BabelDOC pipeline in `processors/processor.py` proper, and
   the rest of `rag/` — extraction, ranking, answer generation. If you touch
   those, expect to write tests from scratch. On the
@@ -1306,13 +1482,18 @@ and `shell.log`.
     here is a process-wide singleton over the app's data root, so a test that
     reaches for `get_pdf_cache()` gets the shared one. The same applies to
     settings: `_refresh_cap_from_settings` and `_cache_enabled` are stubbed
-    rather than allowed to find a `config.toml`. Behind that convention sits a
-    backstop: `tests/conftest.py` points `%LOCALAPPDATA%` at a throwaway folder
-    (with an empty `config.toml`) at import time, so `appdata_dir()` can never
-    resolve the developer's real `%LOCALAPPDATA%\PDFusion` during a run. It was
-    added after a default run during #59 migrated a real paragraph cache
-    through a path no single test owned. Don't remove it because every test
-    looks isolated.
+    rather than allowed to find a `config.toml`. Behind that convention sit
+    **two** backstops in `tests/conftest.py`, both process-wide and both there
+    because a test that looks isolated may not be. It sets `PDFUSION_DATA_DIR`
+    (and `%LOCALAPPDATA%`) to a throwaway folder with an empty `config.toml` at
+    import time, so `appdata_dir()` can never resolve the developer's real data
+    root during a run — added after a default run during #59 migrated a real
+    paragraph cache through a path no single test owned. And an autouse fixture
+    answers "no keystore here" for `utils/encryption.py`, so a run off Windows
+    never creates or reads the developer's live `PDFusion /
+    config-encryption-key` entry in their login keyring (#69);
+    `test_config_security.py`'s `fake_keystore` overrides it for the tests that
+    are about the keystore. Don't remove either.
   - **`tests/test_sidecar_smoke.py` is marked `smoke` and deselected by
     `addopts`.** It is the one suite that spawns real interpreters. It runs
     twice — once against `python -m desktop_pdf_translator.api.server`, once
@@ -1325,22 +1506,29 @@ and `shell.log`.
   `pyproject.toml [project.optional-dependencies].dev` and configured under
   `[tool.ruff]`. It runs its default rule set — pycodestyle errors plus
   pyflakes (`E4`, `E7`, `E9`, `F`) — and the tree is clean, so `ruff check src
-  tests` is expected to pass. It is deliberately not widened: line length is
+  tests scripts` is expected to pass. `scripts/` is on that list because the
+  build and asset-staging logic moved there out of the PowerShell here-string
+  it used to live inside (#69), where nothing could lint it at all. It is deliberately not widened: line length is
   left to `black`, which is *not* wired into CI, because reflowing the existing
   prose comments would bury every real diff. black / isort / flake8 / mypy stay
   installed for local use and are not gates. There is no pre-commit and no
   Makefile.
 - **TypeScript** is checked by `pnpm build` (which runs `tsc` before `vite build`). There is no separate lint step (no ESLint config).
-- **CI** is `.github/workflows/ci.yml`, on every PR and push to `main`, and
-  every job runs on `windows-latest` — the key store is DPAPI, the sidecar is
-  found through `%LOCALAPPDATA%`, and the shell uses a Job Object, so a Linux
-  runner would skip or mis-test all three. Two gating jobs: `python`
-  (`ruff check` → `pytest` → regenerate + diff-check `openapi.json` →
-  `pytest -m smoke`) and `desktop` (`pnpm test` → check `api-types.d.ts` is
-  current → `pnpm build` → `build-sidecar.ps1 -Stub` →
+- **CI** is `.github/workflows/ci.yml`, on every PR and push to `main`. Two
+  gating jobs, each a matrix over **`windows-latest` and `ubuntu-latest`**
+  (#69): `python` (`ruff check` → `pytest` → regenerate + diff-check
+  `openapi.json` → `pytest -m smoke`) and `desktop` (`pnpm test` → check
+  `api-types.d.ts` is current → `pnpm build` → stage sidecar stubs →
   `cargo check --all-targets` → `cargo test`).
 
-  Two things about it that are easy to get wrong on a rewrite:
+  Both runners, not one standing in for the other, because each platform is the
+  only place its own half is exercised: Windows has DPAPI, `%LOCALAPPDATA%` and
+  the Job Object; Linux has the XDG root, the keystore *fallback* (no Secret
+  Service on a runner), `$HOME`-shaped interpreter discovery, and a `cargo
+  check` with `windows-sys` gated out of the dependency graph entirely. macOS
+  is deliberately absent — see "Out of scope".
+
+  Three things about it that are easy to get wrong on a rewrite:
 
   - **The Python job installs `requirements.txt`, not just the package.** The
     two are not in lockstep on purpose, and
@@ -1351,21 +1539,44 @@ and `shell.log`.
     script validates `externalBin` and `resources` at compile time and needs
     `frontendDist` (`desktop/dist/`) to exist, so `cargo check` fails on a
     fresh checkout until both the frontend is built and a sidecar is staged.
-    `-Stub` covers the second in seconds.
+    `--stub` covers the second in seconds.
+  - **The OpenAPI diff-check runs on Windows only.** It is a `git diff` against
+    a checked-in file; running it on both runners would gate the same bytes
+    twice, and `desktop/src/lib/openapi.json` is already pinned to LF in
+    `.gitattributes` precisely because that comparison is newline-sensitive.
+    The Linux runner *does* install webkit2gtk before anything cargo touches —
+    without it the crate does not link, and the failure names a missing
+    `webkit2gtk-4.1.pc` rather than anything about PDFusion.
 
   A third job, `frozen-sidecar`, runs the real PyInstaller build and then the
-  smoke tests against the exe. It is `workflow_dispatch` only: it costs 10-20
-  minutes, and it is the check to run before cutting an installer or after
-  changing `pdfusion-sidecar.spec`.
+  smoke tests against the built binary, on both platforms. It is
+  `workflow_dispatch` only: it costs 10-20 minutes per platform, and it is the
+  check to run before cutting an installer or after changing
+  `pdfusion-sidecar.spec` — and the only thing that settles whether the spec
+  produces a *working* Linux sidecar.
 
 ## Out of scope (for a later phase)
 
 - **Auto-update** flow.
-- **A signing certificate.** The plumbing exists — `bundle.windows` carries
-  `digestAlgorithm`/`timestampUrl` and `release.yml` reads a
-  `WINDOWS_SIGN_COMMAND` secret — but no certificate is configured, so shipped
-  installers are unsigned and SmartScreen warns on first install.
-- **Cross-platform** (macOS/Linux) — Tauri supports both, but explicit testing deferred. The PyInstaller spec is Windows-tested only.
+- **A signing certificate.** The plumbing exists — `bundle.windows` in
+  `tauri.windows.conf.json` carries `digestAlgorithm`/`timestampUrl` and
+  `release.yml` reads a `WINDOWS_SIGN_COMMAND` secret — but no certificate is
+  configured, so shipped installers are unsigned and SmartScreen warns on first
+  install. The Linux bundles are unsigned too, with no plumbing at all: `.deb`
+  signing wants a GPG key in the workflow and AppImage signing wants
+  `appimagetool --sign`.
+- **macOS packaging and verification** — the plumbing is in place (a `dmg`/`app`
+  target in `tauri.macos.conf.json`, Keychain-backed keys, the
+  `~/Library/Application Support` data root), but nobody has run it on a Mac
+  and no artifact is published: an unsigned, un-notarized `.dmg` is refused by
+  Gatekeeper with no useful way past it. That is Phase B of #69, and it needs
+  hardware — a `macos-latest` runner can prove it builds, but nothing headless
+  validates WKWebView, the Keychain prompt or notarization.
+- **A Job Object equivalent off Windows.** The Windows child dies with the shell
+  however the shell dies, because of `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`. On
+  Linux and macOS a `SIGKILL` of the shell orphans the sidecar; the supervisor
+  poll and `ExitRequested` only cover an orderly exit.
+  `prctl(PR_SET_PDEATHSIG)` is the Linux analogue.
 - **i18n of the UI strings** (the UI itself stays English; the translation *output* follows the toolbar's target language).
 - **More Argos language pairs** — the offline backend ships en→vi only. Adding
   a pair means shipping/downloading its pack, then extending `SUPPORTED_PAIRS`

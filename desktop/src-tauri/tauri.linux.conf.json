@@ -1,0 +1,11 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "build": {
+    "beforeBundleCommand": "sh ../build-sidecar.sh"
+  },
+  "bundle": {
+    "targets": ["deb", "appimage"],
+    "externalBin": [],
+    "resources": ["sidecar/**/*"]
+  }
+}

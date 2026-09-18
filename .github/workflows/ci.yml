@@ -1,9 +1,19 @@
 name: CI
 
-# Everything runs on Windows. PDFusion is a Windows desktop app: the key store
-# is DPAPI, the sidecar is located through `%LOCALAPPDATA%`, and the Tauri
-# shell confines its child to a Job Object. A Linux runner would be cheaper and
-# would skip or mis-test all three.
+# Both gating jobs run on Windows **and** Linux (#69).
+#
+# Windows is where the app ships today and where the platform-specific halves
+# live: the key store is DPAPI, the sidecar is located through `%LOCALAPPDATA%`,
+# and the Tauri shell confines its child to a Job Object. None of those are
+# exercised on a Linux runner. Linux is where the cross-platform work is
+# verified in the other direction — the XDG data root, the keystore fallback,
+# `$HOME`-based interpreter discovery, and a `cargo check` with `windows-sys`
+# target-gated out of the dependency graph entirely. A job that only ever ran
+# on one of the two could not catch a regression in the other.
+#
+# macOS is deliberately absent: the runner can prove it builds, but nothing
+# headless validates WKWebView, the Keychain prompt or notarization, so Phase B
+# of #69 stays open rather than being half-covered by a green check.
 on:
   pull_request:
   push:
@@ -20,9 +30,13 @@ env:
 
 jobs:
   python:
-    name: ruff + pytest
-    runs-on: windows-latest
+    name: ruff + pytest (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
     steps:
       - uses: actions/checkout@v4
 
@@ -46,18 +60,27 @@ jobs:
           pip install -e ".[dev]"
 
       - name: Lint
-        run: python -m ruff check src tests
+        run: python -m ruff check src tests scripts
 
+      # No Secret Service on a GitHub runner, so `utils/encryption.py` takes
+      # its documented last-resort path here. The suite covers the keystore
+      # scheme with a stand-in backend rather than a real one, so this is not
+      # a coverage gap — see tests/test_config_security.py.
       - name: Test
         run: python -m pytest tests
 
       # Two separate steps, deliberately: a multi-line `run: |` block only
       # checks the *last* command's exit code, so a broken export script
       # followed by a no-op `git diff` would report green.
+      #
+      # Windows only, because it is a `git diff` against a checked-in file and
+      # running it on both platforms would gate the same bytes twice.
       - name: Regenerate OpenAPI schema
+        if: runner.os == 'Windows'
         run: python -m desktop_pdf_translator.api.export_openapi --output desktop/src/lib/openapi.json
 
       - name: Verify committed OpenAPI schema is up to date
+        if: runner.os == 'Windows'
         run: git diff --exit-code -- desktop/src/lib/openapi.json
 
       # The smoke tests spawn a real sidecar, so they are excluded from the
@@ -68,11 +91,36 @@ jobs:
         run: python -m pytest tests -m smoke
 
   desktop:
-    name: tsc + vitest + cargo
-    runs-on: windows-latest
+    name: tsc + vitest + cargo (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
     steps:
       - uses: actions/checkout@v4
+
+      # Tauri's crate links against the system webview. Windows has WebView2
+      # in the image; Linux needs webkit2gtk and friends installed before
+      # anything cargo does will link. `libwebkit2gtk-4.1-dev` is the Tauri 2
+      # version — 4.0 is Tauri 1 and will not satisfy the build.
+      - name: Install Linux webview dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libgtk-3-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            patchelf \
+            build-essential \
+            curl \
+            wget \
+            file \
+            libssl-dev \
+            libxdo-dev
 
       # Pinned rather than taken from `packageManager` (package.json has no
       # such field). Bump alongside the local toolchain — `pnpm-workspace.yaml`
@@ -112,11 +160,19 @@ jobs:
 
       # Tauri's build script validates `externalBin` and `resources` at compile
       # time, so the crate does not build on a fresh checkout until a sidecar
-      # is staged. `-Stub` drops zero-byte placeholders, which is all `cargo
-      # check` needs and takes seconds instead of the ~15 min PyInstaller run.
-      - name: Stage sidecar stubs
+      # is staged. `--stub` drops placeholders, which is all `cargo check`
+      # needs and takes seconds instead of the ~15 min PyInstaller run. What it
+      # stages differs per platform (see scripts/build_sidecar.py), which is
+      # exactly why both runners have to do it rather than one standing in for
+      # the other.
+      - name: Stage sidecar stubs (Windows)
+        if: runner.os == 'Windows'
         run: ./build-sidecar.ps1 -Stub
         shell: pwsh
+
+      - name: Stage sidecar stubs (Linux)
+        if: runner.os == 'Linux'
+        run: ./build-sidecar.sh --stub
 
       - uses: dtolnay/rust-toolchain@stable
 
@@ -134,14 +190,19 @@ jobs:
 
   # The real PyInstaller build, which is the only thing that can catch a
   # `ModuleNotFoundError` from the spec's `excludes` list. It costs 10-20
-  # minutes and downloads ~290 MB of engine assets, so it is not a PR gate —
-  # run it before cutting an installer, or when the spec / dependency set
-  # changes.
+  # minutes per platform and downloads ~290 MB of engine assets, so it is not a
+  # PR gate — run it before cutting an installer, or when the spec / dependency
+  # set changes. It is also where a claim that the spec builds a *working*
+  # Linux sidecar is actually settled (#69).
   frozen-sidecar:
-    name: PyInstaller sidecar smoke test
-    runs-on: windows-latest
+    name: PyInstaller sidecar smoke test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 90
     if: github.event_name == 'workflow_dispatch'
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
     steps:
       - uses: actions/checkout@v4
 
@@ -159,9 +220,14 @@ jobs:
           pip install -r requirements.txt
           pip install -e ".[dev]"
 
-      - name: Build the sidecar
+      - name: Build the sidecar (Windows)
+        if: runner.os == 'Windows'
         run: ./build-sidecar.ps1
         shell: pwsh
 
-      - name: Smoke test the built exe
+      - name: Build the sidecar (Linux)
+        if: runner.os == 'Linux'
+        run: ./build-sidecar.sh
+
+      - name: Smoke test the built binary
         run: python -m pytest tests -m smoke

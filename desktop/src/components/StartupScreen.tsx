@@ -29,10 +29,10 @@ const SLOW_START_MS = 15_000;
  * What the user sees before the app is usable.
  *
  * The copy is deliberately in the app's own terms. "Starting Python sidecar…"
- * and "set PDFUSION_PYTHON to your conda env's python.exe" describe this
- * repository's dev setup, not anything an end user installed from the .msi can
- * act on — so the interpreter hint is kept behind `import.meta.env.DEV`, which
- * Vite compiles to `false` (and tree-shakes) in a production build.
+ * and "set PDFUSION_PYTHON to your conda env's interpreter" describe this
+ * repository's dev setup, not anything an end user installed from the installer
+ * can act on — so the interpreter hint is kept behind `import.meta.env.DEV`,
+ * which Vite compiles to `false` (and tree-shakes) in a production build.
  *
  * Retry restarts the whole app rather than re-spawning the sidecar: the handle
  * is a `OnceCell` set once per process, so re-entering that lifecycle would
@@ -90,8 +90,8 @@ export function StartupScreen({ state }: StartupScreenProps) {
   const devHint = import.meta.env.DEV && (
     <p className="text-xs text-muted-foreground">
       Dev: if the sidecar can't find an interpreter, set{" "}
-      <code className="font-mono">PDFUSION_PYTHON</code> to your conda env's{" "}
-      <code className="font-mono">python.exe</code> and restart.
+      <code className="font-mono">PDFUSION_PYTHON</code> to your conda env's
+      interpreter and restart.
     </p>
   );
 
@@ -113,8 +113,9 @@ export function StartupScreen({ state }: StartupScreenProps) {
                 <>
                   <p className="text-xs text-muted-foreground">
                     This is taking longer than usual. It may still finish — a
-                    first launch after installing has to get past Windows'
-                    on-access scanner. You can wait, or take a look at the logs.
+                    first launch after installing has to read thousands of files
+                    past the system's on-access scanner. You can wait, or take a
+                    look at the logs.
                   </p>
                   {actions}
                   {devHint}

@@ -270,7 +270,7 @@ def _dev_origins_allowed() -> bool:
     `sys.frozen` alone is *not* that answer, and relying on it was a bug.
     Frozen means "built by PyInstaller", not "shipped app": the Rust shell
     prefers a staged `binaries/pdfusion-sidecar-*.exe` over local Python
-    whenever one is present, so after `build-sidecar.ps1` (a documented step
+    whenever one is present, so after a build-sidecar run (a documented step
     before `pnpm tauri build`) `pnpm tauri dev` runs a *frozen* sidecar behind a
     *Vite-hosted* webview. Withholding the dev origins there rejects every
     request the app makes — CORS preflights come back `400 Disallowed CORS

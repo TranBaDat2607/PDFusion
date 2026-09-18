@@ -1,10 +1,17 @@
 name: Release
 
-# Builds the installer on a version tag and attaches it to a draft release.
+# Builds the installers on a version tag and attaches them to a draft release.
 #
-# windows-latest for the same reasons ci.yml is: DPAPI key store, %LOCALAPPDATA%
-# sidecar lookup, Job Object confinement. Unlike ci.yml this is not a gate —
-# nothing here runs on a PR.
+# Two jobs, not a matrix: the Windows one carries a signing step with no Linux
+# equivalent, and the two produce differently-named artifacts from differently
+# staged sidecars (see scripts/build_sidecar.py). Unlike ci.yml neither is a
+# gate — nothing here runs on a PR.
+#
+# macOS is absent on purpose. A `dmg` target and a `~/Library/Application
+# Support` data root are already wired up (tauri.macos.conf.json,
+# utils/paths.py), but an unsigned, un-notarized .dmg is refused by Gatekeeper
+# with no useful way for a user to get past it, so shipping one would be worse
+# than shipping none. That is Phase B of #69.
 on:
   push:
     tags: ["v*"]
@@ -15,7 +22,7 @@ env:
   NODE_VERSION: "22"
 
 jobs:
-  installer:
+  windows-installer:
     name: Build NSIS installer
     runs-on: windows-latest
     timeout-minutes: 120
@@ -117,5 +124,108 @@ jobs:
           body: |
             Per-user install — no admin rights required; installs under
             `%LOCALAPPDATA%\Programs\PDFusion`.
+
+            See the commit log for ${{ github.ref_name }}.
+
+  linux-bundles:
+    name: Build .deb + AppImage
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            pyproject.toml
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+          cache-dependency-path: desktop/pnpm-lock.yaml
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: desktop/src-tauri
+
+      # webkit2gtk 4.1 is the Tauri 2 series; 4.0 is Tauri 1 and does not
+      # satisfy the build. `patchelf` and `librsvg2-dev` are what the AppImage
+      # target itself shells out to.
+      - name: Install webview and bundler dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libgtk-3-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            patchelf \
+            build-essential \
+            curl \
+            wget \
+            file \
+            libssl-dev \
+            libxdo-dev
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install -e ".[dev]"
+
+      # ~290 MB of engine assets, deliberately not wired into
+      # beforeBundleCommand (see scripts/fetch_offline_assets.py). Without this
+      # the bundle still succeeds and the app downloads them on first run
+      # instead — which is exactly what shipping them is meant to avoid.
+      - name: Stage offline engine assets
+        run: ./fetch-offline-assets.sh
+
+      - name: Install frontend dependencies
+        working-directory: desktop
+        run: pnpm install --frozen-lockfile
+
+      # beforeBundleCommand runs build-sidecar.sh (PyInstaller, ~10-20 min).
+      - name: Build the bundles
+        working-directory: desktop
+        run: pnpm tauri build
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pdfusion-linux-bundles
+          path: |
+            desktop/src-tauri/target/release/bundle/deb/*.deb
+            desktop/src-tauri/target/release/bundle/appimage/*.AppImage
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Attach to a draft release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          draft: true
+          files: |
+            desktop/src-tauri/target/release/bundle/deb/*.deb
+            desktop/src-tauri/target/release/bundle/appimage/*.AppImage
+          body: |
+            Linux builds are unsigned, as the Windows installer is.
+
+            The `.deb` depends on `libwebkit2gtk-4.1-0` and `libgtk-3-0`;
+            the AppImage carries them.
+            API keys are stored in the Secret Service (gnome-keyring, KWallet);
+            with none running they fall back to an obfuscated value in
+            `~/.local/share/PDFusion/config.toml` and the app says so in the log.
 
             See the commit log for ${{ github.ref_name }}.
