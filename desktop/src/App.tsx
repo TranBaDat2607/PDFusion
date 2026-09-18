@@ -10,6 +10,7 @@ import { Header } from "@/components/layout/Header";
 import { ContextBar } from "@/components/layout/ContextBar";
 import { DropOverlay } from "@/components/layout/DropOverlay";
 import { MainLayout } from "@/components/layout/MainLayout";
+import { DiscardTranslationDialog } from "@/components/translation/DiscardTranslationDialog";
 import {
   PageLimitDialog,
   type OverLimit,
@@ -26,6 +27,7 @@ import { useEngineSetup } from "@/hooks/useEngineSetup";
 import { useFileDrop } from "@/hooks/useFileDrop";
 import { useSidecar } from "@/hooks/useSidecar";
 import { isTranslationBusy, useTranslation } from "@/hooks/useTranslation";
+import { shouldConfirmSwap, type SwapPrompt } from "@/lib/document-swap";
 import { readSkipped, shouldShowSetup } from "@/lib/engine-setup";
 import {
   checkPageLimit,
@@ -129,6 +131,9 @@ function Workspace() {
     path: string;
     bypassCache: boolean;
   } | null>(null);
+  // A document waiting to be opened while a translation runs, held until the
+  // user answers the offer to discard that run (#44).
+  const [swapPrompt, setSwapPrompt] = useState<SwapPrompt | null>(null);
   const setOriginalPath = useAppStore((s) => s.setOriginalPdfPath);
   const setTranslatedPath = useAppStore((s) => s.setTranslatedPdfPath);
   const setExportedPath = useAppStore((s) => s.setExportedPdfPath);
@@ -154,7 +159,10 @@ function Workspace() {
     [config],
   );
 
-  const openDocument = useCallback(
+  /** Open `path`, unconditionally. Everything that swaps documents goes
+   *  through `openDocument` instead, which asks first when that would throw
+   *  away a running translation. */
+  const applyOpen = useCallback(
     (path: string) => {
       setOriginalPath(path);
       setTranslatedPath(null);
@@ -162,6 +170,10 @@ function Workspace() {
       // make the toolbar offer "Open" on an unrelated file.
       setExportedPath(null);
       setLimitPrompt(null);
+      // Both prompts are about the document being replaced. The swap one can
+      // still be up here: a run that finished while the dialog waited leaves
+      // the next open free to go straight through, and its question with it.
+      setSwapPrompt(null);
       translation.reset();
       // Fire-and-forget pre-warm: by the time the user clicks Translate, the
       // Argos pack should be installed (or the LLM client should be live).
@@ -178,6 +190,46 @@ function Workspace() {
         .catch(() => undefined);
     },
     [setOriginalPath, setTranslatedPath, setExportedPath, translation, selection],
+  );
+
+  // A translation is a job on the sidecar, not a piece of React state: swapping
+  // the document out from under one used to leave it running, billing an LLM
+  // and streaming events for a file nobody is looking at, with its `job_id`
+  // dropped so the user could no longer cancel it (#44). Asking here rather
+  // than disabling the Change PDF button, because a dropped file and an "Open
+  // with PDFusion" handoff reach this same function without touching a button.
+  const openDocument = useCallback(
+    (path: string) => {
+      const busy = isTranslationBusy(translation.state);
+      if (!shouldConfirmSwap(busy, path, originalPath)) {
+        // Re-opening the document that is being translated keeps its run —
+        // `applyOpen` would reset the overlay out from under it.
+        if (!busy) applyOpen(path);
+        return;
+      }
+      setSwapPrompt({
+        incomingPath: path,
+        currentPath: originalPath,
+        progress: translation.state.progress,
+      });
+    },
+    [translation.state, originalPath, applyOpen],
+  );
+
+  // A second forwarded file arriving while the dialog is up replaces the
+  // pending prompt, so the answer applies to the document asked for last.
+  const confirmSwap = useCallback(
+    (prompt: SwapPrompt) => {
+      setSwapPrompt(null);
+      // Not awaited: everything that has to happen before the swap — aborting
+      // the stream, dropping the job id, clearing the overlay — is synchronous
+      // inside `abandon`, and only the cancel POST is left. Waiting on that
+      // would leave the user staring at the old document if the sidecar is
+      // wedged, for a reply nothing here reads.
+      void translation.abandon();
+      applyOpen(prompt.incomingPath);
+    },
+    [translation, applyOpen],
   );
 
   const handlePickFile = useCallback(async () => {
@@ -200,10 +252,11 @@ function Workspace() {
   // A PDF dragged onto the window goes through the same handler as the picker.
   const fileDrop = useFileDrop(openDocument);
 
-  // `openDocument` is rebuilt whenever the toolbar selection changes, but the
-  // listener below must be registered exactly once — re-running that effect
-  // would re-open the command-line document on every dropdown change. The ref
-  // keeps the handler current without making it a dependency.
+  // `openDocument` is rebuilt whenever the toolbar selection changes — and now
+  // on every progress tick, since it reads the running translation's state —
+  // but the listener below must be registered exactly once: re-running that
+  // effect would re-open the command-line document each time. The ref keeps
+  // the handler current without making it a dependency.
   const openDocumentRef = useRef(openDocument);
   openDocumentRef.current = openDocument;
 
@@ -336,6 +389,11 @@ function Workspace() {
         check={limitPrompt?.check ?? null}
         onCancel={() => setLimitPrompt(null)}
         onConfirm={confirmLimit}
+      />
+      <DiscardTranslationDialog
+        prompt={swapPrompt}
+        onCancel={() => setSwapPrompt(null)}
+        onConfirm={confirmSwap}
       />
       <SettingsSheet open={settingsOpen} onOpenChange={setSettingsOpen} />
       <AboutDialog open={aboutOpen} onOpenChange={setAboutOpen} />

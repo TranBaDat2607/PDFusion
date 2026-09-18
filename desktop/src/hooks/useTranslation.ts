@@ -301,22 +301,34 @@ export function useTranslation() {
         // cancel resolves to `cancelled`: the stream closing means the backend
         // has stopped touching the artifact, which is all `cancelling` was
         // waiting for.
-        setState((s) =>
-          s.status === "running"
-            ? {
-                ...s,
-                status: "error",
-                error: "Translation stream ended unexpectedly",
-              }
-            : s.status === "cancelling"
-              ? { ...s, status: "cancelled" }
-              : s,
-        );
+        //
+        // Skipped when we aborted the stream ourselves: `streamJobEvents`
+        // resolves rather than throwing on an abort, so `abandon()` lands
+        // here, and the run it walked away from is neither unexpected nor
+        // still the user's business (#44).
+        if (!controller.signal.aborted) {
+          setState((s) =>
+            s.status === "running"
+              ? {
+                  ...s,
+                  status: "error",
+                  error: "Translation stream ended unexpectedly",
+                }
+              : s.status === "cancelling"
+                ? { ...s, status: "cancelled" }
+                : s,
+          );
+        }
       } catch (e) {
         setState((s) => ({ ...s, status: "error", error: (e as Error).message }));
       } finally {
-        setActiveJob(null);
-        abortRef.current = null;
+        // Retract only *our* job. An abandoned stream resolves a moment after
+        // the document was swapped, and must not clear the id — or the abort
+        // handle — belonging to the run that replaced it.
+        if (useAppStore.getState().activeTranslationJob === jobId) {
+          setActiveJob(null);
+        }
+        if (abortRef.current === controller) abortRef.current = null;
       }
     },
     [
@@ -351,6 +363,35 @@ export function useTranslation() {
 
   const reset = useCallback(() => setState(INITIAL), []);
 
+  /**
+   * Stop this job and forget it, because the document it belongs to is going
+   * away (#44). Distinct from both neighbours: `reset()` only clears local
+   * state — the sidecar keeps translating a document nobody is looking at, and
+   * with the `job_id` gone the user can't stop it — while `cancel()`
+   * deliberately keeps listening so the terminal event can deliver the partial
+   * rolling PDF, which here is the *previous* document's and must not reach
+   * the viewer at all.
+   */
+  const abandon = useCallback(async () => {
+    const jobId = useAppStore.getState().activeTranslationJob;
+    // Detach the frontend first. The abandoned stream's remaining events carry
+    // the old document's rolling PDF, and `adoptTranslatedArtifact` takes any
+    // path it is handed — one late `chunk_ready` would paint the previous
+    // document's translation into the new document's pane.
+    abortRef.current?.abort();
+    abortRef.current = null;
+    setState(INITIAL);
+    setActiveJob(null);
+    setChunkProgress(null);
+    if (!jobId) return;
+    try {
+      await api.post(`/translate/${jobId}/cancel`);
+    } catch {
+      // Best-effort: the user has already moved on, and the sidecar's own
+      // stale-job sweep reclaims a job nobody reattaches to.
+    }
+  }, [setActiveJob, setChunkProgress]);
+
   // Live re-prioritization: when the user scrolls during translation, POST
   // the new visible page so backend workers pivot to translating pages near
   // the current view next. Debounced to avoid flooding while scrolling.
@@ -369,5 +410,5 @@ export function useTranslation() {
     return () => window.clearTimeout(timer);
   }, [state.status, activeJob, visiblePage]);
 
-  return { state, start, cancel, reset };
+  return { state, start, cancel, reset, abandon };
 }
