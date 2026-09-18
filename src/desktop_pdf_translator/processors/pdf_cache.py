@@ -5,10 +5,25 @@ singleton, lazy init) but caches *whole translated PDFs* instead of individual
 paragraphs.
 
 Cache key = sha256(file_hash | lang_in | lang_out | service | model | pipeline_version)
-where file_hash is sha256 of the input PDF bytes. A hit lets `process_pdf`
+where file_hash is sha256 of the input PDF bytes. A translation of some of the
+document's pages adds `| pages=<selection>`. A hit lets `process_pdf`
 skip the entire BabelDOC pipeline (layout / typeset / render / save) by
 copying the cached PDF into the live output directory and emitting synthetic
 SSE events.
+
+**A partial entry is second-class**, and both rules that make it so exist
+because what it stores is the *full-length* rolling PDF — every page present,
+only the selected ones translated. So it costs as much disk as the whole
+document's entry while answering far fewer requests, and the workflow
+`page_selection.PAGE_LIMIT_HELP` recommends (a long book in parts) produces a
+string of them:
+
+* `_enforce_lru_cap` evicts partial entries before whole-document ones, so
+  working through a book in parts can never cost the user the whole-document
+  entries the cache exists for.
+* `store()`ing the whole document deletes that document's partial entries.
+  `lookup()` tries the whole-document key first and it answers any selection,
+  so from that moment the partials are unreachable bytes.
 
 Storage layout:
     <appdata_dir>/translated_pdf_cache/     (utils/paths.appdata_dir)
@@ -24,7 +39,7 @@ import sqlite3
 import threading
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from ..storage.migrations import Migration, migrate
 from ..storage.sqlite import (
@@ -70,6 +85,7 @@ def _make_cache_key(
     service: str,
     model: Optional[str],
     pipeline_version: str,
+    pages: Optional[str] = None,
 ) -> str:
     # Source language IS part of the key. It used to be excluded, on the
     # premise that output bytes are independent of what the user picked as
@@ -86,6 +102,11 @@ def _make_cache_key(
     payload = (
         f"{file_hash}|{lang_in}|{lang_out}|{service}|{model or ''}|{pipeline_version}"
     )
+    # A page selection (`page_selection.pages_key`) is appended only when there
+    # is one, so every whole-document key is the same as before #33, and a
+    # partial translation can never be served as the whole document's.
+    if pages is not None:
+        payload += f"|pages={pages}"
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
@@ -194,7 +215,22 @@ def _v1_integer_utc_timestamps(conn: sqlite3.Connection) -> None:
     )
 
 
-_MIGRATIONS = (Migration(1, "integer UTC timestamps", _v1_integer_utc_timestamps),)
+def _v2_page_selection(conn: sqlite3.Connection) -> None:
+    """Add `pages`: the selection an entry was translated for (#33), as
+    `page_selection.pages_key` spells it, or NULL for the whole document.
+
+    NULL is the right value for every existing row — a per-selection cache key
+    did not exist before #33, so everything already stored is a whole-document
+    translation. An `ALTER` is enough here for the same reason: nothing has to
+    be rewritten, only widened.
+    """
+    conn.execute("ALTER TABLE pdf_translations ADD COLUMN pages TEXT")
+
+
+_MIGRATIONS = (
+    Migration(1, "integer UTC timestamps", _v1_integer_utc_timestamps),
+    Migration(2, "page selection column", _v2_page_selection),
+)
 
 
 @dataclass
@@ -203,6 +239,8 @@ class CacheHit:
     cached_at: str            # ISO-8601, with a UTC offset
     hit_count: int
     original_filename: str
+    # The page selection the entry was stored for; `None` is the whole document.
+    pages: Optional[str] = None
 
 
 class PDFTranslationCache:
@@ -256,8 +294,13 @@ class PDFTranslationCache:
         service: str,
         model: Optional[str],
         file_hash: Optional[str] = None,
+        pages: Optional[str] = None,
     ) -> Optional[CacheHit]:
         """Return a CacheHit or None. Bumps hit_count + last_used on hit.
+
+        With `pages`, the whole document's entry is tried first — it has those
+        pages translated too — and then the entry for that selection. Either
+        way the lookup counts once in the hit rate.
 
         Returns None (and silently deletes the stale row) if the cached PDF
         file is missing on disk — protects against users wiping `files/`
@@ -275,59 +318,72 @@ class PDFTranslationCache:
                 self._bump(miss=True)
                 return None
 
-        key = _make_cache_key(
-            file_hash, source_lang, target_lang, service, model, PIPELINE_VERSION
-        )
+        candidates = [None] if pages is None else [None, pages]
         try:
             conn = self._conn()
-            row = conn.execute(
-                "SELECT cached_path, cached_at, hit_count, original_filename "
-                "FROM pdf_translations WHERE cache_key = ?",
-                (key,),
-            ).fetchone()
-            if row is None:
-                self._bump(miss=True)
-                return None
-
-            cached_path = Path(row["cached_path"])
-            if not cached_path.exists():
-                logger.info(
-                    "PDF cache row %s points to missing file %s — evicting",
-                    key[:12], cached_path,
+            for selection in candidates:
+                key = _make_cache_key(
+                    file_hash, source_lang, target_lang, service, model,
+                    PIPELINE_VERSION, selection,
                 )
-                with self._write_lock:
-                    conn.execute(
-                        "DELETE FROM pdf_translations WHERE cache_key = ?", (key,)
-                    )
-                    conn.commit()
-                self._bump(miss=True)
-                return None
-
-            now = now_ms()
-            try:
-                with self._write_lock:
-                    conn.execute(
-                        "UPDATE pdf_translations SET hit_count = hit_count + 1, "
-                        "last_used = ?, last_used_seq = "
-                        "(SELECT COALESCE(MAX(last_used_seq), 0) + 1 FROM pdf_translations) "
-                        "WHERE cache_key = ?",
-                        (now, key),
-                    )
-                    conn.commit()
-            except sqlite3.OperationalError:
-                pass
-
-            self._bump(miss=False)
-            return CacheHit(
-                cached_path=cached_path,
-                cached_at=ms_to_iso(row["cached_at"]),
-                hit_count=int(row["hit_count"]) + 1,
-                original_filename=row["original_filename"],
-            )
+                hit = self._hit(conn, key, selection)
+                if hit is not None:
+                    self._bump(miss=False)
+                    return hit
+            self._bump(miss=True)
+            return None
         except Exception as exc:  # noqa: BLE001
             logger.warning("PDF cache lookup failed: %s", exc)
             self._bump(miss=True)
             return None
+
+    def _hit(
+        self, conn: sqlite3.Connection, key: str, pages: Optional[str]
+    ) -> Optional[CacheHit]:
+        """The entry at `key` with its use recorded, or `None` — including
+        for a row whose file is gone, which is deleted."""
+        row = conn.execute(
+            "SELECT cached_path, cached_at, hit_count, original_filename "
+            "FROM pdf_translations WHERE cache_key = ?",
+            (key,),
+        ).fetchone()
+        if row is None:
+            return None
+
+        cached_path = Path(row["cached_path"])
+        if not cached_path.exists():
+            logger.info(
+                "PDF cache row %s points to missing file %s — evicting",
+                key[:12], cached_path,
+            )
+            with self._write_lock:
+                conn.execute(
+                    "DELETE FROM pdf_translations WHERE cache_key = ?", (key,)
+                )
+                conn.commit()
+            return None
+
+        now = now_ms()
+        try:
+            with self._write_lock:
+                conn.execute(
+                    "UPDATE pdf_translations SET hit_count = hit_count + 1, "
+                    "last_used = ?, last_used_seq = "
+                    "(SELECT COALESCE(MAX(last_used_seq), 0) + 1 FROM pdf_translations) "
+                    "WHERE cache_key = ?",
+                    (now, key),
+                )
+                conn.commit()
+        except sqlite3.OperationalError:
+            pass
+
+        return CacheHit(
+            cached_path=cached_path,
+            cached_at=ms_to_iso(row["cached_at"]),
+            hit_count=int(row["hit_count"]) + 1,
+            original_filename=row["original_filename"],
+            pages=pages,
+        )
 
     def store(
         self,
@@ -338,9 +394,13 @@ class PDFTranslationCache:
         service: str,
         model: Optional[str],
         file_hash: Optional[str] = None,
+        pages: Optional[str] = None,
     ) -> Optional[Path]:
         """Copy `translated_path` into the cache; insert/replace the row.
         Returns the cached file path on success, None on failure (non-fatal).
+
+        `pages` is the page selection the translation covered
+        (`page_selection.pages_key`), or `None` for the whole document.
 
         If `file_hash` is provided, skip the internal SHA-256 streaming pass.
         Pair this with a lookup() call that already hashed the same bytes
@@ -358,7 +418,8 @@ class PDFTranslationCache:
                 return None
 
         key = _make_cache_key(
-            file_hash, source_lang, target_lang, service, model, PIPELINE_VERSION
+            file_hash, source_lang, target_lang, service, model, PIPELINE_VERSION,
+            pages,
         )
         dest = self.files_dir / f"{key}.pdf"
         # Copy via .tmp then atomic rename so a concurrent reader (PdfViewer)
@@ -394,6 +455,7 @@ class PDFTranslationCache:
             )
 
         now = now_ms()
+        superseded: list[str] = []
         try:
             conn = self._conn()
             with self._write_lock:
@@ -402,17 +464,22 @@ class PDFTranslationCache:
                     INSERT OR REPLACE INTO pdf_translations
                     (cache_key, file_hash, source_lang, target_lang, service,
                      model, pipeline_version, cached_path, original_filename,
-                     cached_at, last_used, last_used_seq, hit_count, file_size_bytes)
+                     cached_at, last_used, last_used_seq, hit_count, file_size_bytes,
+                     pages)
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
                             (SELECT COALESCE(MAX(last_used_seq), 0) + 1 FROM pdf_translations),
-                            0, ?)
+                            0, ?, ?)
                     """,
                     (
                         key, file_hash, source_lang, target_lang, service,
                         model, PIPELINE_VERSION, str(dest), file_path.name,
-                        now, now, size_bytes,
+                        now, now, size_bytes, pages,
                     ),
                 )
+                if pages is None:
+                    superseded = self._drop_superseded_partials_locked(
+                        conn, file_hash, source_lang, target_lang, service, model,
+                    )
                 conn.commit()
         except Exception as exc:  # noqa: BLE001
             logger.warning("PDF cache store: DB insert failed (%s)", exc)
@@ -422,8 +489,64 @@ class PDFTranslationCache:
                 pass
             return None
 
+        # Outside the write lock, as `_enforce_lru_cap` does its own unlinks:
+        # the rows are already gone, so a file left behind is wasted space, not
+        # a row pointing at nothing.
+        for path in superseded:
+            try:
+                Path(path).unlink(missing_ok=True)
+            except OSError as exc:
+                logger.warning(
+                    "PDF cache: unlink superseded partial %s failed: %s", path, exc
+                )
+        if superseded:
+            logger.info(
+                "PDF cache: whole-document entry superseded %d partial entr%s "
+                "for %s",
+                len(superseded), "y" if len(superseded) == 1 else "ies",
+                file_path.name,
+            )
+
         self._enforce_lru_cap()
         return dest
+
+    def _drop_superseded_partials_locked(
+        self,
+        conn: sqlite3.Connection,
+        file_hash: str,
+        source_lang: str,
+        target_lang: str,
+        service: str,
+        model: Optional[str],
+    ) -> List[str]:
+        """Delete this document's partial entries, returning their file paths.
+
+        A whole-document entry has those pages translated too, and `lookup`
+        reaches it first (its `candidates` list is `[None, pages]`), so every
+        partial entry sharing the rest of the key is from here on unreachable —
+        a full-size PDF nothing can ever be served from.
+
+        The predicate is the cache key's own components, which are all columns.
+        `pages IS NOT NULL` is what keeps the row just inserted out of it.
+        Caller holds `_write_lock` and commits.
+        """
+        where = (
+            "file_hash = ? AND source_lang = ? AND target_lang = ? "
+            "AND service = ? AND COALESCE(model, '') = COALESCE(?, '') "
+            "AND pipeline_version = ? AND pages IS NOT NULL"
+        )
+        params = (
+            file_hash, source_lang, target_lang, service, model, PIPELINE_VERSION,
+        )
+        paths = [
+            row["cached_path"]
+            for row in conn.execute(
+                f"SELECT cached_path FROM pdf_translations WHERE {where}", params
+            )
+        ]
+        if paths:
+            conn.execute(f"DELETE FROM pdf_translations WHERE {where}", params)
+        return paths
 
     def _refresh_cap_from_settings(self) -> None:
         """Re-read `pdf_cache_max_size_mb` from settings so cap changes apply
@@ -459,7 +582,14 @@ class PDFTranslationCache:
                 return
             rows = conn.execute(
                 "SELECT cache_key, cached_path, file_size_bytes FROM pdf_translations "
-                "ORDER BY last_used_seq ASC"
+                # Partial entries first, least-recently-used within each class.
+                # A partial entry costs a full-length PDF's disk (only the
+                # selected pages differ) and answers only its own selection,
+                # while a whole-document entry answers every request for that
+                # file — so the sequential-parts workflow `PAGE_LIMIT_HELP`
+                # recommends must not be able to evict one. SQLite renders the
+                # predicate as 1/0, so DESC puts the partials at the front.
+                "ORDER BY (pages IS NOT NULL) DESC, last_used_seq ASC"
             ).fetchall()
             to_remove: list[tuple[str, str]] = []
             for row in rows:

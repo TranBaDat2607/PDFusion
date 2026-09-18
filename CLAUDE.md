@@ -509,8 +509,8 @@ now a Windows + Linux matrix) is what settles the PyInstaller half.
 | `desktop/src/components/pdf-viewer/` | `PdfViewer` (layout, scroll, zoom), `page-renderer.ts` (canvas recycling, text layers), `text-selection.ts`, `find-highlight.ts`, `FindBar`, `ViewerToolbar`, `pdf-viewer.css` — see "PDF viewer" |
 | `desktop/src/lib/pdf-viewer/` | Pure: page geometry (`layout.ts`), find matching (`find.ts`), which pages a new rolling PDF changed (`artifact-swap.ts`), key → shortcut (`shortcuts.ts`) |
 | `desktop/src/components/chat/` | `ChatPanel`, `UserMessage`, `AssistantMessage`, `ActionLog`, `ReferenceList`, `ChatInput` |
-| `desktop/src/components/settings/` | `SettingsSheet` (a tab per service, plus Cache and Chat); `ModelCombobox` (a model name typed freely or picked from suggestions); `ChatIndexTab` (Enable chat, the recorded documents, Remove, Reset) |
-| `desktop/src/components/translation/` | `ProgressOverlay`, `TranslatedFileActions` (Save / Open / Show in folder) |
+| `desktop/src/components/settings/` | `SettingsSheet` (a tab per service, plus Cache — with Performance, where the translation limits are — and Chat); `ModelCombobox` (a model name typed freely or picked from suggestions); `ChatIndexTab` (Enable chat, the recorded documents, Remove, Reset) |
+| `desktop/src/components/translation/` | `ProgressOverlay`, `TranslatedFileActions` (Save / Open / Show in folder), `PageRangeInput` (the toolbar's Pages box), `PageLimitDialog` (the offer made instead of a page-limit failure) — see "Page ranges and limits" |
 | `desktop/src/components/ui/` | shadcn-generated primitives (button, dialog, sheet, …) |
 | `desktop/src/lib/api-client.ts` | Typed HTTP wrapper with bearer-token + sidecar URL helpers |
 | `desktop/src/lib/sse.ts` | Authenticated SSE reader (native EventSource can't set headers) |
@@ -525,6 +525,8 @@ now a Windows + Linux matrix) is what settles the PyInstaller half.
 | `desktop/src/lib/chat-documents.ts` | Pure: the line Settings → Chat shows under each recorded document |
 | `desktop/src/lib/service-settings.ts` | Pure: a Settings service tab's draft, the `PUT /config` body it makes, and what Save checks with the provider first — see "LLM endpoints and models" |
 | `desktop/src/lib/cache-settings.ts` | Pure: the sizes, confirmations and toasts Settings → Cache shows |
+| `desktop/src/lib/page-range.ts` | Pure: the Pages box parsed into `page_ranges`, the page-limit check, and what the offer dialog says |
+| `desktop/src/lib/performance-settings.ts` | Pure: the limit presets and help text in Settings → Cache → Performance |
 | `src/desktop_pdf_translator/engine_assets.py` | What "the offline engine is installed" means; no heavy imports |
 | `src/desktop_pdf_translator/api/server.py` | FastAPI app + uvicorn entry + port discovery |
 | `src/desktop_pdf_translator/api/auth.py` | Bearer-token middleware |
@@ -546,6 +548,8 @@ now a Windows + Linux matrix) is what settles the PyInstaller half.
 | `src/desktop_pdf_translator/storage/` | SQLite plumbing every store shares: `sqlite.py` (connection pragmas, per-thread connections, UTC-millisecond timestamps) and `migrations.py` (versioned schema migrations on `PRAGMA user_version`); `records.py` is `pdfusion.db`, the records database of documents and their chat indexes. Stdlib-only, re-exports nothing — see "Local data layer" |
 | `src/desktop_pdf_translator/translators/translation_cache.py` | Persistent **paragraph-level** SQLite cache (singleton `get_translation_cache()`) |
 | `src/desktop_pdf_translator/processors/pdf_cache.py` | Persistent **whole-PDF** SQLite cache (singleton `get_pdf_cache()`) |
+| `src/desktop_pdf_translator/processors/page_selection.py` | Which pages a translation covers, whether it may run (`validate_selection`), and the chunk and rolling-PDF plans. Stdlib-only — see "Page ranges and limits" |
+| `src/desktop_pdf_translator/processors/pdf_pages.py` | The PyMuPDF half: `inspect_pdf`, `split_into_chunks`, `rebuild_rolling_pdf`. Imports `fitz` inside each function, because the `/translate` pre-flight calls it |
 | `src/desktop_pdf_translator/processors/doc_layout_cache.py` | Process-wide DocLayout-YOLO model, loaded once (`get_shared_doc_layout_model()`) |
 
 ### HTTP API (sidecar)
@@ -564,8 +568,8 @@ All routes (except `GET /health`) require `Authorization: Bearer <token>`.
 | DELETE | `/config/cache?scope=all\|expired&target=paragraph\|pdf\|all` | Clear the cache `target` names (`paragraph` by default); `scope=expired` reaps expired paragraphs and never touches the PDF cache. Any other value is **422**, not a clear |
 | GET | `/setup/status` | Which engine assets are installed, plus the running install's phase and the last one's error. Stat calls only — polled twice a second during an install |
 | POST | `/setup/engine` | Start installing the engine assets, or report the one already running; answers with the same body as `/setup/status` |
-| POST | `/translate` | Start translation job → returns `{ job_id }`. `source_lang` / `target_lang` / `service` are `None`-defaulted (config applies); an unsupported pair is refused with **422** and a missing engine with **409**, both before the job is created. `bypass_cache: bool` forces a full re-translate (used by the "Re-translate" button). There is deliberately **no `output_dir`** — output always lands in a per-job `%TEMP%` dir that the cleanup paths know about |
-| GET | `/translate/{job_id}/events` | SSE: `progress`, `chunk_ready`, `paragraph_translated`, `done`, `error`, `cancelled`. **`chunk_ready` arrives in priority order, not page order** — nearest the viewer's page first — so `chunk_index` is not a completion count and `pages_in_chunk[1]` is not a running total. Accumulate with `lib/translation-progress.ts`; page totals come from `total_pages` (`total_chunks` is not a page count — Argos runs 3-page chunks) |
+| POST | `/translate` | Start translation job → returns `{ job_id }`. `source_lang` / `target_lang` / `service` are `None`-defaulted (config applies); `page_ranges` (`[[first, last], …]`, 1-indexed, inclusive; omitted = every page) picks the pages to translate. An unsupported pair, then a file or selection over the limits or past the end of the document, are refused with **422**, and a missing engine with **409** — all before the job is created. `bypass_cache: bool` forces a full re-translate (used by the "Re-translate" button). There is deliberately **no `output_dir`** — output always lands in a per-job `%TEMP%` dir that the cleanup paths know about |
+| GET | `/translate/{job_id}/events` | SSE: `progress`, `chunk_ready`, `paragraph_translated`, `done`, `error`, `cancelled`. **`chunk_ready` arrives in priority order, not page order** — nearest the viewer's page first — so `chunk_index` is not a completion count and `pages_in_chunk[1]` is not a running total. Accumulate with `lib/translation-progress.ts`; the denominator is `pages_to_translate`, the pages this run covers (`total_pages` is the whole document's, and `total_chunks` is not a page count — a chunk can span several pages) |
 | POST | `/translate/{job_id}/cancel` | Cancel an in-flight translation |
 | POST | `/rag/index` | Index a PDF into ChromaDB → returns `{ job_id }`. A document's id is the **SHA-256 of its bytes**, derived by the sidecar — the request carries no `document_id`, and `done` returns it. It used to be the file name stem, so two different `paper.pdf`s shared one index (#59). The index is recorded in `pdfusion.db` and is `ready` only once every chunk is stored; a PDF with no extractable text ends in an `error` event |
 | GET | `/rag/index/{job_id}/events` | SSE: `progress`, `done`, `error`. The first `progress` carries `document_id`, sent before the vector store loads, so the chat panel shows the document's saved conversation meanwhile |
@@ -719,6 +723,18 @@ Three non-obvious invariants in this area, each with a test:
    `keep=2` — see "Loading the layout model once"). So `TranslationState.status` has a `cancelling` state covering
    the window until the terminal SSE event. Anything that touches the artifact
    must gate on `isTranslationBusy()`, never on `status === "running"`.
+
+   That window is the in-flight chunks' drain and nothing more, **because a
+   chunk worker checks `task.cancelling()` before each page**
+   (`_process_with_babeldoc.worker`). BabelDOC's `async_translate` catches the
+   `CancelledError` a cancel delivers, waits for its thread and returns as if
+   finished, so `run_one_chunk` sees only a chunk with no output. Without the
+   check the worker went on to the next page, the `gather` in the pipeline's
+   `finally` waited for all of them, and Cancel on a 50-page run sat at
+   "Cancelling…" for minutes. The same `finally` runs on every error, so the
+   check matters there too. This one has no unit test — the workers live in
+   `processor.py`, which the suite doesn't import — so exercise Cancel on a
+   long run in `pnpm tauri dev` after touching that loop.
 3. **`export_pdf(protect=...)` refuses to overwrite the opened document.** The
    Save dialog lets the user type their source document's own name and confirm
    "Replace?", which would destroy their input with no undo. Relatedly,
@@ -755,8 +771,7 @@ A failed load leaves the module global `None` rather than caching the failure,
 so the next chunk retries; `run_one_chunk`'s `except BaseException` still routes
 it into `babeldoc_chunk_error`.
 
-**What this does not fix, and the reason `_PAGES_PER_CHUNK_ARGOS` is a live
-question.** The layout model was never the largest per-chunk fixed cost.
+**What this does not fix, and why chunk size is a live question.** The layout model was never the largest per-chunk fixed cost.
 `FontMapper.__init__` sha3_256-verifies and loads **all 34 embedding fonts
 (~250 MB)** for `lang_out`, and nothing memoizes it — not `fontmap.py`, not
 `assets.py`. BabelDOC constructs one per stage: `ILCreater`, `ParagraphFinder`,
@@ -765,8 +780,9 @@ against the installed babeldoc on a warm cache: **1.02 s per `FontMapper`, ≈6 
 per chunk**, none of which this cache touches. So "the reload is fixed" is not
 on its own a reason to shrink a chunk — shrinking one multiplies ~6 s by the
 extra chunks it creates, and on the Argos path (`_MAX_PARALLEL_CHUNKS_ARGOS = 2`)
-that can outweigh what the cache saves. Measure an end-to-end Argos run before
-touching `_PAGES_PER_CHUNK_ARGOS`; the constant's real justification is
+that can outweigh what the cache saves. `_PAGES_PER_CHUNK_ARGOS` is 1 today,
+like the LLM path; measure an end-to-end Argos run before trusting that, or
+before changing either constant. What a larger chunk buys is amortized
 per-chunk fixed overhead in general, not the ONNX reload specifically.
 
 **Rolling-PDF pruning keeps two files, not one.** `cleanup_partial_artifacts`
@@ -782,6 +798,51 @@ superseded version still bounds disk at two files. (On Windows the unlink
 usually loses that race and just logs, which is what makes the symptom
 intermittent rather than absent — do not read "it works here" as "the ordering
 is safe".)
+
+### Page ranges and limits
+
+A translation covers the pages the toolbar's Pages box names (#33) — `1-20, 35`,
+blank for all of them — and `translation.max_pages` limits **those pages**, not
+the document's length. A 500-page book is translated 50 pages at a time; before
+this, anything past 50 pages opened the progress overlay and then failed with
+"Too many pages: 120 > 50". `max_file_size_mb` still applies to the file,
+whichever pages are chosen. Both limits are in Settings → Cache → Performance,
+bounded by `config/models.py:MaxPages` / `MaxFileSizeMB`, which `PUT /config`
+shares so an out-of-range value is a 422 rather than a 500.
+
+- **One check, made twice.** `page_selection.validate_selection` is what
+  `POST /translate` runs before creating the job (off the event loop, since it
+  opens the PDF) and what `PDFProcessor._validate_file` runs again inside it.
+  The frontend has its own copy of the page half (`lib/page-range.ts:
+  checkPageLimit`) only to turn a request over the limit into an offer —
+  `PageLimitDialog`'s "Translate pages 1–50" — instead of a toast. When the page
+  count isn't known yet, it skips that and the sidecar's 422 applies.
+- **The output is always the whole document.** Only the selected pages are
+  split into chunks, but `rolling_segments` fills every other page from the
+  original, so the viewer's page count never changes and pages outside the
+  selection stay readable. Neighbouring original pages are inserted as one run.
+  The rebuild is cheap next to BabelDOC's ~6 s per page: measured at 0.4 s per
+  rebuild for a 300-page, 77 MB PDF (0.23 s with a 10-page selection). It is
+  per chunk, though, and it writes a full copy each time — which is why the
+  size limit still exists.
+- **Scheduling is by page, not chunk index.** `pick_next` measures a pending
+  chunk's distance from the reader's page by its first page; with a selection,
+  chunk 0 can be page 40.
+- **A partial run is cached under its own key.** `_make_cache_key` appends
+  `|pages=<pages_key>` only when a selection is given, so every whole-document
+  key is what it was before, and a partial translation can never be served as
+  the whole document's. A lookup with a selection tries the whole document's
+  entry first — it has those pages translated too — and counts once.
+- **Progress counts toward the selection.** `chunk_ready.pages_to_translate` is
+  the denominator of "N of M pages translated"; `total_pages` stays the
+  document's.
+- **A selection of every page is the whole document**, on both sides
+  (`selected_pages` and `parsePageRanges` return `None`/`null`), so it is
+  cached and reported as a full translation.
+
+The Pages box resets when a different document opens (`setOriginalPdfPath`).
+Accepting the offer writes the chosen pages back into it, so Re-translate and
+Retry ask for the same pages.
 
 ### Language selection and backend capabilities
 
@@ -1267,6 +1328,7 @@ deliberately not implemented: the panes scroll and zoom independently.
 - `.env` is auto-loaded via `python-dotenv` and overrides the TOML, except an API key for a service set to its own endpoint (see "LLM endpoints and models"). It's searched at the **repo root** (resolved from `__file__`, not `cwd` — `cwd` is non-writable `C:\Program Files\…` on an installed launch) and in the AppData config dir. See `config/manager.py:_load_dotenv`.
 - Singleton: `get_config_manager()` / `get_settings()` from `desktop_pdf_translator.config`.
 - A saved model its provider has shut down loads as the service's current default (`RETIRED_MODELS`); see "LLM endpoints and models".
+- `[translation]` also holds the two translation limits, `max_pages` (pages one translation covers) and `max_file_size_mb`; see "Page ranges and limits".
 - Cache-related settings live under `[translation]` in `AppSettings` (`config/models.py`): `cache_translations` (paragraph cache, default on), `cache_translated_pdfs` (whole-PDF cache, default on), `pdf_cache_max_size_mb` (LRU cap, default 1000). Changing `pdf_cache_max_size_mb` applies without a sidecar restart (re-read on every eviction pass).
 
 ## Tauri shell details
@@ -1447,6 +1509,8 @@ and `shell.log`.
   translator failure/retry accounting and per-model parameter adaptation, the records
   database, and chat's document isolation (`test_rag_isolation.py` runs a real ChromaDB under
   `tmp_path` with a deterministic embedding function, so nothing downloads).
+  Splitting a document into chunks and assembling the rolling PDF are covered
+  against real PDFs (`test_pdf_pages.py`).
   Cross-platform (#69), `test_storage_paths.py` covers the data root per
   platform — the marked cases run only where they apply, the shell-override
   ones run everywhere — `test_config_security.py` covers the keystore scheme
@@ -1480,7 +1544,8 @@ and `shell.log`.
                                    # test_rag_isolation.py, test_rag_api.py,
                                    # test_storage_migrations.py, test_storage_paths.py,
                                    # test_records_store.py, test_keyword_search.py,
-                                   # test_config_api.py, test_param_compat.py
+                                   # test_config_api.py, test_param_compat.py,
+                                   # test_page_selection.py, test_pdf_pages.py
   python -m pytest tests -m smoke  # test_sidecar_smoke.py — excluded by default
 
   # Frontend (vitest, node environment — no jsdom)

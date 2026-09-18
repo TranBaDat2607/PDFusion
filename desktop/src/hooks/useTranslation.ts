@@ -3,6 +3,7 @@ import { toast } from "sonner";
 
 import { ApiError, api } from "@/lib/api-client";
 import type { components } from "@/lib/api-types";
+import type { PageRange } from "@/lib/page-range";
 import { streamJobEvents } from "@/lib/sse";
 import { useAppStore } from "@/lib/store";
 import { buildTranslateBody } from "@/lib/translate-request";
@@ -95,6 +96,8 @@ export interface StartOptions {
   sourceLang?: string | null;
   targetLang?: string | null;
   service?: string | null;
+  /** The pages to translate; omitted or null for the whole document. */
+  pageRanges?: PageRange[] | null;
 }
 
 export function useTranslation() {
@@ -150,17 +153,19 @@ export function useTranslation() {
             sourceLang: opts.sourceLang,
             targetLang: opts.targetLang,
             service: opts.service,
+            pageRanges: opts.pageRanges,
           }),
         );
         jobId = accepted.job_id;
         setActiveJob(jobId);
       } catch (e) {
-        // The sidecar pre-flights the language pair and answers 422 with a
-        // sentence meant for the user ("Argos translates English → Vietnamese
-        // only…"). Show that, not `ApiError`'s "422: " prefix.
+        // The sidecar pre-flights the language pair, the document's size and
+        // the pages asked for, and answers 422 with a sentence meant for the
+        // user ("Argos translates English → Vietnamese only…", "This PDF has
+        // 120 pages…"). Show that, not `ApiError`'s "422: " prefix.
         const message = e instanceof ApiError ? e.detail : (e as Error).message;
         if (e instanceof ApiError && e.status === 422) {
-          toast.error("Can't translate this combination", {
+          toast.error("Can't start this translation", {
             description: message,
           });
         } else if (e instanceof ApiError && e.status === 409) {
@@ -244,8 +249,10 @@ export function useTranslation() {
                 // The stage is left to the `progress` event that follows this
                 // one, which names the same pages.
                 stage: c.cache_hit ? "Loaded from cache" : s.stage,
+                // A cached whole-document translation can answer a request for
+                // some of its pages; name the pages the served file has.
                 message: c.cache_hit
-                  ? `All ${pluralizePages(donePages)} ready`
+                  ? `All ${pluralizePages(c.pages_to_translate ?? donePages)} ready`
                   : describeChunk(c),
                 etaSeconds: c.eta_seconds ?? null,
                 etaAnchorAt:

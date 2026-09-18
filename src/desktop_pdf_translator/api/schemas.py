@@ -1,8 +1,8 @@
 """Pydantic request/response schemas for the sidecar API."""
 
-from typing import Any, Dict, List, Literal, Optional
+from typing import Annotated, Any, Dict, List, Literal, Optional, Tuple
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, PositiveInt, field_validator
 
 from .sse_schemas import AskResultPayload
 
@@ -14,7 +14,7 @@ from ..config import (
     TranslationService,
     TranslationSettings,
 )
-from ..config.models import normalize_base_url
+from ..config.models import MaxFileSizeMB, MaxPages, normalize_base_url
 
 
 # ---------------------------------------------------------------------------
@@ -117,6 +117,8 @@ class ConfigUpdateRequest(BaseModel):
     chat_enabled: Optional[bool] = None
     # Performance / cache toggles
     max_parallel_chunks: Optional[int] = Field(None, ge=0, le=16)
+    max_pages: Optional[MaxPages] = None
+    max_file_size_mb: Optional[MaxFileSizeMB] = None
     cache_translations: Optional[bool] = None
     cache_translated_pdfs: Optional[bool] = None
 
@@ -155,6 +157,13 @@ class ValidateResponse(BaseModel):
 # ---------------------------------------------------------------------------
 
 
+# `[first, last]`, 1-indexed and inclusive. Pages past the end of the document
+# are refused by the pre-flight, which is the first place that knows its length.
+PageRangeList = Annotated[
+    List[Tuple[PositiveInt, PositiveInt]], Field(min_length=1, max_length=500)
+]
+
+
 class TranslateRequest(BaseModel):
     file_path: str
     # `None` means "unspecified" — the configured default applies. These were
@@ -174,6 +183,14 @@ class TranslateRequest(BaseModel):
     bypass_cache: bool = Field(
         False,
         description="Skip the PDF-level cache lookup for this run (forces a fresh translation)",
+    )
+    page_ranges: Optional[PageRangeList] = Field(
+        None,
+        description=(
+            "Pages to translate, as [first, last] ranges (1-indexed, inclusive). "
+            "Omitted or null: the whole document. The other pages stay in the "
+            "output untranslated, and `max_pages` limits the pages selected."
+        ),
     )
 
 

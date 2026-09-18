@@ -13,10 +13,18 @@
  *
  * Two more things it gets right, both invisible until they bite:
  *
- * - **A chunk is not always a page.** Argos uses 3-page chunks
- *   (`_PAGES_PER_CHUNK_ARGOS`) to amortise BabelDOC's layout-model reload, so
- *   `total_chunks` is not a page count. Pages come from the event's own
- *   `pages_in_chunk` span and the total from `total_pages`.
+ * - **A chunk is not always a page.** Every backend runs 1-page chunks today,
+ *   but the processor's chunk size is a knob (`_effective_pages_per_chunk`),
+ *   so `total_chunks` is not a page count. Pages come from the event's own
+ *   `pages_in_chunk` span, and the total from `pages_to_translate` — which is
+ *   fewer than the document's `total_pages` when only some pages were asked
+ *   for (#33).
+ * - **A cache hit's span is not what it translated.** The one synthetic
+ *   `chunk_ready` a cache hit emits claims the whole document, because the
+ *   viewer is swapping in a different file and every page has to repaint.
+ *   Read as a page count on a partial entry, that says 120 pages finished out
+ *   of the 2 the run asked for. `pagesIn` takes `pages_to_translate` there
+ *   instead.
  * - **The same chunk can arrive twice** (an SSE re-attach replays it), so
  *   completions are keyed by index rather than counted.
  */
@@ -31,16 +39,31 @@ export interface ChunkReadyLike {
    *  this field — the UI then reports progress without a denominator rather
    *  than inventing one. */
   total_pages?: number | null;
+  /** Pages this run translates: `total_pages`, or fewer for a page
+   *  selection. Absent on a sidecar that predates page selections. */
+  pages_to_translate?: number | null;
+  /** This event is the synthetic one a PDF-cache hit emits, not a chunk the
+   *  pipeline finished. The accumulator has to know because such an event's
+   *  `pages_in_chunk` is a repaint hint rather than a span of work. */
+  cache_hit?: boolean;
 }
 
 export interface ChunkProgress {
   /** chunk index → pages that chunk covers. */
   pagesByChunk: Record<number, number>;
   totalChunks: number;
+  /** Pages this run translates — the denominator of "N of M". */
   totalPages: number | null;
 }
 
 function pagesIn(event: ChunkReadyLike): number {
+  // A cache hit's span is the whole document on purpose — the viewer is
+  // swapping in a different file, so every page repaints — and that is not
+  // what the run translated. The two agree for a whole-document entry and
+  // differ for a partial one, where the span is 120 and the run is 2.
+  if (event.cache_hit && event.pages_to_translate != null) {
+    return event.pages_to_translate;
+  }
   const [first, last] = event.pages_in_chunk;
   return Math.max(1, last - first + 1);
 }
@@ -55,7 +78,11 @@ export function applyChunkReady(
       [event.chunk_index]: pagesIn(event),
     },
     totalChunks: event.total_chunks,
-    totalPages: event.total_pages ?? previous?.totalPages ?? null,
+    totalPages:
+      event.pages_to_translate ??
+      event.total_pages ??
+      previous?.totalPages ??
+      null,
   };
 }
 

@@ -86,8 +86,9 @@ export function ProgressOverlay({
   // is the only evidence, so it gets said out loud.
   const failed = state.failedParagraphs ?? 0;
   const partial = state.status === "done" && failed > 0;
-  // Pages, not chunks: Argos translates 3 pages per chunk, so `totalChunks`
-  // is not a page count.
+  // Pages, not chunks: a chunk can span several pages, so `totalChunks` is not
+  // a page count. The total is the pages this run translates, which is fewer
+  // than the document's when only some were selected.
   const donePages = chunkProgress ? pagesReady(chunkProgress) : 0;
   const totalPages = chunkProgress?.totalPages ?? null;
   const pagesLeft = chunkProgress ? pagesRemaining(chunkProgress) : null;

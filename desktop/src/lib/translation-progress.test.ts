@@ -21,14 +21,30 @@ function page(n: number, totalPages = 50): ChunkReadyLike {
   };
 }
 
-/** Argos batches 3 pages per chunk, so chunk 0 covers pages 1-3. */
-function argosChunk(index: number, totalPages = 10): ChunkReadyLike {
+/** A backend configured for 3-page chunks: chunk 0 covers pages 1-3. */
+function threePageChunk(index: number, totalPages = 10): ChunkReadyLike {
   const first = index * 3 + 1;
   return {
     chunk_index: index,
     total_chunks: Math.ceil(totalPages / 3),
     pages_in_chunk: [first, Math.min(first + 2, totalPages)],
     total_pages: totalPages,
+  };
+}
+
+/**
+ * The single synthetic `chunk_ready` a PDF-cache hit emits. Its span is always
+ * the whole document — the viewer swaps the file rather than repainting a
+ * chunk — while `pages_to_translate` is what the served file has translated.
+ */
+function cacheHit(pagesTranslated: number, totalPages = 120): ChunkReadyLike {
+  return {
+    chunk_index: 0,
+    total_chunks: 1,
+    pages_in_chunk: [1, totalPages],
+    total_pages: totalPages,
+    pages_to_translate: pagesTranslated,
+    cache_hit: true,
   };
 }
 
@@ -63,9 +79,9 @@ describe("applyChunkReady", () => {
     expect(chunksReady(progress)).toBe(2);
   });
 
-  // Argos runs 3-page chunks, so total_chunks (4) is not the page count (10).
+  // With 3-page chunks, total_chunks (4) is not the page count (10).
   it("counts pages, not chunks, for multi-page chunks", () => {
-    const progress = accumulate([argosChunk(0), argosChunk(1)]);
+    const progress = accumulate([threePageChunk(0), threePageChunk(1)]);
     expect(chunksReady(progress)).toBe(2);
     expect(pagesReady(progress)).toBe(6);
     expect(progress.totalPages).toBe(10);
@@ -74,7 +90,7 @@ describe("applyChunkReady", () => {
 
   it("counts a short trailing chunk by its real length", () => {
     // 10 pages in 3-page chunks: the last one holds page 10 alone.
-    const progress = accumulate([0, 1, 2, 3].map((i) => argosChunk(i)));
+    const progress = accumulate([0, 1, 2, 3].map((i) => threePageChunk(i)));
     expect(pagesReady(progress)).toBe(10);
     expect(pagesRemaining(progress)).toBe(0);
   });
@@ -105,6 +121,49 @@ describe("applyChunkReady", () => {
     expect(pagesRemaining(progress)).toBeNull();
   });
 
+  // #33: pages 101-150 of a 500-page book. "3 of 500 pages" would read as
+  // barely started when a sixteenth of the job is done.
+  it("counts toward the selected pages, not the document", () => {
+    const progress = accumulate(
+      [101, 102, 103].map((n) => ({
+        ...page(n, 500),
+        chunk_index: n - 101,
+        total_chunks: 50,
+        pages_to_translate: 50,
+      })),
+    );
+    expect(progress.totalPages).toBe(50);
+    expect(pagesReady(progress)).toBe(3);
+    expect(pagesRemaining(progress)).toBe(47);
+  });
+
+  // A partial run served from the cache: the span says 120 because every page
+  // repaints, `pages_to_translate` says 2 because that is what was asked for.
+  // Counting the span against that denominator rendered "120 of 2 pages
+  // translated".
+  it("counts a partial cache hit as the pages it translated", () => {
+    const progress = accumulate([cacheHit(2)]);
+    expect(pagesReady(progress)).toBe(2);
+    expect(progress.totalPages).toBe(2);
+    expect(pagesRemaining(progress)).toBe(0);
+  });
+
+  it("leaves a whole-document cache hit counting every page", () => {
+    const progress = accumulate([cacheHit(120)]);
+    expect(pagesReady(progress)).toBe(120);
+    expect(progress.totalPages).toBe(120);
+    expect(pagesRemaining(progress)).toBe(0);
+  });
+
+  // A sidecar predating `pages_to_translate` still sends `cache_hit`. With
+  // nothing better to read, the span is the only answer available.
+  it("falls back to the span when a cache hit names no page count", () => {
+    const progress = accumulate([
+      { chunk_index: 0, total_chunks: 1, pages_in_chunk: [1, 120], cache_hit: true },
+    ]);
+    expect(pagesReady(progress)).toBe(120);
+  });
+
   it("keeps a totalPages it already learned", () => {
     const progress = accumulate([
       page(1),
@@ -120,7 +179,7 @@ describe("describeChunk", () => {
   });
 
   it("names the span a multi-page chunk covers", () => {
-    expect(describeChunk(argosChunk(1))).toBe("Pages 4–6 translated");
+    expect(describeChunk(threePageChunk(1))).toBe("Pages 4–6 translated");
   });
 
   // The old copy read "Pages 1–30 translated" off the chunk's last page,

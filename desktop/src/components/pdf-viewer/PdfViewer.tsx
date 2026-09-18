@@ -64,6 +64,8 @@ interface PdfViewerProps {
    *  size (CSS points at scale=1). Fires again with `null` when the document
    *  is unloaded. */
   onFirstPageSize?: (size: PageSize | null) => void;
+  /** Fired alongside `onFirstPageSize`, with the document's page count. */
+  onPageCount?: (count: number | null) => void;
   /** Fired when the page the reader is on changes. Used by the original viewer
    *  to feed the translation priority scheduler so the page the user is
    *  looking at translates first. */
@@ -106,6 +108,7 @@ export function PdfViewer({
   label,
   placeholderSize,
   onFirstPageSize,
+  onPageCount,
   onVisiblePageChange,
   reloadKey = 0,
   incrementalUpdates = false,
@@ -147,6 +150,8 @@ export function PdfViewer({
   onVisiblePageChangeRef.current = onVisiblePageChange;
   const onFirstPageSizeRef = useRef(onFirstPageSize);
   onFirstPageSizeRef.current = onFirstPageSize;
+  const onPageCountRef = useRef(onPageCount);
+  onPageCountRef.current = onPageCount;
   const reportedPageRef = useRef(0);
 
   /** Work out what's on screen from the scroll position: which pages the
@@ -212,6 +217,7 @@ export function PdfViewer({
     if (!loaded) {
       setSizes([]);
       onFirstPageSizeRef.current?.(null);
+      onPageCountRef.current?.(null);
       return;
     }
     const { doc: current, changes, keepPosition } = loaded;
@@ -230,7 +236,10 @@ export function PdfViewer({
         const first = (await current.getPage(1)).getViewport({ scale: 1 });
         if (cancelled) return;
         const size = { width: first.width, height: first.height };
-        if (!keepPosition) onFirstPageSizeRef.current?.(size);
+        if (!keepPosition) {
+          onFirstPageSizeRef.current?.(size);
+          onPageCountRef.current?.(current.numPages);
+        }
         resolved = new Array<PageSize>(current.numPages).fill(size);
         setSizes(resolved.slice());
         pending = pageNumbers(2, current.numPages);

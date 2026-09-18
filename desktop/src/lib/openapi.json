@@ -439,6 +439,18 @@
             "default": null,
             "title": "Pages Per Second"
           },
+          "pages_to_translate": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Pages To Translate"
+          },
           "progress_percent": {
             "title": "Progress Percent",
             "type": "number"
@@ -704,6 +716,32 @@
                 "type": "null"
               }
             ]
+          },
+          "max_file_size_mb": {
+            "anyOf": [
+              {
+                "maximum": 200.0,
+                "minimum": 1.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max File Size Mb"
+          },
+          "max_pages": {
+            "anyOf": [
+              {
+                "maximum": 100.0,
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Pages"
           },
           "max_parallel_chunks": {
             "anyOf": [
@@ -1689,6 +1727,35 @@
             "title": "File Path",
             "type": "string"
           },
+          "page_ranges": {
+            "anyOf": [
+              {
+                "items": {
+                  "maxItems": 2,
+                  "minItems": 2,
+                  "prefixItems": [
+                    {
+                      "exclusiveMinimum": 0.0,
+                      "type": "integer"
+                    },
+                    {
+                      "exclusiveMinimum": 0.0,
+                      "type": "integer"
+                    }
+                  ],
+                  "type": "array"
+                },
+                "maxItems": 500,
+                "minItems": 1,
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Pages to translate, as [first, last] ranges (1-indexed, inclusive). Omitted or null: the whole document. The other pages stay in the output untranslated, and `max_pages` limits the pages selected.",
+            "title": "Page Ranges"
+          },
           "service": {
             "anyOf": [
               {
@@ -1795,7 +1862,7 @@
           },
           "max_pages": {
             "default": 50,
-            "description": "Maximum pages per PDF",
+            "description": "Maximum pages per translation",
             "maximum": 100.0,
             "minimum": 1.0,
             "title": "Max Pages",

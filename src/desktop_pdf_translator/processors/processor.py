@@ -11,9 +11,7 @@ import threading
 import time
 import uuid
 from pathlib import Path
-from typing import AsyncGenerator, Optional
-
-import fitz  # PyMuPDF
+from typing import AsyncGenerator, Optional, Sequence
 
 from babeldoc.format.pdf.high_level import async_translate as babeldoc_translate
 from babeldoc.format.pdf.translation_config import TranslationConfig as BabelDOCConfig
@@ -34,7 +32,17 @@ from .events import (
     EventType,
 )
 from .doc_layout_cache import get_shared_doc_layout_model
+from .page_selection import (
+    PageRange,
+    PageSelectionError,
+    contiguous_runs,
+    format_pages,
+    pages_key,
+    rolling_segments,
+    validate_selection,
+)
 from .pdf_cache import compute_file_hash, get_pdf_cache, is_cacheable_artifact
+from .pdf_pages import inspect_pdf, rebuild_rolling_pdf, split_into_chunks
 from .exceptions import (
     ProcessingError,
     BabelDOCError,
@@ -241,16 +249,20 @@ class PDFProcessor:
         translation_service: Optional[TranslationService] = None,
         visible_page: int = 1,
         bypass_cache: bool = False,
+        page_ranges: Optional[Sequence[PageRange]] = None,
     ) -> AsyncGenerator[ProcessingEvent, None]:
         """
         Process PDF file with translation.
-        
+
         Args:
             file_path: Path to input PDF file
             source_lang: Source language (optional, uses config default)
-            target_lang: Target language (optional, uses config default) 
+            target_lang: Target language (optional, uses config default)
             translation_service: Translation service (optional, uses config default)
-            
+            page_ranges: 1-indexed, inclusive `(first, last)` ranges to
+                translate; `None` for the whole document. The other pages
+                stay in the output untranslated.
+
         Yields:
             ProcessingEvent: Progress updates and completion events
         """
@@ -313,7 +325,15 @@ class PDFProcessor:
                 message=f"Validating {file_path.name}"
             )
             
-            file_metadata = await asyncio.to_thread(self._validate_file, file_path)
+            file_metadata = await asyncio.to_thread(
+                self._validate_file, file_path, page_ranges
+            )
+            selected = file_metadata.selected_pages
+            pages_label = (
+                f"{file_metadata.page_count} pages"
+                if selected is None
+                else f"pages {format_pages(selected)} of {file_metadata.page_count}"
+            )
 
             yield ProgressEvent(
                 type=EventType.PROGRESS_UPDATE,
@@ -324,7 +344,7 @@ class PDFProcessor:
                 current_step=1,
                 total_steps=4,
                 progress_percent=25.0,
-                message=f"File validated: {file_metadata.page_count} pages, {file_metadata.file_size_mb:.1f} MB"
+                message=f"File validated: {pages_label}, {file_metadata.file_size_mb:.1f} MB"
             )
 
             # Fallback notice — emit BEFORE the cache lookup so the user is
@@ -360,6 +380,10 @@ class PDFProcessor:
             # the source bytes don't change between the two calls in a single
             # run, so paying twice was pure waste.
             input_file_hash: Optional[str] = None
+            # A partial run is cached under its own key, never under the
+            # whole document's: the whole-document entry is served for every
+            # later open of this file.
+            selection_key = None if selected is None else pages_key(selected)
             if self.settings.translation.cache_translated_pdfs:
                 try:
                     input_file_hash = await asyncio.to_thread(
@@ -385,6 +409,7 @@ class PDFProcessor:
                     translation_service.value,
                     model_id,
                     input_file_hash,
+                    pages=selection_key,
                 )
                 if hit is not None:
                     # Use the highest-int name in the rolling-version family
@@ -433,6 +458,13 @@ class PDFProcessor:
                             hit.cached_at, hit.hit_count, target,
                         )
                         self._input_stem = file_path.stem
+                        # A whole-document entry can answer a partial request;
+                        # say how many pages the served file has translated.
+                        pages_translated = (
+                            file_metadata.page_count
+                            if hit.pages is None or selected is None
+                            else len(selected)
+                        )
                         yield ChunkReadyEvent(
                             type=EventType.CHUNK_READY,
                             timestamp=time.time(),
@@ -440,6 +472,8 @@ class PDFProcessor:
                             data={},
                             chunk_index=0,
                             total_chunks=1,
+                            # Every page: the viewer is swapping in a different
+                            # file, not one that differs by a chunk.
                             pages_in_chunk=(1, file_metadata.page_count),
                             rolling_pdf_path=target,
                             progress_percent=100.0,
@@ -447,6 +481,7 @@ class PDFProcessor:
                             eta_seconds=None,
                             pages_per_second=None,
                             total_pages=file_metadata.page_count,
+                            pages_to_translate=pages_translated,
                             cache_hit=True,
                             cached_at=hit.cached_at,
                         )
@@ -459,7 +494,7 @@ class PDFProcessor:
                             original_file=file_path,
                             translated_file=target,
                             processing_time_seconds=time.time() - start_time,
-                            pages_processed=file_metadata.page_count,
+                            pages_processed=pages_translated,
                             cache_hit=True,
                             cached_at=hit.cached_at,
                             target_lang=target_lang.value,
@@ -572,6 +607,7 @@ class PDFProcessor:
                         translation_service.value,
                         self._resolve_model_id(translation_service),
                         input_file_hash,
+                        selection_key,
                     )
                 )
                 _pending_cache_writes.add(store_task)
@@ -602,7 +638,9 @@ class PDFProcessor:
                 original_file=file_path,
                 translated_file=translated_file,
                 processing_time_seconds=processing_time,
-                pages_processed=file_metadata.page_count,
+                pages_processed=(
+                    file_metadata.page_count if selected is None else len(selected)
+                ),
                 target_lang=target_lang.value,
                 failed_paragraphs=self._failed_paragraphs,
                 # The translator's own call count, not `_paragraphs_seen`:
@@ -672,52 +710,34 @@ class PDFProcessor:
         service a request will really run on."""
         return resolve_effective_service(self.settings, requested)
 
-    def _validate_file(self, file_path: Path) -> FileMetadata:
-        """Validate PDF file and extract metadata."""
+    def _validate_file(
+        self,
+        file_path: Path,
+        page_ranges: Optional[Sequence[PageRange]] = None,
+    ) -> FileMetadata:
+        """Validate the PDF and the pages asked of it.
+
+        `POST /translate` makes the same check before creating the job, so a
+        failure here means the file or the settings changed in between.
+        """
+        info = inspect_pdf(file_path)
         try:
-            if not file_path.exists():
-                raise FileValidationError(f"File does not exist: {file_path}")
-            
-            if not file_path.suffix.lower() == '.pdf':
-                raise FileValidationError(f"File is not a PDF: {file_path}")
-            
-            # Get file size
-            file_size_mb = file_path.stat().st_size / (1024 * 1024)
-            
-            # Check file size limit
-            if file_size_mb > self.settings.translation.max_file_size_mb:
-                raise FileValidationError(
-                    f"File too large: {file_size_mb:.1f} MB > {self.settings.translation.max_file_size_mb} MB"
-                )
-            
-            # Open PDF and get page count
-            try:
-                doc = fitz.open(file_path)
-                page_count = len(doc)
-                doc.close()
-            except Exception as e:
-                raise FileValidationError(f"Cannot open PDF file: {e}")
-
-            if page_count == 0:
-                raise FileValidationError("PDF has no pages")
-
-            # Check page count limit
-            if page_count > self.settings.translation.max_pages:
-                raise FileValidationError(
-                    f"Too many pages: {page_count} > {self.settings.translation.max_pages}"
-                )
-            
-            return FileMetadata(
-                original_path=file_path,
-                filename=file_path.name,
-                file_size_mb=file_size_mb,
-                page_count=page_count
+            selected = validate_selection(
+                page_ranges,
+                page_count=info.page_count,
+                size_mb=info.size_mb,
+                max_pages=self.settings.translation.max_pages,
+                max_size_mb=self.settings.translation.max_file_size_mb,
             )
-            
-        except FileValidationError:
-            raise
-        except Exception as e:
-            raise FileValidationError(f"File validation failed: {e}")
+        except PageSelectionError as exc:
+            raise FileValidationError(str(exc), file_path=str(file_path))
+        return FileMetadata(
+            original_path=file_path,
+            filename=file_path.name,
+            file_size_mb=info.size_mb,
+            page_count=info.page_count,
+            selected_pages=selected,
+        )
     
     async def _process_with_babeldoc(
         self,
@@ -736,7 +756,8 @@ class PDFProcessor:
         we get streaming + pipelining by structuring it at the orchestration
         layer:
 
-        1. Split the input into 1-page chunks up front.
+        1. Split the selected pages (`file_metadata.selected_pages`, or all of
+           them) into 1-page chunks up front.
         2. Launch up to `_MAX_PARALLEL_CHUNKS` BabelDOC sub-jobs concurrently.
            While chunk N is in its typeset/render/save phase, chunk N+1 can be
            in its translate phase calling Argos.
@@ -746,8 +767,9 @@ class PDFProcessor:
            natural rate limiter — extra parallelism doesn't make it faster,
            but it does hide BabelDOC's per-chunk non-translate overhead.
         4. Completed chunks are merged into a rolling versioned PDF (in
-           strict page order, even when chunks finish out of order) and a
-           `chunk_ready` SSE event is emitted so the viewer hot-swaps.
+           strict page order, even when chunks finish out of order; every
+           other page comes from the original) and a `chunk_ready` SSE event
+           is emitted so the viewer hot-swaps.
 
         The translator instance is reused across chunks so the Argos batch
         queue and process-lifetime translation cache (argos_translator.py)
@@ -769,15 +791,21 @@ class PDFProcessor:
             chunks_in_dir.mkdir(parents=True, exist_ok=True)
             chunks_out_root.mkdir(parents=True, exist_ok=True)
 
+            pages = file_metadata.selected_pages or range(
+                1, file_metadata.page_count + 1
+            )
+            pages_to_translate = len(pages)
             chunks = await asyncio.to_thread(
-                self._split_input_into_chunks,
-                file_path, chunks_in_dir, pages_per_chunk=pages_per_chunk,
+                split_into_chunks,
+                file_path,
+                chunks_in_dir,
+                contiguous_runs(pages, pages_per_chunk),
             )
             total_chunks = len(chunks)
             logger.info(
-                "Split %s (%d pages) into %d chunk(s) of up to %d page(s)",
-                file_path.name, file_metadata.page_count, total_chunks,
-                pages_per_chunk,
+                "Split %d of %s's %d pages into %d chunk(s) of up to %d page(s)",
+                pages_to_translate, file_path.name, file_metadata.page_count,
+                total_chunks, pages_per_chunk,
             )
 
             yield ProgressEvent(
@@ -790,17 +818,20 @@ class PDFProcessor:
                 total_steps=4,
                 progress_percent=50.0,
                 message=(
-                    f"Pipelining {total_chunks} page(s), "
+                    f"Pipelining {pages_to_translate} page(s), "
                     f"up to {max_parallel} in flight"
                 ),
             )
 
             # Priority-driven scheduling. Up to `max_parallel` workers run
-            # concurrently, each picking the **pending** chunk whose page
-            # index is closest to the current `_priority_anchor` (the page
-            # the user is looking at). Reprioritization via
-            # `reprioritize()` updates the anchor and the next worker pick
-            # sees the new value.
+            # concurrently, each picking the **pending** chunk whose first
+            # page is closest to the current `_priority_anchor` (the page the
+            # user is looking at). Reprioritization via `reprioritize()`
+            # updates the anchor and the next worker pick sees the new value.
+            #
+            # Distance is measured in pages, not chunk indexes: with a page
+            # selection, chunk 0 can be page 40.
+            chunk_first_page = [page_range[0] - 1 for _, page_range in chunks]
             chunk_results: list[Optional[Path]] = [None] * total_chunks
             chunk_errors: list[Optional[BaseException]] = [None] * total_chunks
             pending: set[int] = set(range(total_chunks))
@@ -817,7 +848,10 @@ class PDFProcessor:
                     anchor = self._priority_anchor or 0
                     # Smallest absolute distance wins; ties break to the
                     # lower index for deterministic progress on flat priors.
-                    target = min(pending, key=lambda i: (abs(i - anchor), i))
+                    target = min(
+                        pending,
+                        key=lambda i: (abs(chunk_first_page[i] - anchor), i),
+                    )
                     pending.discard(target)
                     return target
 
@@ -859,13 +893,28 @@ class PDFProcessor:
                             f"{idx + 1} in {chunk_out_dir}"
                         )
                     chunk_results[idx] = translated
+                except asyncio.CancelledError:
+                    # The workers are being stopped (see `worker`). Not a
+                    # chunk failure.
+                    raise
                 except BaseException as exc:
                     chunk_errors[idx] = exc
                 finally:
                     await completion_queue.put(idx)
 
             async def worker() -> None:
+                task = asyncio.current_task()
                 while True:
+                    # A cancelled worker stops before its next page. The
+                    # `finally` below cancels the workers on Cancel and on any
+                    # error, but BabelDOC's `async_translate` catches the
+                    # CancelledError, waits for its thread and returns as if
+                    # done — so `run_one_chunk` only sees a chunk with no
+                    # output. Without this check the worker carried on, and
+                    # the `gather` below waited for every remaining page:
+                    # Cancel sat at "Cancelling…" for minutes.
+                    if task is not None and task.cancelling():
+                        raise asyncio.CancelledError
                     nxt = await pick_next()
                     if nxt is None:
                         return
@@ -979,13 +1028,20 @@ class PDFProcessor:
                     )
                     # PyMuPDF merge is blocking (~50-100 ms, grows with page
                     # count) — run it off the event loop so SSE delivery and
-                    # other requests aren't stalled per chunk.
+                    # other requests aren't stalled per chunk. The plan and a
+                    # copy of the results are taken here, on the loop, where
+                    # no other chunk can land in between.
+                    segments = rolling_segments(
+                        file_metadata.page_count,
+                        [page_range for _, page_range in chunks],
+                        [result is not None for result in chunk_results],
+                    )
                     await asyncio.to_thread(
-                        self._rebuild_sparse_rolling_pdf,
+                        rebuild_rolling_pdf,
                         rolling_path,
-                        original_path=file_path,
-                        chunks=chunks,
-                        chunk_results=chunk_results,
+                        file_path,
+                        segments,
+                        list(chunk_results),
                     )
                     # Bound disk usage during the run. keep=2, not 1: the
                     # viewer is still on v{N-1} until it processes the
@@ -1020,11 +1076,12 @@ class PDFProcessor:
                         eta_seconds=eta_seconds,
                         pages_per_second=pages_per_second,
                         total_pages=file_metadata.page_count,
+                        pages_to_translate=pages_to_translate,
                     )
                     # Name the pages this chunk actually covers. `page_range[1]`
-                    # alone silently dropped the other two pages of an Argos
-                    # 3-page chunk, and reads like a running total even though
-                    # chunks complete in priority order, not 1..N.
+                    # alone would drop the rest of a multi-page chunk, and reads
+                    # like a running total even though chunks complete in
+                    # priority order, not 1..N.
                     # No "of {page_count}" here for the same reason: the overlay
                     # renders the accumulated "N of M pages translated" directly
                     # below this line, and a second fraction describing a single
@@ -1081,37 +1138,6 @@ class PDFProcessor:
                 t.cancel()
             if unfinished_tasks:
                 await asyncio.gather(*unfinished_tasks, return_exceptions=True)
-
-    def _split_input_into_chunks(
-        self,
-        input_path: Path,
-        chunks_dir: Path,
-        pages_per_chunk: int = _PAGES_PER_CHUNK,
-    ) -> list:
-        """Split a PDF into N-page chunks on disk.
-
-        Returns a list of `(chunk_path, (first_page, last_page))` tuples,
-        where pages are 1-indexed and inclusive (UI-friendly).
-        """
-        chunks_dir.mkdir(parents=True, exist_ok=True)
-        src = fitz.open(input_path)
-        try:
-            total = src.page_count
-            chunks = []
-            for chunk_idx, start in enumerate(range(0, total, pages_per_chunk)):
-                end = min(start + pages_per_chunk, total)
-                chunk_doc = fitz.open()
-                chunk_doc.insert_pdf(src, from_page=start, to_page=end - 1)
-                chunk_path = (
-                    chunks_dir
-                    / f"{input_path.stem}_chunk{chunk_idx:03d}.pdf"
-                )
-                chunk_doc.save(chunk_path)
-                chunk_doc.close()
-                chunks.append((chunk_path, (start + 1, end)))
-            return chunks
-        finally:
-            src.close()
 
     def _handle_paragraph(self, source: str, target: str) -> None:
         """Thread-safe paragraph callback. Called from the translator's
@@ -1190,38 +1216,6 @@ class PDFProcessor:
             self._priority_anchor = max(0, visible_page - 1)
         logger.info("Priority anchor updated → page %d (0-indexed %d)",
                     visible_page, self._priority_anchor)
-
-    def _rebuild_sparse_rolling_pdf(
-        self,
-        rolling_path: Path,
-        original_path: Path,
-        chunks: list,
-        chunk_results: list,
-    ) -> None:
-        """Build a full N-page rolling PDF where translated chunk slots are
-        filled from `chunk_results` and pending slots fall back to the
-        original PDF's pages. The viewer always sees a complete N-page
-        document, so scroll position stays stable as out-of-order chunks
-        land. PyMuPDF's `insert_pdf` is object-level (no re-render) — a
-        20-page rebuild typically takes ~50-100ms."""
-        merged = fitz.open()
-        src = fitz.open(original_path)
-        try:
-            for idx, (_, page_range) in enumerate(chunks):
-                translated = chunk_results[idx]
-                if translated is not None:
-                    with fitz.open(translated) as chunk_doc:
-                        merged.insert_pdf(chunk_doc)
-                else:
-                    # Fall back to original pages (1-indexed inclusive →
-                    # 0-indexed inclusive for PyMuPDF).
-                    start_0 = page_range[0] - 1
-                    end_0 = page_range[1] - 1
-                    merged.insert_pdf(src, from_page=start_0, to_page=end_0)
-            merged.save(rolling_path)
-        finally:
-            src.close()
-            merged.close()
 
     def _create_babeldoc_config(self, file_path: Path, translator, output_dir: Path, doc_layout_model):
         """Create BabelDOC configuration."""
@@ -1317,7 +1311,7 @@ class PDFProcessor:
     def _sorted_rolling_pdfs(self, output_dir: Path, stem: str) -> list[Path]:
         """All rolling translated PDFs for `stem`, ascending by version number
         (so `[-1]` is the latest, most-complete output). These are written by
-        `_rebuild_sparse_rolling_pdf` after each chunk."""
+        `pdf_pages.rebuild_rolling_pdf` after each chunk."""
         return sorted(
             output_dir.glob(f"{stem}_translated_v*.pdf"),
             key=self._rolling_version,

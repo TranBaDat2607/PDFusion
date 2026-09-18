@@ -14,9 +14,21 @@ import type { ChunkProgress } from "@/lib/translation-progress";
 export type Theme = "light" | "dark" | "system";
 
 interface AppState {
-  /** Path of the currently loaded original PDF (absolute, host filesystem). */
+  /** Path of the currently loaded original PDF (absolute, host filesystem).
+   *  Setting a different one also clears `originalPageCount` and
+   *  `pageRangeText`, which describe the previous document. */
   originalPdfPath: string | null;
   setOriginalPdfPath: (path: string | null) => void;
+
+  /** Pages in the original PDF, reported by its viewer once pdf.js has loaded
+   *  it; `null` until then. */
+  originalPageCount: number | null;
+  setOriginalPageCount: (count: number | null) => void;
+
+  /** The toolbar's Pages box, as typed (#33). Blank is the whole document.
+   *  Parsed by `lib/page-range.ts` wherever it's read. */
+  pageRangeText: string;
+  setPageRangeText: (text: string) => void;
 
   /** Dimensions of the original PDF's first page (CSS points, scale=1). Used
    *  to render a blank placeholder in the translated panel before a
@@ -108,7 +120,18 @@ interface AppState {
 
 export const useAppStore = create<AppState>((set) => ({
   originalPdfPath: null,
-  setOriginalPdfPath: (path) => set({ originalPdfPath: path }),
+  setOriginalPdfPath: (path) =>
+    set((s) =>
+      path === s.originalPdfPath
+        ? {}
+        : { originalPdfPath: path, originalPageCount: null, pageRangeText: "" },
+    ),
+
+  originalPageCount: null,
+  setOriginalPageCount: (originalPageCount) => set({ originalPageCount }),
+
+  pageRangeText: "",
+  setPageRangeText: (pageRangeText) => set({ pageRangeText }),
 
   originalFirstPageSize: null,
   setOriginalFirstPageSize: (size) => set({ originalFirstPageSize: size }),
