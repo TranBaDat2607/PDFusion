@@ -291,6 +291,22 @@ def test_a_file_that_is_not_a_pdf_is_refused(
     assert response.json()["detail"].startswith("Cannot open PDF file")
 
 
+def test_a_password_protected_pdf_is_refused(
+    client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """MuPDF opens it and reports one page, so the pre-flight used to wave it
+    through into a job that could never read it (#68)."""
+    locked = tmp_path / "locked.pdf"
+    with fitz.open() as doc:
+        doc.new_page()
+        doc.save(locked, encryption=fitz.PDF_ENCRYPT_AES_256, user_pw="open-me")
+    _settings(monkeypatch)
+    _engine(monkeypatch, ready=True)
+    response = _post(client, locked)
+    assert response.status_code == 422
+    assert "password-protected" in response.json()["detail"]
+
+
 def test_the_limit_is_reported_before_a_missing_engine(
     client: TestClient, five_pages: Path, monkeypatch: pytest.MonkeyPatch
 ):
