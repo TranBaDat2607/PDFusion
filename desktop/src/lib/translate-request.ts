@@ -106,3 +106,18 @@ export function isPairSupported(
   if (pairs == null) return true;
   return pairs.some(([from, to]) => from === sourceLang && to === targetLang);
 }
+
+/**
+ * Whether `service` can translate from `sourceLang` into anything at all — the
+ * toolbar's From list, which greys out the rest (#33). Same unrestricted cases
+ * as `isPairSupported`.
+ */
+export function isSourceSupported(
+  options: Pick<OptionsResponse, "services">,
+  service: ServiceCode,
+  sourceLang: string,
+): boolean {
+  const pairs = supportedPairs(options, service);
+  if (pairs == null) return true;
+  return pairs.some(([from]) => from === sourceLang);
+}

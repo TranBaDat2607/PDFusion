@@ -1014,6 +1014,59 @@
         "title": "EngineStatusResponse",
         "type": "object"
       },
+      "EstimateRequest": {
+        "description": "What a translation of these pages would cost an LLM, before it runs.",
+        "properties": {
+          "file_path": {
+            "title": "File Path",
+            "type": "string"
+          },
+          "page_ranges": {
+            "anyOf": [
+              {
+                "items": {
+                  "maxItems": 2,
+                  "minItems": 2,
+                  "prefixItems": [
+                    {
+                      "exclusiveMinimum": 0.0,
+                      "type": "integer"
+                    },
+                    {
+                      "exclusiveMinimum": 0.0,
+                      "type": "integer"
+                    }
+                  ],
+                  "type": "array"
+                },
+                "maxItems": 500,
+                "minItems": 1,
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "As in TranslateRequest; omitted or null: every page",
+            "title": "Page Ranges"
+          },
+          "target_lang": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/LanguageCode"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "file_path"
+        ],
+        "title": "EstimateRequest",
+        "type": "object"
+      },
       "ExportPdfRequest": {
         "description": "Save a translated PDF to a permanent location the user picked.\n\n`source_path` is whatever the translation job reported (a rolling file in\nthe per-job temp dir, or a cache materialization); `destination_path` comes\nstraight from the native Save dialog.",
         "properties": {
@@ -1798,6 +1851,40 @@
           "file_path"
         ],
         "title": "TranslateRequest",
+        "type": "object"
+      },
+      "TranslationEstimate": {
+        "description": "A rough count (`translators/usage_estimate.py`): PyMuPDF's text blocks\nstand in for BabelDOC's paragraphs, and characters for tokens.",
+        "properties": {
+          "input_tokens": {
+            "title": "Input Tokens",
+            "type": "integer"
+          },
+          "output_tokens": {
+            "title": "Output Tokens",
+            "type": "integer"
+          },
+          "page_count": {
+            "title": "Page Count",
+            "type": "integer"
+          },
+          "pages_selected": {
+            "title": "Pages Selected",
+            "type": "integer"
+          },
+          "paragraphs": {
+            "title": "Paragraphs",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "page_count",
+          "pages_selected",
+          "paragraphs",
+          "input_tokens",
+          "output_tokens"
+        ],
+        "title": "TranslationEstimate",
         "type": "object"
       },
       "TranslationService": {
@@ -3231,6 +3318,66 @@
           }
         },
         "summary": "Start Translation",
+        "tags": [
+          "translation"
+        ]
+      }
+    },
+    "/translate/estimate": {
+      "post": {
+        "description": "Roughly how many tokens translating these pages would take (#33). The\ntoolbar shows it when an LLM will run. Off the event loop: it reads every\nselected page's text.",
+        "operationId": "estimate_translation_translate_estimate_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EstimateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TranslationEstimate"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Estimate Translation",
         "tags": [
           "translation"
         ]

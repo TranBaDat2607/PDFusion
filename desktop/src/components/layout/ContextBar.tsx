@@ -9,6 +9,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { PageRangeInput } from "@/components/translation/PageRangeInput";
+import { TokenEstimate } from "@/components/translation/TokenEstimate";
 import { TranslatedFileActions } from "@/components/translation/TranslatedFileActions";
 import {
   Tooltip,
@@ -25,7 +26,11 @@ import { api } from "@/lib/api-client";
 import type { components } from "@/lib/api-types";
 import { basename } from "@/lib/export-pdf";
 import { parsePageRanges } from "@/lib/page-range";
-import { effectiveService, isPairSupported } from "@/lib/translate-request";
+import {
+  effectiveService,
+  isPairSupported,
+  isSourceSupported,
+} from "@/lib/translate-request";
 import { useAppStore } from "@/lib/store";
 import { cn } from "@/lib/utils";
 
@@ -38,6 +43,35 @@ function prewarm(selection: {
   service?: string;
 }) {
   void api.post("/translate/prewarm", selection).catch(() => undefined);
+}
+
+const ARGOS_ONLY =
+  "Offline Argos translates English → Vietnamese only. Add an API key in " +
+  "Settings to translate other languages.";
+
+/** Under a language list with locked entries. A disabled Radix item sets
+ *  `pointer-events: none`, so a hover tooltip on the row could never fire; the
+ *  explanation goes here instead, where it's visible without hovering. */
+function LockedNote() {
+  return (
+    <p className="mt-1 border-t border-border px-2 pt-2 text-[11px] leading-snug text-muted-foreground">
+      {ARGOS_ONLY}
+    </p>
+  );
+}
+
+function LanguageLabel({ label, locked }: { label: string; locked: boolean }) {
+  return (
+    <span className="flex items-center gap-1.5">
+      {label}
+      {locked && (
+        <>
+          <Lock className="h-3 w-3" />
+          <span className="text-[10px] text-muted-foreground">API key needed</span>
+        </>
+      )}
+    </span>
+  );
 }
 
 interface ContextBarProps {
@@ -78,15 +112,19 @@ export function ContextBar({
     ? config?.[service].model ?? activeService.models[0]
     : "";
 
-  // Which targets the backend that will *actually* run can reach. An LLM with
-  // no API key is silently downgraded to Argos by the sidecar, so this asks
-  // about the effective service — offering Japanese under a keyless "OpenAI"
-  // selection would produce a job the sidecar refuses.
+  // Which languages the backend that will *actually* run can handle. An LLM
+  // with no API key is silently downgraded to Argos by the sidecar, so this
+  // asks about the effective service — offering Japanese under a keyless
+  // "OpenAI" selection would produce a job the sidecar refuses.
+  const running = config ? effectiveService(config) : null;
+  const sourceSupported = (code: string) =>
+    !options || !running ? true : isSourceSupported(options, running, code);
   const targetSupported = (code: string) =>
-    !config || !options
+    !options || !running
       ? true
-      : isPairSupported(options, effectiveService(config), sourceLang, code);
+      : isPairSupported(options, running, sourceLang, code);
 
+  const hasLockedSource = !!options?.languages.some((l) => !sourceSupported(l.code));
   const hasLockedTarget = !!options?.languages.some(
     (l) => l.code !== "auto" && !targetSupported(l.code),
   );
@@ -94,7 +132,27 @@ export function ContextBar({
   const ready = config && options;
   // A Pages box the toolbar can't read keeps Translate off; its tooltip says why.
   const pagesValid = parsePageRanges(pageRangeText, pageCount).ok;
-  const canTranslate = !!originalPath && !translating && ready && pagesValid;
+  // Switching to Argos can leave a pair it can't do selected. Translate says
+  // so here rather than as a refusal after the click (#33).
+  const pairSupported = targetSupported(targetLang);
+  const canTranslate =
+    !!originalPath && !translating && ready && pagesValid && pairSupported;
+
+  const translateButton = (
+    <Button
+      onClick={onTranslate}
+      disabled={!canTranslate}
+      size="sm"
+      className="gap-2"
+    >
+      {translating ? (
+        <Loader2 className="h-4 w-4 animate-spin" />
+      ) : (
+        <Sparkles className="h-4 w-4" />
+      )}
+      {translating ? "Translating…" : "Translate"}
+    </Button>
+  );
 
   return (
     <div className="flex flex-wrap items-center gap-3 border-b border-border bg-background px-4 py-2.5">
@@ -150,11 +208,15 @@ export function ContextBar({
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
-            {options?.languages.map((l) => (
-              <SelectItem key={l.code} value={l.code}>
-                {l.label}
-              </SelectItem>
-            ))}
+            {options?.languages.map((l) => {
+              const supported = sourceSupported(l.code);
+              return (
+                <SelectItem key={l.code} value={l.code} disabled={!supported}>
+                  <LanguageLabel label={l.label} locked={!supported} />
+                </SelectItem>
+              );
+            })}
+            {hasLockedSource && <LockedNote />}
           </SelectContent>
         </Select>
         <ArrowRight className="h-3.5 w-3.5 text-muted-foreground" />
@@ -177,29 +239,11 @@ export function ContextBar({
                 const supported = targetSupported(l.code);
                 return (
                   <SelectItem key={l.code} value={l.code} disabled={!supported}>
-                    <span className="flex items-center gap-1.5">
-                      {l.label}
-                      {!supported && (
-                        <>
-                          <Lock className="h-3 w-3" />
-                          <span className="text-[10px] text-muted-foreground">
-                            API key needed
-                          </span>
-                        </>
-                      )}
-                    </span>
+                    <LanguageLabel label={l.label} locked={!supported} />
                   </SelectItem>
                 );
               })}
-            {hasLockedTarget && (
-              // A disabled Radix item sets `pointer-events: none`, so a hover
-              // tooltip on the row can never fire. The explanation goes here
-              // instead, where it's visible without hovering anything.
-              <p className="mt-1 border-t border-border px-2 pt-2 text-[11px] leading-snug text-muted-foreground">
-                Offline Argos translates English → Vietnamese only. Add an API
-                key in Settings to translate to other languages.
-              </p>
-            )}
+            {hasLockedTarget && <LockedNote />}
           </SelectContent>
         </Select>
       </div>
@@ -229,6 +273,11 @@ export function ContextBar({
         <span className="rounded-md bg-muted px-2 py-1 font-mono text-[10px] text-muted-foreground">
           {activeModel}
         </span>
+      )}
+
+      {/* What an LLM run would cost, roughly. Argos costs nothing to call. */}
+      {originalPath && running && running !== "argos" && (
+        <TokenEstimate filePath={originalPath} targetLang={targetLang} />
       )}
 
       <div className="ml-auto flex items-center gap-2">
@@ -263,26 +312,27 @@ export function ContextBar({
           </>
         )}
 
-        <Button
-          onClick={onTranslate}
-          disabled={!canTranslate}
-          size="sm"
-          className="gap-2"
-        >
-          {translating ? (
-            <Loader2 className="h-4 w-4 animate-spin" />
-          ) : (
-            <Sparkles className="h-4 w-4" />
-          )}
-          {translating ? "Translating…" : "Translate"}
-        </Button>
+        {pairSupported || translating ? (
+          translateButton
+        ) : (
+          // A disabled button gets no pointer events, so the tooltip hangs
+          // off a wrapper that does.
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <span tabIndex={0} className="inline-flex">
+                {translateButton}
+              </span>
+            </TooltipTrigger>
+            <TooltipContent className="max-w-xs">{ARGOS_ONLY}</TooltipContent>
+          </Tooltip>
+        )}
 
         {canReTranslate && !translating && (
           <Tooltip>
             <TooltipTrigger asChild>
               <Button
                 onClick={onReTranslate}
-                disabled={!pagesValid}
+                disabled={!pagesValid || !pairSupported}
                 variant="outline"
                 size="sm"
                 className="gap-2"
