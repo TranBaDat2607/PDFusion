@@ -110,7 +110,21 @@ jobs:
             Write-Warning "WINDOWS_SIGN_COMMAND is not set - building an UNSIGNED installer"
           }
 
-      # beforeBundleCommand runs build-sidecar.ps1 (PyInstaller, ~10-20 min).
+      # Tauri's build script validates `externalBin` and `resources` at
+      # *compile* time, which is long before `beforeBundleCommand` runs — so
+      # `pnpm tauri build` never reaches the hook that builds the sidecar
+      # unless something is already staged. That is what killed the first
+      # v1.1.0 release: `resource path binaries\pdfusion-sidecar-<triple>.exe
+      # doesn't exist`, with PyInstaller never invoked. `--stub` drops
+      # placeholders in seconds, and `stage()` clears each destination before
+      # copying, so nothing of the stub survives into the installer.
+      - name: Stage sidecar placeholders
+        shell: pwsh
+        run: ./build-sidecar.ps1 -Stub
+
+      # beforeBundleCommand runs build-sidecar.ps1 for real (PyInstaller,
+      # ~10-20 min), replacing the placeholders above before the bundler
+      # collects externalBin and resources.
       - name: Build the installer
         working-directory: desktop
         run: pnpm tauri build --config '${{ steps.signing.outputs.config }}'
@@ -185,6 +199,17 @@ jobs:
             libssl-dev \
             libxdo-dev
 
+      # The staged sidecar tree is ~1.2 GB and is copied again into the .deb
+      # payload and once more into the AppImage's AppDir, on top of a
+      # torch-carrying pip env and a release cargo target. An ubuntu-24.04
+      # runner starts with little headroom over that, and these three SDKs are
+      # ~25 GB that nothing here touches. `df` is left in the log because
+      # running out of disk and linuxdeploy failing read identically below.
+      - name: Reclaim disk
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc
+          df -h /
+
       - name: Install Python dependencies
         run: |
           python -m pip install --upgrade pip
@@ -202,10 +227,29 @@ jobs:
         working-directory: desktop
         run: pnpm install --frozen-lockfile
 
-      # beforeBundleCommand runs build-sidecar.sh (PyInstaller, ~10-20 min).
+      # The same compile-time validation as the Windows job. Linux only got
+      # away without this because `resources` here is a glob — an empty match
+      # is allowed — and `externalBin` is empty; don't rely on that.
+      - name: Stage sidecar placeholders
+        run: ./build-sidecar.sh --stub
+
+      # beforeBundleCommand runs build-sidecar.sh for real (PyInstaller,
+      # ~10-20 min) before the bundler collects the `sidecar/` resource tree.
+      #
+      # NO_STRIP is for the AppImage target: linuxdeploy shells out to `strip`,
+      # which fails on system libraries carrying a `.relr.dyn` section
+      # (`unknown type [0x13]`) — see tauri-apps/tauri#14796. The .deb built
+      # fine and the AppImage died here on the first v1.1.0 release with
+      # nothing but `failed to run linuxdeploy`, because tauri-bundler
+      # *discards* linuxdeploy's stderr at its default log level
+      # (`linuxdeploy.rs`: "Linuxdeploy logs everything into stderr so we have
+      # to ignore the output ourselves here"). `--verbose` raises that level to
+      # the branch that surfaces it, so the next failure here says what it was.
       - name: Build the bundles
         working-directory: desktop
-        run: pnpm tauri build
+        env:
+          NO_STRIP: "true"
+        run: pnpm tauri build --verbose
 
       - uses: actions/upload-artifact@v4
         with:

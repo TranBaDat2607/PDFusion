@@ -1375,7 +1375,7 @@ launchers at all).
 conda activate pdfusion
 ./fetch-offline-assets.sh        # Windows: ./fetch-offline-assets.ps1
 
-# 2. Build the standalone sidecar (PyInstaller, one-dir).
+# 2. Build the standalone sidecar (PyInstaller, one-dir). NOT optional.
 #    Output: dist/pdfusion-sidecar/{pdfusion-sidecar[.exe], _internal/}
 #    Then staged where this platform's bundler needs it (table below).
 pip install -e ".[dev]"          # ensures pyinstaller is available
@@ -1383,11 +1383,23 @@ pip install -e ".[dev]"          # ensures pyinstaller is available
 
 # 3. Build the Tauri bundle.
 #    The beforeBundleCommand in tauri.<platform>.conf.json re-runs the
-#    build-sidecar script, so step 2 is technically optional — but doing it
-#    first lets you sanity-check the bundled sidecar in isolation before the
-#    slow Tauri bundle step. The fetch-offline-assets script is NOT wired into
-#    that hook: it needs the network, and a bundle step that silently downloads
-#    a third of a gigabyte is the problem this staging exists to fix.
+#    build-sidecar script, so this step always ships a freshly built sidecar —
+#    but that hook does NOT make step 2 skippable, because it runs too late to.
+#    Tauri validates `externalBin` and `resources` in its build script, i.e.
+#    during the cargo build that precedes the bundle phase, while the hook runs
+#    inside that phase (tauri-cli `bundle.rs`: the hook, then
+#    `bundle_project`). With nothing staged, `pnpm tauri build` fails at
+#    compile time and never reaches the hook that would have built it —
+#    `resource path binaries\pdfusion-sidecar-<triple>.exe doesn't exist`, and
+#    no PyInstaller run in the log. That is the same validation the dev-mode
+#    caveat below is about, and it is what broke the first v1.1.0 release: the
+#    Windows job had no staging step and died there, while Linux only survived
+#    it because its `resources` entry is a glob (an empty match is allowed) and
+#    its `externalBin` is empty. Both release jobs now stage `--stub`
+#    placeholders first and let the hook replace them, so the real build still
+#    happens once, at bundle time. The fetch-offline-assets script is NOT wired
+#    into that hook: it needs the network, and a bundle step that silently
+#    downloads a third of a gigabyte is the problem this staging exists to fix.
 cd desktop
 pnpm tauri build
 # Windows → target/release/bundle/nsis/PDFusion_<version>_x64-setup.exe
@@ -1474,6 +1486,16 @@ signing step. Signing is opt-in and Windows-only — set the
 `bundle.windows.certificateThumbprint` (an OV cert in the runner's store); with
 neither, the job warns and ships unsigned, which is also what the Linux job
 always does.
+
+The Linux job carries two things the Windows one doesn't need. It builds under
+**`NO_STRIP=true`**, because the AppImage target's `linuxdeploy` shells out to
+`strip`, which fails on system libraries carrying a `.relr.dyn` section
+(`unknown type [0x13]`, tauri-apps/tauri#14796) — the `.deb` is unaffected. And
+it passes **`--verbose`**, which is not noise for its own sake:
+`tauri-bundler`'s `linuxdeploy.rs` *discards* linuxdeploy's stderr at the
+default log level and only surfaces it on the verbose branch, so without it an
+AppImage failure is the bare string `failed to run linuxdeploy` with no cause
+attached. Keep both if you touch that step.
 
 Hidden-import additions for chromadb / babeldoc / etc. live in
 `pdfusion-sidecar.spec`, which is itself platform-neutral — PyInstaller adds the
