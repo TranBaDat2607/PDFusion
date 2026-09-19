@@ -237,10 +237,10 @@ jobs:
       # beforeBundleCommand runs build-sidecar.sh for real (PyInstaller,
       # ~10-20 min) before the bundler collects the `sidecar/` resource tree.
       #
-      # `.deb` only — see "Why there is no AppImage" in CLAUDE.md. `--verbose`
-      # stays because tauri-bundler *discards* a bundler tool's stderr at its
-      # default log level, which is how the AppImage attempt cost two release
-      # runs to diagnose.
+      # `.deb` only — see "Why there is no AppImage" in
+      # docs/architecture-notes.md. `--verbose` stays because tauri-bundler
+      # *discards* a bundler tool's stderr at its default log level, which is
+      # how the AppImage attempt cost two release runs to diagnose.
       - name: Build the bundle
         working-directory: desktop
         run: pnpm tauri build --verbose
