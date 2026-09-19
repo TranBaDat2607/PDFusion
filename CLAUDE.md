@@ -1332,6 +1332,22 @@ out of React state. There are five invariants, and each one is easy to break by
   gap left open for predefined CJK CMaps; note that setting them flips
   `useWorkerFetch` to `true` and moves the fetch from the main thread into the
   worker.
+- **On Linux that decoder only *runs* because the shell asks for it.** pdf.js's
+  `openjpeg.wasm` is built with WebAssembly Relaxed SIMD, and WebKitGTK carries
+  the feature but defaults it off, so the module fails to parse. pdf.js reacts
+  by quietly loading `openjpeg_nowasm_fallback.js` — pages still render, about
+  three times slower, which reads as a heavy document rather than a defect. So
+  `lib.rs:enable_wasm_relaxed_simd` sets `JSC_useWasmRelaxedSIMD=1` as the first
+  statement of `run()`, before anything Tauri builds: `set_var` races any thread
+  reading the environment, and WebKitGTK's web process picks the value up when
+  it is forked (#74). It is set **only when absent**, so
+  `JSC_useWasmRelaxedSIMD=0` still turns it off. No other platform needs this —
+  Relaxed SIMD is on by default in Chrome 114+ and Safari 18.4+ — and the whole
+  thing can be deleted once WebKitGTK enables it, at which point it is already a
+  no-op. Measured on a 78-page deck of JPX slides: **2553 ms per page on the
+  fallback, 827 ms with the WASM decoder, 7 ms for a vector-only slide.** The
+  same decode costs 287 ms under Node's V8, so a ~2.9x gap to Chromium remains
+  and is JavaScriptCore's, not something this app can reach.
 
 Synchronized scrolling between the panes (the first item in #30) is
 deliberately not implemented: the panes scroll and zoom independently.

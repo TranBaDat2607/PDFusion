@@ -159,8 +159,58 @@ fn restart_app(app: tauri::AppHandle) {
     app.restart();
 }
 
+/// The JSC option name. Exposed to us as an environment variable because that
+/// is the only way to reach JavaScriptCore's options from outside the engine —
+/// WebKitGTK's `WebKitSettings` covers web-facing features, not JIT internals.
+const RELAXED_SIMD_ENV: &str = "JSC_useWasmRelaxedSIMD";
+
+/// Whether the shell should supply the option itself.
+///
+/// Split out from the `set_var` below only so an explicit setting can be
+/// shown to win: `JSC_useWasmRelaxedSIMD=0 PDFusion` has to keep disabling the
+/// workaround, or someone hitting a WebKit bug in this code path would have no
+/// way out short of rebuilding.
+fn relaxed_simd_needs_default(existing: Option<&std::ffi::OsStr>) -> bool {
+    existing.is_none()
+}
+
+/// Let pdf.js decode JPEG 2000 with its WASM decoder rather than a JS fallback.
+///
+/// pdf.js ships an `openjpeg.wasm` built with the WebAssembly Relaxed SIMD
+/// proposal. WebKitGTK carries the feature but defaults it off, so the module
+/// fails to *parse* — and pdf.js reacts by quietly loading
+/// `openjpeg_nowasm_fallback.js` instead. Nothing surfaces: pages still render,
+/// roughly 6x slower (2553 ms against 432 ms per page, measured), which reads
+/// as "this document is heavy" rather than as a defect (#74).
+///
+/// Only WebKitGTK needs this. Relaxed SIMD is on by default in Chrome 114+, so
+/// WebView2 already has it, and in Safari 18.4+, so WKWebView should too. The
+/// cfg spelling matches how `sidecar.rs` names this platform, and is right for
+/// the same reason: WebKitGTK is the engine on every non-macOS unix.
+///
+/// Delete all of this once WebKitGTK enables Relaxed SIMD by default — at which
+/// point it is already a no-op, so there is no hurry and no way to notice.
+#[cfg(all(not(windows), not(target_os = "macos")))]
+fn enable_wasm_relaxed_simd() {
+    if relaxed_simd_needs_default(std::env::var_os(RELAXED_SIMD_ENV).as_deref()) {
+        // Safe here and nowhere later: `set_var` races any thread reading the
+        // environment, and this runs before Tauri has built anything, on the
+        // one thread that exists. The web process reads it when WebKitGTK
+        // forks it, which is why setting our own environment reaches it at all.
+        std::env::set_var(RELAXED_SIMD_ENV, "1");
+    }
+}
+
+#[cfg(any(windows, target_os = "macos"))]
+fn enable_wasm_relaxed_simd() {}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // Before the builder, not inside `setup`: by then the webview exists and
+    // the option has already been read. See the function's own note on why
+    // that ordering is also what makes the `set_var` sound.
+    enable_wasm_relaxed_simd();
+
     tauri::Builder::default()
         // Must come first: a second launch has to be turned away before the
         // rest of the app builds. Two windows means two sidecars sharing one
@@ -260,10 +310,27 @@ pub fn run() {
 
 #[cfg(test)]
 mod tests {
-    use super::first_pdf_argument;
+    use super::{first_pdf_argument, relaxed_simd_needs_default};
+    use std::ffi::OsStr;
 
     fn args(items: &[&str]) -> Vec<String> {
         items.iter().map(|s| s.to_string()).collect()
+    }
+
+    // Exercised through the pure half rather than the real environment: a test
+    // that called `set_var` would leak the option into every other test in this
+    // binary, and they all share one process.
+    #[test]
+    fn relaxed_simd_is_supplied_only_when_the_environment_is_silent() {
+        assert!(relaxed_simd_needs_default(None));
+    }
+
+    #[test]
+    fn an_explicit_relaxed_simd_setting_is_left_alone() {
+        // Including "0". Someone turning the workaround off is the case that
+        // matters — overwriting it would strand them with no way back (#74).
+        assert!(!relaxed_simd_needs_default(Some(OsStr::new("0"))));
+        assert!(!relaxed_simd_needs_default(Some(OsStr::new("1"))));
     }
 
     #[test]
