@@ -10,6 +10,7 @@ import {
   type ArtifactChange,
   type PendingChanges,
 } from "@/lib/pdf-viewer/artifact-swap";
+import { pdfWasmUrl } from "@/lib/pdf-viewer/wasm-url";
 
 GlobalWorkerOptions.workerSrc = workerSrc;
 
@@ -117,6 +118,9 @@ export function usePdfDocument({
         task = getDocument({
           url,
           httpHeaders: { Authorization: `Bearer ${token}` },
+          // Without this pdf.js has nowhere to fetch its JPEG 2000 decoder
+          // from, and silently drops every page built on one (#73).
+          wasmUrl: pdfWasmUrl(document.baseURI),
         });
         const doc = await task.promise;
         if (cancelled) {

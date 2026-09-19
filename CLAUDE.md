@@ -1311,6 +1311,43 @@ out of React state. There are five invariants, and each one is easy to break by
   `preventDefault`ed even when there's nothing to act on, because WebView2's
   own find bar only stands down for keys the page takes. Nothing fires while a
   dialog is open.
+- **pdf.js fetches its image decoders at runtime, and they have to be there.**
+  pdf.js 5.x keeps JPEG 2000, JBIG2 and ICC out of the worker bundle and loads
+  them from the `wasmUrl` prefix given to `getDocument`. That option defaults to
+  `null` and warns about nothing, so #73 shipped a viewer that asked for
+  `nullopenjpeg.wasm` and dropped every page built on a JPX image or soft mask
+  — twenty consecutive pages of a Beamer deck. Three things hold the fix
+  together. The prefix **must end in `/`**, or `getFactoryUrlProp` throws on
+  every document load and no page renders at all. The files **must keep their
+  own names**, because pdf.js concatenates a literal filename onto the prefix —
+  which is why `vite.config.ts`'s `pdfusion:pdfjs-wasm` plugin copies the
+  directory verbatim instead of routing it through the `?url` import the worker
+  uses, and why it ships the whole folder rather than the two `openjpeg.*` files
+  the issue was about. And the CSP needs `script-src 'self' 'wasm-unsafe-eval'`,
+  without which `WebAssembly.instantiate` is refused. **That last half is
+  invisible in `pnpm tauri dev`** — Tauri injects no CSP into a Vite-served
+  page — so a change here is only really tested by `pnpm tauri build`. The
+  companion `lib/pdf-viewer/wasm-url.ts` exists to keep the trailing slash under
+  test. `cMapUrl` and `standardFontDataUrl` are still unset, which is the same
+  gap left open for predefined CJK CMaps; note that setting them flips
+  `useWorkerFetch` to `true` and moves the fetch from the main thread into the
+  worker.
+- **On Linux that decoder only *runs* because the shell asks for it.** pdf.js's
+  `openjpeg.wasm` is built with WebAssembly Relaxed SIMD, and WebKitGTK carries
+  the feature but defaults it off, so the module fails to parse. pdf.js reacts
+  by quietly loading `openjpeg_nowasm_fallback.js` — pages still render, about
+  three times slower, which reads as a heavy document rather than a defect. So
+  `lib.rs:enable_wasm_relaxed_simd` sets `JSC_useWasmRelaxedSIMD=1` as the first
+  statement of `run()`, before anything Tauri builds: `set_var` races any thread
+  reading the environment, and WebKitGTK's web process picks the value up when
+  it is forked (#74). It is set **only when absent**, so
+  `JSC_useWasmRelaxedSIMD=0` still turns it off. No other platform needs this —
+  Relaxed SIMD is on by default in Chrome 114+ and Safari 18.4+ — and the whole
+  thing can be deleted once WebKitGTK enables it, at which point it is already a
+  no-op. Measured on a 78-page deck of JPX slides: **2553 ms per page on the
+  fallback, 827 ms with the WASM decoder, 7 ms for a vector-only slide.** The
+  same decode costs 287 ms under Node's V8, so a ~2.9x gap to Chromium remains
+  and is JavaScriptCore's, not something this app can reach.
 
 Synchronized scrolling between the panes (the first item in #30) is
 deliberately not implemented: the panes scroll and zoom independently.
