@@ -35,7 +35,7 @@ affects *new* shells/processes, so open a fresh terminal before the next
 `pnpm tauri dev`.
 
 On Linux you also need webkit2gtk **4.1** and its headers before the Rust shell
-will link — see the root [`README.md`](../README.md#prerequisites).
+will link — see [`docs/development.md`](../docs/development.md#prerequisites).
 
 If bare `pnpm` isn't found even after `corepack enable` (it can fail with
 `EPERM` writing shims into `Program Files\nodejs` without admin rights), install

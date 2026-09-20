@@ -1,106 +1,115 @@
+<div align="center">
+
 # PDFusion
 
-Desktop app for translating PDFs (default target: Vietnamese) while preserving layout, plus an optional RAG chat to ask questions about the loaded document.
+**Translate a PDF and keep it looking like a PDF.**
 
-Windows and Linux are supported and built by CI; macOS builds from source but is
-not packaged yet (see [Platform support](#platform-support)).
+Columns, tables, figures and page breaks stay where the author put them — then
+ask the document questions and get answers with page citations.
 
-> **Architecture rewrite** — The UI is now built with **Tauri (Rust shell) + React + TypeScript + Tailwind + shadcn/ui**. The Python translation/RAG backend is unchanged and runs as a **FastAPI sidecar** spawned by the Tauri shell on app start.
+[![Release](https://img.shields.io/github/v/release/TranBaDat2607/PDFusion?color=2ea043&label=download)](https://github.com/TranBaDat2607/PDFusion/releases/latest)
+[![CI](https://img.shields.io/github/actions/workflow/status/TranBaDat2607/PDFusion/ci.yml?branch=main&label=CI)](https://github.com/TranBaDat2607/PDFusion/actions/workflows/ci.yml)
+[![Platforms](https://img.shields.io/badge/platforms-Windows%20%7C%20Linux-informational)](#download)
+[![License](https://img.shields.io/github/license/TranBaDat2607/PDFusion?color=blue)](LICENSE)
 
-## Platform support
+</div>
 
-| | Windows | Linux | macOS |
+<!-- Screenshots go here once the UI is settled: drop them in docs/images/ and
+     link them from this block. -->
+
+---
+
+Most translators hand back a wall of text. PDFusion rebuilds the page: the
+translated text is laid back into the original layout, so a paper stays a paper
+and a form stays a form. It runs entirely on your machine, and **the first
+translation works with no account, no API key and no internet** — an offline
+English→Vietnamese engine ships inside the installer.
+
+- **Nothing leaves your computer** unless you choose a cloud model.
+- **Bring your own model** — OpenAI, Gemini, Claude, or anything
+  OpenAI-compatible running on `localhost`.
+- **Ask the document things** — answers quote the pages they came from.
+
+## Download
+
+**[⬇ Get the latest release](https://github.com/TranBaDat2607/PDFusion/releases/latest)**
+
+| Platform | File | Install |
+|---|---|---|
+| Windows 10/11 (x64) | `PDFusion_<version>_x64-setup.exe` | Run it. Installs per user — no admin rights, nothing in `Program Files`. |
+| Debian / Ubuntu (x64) | `PDFusion_<version>_amd64.deb` | `sudo apt install ./PDFusion_<version>_amd64.deb` |
+
+Two things everyone hits on first install:
+
+- **Windows SmartScreen warns you.** The installer is unsigned — a code-signing
+  certificate costs money the project doesn't have yet. Choose *More info* →
+  *Run anyway*.
+- **Linux needs webkit2gtk 4.1**, not 4.0. On Ubuntu:
+  `sudo apt install libwebkit2gtk-4.1-0 libgtk-3-0`.
+
+The download is large (several hundred MB) because the translation engine —
+layout models, fonts and the offline language pack, about 290 MB of it — ships
+inside so the app works on first run without downloading anything.
+
+> **macOS** builds from source but isn't packaged. An unsigned, un-notarized
+> `.dmg` is refused by Gatekeeper with no useful way past it, so shipping one
+> would be worse than shipping none ([#69](https://github.com/TranBaDat2607/PDFusion/issues/69)).
+
+## Quick start
+
+1. **Open a PDF** — `Ctrl+O`, or drop the file onto the window.
+2. **Pick your languages** in the *From* and *To* boxes. *To* defaults to
+   Vietnamese.
+3. *(Optional)* **Narrow the range** in the *Pages* box — `1-10, 14, 22-` all
+   work. Up to 50 pages per run.
+4. **Press Translate.** The translated pages appear beside the original as they
+   finish; you can cancel mid-run.
+5. **Press Save PDF…** to keep it.
+
+> **Step 5 is not optional.** Until you save, the translated file lives in a
+> temporary folder and is cleaned up. The app never writes over the PDF you
+> opened.
+
+Untranslated pages are copied through from the original, so what you save is
+always the whole document.
+
+## Translation services
+
+Pick one in the toolbar. Only the first works offline.
+
+| Service | API key | Translates | Notes |
 |---|---|---|---|
-| Runs from source | yes | yes | yes, untested |
-| Packaged by CI | `.exe` (NSIS) | `.deb`, `.AppImage` | not yet |
-| API keys stored in | DPAPI | Secret Service (gnome-keyring, KWallet) | Keychain |
-| Data root | `%LOCALAPPDATA%\PDFusion` | `$XDG_DATA_HOME/PDFusion`, else `~/.local/share/PDFusion` | `~/Library/Application Support/PDFusion` |
+| **Argos Translate** | not needed | English → Vietnamese | Runs on your machine. The default, and what ships in the installer. |
+| **OpenAI** | yes | any supported pair | Also speaks to any OpenAI-compatible server. |
+| **Google Gemini** | yes | any supported pair | |
+| **Anthropic Claude** | yes | any supported pair | Also speaks to Claude-compatible servers. |
 
-macOS is wired up — a `dmg` target, the Keychain and the data root are all in
-place — but nobody has run it on a Mac, and an unsigned, un-notarized `.dmg` is
-refused by Gatekeeper, so no macOS artifact is published. See issue #69.
+Languages offered: Vietnamese, English, Japanese, Chinese (Simplified), Chinese
+(Traditional), with auto-detection for the source. PDFusion is
+**Vietnamese-first, not Vietnamese-only** — with an API key it translates
+between any of these pairs.
 
-**On Linux with no keyring running** (a bare tiling-WM setup, a container), keys
-fall back to an obfuscated value in `config.toml` that anyone who can read the
-file can recover. The app says so in `app.log` when it happens. Install and
-unlock `gnome-keyring` or `kwalletmanager` if that matters to you.
-
-## Prerequisites
-
-- **Python** 3.11 (via Anaconda/Miniforge) — for the FastAPI sidecar
-- **Node.js** ≥ 18 + **pnpm** — for the React frontend
-- **Rust** (rustup, cargo) — for the Tauri shell
-- **Ghostscript** — optional, only needed by Camelot for table extraction during RAG indexing (pdfplumber fallback runs without it)
-
-Per platform:
-
-- **Windows** — Microsoft Visual C++ Build Tools 2022/2026 (the Rust MSVC
-  linker), and the WebView2 Runtime (ships with Windows 11; install separately
-  on Windows 10).
-- **Linux** — webkit2gtk **4.1** (not 4.0, which is Tauri 1) and its build
-  headers. On Debian/Ubuntu:
-
-  ```bash
-  sudo apt install libwebkit2gtk-4.1-dev libgtk-3-dev \
-      libayatana-appindicator3-dev librsvg2-dev patchelf \
-      build-essential curl wget file libssl-dev libxdo-dev
-  ```
-
-  Fedora: `webkit2gtk4.1-devel gtk3-devel libappindicator-gtk3-devel librsvg2-devel patchelf`.
-  Arch: `webkit2gtk-4.1 gtk3 libappindicator-gtk3 librsvg patchelf`.
-- **macOS** — Xcode command line tools (`xcode-select --install`). WKWebView is
-  part of the OS.
-
-## Setup
-
-### 1. Python sidecar (one-time)
-
-```bash
-conda create -n pdfusion python=3.11.14
-conda activate pdfusion
-pip install -r requirements.txt
-# Optional extras (editable install — the package isn't published to PyPI):
-pip install -e ".[rag]"        # RAG chat
-pip install -e ".[advanced]"   # table extraction
-```
-
-> These examples name the env `pdfusion`; `pdfusion-env` also works out of the
-> box. The Tauri shell auto-detects either name under `anaconda3`,
-> `miniconda3` or `miniforge3` in your home directory, on every platform. If
-> you use something else, set `PDFUSION_PYTHON` to that env's interpreter
-> (`python.exe` on Windows, `bin/python` elsewhere) before launching the
-> desktop app.
-
-### 2. Tauri / React frontend (one-time)
-
-```bash
-cd desktop
-pnpm install
-```
-
-> If bare `pnpm` isn't resolvable even after `corepack enable` (it can fail
-> with `EPERM` writing shims into `Program Files\nodejs` without admin rights),
-> install it globally instead: `npm install -g pnpm`.
-
-### 3. API keys
-
-Create a `.env` file in the project root:
+Add keys in **Settings** — they're encrypted before they touch disk. If you
+prefer a file, PDFusion also reads a `.env` from its data folder (see
+[Where your data lives](#where-your-data-lives)):
 
 ```env
 OPENAI_API_KEY=...
 GEMINI_API_KEY=...
-ANTHROPIC_API_KEY=...     # optional
+ANTHROPIC_API_KEY=...
 ```
 
-You can also enter and validate keys later from the in-app **Settings** sheet
-(they're encrypted before being written to disk).
+If you select a cloud service with no key configured, PDFusion falls back to the
+offline engine rather than failing.
 
-### 4. Local and OpenAI-compatible models (optional)
+When a cloud model is selected, the toolbar shows an estimate of the tokens the
+run will use, so a 200-page document doesn't surprise you.
+
+## Use your own model
 
 The **OpenAI** and **Claude** tabs in Settings each have an **Endpoint** field,
-so PDFusion can translate with a model running on your own machine, or through
-a proxy that speaks one of those APIs. Leave it blank to use the provider
-itself.
+so PDFusion can translate with a model running on your own machine, or through a
+proxy that speaks one of those APIs. Leave it blank to use the provider itself.
 
 | Server | Settings tab | Endpoint | API key | Model |
 |---|---|---|---|---|
@@ -110,146 +119,90 @@ itself.
 
 Then pick that service in the toolbar. Worth knowing:
 
-- **Enter the key together with the endpoint.** A saved key is only ever sent
-  to the endpoint it was saved for, so changing the endpoint asks for the key
+- **Enter the key together with the endpoint.** A saved key is only ever sent to
+  the endpoint it was saved for, so changing the endpoint asks for the key
   again. Local servers ignore the key, but the field can't be empty. An
-  `OPENAI_API_KEY` or `ANTHROPIC_API_KEY` from `.env` or your environment is
-  only used with the provider itself.
+  `OPENAI_API_KEY` or `ANTHROPIC_API_KEY` from your environment is only ever
+  used with the provider itself.
 - **Save checks the model with the server first.** If the server isn't running
   yet, Save shows the error and offers **Save anyway**.
-- **The model field takes any name.** The list beside it only makes
-  suggestions.
+- **The model field takes any name.** The list beside it only makes suggestions.
 - Chat writes its answers with the same service and endpoint.
 
-## Running
+## Chat with your document
 
-### Full desktop app (recommended)
+Open the chat panel and ask about the PDF you have loaded. Retrieval combines
+keyword and semantic search, and every answer lists the pages it drew on, so you
+can check it. Each document keeps its own conversation, which you can clear.
 
-```bash
-cd desktop
-pnpm tauri dev
-```
+Chat answers from exactly one document — the one you have open — so it never
+blends two papers together.
 
-This builds the React UI (~10s) and the Rust shell (~5–10 min the first time;
-seconds on subsequent runs), then opens the PDFusion window. The Tauri shell
-will automatically spawn the Python sidecar from the conda env in the
-background.
+**First use downloads about 470 MB** — a multilingual embedding model, fetched
+once into `~/.cache/huggingface`. Everything after that is local. This is the
+only part of PDFusion that needs the internet when you're using the offline
+translator.
 
-### Sidecar only (for debugging)
+## Keyboard shortcuts
 
-```bash
-conda activate pdfusion
-python main.py
-```
+| | |
+|---|---|
+| `Ctrl+O` | Open a PDF |
+| `Ctrl+F` | Find in document |
+| `F3` / `Shift+F3` | Next / previous match |
+| `Ctrl` `+` / `-` / `0` | Zoom in, out, reset |
 
-This prints `READY port=<n> token=<n>` and then serves the FastAPI app on
-`http://127.0.0.1:<n>`. OpenAPI docs are at `http://127.0.0.1:<n>/docs`.
+## Where your data lives
 
-## Building an installer
+Everything stays on your machine.
 
-Same three steps on every platform; only the script extension differs.
+| | Windows | Linux | macOS |
+|---|---|---|---|
+| Settings, cache, chat index | `%LOCALAPPDATA%\PDFusion` | `~/.local/share/PDFusion` | `~/Library/Application Support/PDFusion` |
+| Logs | `…\PDFusion\logs` | `…/PDFusion/logs` | `…/PDFusion/logs` |
+| API keys protected by | DPAPI, scoped to your account | Secret Service (gnome-keyring, KWallet) | Keychain |
 
-```bash
-# 1. Install Python deps + PyInstaller (not in requirements.txt — it's a dev extra).
-conda activate pdfusion
-pip install -r requirements.txt
-pip install -e ".[dev]"          # or just: pip install pyinstaller
+Translations are cached, so re-translating the same document is quick. You can
+clear the cache from Settings.
 
-# 2. (Optional but recommended) Stage the ~290 MB of engine assets the
-#    installer ships, so it is offline-ready. Without this the app downloads
-#    them on the user's first translate instead.
-./fetch-offline-assets.sh        # Windows: ./fetch-offline-assets.ps1
+**On Linux with no keyring running** — a bare tiling-WM setup, a container —
+keys fall back to an obfuscated value in `config.toml` that anyone who can read
+the file can recover. PDFusion says so in `app.log` rather than refusing to
+start. Install and unlock `gnome-keyring` or `kwalletmanager` if that matters to
+you.
 
-# 3. Install frontend deps and build.
-cd desktop
-pnpm install
-pnpm tauri build
-```
+## Troubleshooting
 
-The Tauri bundler auto-runs the build-sidecar script (via the
-`beforeBundleCommand` in each `tauri.<platform>.conf.json`), which invokes
-PyInstaller against `pdfusion-sidecar.spec` and then stages the result. *Where*
-it stages it differs, because PyInstaller's one-dir bootloader requires
-`_internal/` to sit next to the executable and the bundlers put binaries and
-resources in different places:
+**Windows says the app is unsigned.** It is. *More info* → *Run anyway*. See
+[Download](#download).
 
-| | Staged to | Shipped as |
-|---|---|---|
-| Windows | `desktop/src-tauri/binaries/` + `desktop/src-tauri/_internal/` | `externalBin` + a `resources` glob, both at the install root |
-| Linux, macOS | `desktop/src-tauri/sidecar/` (the whole tree) | one `resources` directory |
+**The first translation is slow.** The engine loads its layout models on first
+use. Later runs reuse them, and repeat documents come from the cache.
 
-Output:
-```
-# Windows
-desktop/src-tauri/target/release/bundle/nsis/PDFusion_<version>_x64-setup.exe
-# Linux
-desktop/src-tauri/target/release/bundle/deb/PDFusion_<version>_amd64.deb
-desktop/src-tauri/target/release/bundle/appimage/PDFusion_<version>_amd64.AppImage
-```
+**Chat won't start.** It needs that one-time 470 MB model download — check your
+connection and `app.log`.
 
-Notes:
-- **Windows installs per user** — under `%LOCALAPPDATA%\Programs\PDFusion`, with
-  no admin rights and no UAC prompt. NSIS is the only Windows bundle target; the
-  per-machine WiX `.msi` was dropped, so re-add `"msi"` to `bundle.targets` in
-  `tauri.windows.conf.json` if you need one for an IT deployment.
-- **The `.deb` depends on `libwebkit2gtk-4.1-0` and `libgtk-3-0`** (derived by
-  the bundler, not hand-listed); the AppImage carries its own copies.
-- **First build is slow** — ~10–20 min, because PyInstaller bundles the full
-  chromadb + babeldoc stack.
-- **The installer is large** — ~470 MB, most of which is the ~290 MB of engine
-  assets it ships so the app works offline on first run. The RAG embedding
-  weights (~470 MB) still download lazily on first Chat use to
-  `~/.cache/huggingface`.
-- **Installers are unsigned by default** — Windows SmartScreen warns on first
-  install; the Linux bundles carry no signature either. See *Code signing*
-  below.
+**A PDF won't open or looks wrong.** Scanned pages with no text layer can't be
+translated; there's no OCR step yet. Please
+[open an issue](https://github.com/TranBaDat2607/PDFusion/issues) with the file
+if you can share it.
 
-### Code signing
+**Where are the logs?** The boot screen has a *Show logs folder* button, which
+opens the right directory for your platform.
 
-`tauri.conf.json` carries the `digestAlgorithm` and `timestampUrl` half of the
-configuration; what it deliberately does not carry is a certificate. Supply one
-of the two and the release workflow signs:
+## Building from source
 
-- **Azure Trusted Signing** (no cert to store, billed per month) — set the
-  repository secret `WINDOWS_SIGN_COMMAND` to the signing invocation, with `%1`
-  standing in for the file being signed. `.github/workflows/release.yml` passes
-  it through to `bundle.windows.signCommand`.
-- **An OV/EV certificate in the runner's store** — set
-  `bundle.windows.certificateThumbprint` instead.
+See **[docs/development.md](docs/development.md)** for prerequisites, setup and
+how to build an installer, and
+**[docs/architecture-notes.md](docs/architecture-notes.md)** for why the app is
+put together the way it is.
 
-With neither set the workflow prints a warning and produces an unsigned
-installer, which is the current shipped state. SmartScreen keeps warning until
-one of them is configured.
-- **Dev iteration without a full PyInstaller build**: if you only want to
-  hack on the React/Rust side and don't need a working bundled sidecar,
-  run `./build-sidecar.sh --stub` (Windows: `./build-sidecar.ps1 -Stub`) once
-  to drop placeholder files so `pnpm tauri dev` and `cargo check` succeed. The
-  dev shell falls back to your local conda Python at runtime.
+Issues and pull requests are welcome.
 
-## Project layout
+## License
 
-```
-PDFusion/
-├── desktop/                          ← Tauri + React frontend
-│   ├── src/                          ← React + TypeScript
-│   │   ├── components/               ← UI components (shadcn-based)
-│   │   ├── hooks/                    ← TanStack Query + custom hooks
-│   │   └── lib/                      ← API client, SSE, Zustand store
-│   └── src-tauri/                    ← Rust shell, sidecar lifecycle
-├── src/desktop_pdf_translator/
-│   ├── api/                          ← FastAPI sidecar
-│   ├── config/                       ← TOML + .env settings
-│   ├── processors/                   ← BabelDOC translation pipeline
-│   ├── translators/                  ← OpenAI / Gemini / Anthropic
-│   ├── rag/                          ← ChromaDB + RAG chain + deep search
-│   └── utils/                        ← API key encryption
-├── main.py                           ← Standalone sidecar runner
-└── requirements.txt
-```
+[MIT](LICENSE).
 
-## Logs
-
-`app.log` (Python sidecar) and `shell.log` (Rust shell) are written to `logs/`
-under the data root for your platform — see the table in
-[Platform support](#platform-support). The boot screen's **Show logs folder**
-button opens it, whichever one that is.
+Built on [BabelDOC](https://github.com/funstory-ai/BabelDOC) for
+layout-preserving translation and [Argos Translate](https://www.argosopentech.com/)
+for the offline engine.
