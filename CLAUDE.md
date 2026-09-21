@@ -253,6 +253,13 @@ MiniSBD, `chunk_type` is pinned by assignment, and `_sbd_compat` stubs
 the frozen half of `test_sidecar_smoke.py` is the only check that catches an
 over-exclusion.
 
+**The spec also prunes inside packages it keeps** (`_prune`). Two things there
+look like dead weight and are not: `.pyi` stubs (skimage's `lazy_loader` parses
+`skimage/__init__.pyi` at import) and hyperscan's sibling `hyperscan.libs/`.
+Both fail as a *non-fatal* warm-up warning plus `cannot import name
+'PDFProcessor'` on the first translate, and the smoke suite stays green through
+either — only a real translate through the frozen exe catches them.
+
 ## Conventions
 
 - **Comments answer *why*, not *what*.** The code already says what it does;
@@ -290,6 +297,8 @@ conda activate pdfusion
 pip install -e ".[dev]"
 ./build-sidecar.sh          # PyInstaller one-dir. NOT optional — see below
 cd desktop && pnpm tauri build
+cd desktop && pnpm run tauri:build:fast   # Windows: same build, zlib not LZMA
+                                          # (NSIS 310s → 94s, installer +68 MB)
 ```
 
 (`.ps1` instead of `.sh` on Windows.) Tauri validates `externalBin` and

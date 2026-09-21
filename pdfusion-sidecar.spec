@@ -17,6 +17,7 @@
 
 from PyInstaller.utils.hooks import (
     collect_data_files,
+    collect_delvewheel_libs_directory,
     collect_submodules,
     copy_metadata,
 )
@@ -210,6 +211,31 @@ else:
 
 
 # ---------------------------------------------------------------------------
+# Vendored DLLs
+# ---------------------------------------------------------------------------
+# hyperscan (babeldoc imports it) ships as a delvewheel-repaired wheel: its
+# `_hs_ext` extension links a private, hash-named copy of the MSVC runtime that
+# lives in a *sibling* `hyperscan.libs/` directory, and `hyperscan/__init__.py`
+# registers that directory with `os.add_dll_directory` before importing the
+# extension. PyInstaller's dependency scan does not follow a sibling libs
+# directory, so nothing put it in the bundle.
+#
+# What hid this is that numpy and pandas are repaired the same way, and their
+# vendored runtime sometimes carries the *same* hash — so `_hs_ext` resolved
+# through whichever libs directory another package had already registered.
+# When it does not match (a numpy version bump is enough), the failure is
+# "DLL load failed while importing _hs_ext", logged only as a non-fatal
+# warm-up warning; the first translate then dies in `_load_engine` with a
+# misleading `cannot import name 'PDFProcessor'`, because babeldoc's import
+# left a half-initialised module behind.
+#
+# Inert off Windows, where delvewheel is not used and the helper returns
+# nothing.
+binaries = []
+datas, binaries = collect_delvewheel_libs_directory("hyperscan", datas=datas, binaries=binaries)
+
+
+# ---------------------------------------------------------------------------
 # Excludes
 # ---------------------------------------------------------------------------
 # Drop heavy transitive deps we don't actually use. Cuts ~500 MB off the
@@ -359,7 +385,7 @@ a = Analysis(
     # silently left out of the bundle and the sidecar died at startup with
     # "ModuleNotFoundError: No module named 'desktop_pdf_translator'".
     pathex=[_os.path.join(SPECPATH, "src")],
-    binaries=[],
+    binaries=binaries,
     datas=datas,
     hiddenimports=hiddenimports,
     hookspath=[],
@@ -379,6 +405,98 @@ a = Analysis(
     # because the crash happens before logging is configured.
     optimize=1,
 )
+
+# ---------------------------------------------------------------------------
+# Pruning
+# ---------------------------------------------------------------------------
+# `excludes` can only drop a whole importable package, and the packages that
+# dominate this bundle are all reachable: babeldoc's layout parser imports cv2
+# (`document_il/midend/layout_parser.py`), its char extractor imports
+# `sklearn.cluster` (`document_il/utils/extract_char.py`), and RAG indexing
+# imports camelot, which brings pandas. What follows drops payload *inside*
+# packages we have to keep.
+#
+# Bytes are what matter, and it is worth knowing why, because "fewer files"
+# is the intuitive answer and it is wrong here. Measured on the real tree:
+# writing all 2,240 entries costs 1.7 s, of which per-file overhead is
+# ~0.55 ms, and Defender adds only ~0.4 ms per *unknown* binary (+0.14 s
+# across all 379 .pyd/.dll). Dropping a thousand small files buys well under a
+# second. The rule that pays for itself is the 28 MB one; the small-file rules
+# below are kept because they are free and keep the tree honest, not because
+# they make an install faster.
+#
+# What goes stale here is the *reachability* claim, not the paths: a babeldoc
+# or camelot upgrade can start using something dropped below. Each rule
+# therefore names what would have reached it. `tests/test_sidecar_smoke.py`
+# against the frozen exe is what catches a bad one.
+import sys as _sys
+
+
+def _prune(predicate, label):
+    """Drop matching entries from both TOCs, and say how many went.
+
+    Printed rather than silent: a prune that quietly stops matching (a renamed
+    directory, a new wheel layout) looks like nothing at all, and the place you
+    would find out is a shipped installer.
+    """
+    before = len(a.binaries) + len(a.datas)
+    a.binaries = [e for e in a.binaries if not predicate(e[0].replace("\\", "/"))]
+    a.datas = [e for e in a.datas if not predicate(e[0].replace("\\", "/"))]
+    print(f"PRUNE {label}: {before - len(a.binaries) - len(a.datas)} file(s)")
+
+
+# OpenCV's FFmpeg video backend, 28 MB in one DLL. Everything here hands cv2
+# page bitmaps — imread, resize, cvtColor, the doclayout preprocessing — and
+# nothing constructs a VideoCapture or VideoWriter.
+#
+# Windows only. Here the DLL is resolved by name when the videoio FFmpeg
+# backend first initialises, so its absence only marks that backend
+# unavailable. The Linux wheel has no equivalent: its ffmpeg lives in
+# `opencv_python_headless.libs/libav*.so`, which cv2's own extension module
+# lists in DT_NEEDED, and dropping those breaks `import cv2` outright.
+if _sys.platform == "win32":
+    _prune(
+        lambda dest: _os.path.basename(dest).lower().startswith("opencv_videoio_ffmpeg"),
+        "opencv videoio ffmpeg backend",
+    )
+
+# scikit-learn's bundled sample corpora: the toy sets behind `load_iris()` and
+# friends (`data/`), their prose descriptions (`descr/`), two demo photographs
+# (`images/`), and the fixtures for sklearn's own test suite (`tests/`). The
+# only sklearn entry point in this app is `sklearn.cluster.DBSCAN`, via
+# babeldoc's char extractor; nothing calls a loader or a fetcher.
+#
+# Spelled out per directory rather than as `sklearn/datasets/*`, because that
+# directory also holds `_svmlight_format_fast`, a compiled extension
+# `sklearn/datasets/__init__.py` imports at package load.
+_prune(
+    lambda dest: dest.startswith(
+        (
+            "sklearn/datasets/data/",
+            "sklearn/datasets/descr/",
+            "sklearn/datasets/images/",
+            "sklearn/datasets/tests/",
+        )
+    ),
+    "sklearn sample datasets and test fixtures",
+)
+
+# Build-time leftovers from the scientific wheels: MSVC import libraries, the
+# Cython and C sources the shipped extensions were generated from, and meson
+# build files. A linker reads these; an interpreter never opens one.
+#
+# `.pyi` is deliberately NOT in this list, obvious as it looks. scikit-image
+# (a babeldoc dependency) builds its public namespace with `lazy_loader`,
+# which parses `skimage/__init__.pyi` at **import** time to learn what to
+# attach — dropping it fails the import with "Cannot load imports from
+# non-existent stub", surfacing as a non-fatal warm-up warning and then a
+# misleading `cannot import name 'PDFProcessor'` on the first translate.
+_prune(
+    lambda dest: dest.endswith((".lib", ".pyx", ".pxd", ".h", ".hpp"))
+    or _os.path.basename(dest) == "meson.build",
+    "C/Cython build artefacts",
+)
+
 
 pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
 

@@ -11,7 +11,8 @@
     "preview": "vite preview",
     "test": "vitest run",
     "test:watch": "vitest",
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "tauri:build:fast": "tauri build --config \"{\\\"bundle\\\":{\\\"windows\\\":{\\\"nsis\\\":{\\\"compression\\\":\\\"zlib\\\"}}}}\""
   },
   "dependencies": {
     "@radix-ui/react-slot": "^1.2.4",
