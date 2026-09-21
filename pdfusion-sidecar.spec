@@ -231,8 +231,22 @@ else:
 #
 # Inert off Windows, where delvewheel is not used and the helper returns
 # nothing.
+#
+# Guarded like the Argos pack and the babeldoc zip above: the helper calls
+# get_package_paths(), which raises ValueError when hyperscan is not importable
+# (a babeldoc release that drops the dependency, or an env where the wheel
+# failed to install). That must not take the whole build down with an opaque
+# traceback — if hyperscan is gone there is nothing to collect anyway.
 binaries = []
-datas, binaries = collect_delvewheel_libs_directory("hyperscan", datas=datas, binaries=binaries)
+try:
+    datas, binaries = collect_delvewheel_libs_directory("hyperscan", datas=datas, binaries=binaries)
+except Exception as _hs_err:  # noqa: BLE001 — absent/unimportable package is a WARN, not a failure
+    print(
+        f"WARN: could not collect hyperscan.libs/ ({_hs_err}). If babeldoc still "
+        "imports hyperscan, the bundled exe may fail with 'DLL load failed while "
+        "importing _hs_ext' and then 'cannot import name PDFProcessor' on the "
+        "first translate."
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -465,6 +479,11 @@ if _sys.platform == "win32":
 # (`images/`), and the fixtures for sklearn's own test suite (`tests/`). The
 # only sklearn entry point in this app is `sklearn.cluster.DBSCAN`, via
 # babeldoc's char extractor; nothing calls a loader or a fetcher.
+#
+# Collected despite nothing importing `sklearn.datasets`: the contributed
+# `hook-sklearn.py` is `collect_data_files('sklearn')`, which walks the package
+# directory rather than the module graph, so all 108 files ride along on
+# `DBSCAN` alone.
 #
 # Spelled out per directory rather than as `sklearn/datasets/*`, because that
 # directory also holds `_svmlight_format_fast`, a compiled extension

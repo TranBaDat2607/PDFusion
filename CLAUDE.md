@@ -297,16 +297,18 @@ conda activate pdfusion
 pip install -e ".[dev]"
 ./build-sidecar.sh          # PyInstaller one-dir. NOT optional — see below
 cd desktop && pnpm tauri build
-cd desktop && pnpm run tauri:build:fast   # Windows: same build, zlib not LZMA
-                                          # (NSIS 310s → 94s, installer +68 MB)
 ```
 
-(`.ps1` instead of `.sh` on Windows.) Tauri validates `externalBin` and
-`resources` at **compile** time, before the `beforeBundleCommand` that rebuilds
-the sidecar — so a fresh checkout fails `cargo check`, `pnpm tauri dev` and
-`pnpm tauri build` until something is staged. For frontend/Rust work use
-`./build-sidecar.sh --stub`; the shell rejects anything under 1 MiB and falls
-back to local Python.
+(`.ps1` instead of `.sh` on Windows.) Iterating on the installer itself? Swap
+the last line for `pnpm run tauri:build:fast` — the same build with NSIS's
+compressor switched to zlib, which takes `pnpm tauri build` from 607 s to 344 s
+for an installer 68 MB larger.
+
+Tauri validates `externalBin` and `resources` at **compile** time, before the
+`beforeBundleCommand` that rebuilds the sidecar — so a fresh checkout fails
+`cargo check`, `pnpm tauri dev` and `pnpm tauri build` until something is
+staged. For frontend/Rust work use `./build-sidecar.sh --stub`; the shell
+rejects anything under 1 MiB and falls back to local Python.
 
 Targets: NSIS per-user on Windows, `deb` on Linux (**no AppImage** — linuxdeploy
 cannot walk the PyInstaller tree; see the notes), `dmg`/`app` on macOS
