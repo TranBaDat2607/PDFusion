@@ -1289,11 +1289,23 @@ out of React state. There are five invariants, and each one is easy to break by
   away from a figure page and back took 384–753 ms to repaint before this and
   16–36 ms after. `lib/pdf-viewer/decode-retention.ts` holds the last
   `DECODE_RETAIN` (6) released pages back from cleanup, and a page scrolled
-  back into the window leaves that list rather than being cleaned up behind the
-  reader. A decoded 2.2 MP image is ~9 MB and these pages carry two, so the
-  worst case is roughly 110 MB on that document and nothing at all on an
-  ordinary one. The bound is a *count*, which is also why this is not simply a
-  larger `RENDER_RADIUS`: that would multiply canvases too.
+  back into the window moves to the *end* of that list rather than being
+  cleaned up behind the reader. It moves rather than leaving, because the list
+  is also the record of what still owes a `cleanup()`: a page taken off it and
+  then never re-rendered — which is what a scroll sweeping straight past a page
+  does, since the pump only reaches one page at a time — would hold its decoded
+  images until the document was destroyed, and the count would stop bounding
+  anything. For the same reason the deferred cleanup is handed the document it
+  belongs to rather than reading `this.doc` back: it settles in a microtask, by
+  which point a swap has already reassigned that field, and every flush on the
+  swap path would skip itself.
+
+  A decoded 2.2 MP image is ~9 MB and these pages carry two, so six retained
+  pages is roughly 110 MB on that document — and the viewer mounts two panes,
+  each with its own renderer and its own six, so the figure to budget against
+  is ~220 MB. An ordinary document costs nothing either way. The bound is a
+  *count*, which is also why this is not simply a larger `RENDER_RADIUS`: that
+  would multiply canvases too.
 
   The other half of #76 — decoding ahead of the canvas radius with
   `getOperatorList()` — was tried on paper and **rejected**. `getOperatorList()`

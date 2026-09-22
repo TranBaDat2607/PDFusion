@@ -24,10 +24,13 @@ import type { PageRange } from "./layout";
  * How many just-released pages keep their decoded images.
  *
  * A decoded 2.2 MP image is ~9 MB and the pathological pages carry two, so six
- * retained pages is roughly 110 MB on that document and nothing at all on one
- * whose pages are vector art. The bound is a *count*, so retention never grows
- * with the document — the reason this is not simply a larger `RENDER_RADIUS`,
- * which would multiply canvases as well, and a canvas is the larger allocation.
+ * retained pages is roughly 110 MB on that document, and the viewer mounts two
+ * panes — original and translated, each with its own renderer and its own six
+ * — so the figure to budget against is ~220 MB. A document whose pages are
+ * vector art costs nothing either way. The bound is a *count*, so retention
+ * never grows with the document — the reason this is not simply a larger
+ * `RENDER_RADIUS`, which would multiply canvases as well, and a canvas is the
+ * larger allocation.
  *
  * Six covers the motions that re-read a page: page-up/page-down, and scrolling
  * back over a figure. Travel further than that and the decode is re-paid, which
@@ -49,14 +52,22 @@ export function retainReleased(
   return { retained: next, evicted };
 }
 
-/** Pages back inside `range` are wanted again, so they leave the list rather
- *  than sitting in it waiting to be cleaned up behind the reader's back. A
- *  `null` range means there is nothing on screen yet, which is not a reason to
- *  forget anything. */
-export function forgetRetained(
+/** Pages back inside `range` are wanted again, so they go to the *back* of the
+ *  queue: the reader is about to reach them, and they should be the last thing
+ *  evicted. They stay on the list rather than leaving it, because the list is
+ *  also the record of what still owes a cleanup — a page taken off it and then
+ *  never re-rendered, which a scroll that sweeps straight past a page does
+ *  every time, would hold its decoded images until the document is destroyed
+ *  and the count above would stop bounding anything. A `null` range means there
+ *  is nothing on screen yet, which is not a reason to reorder anything. */
+export function renewRetained(
   retained: readonly number[],
   range: PageRange | null,
 ): number[] {
   if (!range) return [...retained];
-  return retained.filter((page) => page < range.first || page > range.last);
+  const wanted = (page: number) => page >= range.first && page <= range.last;
+  return [
+    ...retained.filter((page) => !wanted(page)),
+    ...retained.filter(wanted),
+  ];
 }
