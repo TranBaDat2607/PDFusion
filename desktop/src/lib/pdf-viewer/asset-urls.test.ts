@@ -3,7 +3,7 @@ import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { describe, expect, it, vi } from "vitest";
+import { beforeAll, describe, expect, it, vi } from "vitest";
 
 import {
   pdfAssetDirectories,
@@ -102,10 +102,22 @@ function assetOptions() {
   };
 }
 
+/** The legacy build, because this runs in Node: it substitutes a filesystem
+ *  reader for the DOM one, which is what lets the prefixes above be paths.
+ *
+ *  Loaded once in a `beforeAll` rather than inside `textOf`, because it is
+ *  ~12 MB of JavaScript to parse and whichever test ran first was paying for
+ *  it — five seconds of the first one's budget on a cold CI runner against
+ *  tens of milliseconds for the rest, which put that test over the default
+ *  timeout on windows-latest while the same suite took a second locally. The
+ *  cost is real and belongs somewhere visible with a budget of its own. */
+let pdfjs: typeof import("pdfjs-dist/legacy/build/pdf.mjs");
+
+beforeAll(async () => {
+  pdfjs = await import("pdfjs-dist/legacy/build/pdf.mjs");
+}, 60_000);
+
 async function textOf(fixture: string, options: Record<string, unknown>) {
-  // The legacy build, because this runs in Node: it substitutes a filesystem
-  // reader for the DOM one, which is what lets the prefixes above be paths.
-  const pdfjs = await import("pdfjs-dist/legacy/build/pdf.mjs");
   const warnings: string[] = [];
   const warn = vi
     .spyOn(console, "warn")
@@ -132,9 +144,11 @@ async function textOf(fixture: string, options: Record<string, unknown>) {
   }
 }
 
-// #77 shipped because nothing opened a document of either kind. These two are
-// ~1 KB each and take about a second, so now something does on every run.
-describe("the assets pdf.js fetches at runtime", () => {
+// #77 shipped because nothing opened a document of either kind. These fixtures
+// are ~1 KB each, so now something does on every run. The timeout is generous
+// because a CI runner parsing pdf.js cold is slow in a way a local run never
+// shows — see the beforeAll above.
+describe("the assets pdf.js fetches at runtime", { timeout: 30_000 }, () => {
   it("renders a predefined CJK CMap only when cMapUrl is set", async () => {
     const withPrefixes = await textOf("cjk-cmap.pdf", assetOptions());
     expect(withPrefixes.text).toBe("あい");
