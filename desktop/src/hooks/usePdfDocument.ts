@@ -10,7 +10,7 @@ import {
   type ArtifactChange,
   type PendingChanges,
 } from "@/lib/pdf-viewer/artifact-swap";
-import { pdfWasmUrl } from "@/lib/pdf-viewer/wasm-url";
+import { pdfAssetUrl } from "@/lib/pdf-viewer/asset-urls";
 
 GlobalWorkerOptions.workerSrc = workerSrc;
 
@@ -115,12 +115,27 @@ export function usePdfDocument({
         );
         const token = await sidecarToken();
         if (cancelled) return;
+        // pdf.js fetches all four of these at runtime and defaults every one
+        // of them to null, warning about none: an unset prefix costs the JPX
+        // pages (#73), then the CJK text, the standard-font metrics and the
+        // CMYK profile (#77). See lib/pdf-viewer/asset-urls.ts.
+        const base = document.baseURI;
         task = getDocument({
           url,
           httpHeaders: { Authorization: `Bearer ${token}` },
-          // Without this pdf.js has nowhere to fetch its JPEG 2000 decoder
-          // from, and silently drops every page built on one (#73).
-          wasmUrl: pdfWasmUrl(document.baseURI),
+          wasmUrl: pdfAssetUrl("wasm", base),
+          cMapUrl: pdfAssetUrl("cmaps", base),
+          // Already the default, but the useWorkerFetch expression below reads
+          // it, so it is stated rather than inferred.
+          cMapPacked: true,
+          standardFontDataUrl: pdfAssetUrl("standardFonts", base),
+          iccUrl: pdfAssetUrl("iccs", base),
+          // Pinned, because pdf.js would otherwise derive it from whether the
+          // base URI is http: Tauri serves http://tauri.localhost on Windows
+          // but tauri://localhost on Linux and macOS, so the default would
+          // fetch from the worker on Windows and from the main thread
+          // everywhere else. One path keeps the CSP surface where #73 left it.
+          useWorkerFetch: false,
         });
         const doc = await task.promise;
         if (cancelled) {

@@ -1315,27 +1315,53 @@ out of React state. There are five invariants, and each one is easy to break by
   `preventDefault`ed even when there's nothing to act on, because WebView2's
   own find bar only stands down for keys the page takes. Nothing fires while a
   dialog is open.
-- **pdf.js fetches its image decoders at runtime, and they have to be there.**
-  pdf.js 5.x keeps JPEG 2000, JBIG2 and ICC out of the worker bundle and loads
-  them from the `wasmUrl` prefix given to `getDocument`. That option defaults to
-  `null` and warns about nothing, so #73 shipped a viewer that asked for
-  `nullopenjpeg.wasm` and dropped every page built on a JPX image or soft mask
-  — twenty consecutive pages of a Beamer deck. Three things hold the fix
-  together. The prefix **must end in `/`**, or `getFactoryUrlProp` throws on
-  every document load and no page renders at all. The files **must keep their
-  own names**, because pdf.js concatenates a literal filename onto the prefix —
-  which is why `vite.config.ts`'s `pdfusion:pdfjs-wasm` plugin copies the
-  directory verbatim instead of routing it through the `?url` import the worker
-  uses, and why it ships the whole folder rather than the two `openjpeg.*` files
-  the issue was about. And the CSP needs `script-src 'self' 'wasm-unsafe-eval'`,
-  without which `WebAssembly.instantiate` is refused. **That last half is
-  invisible in `pnpm tauri dev`** — Tauri injects no CSP into a Vite-served
-  page — so a change here is only really tested by `pnpm tauri build`. The
-  companion `lib/pdf-viewer/wasm-url.ts` exists to keep the trailing slash under
-  test. `cMapUrl` and `standardFontDataUrl` are still unset, which is the same
-  gap left open for predefined CJK CMaps; note that setting them flips
-  `useWorkerFetch` to `true` and moves the fetch from the main thread into the
-  worker.
+- **pdf.js fetches four directories of assets at runtime, and they have to be
+  there.** pdf.js 5.x keeps them out of the worker bundle and loads each from
+  its own prefix option on `getDocument`. Every one defaults to `null` and warns
+  about nothing, which is how two issues shipped. `wasmUrl` (JPEG 2000, JBIG2,
+  the ICC transform) unset meant a viewer that asked for `nullopenjpeg.wasm` and
+  dropped every page built on a JPX image or soft mask — twenty consecutive
+  pages of a Beamer deck (#73). `cMapUrl` + `cMapPacked` (the 169 predefined CJK
+  CMaps) unset means a Type0 font that names one instead of embedding its
+  encoding fails to translate outright, so none of that text draws;
+  `standardFontDataUrl` (the 14 standard fonts' metrics) unset means a
+  non-embedded standard font is silently substituted from the system, so shapes
+  and widths are wrong; `iccUrl` (the CMYK profile) unset drops DeviceCMYK to
+  pdf.js's approximation (#77). The first of those is not exotic here: the
+  default target is Vietnamese and the tool exists to open documents in other
+  scripts.
+
+  Four things hold the fix together. Each prefix **must end in `/`**, or
+  `getFactoryUrlProp` throws on every document load and no page renders at all.
+  The files **must keep their own names**, because pdf.js concatenates a literal
+  filename onto the prefix — which is why `vite.config.ts`'s
+  `pdfusion:pdfjs-assets` plugin copies the directories verbatim instead of
+  routing them through the `?url` import the worker uses, and why each ships
+  whole rather than a chosen subset: which cmap or font a document wants is only
+  knowable when it is opened. `useWorkerFetch` is **pinned to `false`** rather
+  than left to pdf.js, which would otherwise derive it from whether the base URI
+  is http (`isValidFetchUrl` tests `/https?:/`) — Tauri serves
+  `http://tauri.localhost` on Windows but `tauri://localhost` on Linux and
+  macOS, so the default would fetch from the worker on Windows and dev and from
+  the main thread everywhere else, moving the CSP surface on one platform only.
+  And the CSP needs `script-src 'self' 'wasm-unsafe-eval'`, without which
+  `WebAssembly.instantiate` is refused. **That last half is invisible in
+  `pnpm tauri dev`** — Tauri injects no CSP into a Vite-served page — so a change
+  here is only really tested by `pnpm tauri build`. The companion
+  `lib/pdf-viewer/asset-urls.ts` keeps the trailing slash and the directory names
+  under test, against the installed pdfjs-dist, and two ~1 KB fixture PDFs in
+  `lib/pdf-viewer/__fixtures__/` open through the real pdf.js on every test run
+  — a predefined-CMap document and a non-embedded-Helvetica one, which is what
+  #77 lacked.
+
+  One asset does not take the pinned path: `iccUrl` is not passed to the
+  `binaryDataFactory` that `useWorkerFetch: false` selects, and the worker
+  fetches the profile itself with a synchronous `XMLHttpRequest` whatever that
+  option says. On Linux and macOS that is an XHR against `tauri://localhost`.
+  It is guarded — a throw there is caught and falls back to `DeviceCmykCS`,
+  i.e. the behaviour before #77 — so the failure mode is "no worse than now",
+  but a `CMYK fallback: DeviceCMYK` warning in a Linux bundle is that path
+  failing rather than anything new.
 - **On Linux that decoder only *runs* because the shell asks for it.** pdf.js's
   `openjpeg.wasm` is built with WebAssembly Relaxed SIMD, and WebKitGTK carries
   the feature but defaults it off, so the module fails to parse. pdf.js reacts

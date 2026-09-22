@@ -229,9 +229,12 @@ a test. They are the things most easily undone by "simplifying".
   **pages**, not documents, driven by the `translatedChanges` log.
 - Text layers are core `pdfjs.TextLayer` plus two pieces copied from
   `pdf_viewer.mjs` — re-check both when bumping pdfjs-dist.
-- pdf.js fetches its wasm decoders at runtime: the prefix must end in `/`, the
-  files keep their names, and the CSP needs `'wasm-unsafe-eval'` (#73). On
-  Linux `lib.rs:enable_wasm_relaxed_simd` must run first in `run()` (#74).
+- pdf.js fetches four asset directories at runtime — `wasm/`, `cmaps/`,
+  `standard_fonts/`, `iccs/` (#73, #77). Every prefix must end in `/`, the files
+  keep their names, `useWorkerFetch` is pinned to `false` so one fetch path
+  covers every platform, and the CSP needs `'wasm-unsafe-eval'`. `vite.config.ts`
+  and `lib/pdf-viewer/asset-urls.ts` are a pair. On Linux
+  `lib.rs:enable_wasm_relaxed_simd` must run first in `run()` (#74).
 - Shortcuts are owned by `MainLayout`'s capture-phase handler and are always
   `preventDefault`ed.
 
