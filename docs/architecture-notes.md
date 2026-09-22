@@ -1463,6 +1463,19 @@ pnpm tauri build
 > your local Python at runtime, so `pnpm tauri dev` works exactly like before.
 > Just don't ship the stubbed installer — the bundled binary is zero bytes.
 
+**Iterating on the installer itself?** `pnpm run tauri:build:fast` is the same
+build with NSIS's compressor switched from solid LZMA to zlib through
+`--config`. Measured on the same payload: the NSIS step drops from **310 s to
+94 s** and the whole `pnpm tauri build` from **607 s to 344 s**, for an
+installer that grows **463.9 MB → 531.4 MB**.
+
+It is a `--config` override rather than a change to `tauri.windows.conf.json`
+because the two sides of that trade fall on different people: the 68 MB is paid
+by every user on every download, the four minutes by whoever is rebuilding. And
+the user's side of it is small — zlib gives back about 7 s of install time (the
+decompression figures are under "What the bundle carries" below). Releases keep
+LZMA.
+
 Where the build lands, and why it differs, is the subject of rule 2 in
 "Cross-platform" above; the short version:
 
@@ -1566,6 +1579,94 @@ failure, its `strip` choking on a `.relr.dyn` section
 (`unknown type [0x13]`, tauri-apps/tauri#14796); it is not set today because
 nothing runs linuxdeploy, but it is the first thing to set if anyone re-enables
 the target.
+
+### What the bundle carries, and what was taken out of it
+
+`excludes` can only drop a whole importable package, and the heavy ones are all
+reachable by now: babeldoc's layout parser imports cv2
+(`document_il/midend/layout_parser.py`), its char extractor imports
+`sklearn.cluster.DBSCAN` (`document_il/utils/extract_char.py`), and RAG
+indexing imports camelot, which brings pandas. So the spec also prunes *inside*
+the packages it keeps: `_prune()` filters `a.binaries` and `a.datas` after
+`Analysis` and prints what each rule removed, because a rule that silently
+stops matching — a renamed directory, a new wheel layout — looks exactly like
+nothing at all, and the place you would find out is a shipped installer.
+
+**Bytes are what matter, not file count** — worth stating because "fewer
+files" is the intuitive answer and the measurements say otherwise. NSIS does
+emit one `File` directive and one `Delete` per entry (2,525 of them in the
+v1.1.1 installer), but writing the whole 819 MB tree takes 1.7 s, of which
+per-file overhead is ~0.55 ms; and Defender, whose on-write scan is the usual
+suspect, costs ~0.4 ms per binary it has never seen — **+0.14 s across all 379
+`.pyd`/`.dll`** (measured by appending a byte to each, so the copies are
+unknown to it). Dropping a thousand small files buys under a second. So one
+rule below pays for itself and two are merely tidy; keep that straight before
+trading risk for a file count.
+
+Measured on Windows, the staged tree went from **849.2 MB / 2,521 files** to
+**818.9 MB / 2,238 files**:
+
+| Rule | Removed | Why nothing reaches it |
+|---|---|---|
+| OpenCV's FFmpeg videoio backend | 28.3 MB, 1 file | Everything here hands cv2 page bitmaps; nothing constructs a `VideoCapture`. **Windows only** — there the DLL is resolved by name when that backend first initialises, so its absence just marks it unavailable, while the Linux wheel's ffmpeg lives in `opencv_python_headless.libs/libav*.so`, which cv2's own extension lists in `DT_NEEDED`. Dropping those breaks `import cv2` outright. |
+| scikit-learn's sample corpora | 1.0 MB, 108 files | `data/`, `descr/`, `images/`, `tests/` — the toy sets behind `load_iris()`, their prose, two demo photographs, and sklearn's own fixtures. The only entry point this app has into sklearn is `DBSCAN`. Spelled out per directory rather than as `sklearn/datasets/*`, which would also catch `_svmlight_format_fast`, a compiled extension the package imports at load. |
+| C/Cython build artefacts | 1.0 MB, 173 files | `.lib` import libraries, the `.pyx`/`.pxd` sources the shipped extensions were generated from, `.h` headers, `meson.build`. A linker reads these; an interpreter never opens one. |
+
+Two things that look like dead weight and are not:
+
+- **`.pyi` stubs are load-bearing.** scikit-image (a babeldoc dependency)
+  builds its public namespace with `lazy_loader`, which parses
+  `skimage/__init__.pyi` at *import* time to learn what to attach. Pruning
+  `.pyi` fails that import with "Cannot load imports from non-existent stub".
+- **hyperscan's vendored runtime.** `hyperscan` (imported by babeldoc) is a
+  delvewheel-repaired wheel: `_hs_ext` links a private, hash-named copy of the
+  MSVC runtime in a *sibling* `hyperscan.libs/`, which `hyperscan/__init__.py`
+  registers with `os.add_dll_directory`. PyInstaller's dependency scan does not
+  follow a sibling libs directory, so nothing collected it — and this went
+  unnoticed because numpy and pandas are repaired the same way and their
+  vendored runtime *sometimes carries the same hash*, so `_hs_ext` resolved
+  through whichever libs directory another package had already registered. A
+  numpy bump is enough to end that. The spec now collects it explicitly
+  (`collect_delvewheel_libs_directory`).
+
+Both failures present identically and misleadingly: a non-fatal
+`Translation engine warm-up failed` warning at startup, and then the first
+translate dying in `_load_engine` with `cannot import name 'PDFProcessor' from
+desktop_pdf_translator.processors.processor` — because babeldoc's failed import
+left a half-initialised module behind for the second importer to find.
+
+**Which is why the smoke suite is not enough to sign off a prune.**
+`test_sidecar_smoke.py` proves the process boots and answers `/health`, and it
+stays green with cv2, skimage or hyperscan broken: babeldoc is imported inside
+the handler, not at startup. What catches these is a real translation through
+the frozen exe — spawn `dist/pdfusion-sidecar/pdfusion-sidecar.exe`, `POST
+/translate` with `service: "argos"` (offline, no API key) and watch the SSE
+stream terminate in `done` with `failed_paragraphs: 0`.
+
+What is left is left on purpose: `babeldoc_assets` (228 MB) and `argos_pack`
+(67 MB) are the offline-first installer's whole point; `cv2.pyd` (71 MB),
+`ctranslate2` (62 MB), `chromadb_rust_bindings` (63 MB), scipy and its libs
+(76 MB) are single files or hard dependencies of one. The largest remaining
+*file-count* item is camelot's chain — pandas, pytz and tzdata are 1,209 files
+for 19 MB — but by the figures above that is worth well under a second of
+install time, and dropping it means dropping camelot's table extraction, which
+`rag/document_processor.py` already falls back from when Ghostscript is
+missing. Not worth it for the size, and a product decision rather than a
+packaging one if it ever happens for another reason.
+
+**Why the installer is the size it is**, and why little else here will change
+it: those two asset blobs are already-compressed archives that pass through any
+compressor at roughly 1:1, so they are 295 MB of the 819 MB tree and **64% of
+the 464 MB installer**. That is also why solid LZMA's extra four minutes buy so
+little over zlib (67.5 MB on the whole bundle). Where the choice does show is
+install time, and not by much: on this payload LZMA decompresses at ~82 MB/s
+and zlib at ~288 MB/s, so ~10 s against ~3 s for the whole tree, on top of
+~1.7 s of file writes. A Windows install is therefore something like a dozen
+seconds of real work, most of it LZMA — the gap against `dpkg`, which unpacks
+a gzip `data.tar`, is mostly that one number. If download size ever matters
+more than offline-first, the lever is not pruning site-packages but not
+shipping the assets: `fetch-offline-assets` is already optional, and skipping
+it is a ~170 MB installer that downloads ~295 MB on first run instead.
 
 Hidden-import additions for chromadb / babeldoc / etc. live in
 `pdfusion-sidecar.spec`, which is itself platform-neutral — PyInstaller adds the

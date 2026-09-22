@@ -253,6 +253,13 @@ MiniSBD, `chunk_type` is pinned by assignment, and `_sbd_compat` stubs
 the frozen half of `test_sidecar_smoke.py` is the only check that catches an
 over-exclusion.
 
+**The spec also prunes inside packages it keeps** (`_prune`). Two things there
+look like dead weight and are not: `.pyi` stubs (skimage's `lazy_loader` parses
+`skimage/__init__.pyi` at import) and hyperscan's sibling `hyperscan.libs/`.
+Both fail as a *non-fatal* warm-up warning plus `cannot import name
+'PDFProcessor'` on the first translate, and the smoke suite stays green through
+either — only a real translate through the frozen exe catches them.
+
 ## Conventions
 
 - **Comments answer *why*, not *what*.** The code already says what it does;
@@ -292,12 +299,16 @@ pip install -e ".[dev]"
 cd desktop && pnpm tauri build
 ```
 
-(`.ps1` instead of `.sh` on Windows.) Tauri validates `externalBin` and
-`resources` at **compile** time, before the `beforeBundleCommand` that rebuilds
-the sidecar — so a fresh checkout fails `cargo check`, `pnpm tauri dev` and
-`pnpm tauri build` until something is staged. For frontend/Rust work use
-`./build-sidecar.sh --stub`; the shell rejects anything under 1 MiB and falls
-back to local Python.
+(`.ps1` instead of `.sh` on Windows.) Iterating on the installer itself? Swap
+the last line for `pnpm run tauri:build:fast` — the same build with NSIS's
+compressor switched to zlib, which takes `pnpm tauri build` from 607 s to 344 s
+for an installer 68 MB larger.
+
+Tauri validates `externalBin` and `resources` at **compile** time, before the
+`beforeBundleCommand` that rebuilds the sidecar — so a fresh checkout fails
+`cargo check`, `pnpm tauri dev` and `pnpm tauri build` until something is
+staged. For frontend/Rust work use `./build-sidecar.sh --stub`; the shell
+rejects anything under 1 MiB and falls back to local Python.
 
 Targets: NSIS per-user on Windows, `deb` on Linux (**no AppImage** — linuxdeploy
 cannot walk the PyInstaller tree; see the notes), `dmg`/`app` on macOS
