@@ -1,7 +1,7 @@
 /**
  * Where pdf.js goes looking for the assets it does not carry in its bundle.
  *
- * pdf.js 5.x keeps four kinds of asset outside the worker bundle and fetches
+ * pdf.js 5.x keeps several kinds of asset outside the worker bundle and fetches
  * each one at runtime from its own prefix option on `getDocument`. Every one of
  * those options defaults to `null`, and nothing warns when one is left that way
  * — which is how #73 and then #77 shipped:
@@ -21,15 +21,27 @@
  * - `standard_fonts/` — the metrics for the 14 standard fonts, which a PDF may
  *   reference without embedding. Unset, the text still draws, but from a
  *   substituted system font, so the glyph shapes and widths are wrong (#77).
- * - `iccs/` — the CMYK ICC profile. Unset, DeviceCMYK falls back to pdf.js's
- *   approximation rather than a colour-managed conversion (#77).
+ *   This one needs `useSystemFonts: false` alongside it or it does almost
+ *   nothing: `fetchStandardFontData` returns null before it ever reads the
+ *   prefix for every name but `Symbol` and `ZapfDingbats` while system fonts
+ *   are allowed, which is the webview default.
+ *
+ * There is a fourth directory, `iccs/`, holding the CMYK ICC profile, and it is
+ * deliberately not here. `iccUrl` is only ever read by `CmykICCBasedCS`'s
+ * constructor, which `IccColorSpace.setOptions` makes unreachable the moment
+ * `useWorkerFetch` is false — see the pin in `usePdfDocument.ts`. Setting it
+ * would publish 500 KB that nothing fetches and claim a fix that does not
+ * happen; DeviceCMYK keeps pdf.js's approximation, exactly as it did before
+ * #77. Colour-managed CMYK needs the worker to do its own fetching, which is a
+ * CSP question for its own issue rather than a line to add here.
  *
  * The trailing slash is load-bearing rather than tidy. pdf.js concatenates the
  * asset's filename straight onto these strings, and `getFactoryUrlProp` throws
  * `Invalid factory url` when one does not end in a slash. That throw lands on
  * every document load, so dropping a slash would take the entire viewer down
  * rather than only the pages the prefix exists to rescue — a much worse failure
- * than any of the ones being fixed.
+ * than any of the ones being fixed. `vite.config.ts` imports the map below and
+ * strips that slash to get its routes, so the two cannot drift apart.
  *
  * The prefixes are relative on purpose: the app is served from Vite's dev
  * server in development and from Tauri's custom protocol in a bundle, and
@@ -37,19 +49,20 @@
  * without either origin being written down anywhere.
  */
 
-/** Must match the directories `vite.config.ts` publishes verbatim.
- *  The two are a pair — moving one without the other restores #73 or #77. */
+/** The directories, exactly as `pdfjs-dist` names them. `vite.config.ts`
+ *  publishes these same names verbatim by importing the map rather than
+ *  repeating it, because a pair that can drift is how #73 and #77 both read. */
 const ASSET_DIRECTORIES = {
   wasm: "wasm/",
   cmaps: "cmaps/",
   standardFonts: "standard_fonts/",
-  iccs: "iccs/",
 } as const;
 
 export type PdfAssetDirectory = keyof typeof ASSET_DIRECTORIES;
 
 /** The directory names as they appear inside `pdfjs-dist` and, unchanged, in
- *  the published bundle. Exported for the tests that hold those two together. */
+ *  the published bundle. Exported for `vite.config.ts`, which publishes them,
+ *  and for the test that holds them against the installed package. */
 export const pdfAssetDirectories = ASSET_DIRECTORIES;
 
 /**

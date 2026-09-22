@@ -5,21 +5,27 @@ import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
 
+import { pdfAssetDirectories } from "./src/lib/pdf-viewer/asset-urls";
+
 // @ts-expect-error process is a nodejs global
 const host = process.env.TAURI_DEV_HOST;
 
 const require = createRequire(import.meta.url);
 
-/** Must match `lib/pdf-viewer/asset-urls.ts`'s `ASSET_DIRECTORIES`, both in
- *  the directory names and in the routes they are published at. */
-const ASSET_DIRECTORIES = ["wasm", "cmaps", "standard_fonts", "iccs"] as const;
+/** The one list, imported rather than repeated: these are the same strings
+ *  `getDocument` is handed as prefixes, minus the trailing slash pdf.js needs
+ *  and a route does not. A second copy here is how a rename ships a viewer
+ *  that 404s at the first document load with every test still green. */
+const ASSET_DIRECTORIES = Object.values(pdfAssetDirectories).map((dir) =>
+  dir.replace(/\/$/, ""),
+);
 
 /** Anything not listed is served as bytes. `.wasm` has to carry its own type
  *  for `instantiateStreaming`, and the `*_nowasm_fallback.js` decoders are
  *  fetched as ES modules — a module served under the wrong type is refused
- *  before it ever runs. The rest (`.bcmap`, `.pfb`, `.ttf`, `.icc`, and the
- *  `LICENSE*` files beside them) are read as array buffers, which no content
- *  type affects. */
+ *  before it ever runs. The rest (`.bcmap`, `.pfb`, `.ttf`, and the `LICENSE*`
+ *  files beside them) are read as array buffers, which no content type
+ *  affects. */
 const CONTENT_TYPES: Record<string, string> = {
   ".wasm": "application/wasm",
   ".js": "text/javascript",
@@ -27,8 +33,8 @@ const CONTENT_TYPES: Record<string, string> = {
 
 /**
  * Publishes pdf.js's runtime assets beside `index.html`, in dev and in the
- * bundle: the WebAssembly decoders, the predefined CJK CMaps, the standard
- * font metrics and the CMYK ICC profile.
+ * bundle: the WebAssembly decoders, the predefined CJK CMaps and the standard
+ * font metrics.
  *
  * These cannot ride the `?url` import that `usePdfDocument.ts` uses for the
  * pdf.js worker, which is the whole reason this plugin exists. pdf.js builds
@@ -40,9 +46,9 @@ const CONTENT_TYPES: Record<string, string> = {
  * Each one ships whole. A partial copy is not possible for the cmaps and fonts
  * — which one a document asks for is only knowable when it is opened — and it
  * was already the wrong trade for the decoders: shipping only the two
- * `openjpeg.*` files #73 was about would have left JBIG2 and ICC failing in
- * precisely the way JPX was failing, and bought a second visit here in exchange
- * for 800 KB. The four together are ~3.8 MB against a 758 MB installer.
+ * `openjpeg.*` files #73 was about would have left JBIG2 failing in precisely
+ * the way JPX was failing, and bought a second visit here in exchange for
+ * 800 KB. The three together are ~3.8 MB against a 758 MB installer.
  *
  * The source directories are resolved through the installed package rather than
  * written-down `node_modules` paths, and a missing one throws here rather than
