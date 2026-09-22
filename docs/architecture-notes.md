@@ -1263,14 +1263,68 @@ out of React state. There are five invariants, and each one is easy to break by
 - **A slot's size comes from the layout model, never from a canvas.** Only the
   visible pages ±`RENDER_RADIUS` (3) hold a canvas (`page-renderer.ts`). Every
   other page is released: its render cancelled, its backing store zeroed
-  (`canvas.width = 0`, not left to GC), its text layer removed, `page.cleanup()`
-  called. So the column's height, go-to, zoom anchoring and "which page am I
+  (`canvas.width = 0`, not left to GC), its text layer removed, and
+  `page.cleanup()` called a few releases later (see below). So the column's
+  height, go-to, zoom anchoring and "which page am I
   on" are all computed from `layout.ts:pageGeometry`, and the JSX sizes each
   slot through the *same* `slotSize`. Round differently in one place and a
   go-to lands on the wrong page a few hundred pages in. Slots use `ring-1`
   rather than `border` for the same reason: a border would inset the canvas.
   Page sizes start as page 1's and are corrected in the background; Chromium's
   scroll anchoring keeps the reader in place meanwhile.
+
+  **`page.cleanup()` is deferred, because it is not the cheap half of a
+  release** (#76). The canvas goes immediately — it is the larger allocation,
+  and one fast scroll drops dozens of them. `PDFPageProxy.cleanup()` is a
+  different thing: it clears the proxy's `objs`, which holds the page's
+  *decoded* images, so the next visit re-runs the decode. pdf.js's worker-side
+  `GlobalImageCache` does not cover that, because `shouldCache` keys on the set
+  of page indices an image ref was seen on and refuses anything under two — so
+  art that appears on exactly one page, which is what a slide deck or a
+  figure-heavy paper is made of, is never cached. Measured on the 78-page
+  Beamer deck from #73/#74, whose figures are JPEG 2000: rebuilding one page's
+  operator list after a `cleanup()` costs 200–410 ms on Windows (827 ms on
+  Linux, #76) against 0.02 ms with the proxy left alone, and 5.7 s across the
+  whole deck against 0.9 ms. End to end in the viewer, scrolling five pages
+  away from a figure page and back took 384–753 ms to repaint before this and
+  16–36 ms after. `lib/pdf-viewer/decode-retention.ts` holds the last
+  `DECODE_RETAIN` (6) released pages back from cleanup, and a page scrolled
+  back into the window moves to the *end* of that list rather than being
+  cleaned up behind the reader. It moves rather than leaving, because the list
+  is also the record of what still owes a `cleanup()`: a page taken off it and
+  then never re-rendered — which is what a scroll sweeping straight past a page
+  does, since the pump only reaches one page at a time — would hold its decoded
+  images until the document was destroyed, and the count would stop bounding
+  anything. For the same reason the deferred cleanup is handed the document it
+  belongs to rather than reading `this.doc` back: it settles in a microtask, by
+  which point a swap has already reassigned that field, so the cleanup would be
+  aimed at the incoming document's pages. What the flush on the swap path does
+  *not* do is free memory — `usePdfDocument` destroys the outgoing proxy in a
+  cleanup React runs before the effect that calls `setDocument`, so by then
+  `getPage()` rejects and the flush is a no-op. It earns its place by clearing
+  the list, which must not survive into a document it does not describe.
+
+  A decoded 2.2 MP image is ~9 MB and these pages carry two, so six retained
+  pages is roughly 110 MB on that document — and the viewer mounts two panes,
+  each with its own renderer and its own six, so the figure to budget against
+  is ~220 MB. That is what retention *adds*: the `RENDER_RADIUS` pages inside
+  the window hold their decodes too, as they always have, so the viewer's real
+  ceiling on that deck is higher. An ordinary document costs nothing either
+  way. The bound is a *count*, which is also why this is not simply a larger
+  `RENDER_RADIUS`: that would multiply canvases too.
+
+  The other half of #76 — decoding ahead of the canvas radius with
+  `getOperatorList()` — was tried on paper and **rejected**. `getOperatorList()`
+  passes `isOpList = true`, which adds `RenderingIntentFlag.OPLIST` to the
+  rendering intent, and the intent is the first component of the cache key. It
+  therefore allocates a different `intentState` from the one `render()` later
+  uses, each pumping its own operator list; combined with the `shouldCache`
+  rule above (both builds report the same page index), the worker would decode
+  the page's images *twice*. A prefetch that shares state with the later render
+  would have to be a real `render()` at the same intent into a throwaway
+  canvas, which walks the whole operator list on the main thread and competes
+  with scrolling. The queue already renders — and so decodes — the ±3 buffer
+  pages ahead of the visible ones, which is the same thing for free.
 - **A canvas is only ever replaced by a finished one.** Zoom resizes the slots,
   and the existing canvas stretches with them (`.pdf-page-canvas` is
   `width/height: 100%`, and `--scale-factor` rescales the text layer in the same

@@ -7,8 +7,10 @@
  * - **Recycling.** Only pages in the render window (visible ± `RENDER_RADIUS`)
  *   hold a canvas. A page leaving the window is released immediately: its
  *   render is cancelled, its canvas's backing store zeroed, its text layer
- *   removed, and its worker-side resources cleaned up. Slots take their size
- *   from the layout model, never from a canvas, so a release moves nothing.
+ *   removed. Its pdf.js resources go later, once `DECODE_RETAIN` further pages
+ *   have been released, so that scrolling back does not re-pay the decode
+ *   (#76). Slots take their size from the layout model, never from a canvas, so
+ *   a release moves nothing.
  * - **Ordering.** Pages render one at a time. The next page is picked after
  *   every render from the current priority list, so a fast scroll never leaves
  *   a backlog of renders for pages it has already passed.
@@ -35,6 +37,10 @@ import {
   pagesToRefresh,
   type PendingChanges,
 } from "@/lib/pdf-viewer/artifact-swap";
+import {
+  renewRetained,
+  retainReleased,
+} from "@/lib/pdf-viewer/decode-retention";
 import {
   canvasScale,
   renderPriority,
@@ -115,6 +121,8 @@ export class PageRenderer {
   private zoomTimer: ReturnType<typeof setTimeout> | undefined;
   private queue: number[] = [];
   private pumping = false;
+  /** Released pages whose pdf.js resources are still held, oldest first. */
+  private retained: number[] = [];
 
   /** Register the element page `page` draws into, or with `null`, forget it. */
   setHost(page: number, host: HTMLElement | null): void {
@@ -122,7 +130,16 @@ export class PageRenderer {
       this.hosts.set(page, host);
       this.pump();
     } else {
-      this.release(page);
+      // The slot itself is gone, so there is nothing to scroll back to: a page
+      // that was holding decoded images gives them up now rather than waiting
+      // for a later release to push it off the list. It comes off the list
+      // first, and is released without re-entering it: retaining a page we are
+      // about to clean up anyway would evict one that is still worth keeping.
+      // A page that never rendered is on no list and costs nothing here.
+      const decoded = this.pages.has(page) || this.retained.includes(page);
+      this.retained = this.retained.filter((candidate) => candidate !== page);
+      this.release(page, false);
+      if (decoded) this.cleanupPage(page, this.doc);
       this.hosts.delete(page);
     }
   }
@@ -137,11 +154,22 @@ export class PageRenderer {
     changes: PendingChanges | null,
   ): void {
     if (doc === this.doc) return;
-    this.doc = doc;
-    this.generation++;
+    // Both of these clean up pages of the outgoing document, so they have to
+    // run before `this.doc` is reassigned — and `flushRetained` has to be
+    // handed that document rather than reading it back, because the cleanups
+    // settle in a microtask, by which point `this.doc` is the incoming one and
+    // the cleanup would be aimed at its pages instead. On the paths the app
+    // actually takes the flush frees nothing: `usePdfDocument` destroys the
+    // outgoing proxy in a cleanup that React runs before this effect, and that
+    // reclaims everything the flush would have. It stays because the retention
+    // list must not survive into a document it does not describe.
     if (!doc || changes === null) {
       for (const page of [...this.pages.keys()]) this.release(page);
-    } else {
+    }
+    this.flushRetained(this.doc);
+    this.doc = doc;
+    this.generation++;
+    if (doc && changes !== null) {
       for (const page of pagesToRefresh(this.pages.keys(), changes)) {
         const state = this.pages.get(page);
         if (state) state.dirty = true;
@@ -164,6 +192,10 @@ export class PageRenderer {
   /** What's on screen. Pages outside `range` are released; pages inside are
    *  drawn, visible ones first. */
   update(visible: PageRange | null, range: PageRange | null): void {
+    // Before the releases below, so a page scrolled back into the window is
+    // already at the safe end of the retention list before this tick can start
+    // evicting from the other one.
+    this.retained = renewRetained(this.retained, range);
     for (const page of [...this.pages.keys()]) {
       if (!range || page < range.first || page > range.last) {
         this.release(page);
@@ -196,12 +228,15 @@ export class PageRenderer {
   releaseAll(): void {
     clearTimeout(this.zoomTimer);
     for (const page of [...this.pages.keys()]) this.release(page);
+    this.flushRetained(this.doc);
     this.queue = [];
     this.doc = null;
     this.generation++;
   }
 
-  private release(page: number): void {
+  /** With `retain` false the page's pdf.js resources are the caller's to deal
+   *  with: it is not put on the retention list, and so evicts nothing. */
+  private release(page: number, retain = true): void {
     const state = this.pages.get(page);
     if (!state) return;
     this.pages.delete(page);
@@ -212,15 +247,36 @@ export class PageRenderer {
     state.textDiv?.remove();
     this.events.onRelease?.(page);
 
-    // Frees the page's operator list and decoded images in the worker. It does
-    // nothing while a cancelled render is still settling, which is fine.
-    const doc = this.doc;
+    if (!retain) return;
+    // The canvas goes now; the page's decoded images do not. Cleaning up here
+    // would make scrolling back one page re-decode it from scratch, so the
+    // cleanup waits until `DECODE_RETAIN` further pages have been released
+    // (#76).
+    const { retained, evicted } = retainReleased(this.retained, page);
+    this.retained = retained;
+    for (const stale of evicted) this.cleanupPage(stale, this.doc);
+  }
+
+  /** Hand a released page's operator list and decoded images back to pdf.js. It
+   *  does nothing while a cancelled render is still settling — pdf.js retries
+   *  once that render completes, so the page is freed either way. */
+  private cleanupPage(page: number, doc: PDFDocumentProxy | null): void {
+    // The proxy is resolved from `doc`, so this can only ever free a page of
+    // the document the caller meant. `pages` is consulted only while that is
+    // still the document on screen: after a swap it describes the incoming one
+    // and says nothing about this page.
     void doc?.getPage(page).then(
       (proxy) => {
-        if (this.doc === doc && !this.pages.has(page)) proxy.cleanup();
+        if (this.doc !== doc || !this.pages.has(page)) proxy.cleanup();
       },
       () => undefined,
     );
+  }
+
+  private flushRetained(doc: PDFDocumentProxy | null): void {
+    const pages = this.retained;
+    this.retained = [];
+    for (const page of pages) this.cleanupPage(page, doc);
   }
 
   private needsRender(page: number): boolean {

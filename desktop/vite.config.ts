@@ -7,7 +7,6 @@ import path from "node:path";
 
 import { pdfAssetDirectories } from "./src/lib/pdf-viewer/asset-urls";
 
-// @ts-expect-error process is a nodejs global
 const host = process.env.TAURI_DEV_HOST;
 
 const require = createRequire(import.meta.url);

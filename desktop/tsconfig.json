@@ -26,6 +26,12 @@
       "@/*": ["./src/*"]
     }
   },
-  "include": ["src"],
-  "references": [{ "path": "./tsconfig.node.json" }]
+  /* The Vite/Tauri template split the config files into a second, composite
+     project. That split cannot survive `vite.config.ts` importing the asset
+     map out of `src/` (see the invariant in CLAUDE.md): a composite project
+     must list every file it pulls in, and listing one that this project also
+     owns makes `tsc` demand a built `.d.ts` for it (TS6305). One project owns
+     everything instead — nothing is emitted, and the config files are checked
+     by the same `tsc` gate as the app. */
+  "include": ["src", "vite.config.ts", "vitest.config.ts"]
 }

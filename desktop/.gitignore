@@ -26,3 +26,6 @@ src-tauri/gen/
 *.njsproj
 *.sln
 *.sw?
+
+# `tsc -b` build state
+tsconfig.tsbuildinfo
