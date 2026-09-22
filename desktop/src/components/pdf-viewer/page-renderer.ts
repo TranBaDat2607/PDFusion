@@ -7,8 +7,10 @@
  * - **Recycling.** Only pages in the render window (visible ± `RENDER_RADIUS`)
  *   hold a canvas. A page leaving the window is released immediately: its
  *   render is cancelled, its canvas's backing store zeroed, its text layer
- *   removed, and its worker-side resources cleaned up. Slots take their size
- *   from the layout model, never from a canvas, so a release moves nothing.
+ *   removed. Its pdf.js resources go later, once `DECODE_RETAIN` further pages
+ *   have been released, so that scrolling back does not re-pay the decode
+ *   (#76). Slots take their size from the layout model, never from a canvas, so
+ *   a release moves nothing.
  * - **Ordering.** Pages render one at a time. The next page is picked after
  *   every render from the current priority list, so a fast scroll never leaves
  *   a backlog of renders for pages it has already passed.
@@ -35,6 +37,10 @@ import {
   pagesToRefresh,
   type PendingChanges,
 } from "@/lib/pdf-viewer/artifact-swap";
+import {
+  forgetRetained,
+  retainReleased,
+} from "@/lib/pdf-viewer/decode-retention";
 import {
   canvasScale,
   renderPriority,
@@ -115,6 +121,8 @@ export class PageRenderer {
   private zoomTimer: ReturnType<typeof setTimeout> | undefined;
   private queue: number[] = [];
   private pumping = false;
+  /** Released pages whose pdf.js resources are still held, oldest first. */
+  private retained: number[] = [];
 
   /** Register the element page `page` draws into, or with `null`, forget it. */
   setHost(page: number, host: HTMLElement | null): void {
@@ -123,6 +131,17 @@ export class PageRenderer {
       this.pump();
     } else {
       this.release(page);
+      // The slot itself is gone, so there is nothing to scroll back to: a page
+      // that was holding decoded images gives them up now rather than waiting
+      // for a later release to push it off the list. A page that never
+      // rendered is on no list and costs nothing here.
+      if (this.retained.includes(page)) {
+        this.retained = forgetRetained(this.retained, {
+          first: page,
+          last: page,
+        });
+        this.cleanupPage(page);
+      }
       this.hosts.delete(page);
     }
   }
@@ -137,11 +156,15 @@ export class PageRenderer {
     changes: PendingChanges | null,
   ): void {
     if (doc === this.doc) return;
-    this.doc = doc;
-    this.generation++;
+    // Both of these clean up against `this.doc`, so they have to run before it
+    // is reassigned or they would free pages of the incoming document.
     if (!doc || changes === null) {
       for (const page of [...this.pages.keys()]) this.release(page);
-    } else {
+    }
+    this.flushRetained();
+    this.doc = doc;
+    this.generation++;
+    if (doc && changes !== null) {
       for (const page of pagesToRefresh(this.pages.keys(), changes)) {
         const state = this.pages.get(page);
         if (state) state.dirty = true;
@@ -164,6 +187,9 @@ export class PageRenderer {
   /** What's on screen. Pages outside `range` are released; pages inside are
    *  drawn, visible ones first. */
   update(visible: PageRange | null, range: PageRange | null): void {
+    // Before the releases below, so a page scrolled back into the window is
+    // off the retention list before this tick can evict it.
+    this.retained = forgetRetained(this.retained, range);
     for (const page of [...this.pages.keys()]) {
       if (!range || page < range.first || page > range.last) {
         this.release(page);
@@ -196,6 +222,7 @@ export class PageRenderer {
   releaseAll(): void {
     clearTimeout(this.zoomTimer);
     for (const page of [...this.pages.keys()]) this.release(page);
+    this.flushRetained();
     this.queue = [];
     this.doc = null;
     this.generation++;
@@ -212,8 +239,19 @@ export class PageRenderer {
     state.textDiv?.remove();
     this.events.onRelease?.(page);
 
-    // Frees the page's operator list and decoded images in the worker. It does
-    // nothing while a cancelled render is still settling, which is fine.
+    // The canvas goes now; the page's decoded images do not. Cleaning up here
+    // would make scrolling back one page re-decode it from scratch, so the
+    // cleanup waits until `DECODE_RETAIN` further pages have been released
+    // (#76).
+    const { retained, evicted } = retainReleased(this.retained, page);
+    this.retained = retained;
+    for (const stale of evicted) this.cleanupPage(stale);
+  }
+
+  /** Hand a released page's operator list and decoded images back to pdf.js. It
+   *  does nothing while a cancelled render is still settling — pdf.js retries
+   *  once that render completes, so the page is freed either way. */
+  private cleanupPage(page: number): void {
     const doc = this.doc;
     void doc?.getPage(page).then(
       (proxy) => {
@@ -221,6 +259,12 @@ export class PageRenderer {
       },
       () => undefined,
     );
+  }
+
+  private flushRetained(): void {
+    const pages = this.retained;
+    this.retained = [];
+    for (const page of pages) this.cleanupPage(page);
   }
 
   private needsRender(page: number): boolean {
