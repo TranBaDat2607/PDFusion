@@ -157,7 +157,12 @@ export class PageRenderer {
     // Both of these clean up pages of the outgoing document, so they have to
     // run before `this.doc` is reassigned — and `flushRetained` has to be
     // handed that document rather than reading it back, because the cleanups
-    // settle in a microtask, by which point it is the incoming one.
+    // settle in a microtask, by which point `this.doc` is the incoming one and
+    // the cleanup would be aimed at its pages instead. On the paths the app
+    // actually takes the flush frees nothing: `usePdfDocument` destroys the
+    // outgoing proxy in a cleanup that React runs before this effect, and that
+    // reclaims everything the flush would have. It stays because the retention
+    // list must not survive into a document it does not describe.
     if (!doc || changes === null) {
       for (const page of [...this.pages.keys()]) this.release(page);
     }

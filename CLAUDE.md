@@ -227,6 +227,12 @@ a test. They are the things most easily undone by "simplifying".
   only visible pages ±3 hold one.
 - A canvas is only ever replaced by a finished one; the translated pane swaps
   **pages**, not documents, driven by the `translatedChanges` log.
+- `cleanup()` on a released page is deferred, never skipped (#76). The
+  retention list in `lib/pdf-viewer/decode-retention.ts` is the record of what
+  still owes one, so a page renewed into the window stays on the list and only
+  moves to its back. Dropping it there instead holds that page's decoded images
+  until the document is destroyed — a scroll that sweeps straight past a page
+  never re-renders it — and `DECODE_RETAIN` stops bounding anything.
 - Text layers are core `pdfjs.TextLayer` plus two pieces copied from
   `pdf_viewer.mjs` — re-check both when bumping pdfjs-dist.
 - pdf.js fetches three asset directories at runtime — `wasm/`, `cmaps/`,

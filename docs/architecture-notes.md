@@ -1297,15 +1297,21 @@ out of React state. There are five invariants, and each one is easy to break by
   images until the document was destroyed, and the count would stop bounding
   anything. For the same reason the deferred cleanup is handed the document it
   belongs to rather than reading `this.doc` back: it settles in a microtask, by
-  which point a swap has already reassigned that field, and every flush on the
-  swap path would skip itself.
+  which point a swap has already reassigned that field, so the cleanup would be
+  aimed at the incoming document's pages. What the flush on the swap path does
+  *not* do is free memory — `usePdfDocument` destroys the outgoing proxy in a
+  cleanup React runs before the effect that calls `setDocument`, so by then
+  `getPage()` rejects and the flush is a no-op. It earns its place by clearing
+  the list, which must not survive into a document it does not describe.
 
   A decoded 2.2 MP image is ~9 MB and these pages carry two, so six retained
   pages is roughly 110 MB on that document — and the viewer mounts two panes,
   each with its own renderer and its own six, so the figure to budget against
-  is ~220 MB. An ordinary document costs nothing either way. The bound is a
-  *count*, which is also why this is not simply a larger `RENDER_RADIUS`: that
-  would multiply canvases too.
+  is ~220 MB. That is what retention *adds*: the `RENDER_RADIUS` pages inside
+  the window hold their decodes too, as they always have, so the viewer's real
+  ceiling on that deck is higher. An ordinary document costs nothing either
+  way. The bound is a *count*, which is also why this is not simply a larger
+  `RENDER_RADIUS`: that would multiply canvases too.
 
   The other half of #76 — decoding ahead of the canvas radius with
   `getOperatorList()` — was tried on paper and **rejected**. `getOperatorList()`

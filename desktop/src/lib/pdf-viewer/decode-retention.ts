@@ -26,7 +26,9 @@ import type { PageRange } from "./layout";
  * A decoded 2.2 MP image is ~9 MB and the pathological pages carry two, so six
  * retained pages is roughly 110 MB on that document, and the viewer mounts two
  * panes — original and translated, each with its own renderer and its own six
- * — so the figure to budget against is ~220 MB. A document whose pages are
+ * — so the figure to budget against is ~220 MB. That is what retention adds
+ * rather than the viewer's ceiling: the `RENDER_RADIUS` pages inside the
+ * window hold their decodes too, and always did. A document whose pages are
  * vector art costs nothing either way. The bound is a *count*, so retention
  * never grows with the document — the reason this is not simply a larger
  * `RENDER_RADIUS`, which would multiply canvases as well, and a canvas is the

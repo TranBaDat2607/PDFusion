@@ -26,3 +26,6 @@ src-tauri/gen/
 *.njsproj
 *.sln
 *.sw?
+
+# `tsc -b` build state; the referenced project emits into node_modules/.tmp
+tsconfig.tsbuildinfo
