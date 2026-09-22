@@ -13,3 +13,10 @@
 # autocrlf setting.
 desktop/src/lib/openapi.json text eol=lf
 desktop/src/lib/api-types.d.ts text eol=lf
+
+# The pdf.js asset fixtures are byte-addressed: a PDF's trailer points at the
+# xref table by absolute offset, so a single LF turned into CRLF on checkout
+# moves everything after it and the file no longer parses. These two are ASCII
+# enough that git's binary heuristic does not catch them on its own, which
+# would have broken asset-urls.test.ts on any Windows checkout.
+desktop/src/lib/pdf-viewer/__fixtures__/*.pdf binary
