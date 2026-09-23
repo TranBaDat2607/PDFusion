@@ -68,7 +68,13 @@ export function ModelPicker({
       queryKey: ["config", "endpoint-models", code, config[code].base_url],
       queryFn: () => api.get<EndpointModels>(`/config/models/${code}`),
       enabled: open,
-      staleTime: 60_000,
+      // A failed listing still arrives as a 200 carrying `error` (so the
+      // saved model stays pickable), which Query would cache like a good
+      // one. Keep it stale instead: the usual cure — starting the local
+      // server, fixing the key — happens outside this key, and the next
+      // open should see it.
+      staleTime: ({ state }: { state: { data?: EndpointModels } }) =>
+        state.data?.error ? 0 : 60_000,
     })),
   });
   const endpointModels: Partial<Record<LlmServiceCode, string[]>> = {};
