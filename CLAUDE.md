@@ -123,7 +123,7 @@ schema is checked in at `desktop/src/lib/openapi.json` — read it there rather
 than re-deriving from the routes.
 
 `/health` · `/auth/ping` · `GET|PUT /config` · `POST /config/validate` ·
-`GET /config/options` · `GET|DELETE /config/cache` ·
+`GET /config/options` · `GET /config/models/{service}` · `GET|DELETE /config/cache` ·
 `GET /setup/status` · `POST /setup/engine` ·
 `POST /translate` + `/translate/{id}/events` + `/cancel` + `POST /translate/estimate` ·
 `POST /rag/index` + `/events` · `POST /rag/ask` + `/events` ·

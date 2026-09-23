@@ -65,6 +65,32 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/config/models/{service}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Endpoint Models
+         * @description The models the saved endpoint serves.
+         *
+         *     For the toolbar's model picker once a service points at Ollama, LM Studio
+         *     or a proxy: the suggestions in `/config/options` are the provider's own
+         *     models, which such a server doesn't have, and its models are in no list we
+         *     could ship. Always the saved key with the saved endpoint, the pair
+         *     `PUT /config` keeps together, so this can't send a key anywhere new.
+         */
+        get: operations["list_endpoint_models_config_models__service__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/config/options": {
         parameters: {
             query?: never;
@@ -887,6 +913,19 @@ export interface components {
             /** Model */
             model?: string | null;
         };
+        /**
+         * EndpointModelsResponse
+         * @description The models a service's saved endpoint says it serves.
+         *
+         *     A failure is `error`, not an HTTP error: a local server that isn't running
+         *     yet is ordinary, and the picker still offers the saved model without it.
+         */
+        EndpointModelsResponse: {
+            /** Error */
+            error?: string | null;
+            /** Models */
+            models?: string[];
+        };
         /** EngineAssetGroup */
         EngineAssetGroup: {
             /** Detail */
@@ -1650,6 +1689,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["CacheClearResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_endpoint_models_config_models__service__get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                service: components["schemas"]["TranslationService"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EndpointModelsResponse"];
                 };
             };
             /** @description Validation Error */

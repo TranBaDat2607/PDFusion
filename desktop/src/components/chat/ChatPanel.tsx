@@ -14,7 +14,8 @@ import { UserMessage } from "@/components/chat/UserMessage";
 import { useChatHistory, useClearChatHistory } from "@/hooks/useChatHistory";
 import { useRagAsk } from "@/hooks/useRagAsk";
 import { useRagIndex } from "@/hooks/useRagIndex";
-import { useConfig } from "@/hooks/useConfig";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { useConfig, type ConfigResponse } from "@/hooks/useConfig";
 import {
   CHAT_DOCUMENTS_KEY,
   appendExchange,
@@ -23,7 +24,9 @@ import {
   type ChatMessage,
 } from "@/lib/chat-history";
 import { answerForDocument, needsReindex } from "@/lib/rag-ask";
+import { chatModel, SERVICE_SHORT_LABELS } from "@/lib/model-choice";
 import { useAppStore } from "@/lib/store";
+import { cn } from "@/lib/utils";
 
 interface ChatPanelProps {
   documentPath: string | null;
@@ -174,6 +177,7 @@ export function ChatPanel({
               {index.state.chunks} chunks
             </Badge>
           )}
+          {config && <AnswerModelBadge config={config} />}
         </div>
         <div className="flex items-center gap-1">
           <Button
@@ -267,6 +271,33 @@ export function ChatPanel({
         </motion.div>
       )}
     </AnimatePresence>
+  );
+}
+
+/** Which model writes the answers. It follows the translation choice but
+ *  falls back to any LLM with a key, so it isn't always the toolbar's. */
+function AnswerModelBadge({ config }: { config: ConfigResponse }) {
+  const answering = chatModel(config);
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <Badge
+          variant="outline"
+          tabIndex={0}
+          className={cn(
+            "max-w-[160px] truncate font-mono text-[10px]",
+            !answering && "border-amber-500/60 text-amber-600 dark:text-amber-400",
+          )}
+        >
+          {answering ? answering.model : "no model"}
+        </Badge>
+      </TooltipTrigger>
+      <TooltipContent className="max-w-xs">
+        {answering
+          ? `${SERVICE_SHORT_LABELS[answering.service]} writes the answers.`
+          : "No API key is saved, so answers are excerpts from the document. Add a key in Settings for written answers."}
+      </TooltipContent>
+    </Tooltip>
   );
 }
 
