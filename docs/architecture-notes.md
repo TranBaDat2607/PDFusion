@@ -514,7 +514,7 @@ now a Windows + Linux matrix) is what settles the PyInstaller half.
 | `desktop/src/lib/pdf-viewer/` | Pure: page geometry (`layout.ts`), find matching (`find.ts`), which pages a new rolling PDF changed (`artifact-swap.ts`), key → shortcut (`shortcuts.ts`) |
 | `desktop/src/components/chat/` | `ChatPanel`, `UserMessage`, `AssistantMessage`, `ActionLog`, `ReferenceList`, `ChatInput` |
 | `desktop/src/components/settings/` | `SettingsSheet` (a tab per service, plus Cache — with Performance, where the translation limits are — and Chat); `ModelCombobox` (a model name typed freely or picked from suggestions); `ChatIndexTab` (Enable chat, the recorded documents, Remove, Reset) |
-| `desktop/src/components/translation/` | `ProgressOverlay`, `TranslatedFileActions` (Save / Open / Show in folder), `PageRangeInput` (the toolbar's Pages box), `PageLimitDialog` (the offer made instead of a page-limit failure), `TokenEstimate` (the token count beside the model name) — see "Page ranges and limits" |
+| `desktop/src/components/translation/` | `ProgressOverlay`, `TranslatedFileActions` (Save / Open / Show in folder), `PageRangeInput` (the toolbar's Pages box), `PageLimitDialog` (the offer made instead of a page-limit failure), `TokenEstimate` (the token count beside the model name) — see "Page ranges and limits"; `ModelPicker` (the toolbar's service + model, one control) — see "LLM endpoints and models" |
 | `desktop/src/components/ui/` | shadcn-generated primitives (button, dialog, sheet, …) |
 | `desktop/src/lib/api-client.ts` | Typed HTTP wrapper with bearer-token + sidecar URL helpers |
 | `desktop/src/lib/sse.ts` | Authenticated SSE reader (native EventSource can't set headers) |
@@ -570,6 +570,7 @@ All routes (except `GET /health`) require `Authorization: Bearer <token>`.
 | PUT | `/config` | Update API keys / models / endpoints / language defaults. `model` is free text. `openai` and `anthropic` take `base_url` (`""` = the provider's own); changing it while a key is saved needs `api_key` in the same body, or **422** — see "LLM endpoints and models" |
 | POST | `/config/validate` | Check credentials with the provider, off the event loop and under a deadline. `api_key` / `model` / `base_url` left out come from the saved settings, and the saved key is only checked against the saved endpoint (**422** otherwise) |
 | GET | `/config/options` | Static dropdown data (languages, services, model *suggestions* with each service's default first) + `supported_pairs` per service (`null` = unrestricted) |
+| GET | `/config/models/{service}` | The models the saved endpoint serves (`openai` / `anthropic` only; **422** otherwise), always asked with the saved key. A server that's down is `{models: [], error}`, not an HTTP error — see "LLM endpoints and models" |
 | GET | `/config/cache` | Both caches' stats: `paragraph` (entries, expired, hit rate, size, TTL) and `pdf` (entries, hit rate, size, LRU cap) |
 | DELETE | `/config/cache?scope=all\|expired&target=paragraph\|pdf\|all` | Clear the cache `target` names (`paragraph` by default); `scope=expired` reaps expired paragraphs and never touches the PDF cache. Any other value is **422**, not a clear |
 | GET | `/setup/status` | Which engine assets are installed, plus the running install's phase and the last one's error. Stat calls only — polled twice a second during an install |
@@ -1252,6 +1253,33 @@ passes `base_url` explicitly, `None` included (`routes/config.py:_probe_kwargs`)
 because `TranslatorFactory` starts from the *saved* settings. A keyless local
 server still needs some key typed: without one, OpenAI or Anthropic falls back
 to Argos (`capabilities.resolve_effective_service`), a rule #32 left as it was.
+
+**Picking a model happens in the toolbar** (`components/translation/ModelPicker.tsx`,
+rules in `lib/model-choice.ts`). The service used to be a toolbar Select and the
+model a Settings field, so switching models meant a trip through the sheet. Four
+things about it are deliberate:
+
+- **The button names the service that will run, not the one selected.** With
+  no key, the sidecar runs Argos in place of the LLM (above), and the old
+  toolbar went on showing the LLM and its model throughout. `pickerSummary`
+  reads `effectiveService` and says why when the two differ.
+- **A keyless service offers "Add an API key", not its models.** Picking a
+  model the sidecar can't run would bring back that same silent swap. The
+  entry opens Settings on that tab with the key field focused. Saving a key
+  there also selects the service (`SettingsSheet.handleSave`), since the
+  sidecar only promotes off *Argos* by itself. A key saved with "Save anyway"
+  doesn't select it.
+- **Only names from a list are picked here.** They save with no provider
+  check, since a listed name can't be mistyped. A name of one's own goes
+  through Settings, which checks it first.
+- **A custom endpoint shows its own list** (`GET /config/models/{service}`,
+  fetched once the picker opens) in place of the provider's suggestions, which
+  Ollama or LM Studio don't have. The saved model is always offered, so it
+  still shows while that server is down.
+
+The chat panel's header names the answering model (`chatModel`, a copy of
+`rag_chain._answer_model`'s order). It isn't always the toolbar's model: chat
+falls back to any LLM with a key.
 
 ### PDF viewer
 

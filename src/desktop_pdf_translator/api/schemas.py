@@ -438,3 +438,14 @@ class ServiceOption(BaseModel):
 class OptionsResponse(BaseModel):
     languages: List[LanguageOption]
     services: List[ServiceOption]
+
+
+class EndpointModelsResponse(BaseModel):
+    """The models a service's saved endpoint says it serves.
+
+    A failure is `error`, not an HTTP error: a local server that isn't running
+    yet is ordinary, and the picker still offers the saved model without it.
+    """
+
+    models: List[str] = Field(default_factory=list)
+    error: Optional[str] = None

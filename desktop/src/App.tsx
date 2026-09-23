@@ -36,6 +36,7 @@ import {
 } from "@/lib/page-range";
 import { useAppStore } from "@/lib/store";
 import { api } from "@/lib/api-client";
+import type { LlmServiceCode } from "@/lib/service-settings";
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -122,6 +123,8 @@ function EngineGate() {
 
 function Workspace() {
   const [settingsOpen, setSettingsOpen] = useState(false);
+  // Which tab Settings opens on; unset opens on the service in use.
+  const [settingsTab, setSettingsTab] = useState<LlmServiceCode | undefined>();
   const [aboutOpen, setAboutOpen] = useState(false);
   // A Translate click that covered more pages than one translation may, held
   // while the user answers the offer. `path` guards against a document opened
@@ -354,7 +357,10 @@ function Workspace() {
   return (
     <div className="relative flex h-full w-full flex-col bg-background text-foreground">
       <Header
-        onOpenSettings={() => setSettingsOpen(true)}
+        onOpenSettings={() => {
+          setSettingsTab(undefined);
+          setSettingsOpen(true);
+        }}
         onOpenAbout={() => setAboutOpen(true)}
       />
       <ContextBar
@@ -370,6 +376,10 @@ function Workspace() {
         canReTranslate={
           !!originalPath && !isTranslationBusy(translation.state)
         }
+        onOpenSettings={(service) => {
+          setSettingsTab(service);
+          setSettingsOpen(true);
+        }}
       />
       <div className="relative flex-1 overflow-hidden">
         <MainLayout onPickFile={handlePickFile} />
@@ -395,7 +405,11 @@ function Workspace() {
         onCancel={() => setSwapPrompt(null)}
         onConfirm={confirmSwap}
       />
-      <SettingsSheet open={settingsOpen} onOpenChange={setSettingsOpen} />
+      <SettingsSheet
+        open={settingsOpen}
+        onOpenChange={setSettingsOpen}
+        initialTab={settingsTab}
+      />
       <AboutDialog open={aboutOpen} onOpenChange={setAboutOpen} />
     </div>
   );

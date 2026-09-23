@@ -28,6 +28,7 @@ from ..schemas import (
     CacheStatsResponse,
     ConfigResponse,
     ConfigUpdateRequest,
+    EndpointModelsResponse,
     OptionsResponse,
     LanguageOption,
     PdfCacheStatsResponse,
@@ -367,6 +368,58 @@ async def get_options() -> OptionsResponse:
             for s in TranslationService
         ],
     )
+
+
+def _fetch_endpoint_models(
+    service: TranslationService, api_key: str, base_url: str | None
+) -> list[str]:
+    """Ask the endpoint which models it serves. Blocking; imports the SDK."""
+    if service == TranslationService.OPENAI:
+        from openai import OpenAI
+
+        client = OpenAI(api_key=api_key, base_url=base_url, max_retries=0, timeout=10)
+        return [model.id for model in client.models.list()]
+
+    import anthropic
+
+    client_kwargs: dict = {"api_key": api_key, "max_retries": 0, "timeout": 10}
+    if base_url:
+        client_kwargs["base_url"] = base_url
+    client = anthropic.Anthropic(**client_kwargs)
+    return [model.id for model in client.models.list(limit=100)]
+
+
+@router.get("/models/{service}", response_model=EndpointModelsResponse)
+async def list_endpoint_models(service: TranslationService) -> EndpointModelsResponse:
+    """The models the saved endpoint serves.
+
+    For the toolbar's model picker once a service points at Ollama, LM Studio
+    or a proxy: the suggestions in `/config/options` are the provider's own
+    models, which such a server doesn't have, and its models are in no list we
+    could ship. Always the saved key with the saved endpoint, the pair
+    `PUT /config` keeps together, so this can't send a key anywhere new.
+    """
+    if service not in _ENDPOINT_SERVICES:
+        raise HTTPException(
+            status_code=422,
+            detail=f"{SERVICE_LABELS[service]} has no endpoint to list models from.",
+        )
+    saved = getattr(get_settings(), service.value)
+    if not saved.api_key:
+        return EndpointModelsResponse(error="No API key is saved.")
+    try:
+        models = await asyncio.wait_for(
+            asyncio.to_thread(
+                _fetch_endpoint_models, service, saved.api_key, saved.base_url
+            ),
+            timeout=_VALIDATE_PROBE_TIMEOUT_S,
+        )
+    except (asyncio.TimeoutError, TimeoutError):
+        return EndpointModelsResponse(error=f"Timed out contacting {saved.base_url or service.value}.")
+    except Exception as exc:  # noqa: BLE001 — a server that's down is ordinary
+        logger.info("Listing %s models failed: %s", service.value, exc)
+        return EndpointModelsResponse(error=str(exc))
+    return EndpointModelsResponse(models=sorted(set(models)))
 
 
 # ---------------------------------------------------------------------------

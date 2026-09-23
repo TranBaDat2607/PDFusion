@@ -8,6 +8,9 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { toast } from "sonner";
+
+import { ModelPicker } from "@/components/translation/ModelPicker";
 import { PageRangeInput } from "@/components/translation/PageRangeInput";
 import { TokenEstimate } from "@/components/translation/TokenEstimate";
 import { TranslatedFileActions } from "@/components/translation/TranslatedFileActions";
@@ -25,7 +28,9 @@ import {
 import { api } from "@/lib/api-client";
 import type { components } from "@/lib/api-types";
 import { basename } from "@/lib/export-pdf";
+import { selectionUpdate } from "@/lib/model-choice";
 import { parsePageRanges } from "@/lib/page-range";
+import type { LlmServiceCode } from "@/lib/service-settings";
 import {
   effectiveService,
   isPairSupported,
@@ -84,6 +89,9 @@ interface ContextBarProps {
   /** True when a translation has completed for the current document, so the
    *  user can re-run it with the PDF-level cache bypassed. */
   canReTranslate: boolean;
+  /** Settings, on this service's tab — the model picker's way to a key or a
+   *  model name of one's own. */
+  onOpenSettings: (service: LlmServiceCode) => void;
 }
 
 export function ContextBar({
@@ -92,6 +100,7 @@ export function ContextBar({
   onReTranslate,
   translating,
   canReTranslate,
+  onOpenSettings,
 }: ContextBarProps) {
   const { data: config } = useConfig();
   const { data: options } = useOptions();
@@ -107,10 +116,6 @@ export function ContextBar({
   const sourceLang = config?.translation.default_source_lang ?? "auto";
   const targetLang = config?.translation.default_target_lang ?? "vi";
   const service = config?.translation.preferred_service ?? "openai";
-  const activeService = options?.services.find((s) => s.code === service);
-  const activeModel = activeService
-    ? config?.[service].model ?? activeService.models[0]
-    : "";
 
   // Which languages the backend that will *actually* run can handle. An LLM
   // with no API key is silently downgraded to Argos by the sidecar, so this
@@ -263,29 +268,25 @@ export function ContextBar({
 
       <div className="mx-1 h-5 w-px bg-border" />
 
-      <Select
-        value={service}
-        onValueChange={(v) => {
-          update.mutate({ preferred_service: v as typeof service });
-          prewarm({ source_lang: sourceLang, target_lang: targetLang, service: v });
-        }}
-      >
-        <SelectTrigger size="sm" className="h-8 min-w-[150px]">
-          <SelectValue />
-        </SelectTrigger>
-        <SelectContent>
-          {options?.services.map((s) => (
-            <SelectItem key={s.code} value={s.code}>
-              {s.label}
-            </SelectItem>
-          ))}
-        </SelectContent>
-      </Select>
-
-      {activeModel && (
-        <span className="rounded-md bg-muted px-2 py-1 font-mono text-[10px] text-muted-foreground">
-          {activeModel}
-        </span>
+      {config && options && (
+        <ModelPicker
+          config={config}
+          options={options}
+          onOpenSettings={onOpenSettings}
+          onSelect={(v, model) => {
+            const change = selectionUpdate(config, v, model);
+            if (Object.keys(change).length === 0) return;
+            update.mutate(change, {
+              onError: (e) =>
+                toast.error("Could not switch the model", {
+                  description: (e as Error).message,
+                }),
+            });
+            if (change.preferred_service) {
+              prewarm({ source_lang: sourceLang, target_lang: targetLang, service: v });
+            }
+          }}
+        />
       )}
 
       {/* What an LLM run would cost, roughly. Argos costs nothing to call. */}

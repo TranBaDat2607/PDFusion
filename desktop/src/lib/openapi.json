@@ -910,6 +910,31 @@
         "title": "EndpointCredentialUpdate",
         "type": "object"
       },
+      "EndpointModelsResponse": {
+        "description": "The models a service's saved endpoint says it serves.\n\nA failure is `error`, not an HTTP error: a local server that isn't running\nyet is ordinary, and the picker still offers the saved model without it.",
+        "properties": {
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "models": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Models",
+            "type": "array"
+          }
+        },
+        "title": "EndpointModelsResponse",
+        "type": "object"
+      },
       "EngineAssetGroup": {
         "properties": {
           "detail": {
@@ -2373,6 +2398,64 @@
           }
         },
         "summary": "Get Cache Stats",
+        "tags": [
+          "config"
+        ]
+      }
+    },
+    "/config/models/{service}": {
+      "get": {
+        "description": "The models the saved endpoint serves.\n\nFor the toolbar's model picker once a service points at Ollama, LM Studio\nor a proxy: the suggestions in `/config/options` are the provider's own\nmodels, which such a server doesn't have, and its models are in no list we\ncould ship. Always the saved key with the saved endpoint, the pair\n`PUT /config` keeps together, so this can't send a key anywhere new.",
+        "operationId": "list_endpoint_models_config_models__service__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "service",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/TranslationService"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EndpointModelsResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Endpoint Models",
         "tags": [
           "config"
         ]

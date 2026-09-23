@@ -88,22 +88,13 @@ import {
   type ServiceDraft,
   type ServiceDrafts,
 } from "@/lib/service-settings";
+import { SERVICE_SHORT_LABELS } from "@/lib/model-choice";
 import { cn } from "@/lib/utils";
 
 const ALL_SERVICES: ServiceCode[] = ["argos", "openai", "gemini", "anthropic"];
 
 // Pseudo-tab values for the cache and chat panels — not translation services.
 type TabValue = ServiceCode | "cache" | "chat";
-
-// Short names for the tab row. The services' full names ("Argos Translate
-// (offline)") are wider than a column and overlapped their neighbours; each
-// stays available as its tab's tooltip.
-const TAB_LABELS: Record<ServiceCode, string> = {
-  argos: "Argos",
-  openai: "OpenAI",
-  gemini: "Gemini",
-  anthropic: "Claude",
-};
 
 // Where a service with a blank endpoint sends its requests, shown as the
 // field's placeholder.
@@ -124,14 +115,24 @@ type Problems = Partial<Record<LlmServiceCode, string>>;
 interface SettingsSheetProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  /** The tab to open on. Unset opens on the service in use. */
+  initialTab?: LlmServiceCode;
 }
 
-export function SettingsSheet({ open, onOpenChange }: SettingsSheetProps) {
+export function SettingsSheet({ open, onOpenChange, initialTab }: SettingsSheetProps) {
   const { data: config } = useConfig();
   const { data: options } = useOptions();
   const updateConfig = useUpdateConfig();
 
   const [tab, setTab] = useState<TabValue>("argos");
+  // Picked on opening only: the effect below also runs when the config
+  // changes, which a Cache tab switch does, and must not move the user off
+  // the tab they're on. It used to open on Argos whatever was in use.
+  const [wasOpen, setWasOpen] = useState(false);
+  if (open !== wasOpen) {
+    setWasOpen(open);
+    if (open) setTab(initialTab ?? config?.translation.preferred_service ?? "argos");
+  }
   const [drafts, setDrafts] = useState<ServiceDrafts | null>(null);
   // Why the last Save stopped, per service: a draft the sidecar would refuse,
   // or what the provider said when Save checked it.
@@ -209,6 +210,20 @@ export function SettingsSheet({ open, onOpenChange }: SettingsSheetProps) {
       }
     }
 
+    // Opened from the model picker's "Add an API key" for a service that had
+    // none: the user came to translate with it. The sidecar only moves off
+    // Argos by itself, so from a keyless LLM they would otherwise stay on
+    // Argos. Not on "Save anyway", which saves a key the provider turned down.
+    if (
+      initialTab &&
+      !config[initialTab].has_key &&
+      update[initialTab]?.api_key &&
+      !saveAnyway &&
+      config.translation.preferred_service !== initialTab
+    ) {
+      update.preferred_service = initialTab;
+    }
+
     try {
       await updateConfig.mutateAsync(update);
       toast.success("Settings saved");
@@ -238,7 +253,9 @@ export function SettingsSheet({ open, onOpenChange }: SettingsSheetProps) {
                   value={c}
                   title={options?.services.find((s) => s.code === c)?.label ?? c}
                 >
-                  {TAB_LABELS[c]}
+                  {/* The full names ("Argos Translate (offline)") are wider
+                      than a column and overlapped their neighbours. */}
+                  {SERVICE_SHORT_LABELS[c]}
                 </TabsTrigger>
               ))}
               <TabsTrigger value="cache">Cache</TabsTrigger>
@@ -273,6 +290,7 @@ export function SettingsSheet({ open, onOpenChange }: SettingsSheetProps) {
                       saved={config}
                       draft={drafts[code]}
                       problem={problems[code]}
+                      focusKey={code === initialTab && !config[code].has_key}
                       onChange={(patch) => editDraft(code, patch)}
                     />
                   </TabsContent>
@@ -396,6 +414,8 @@ interface ServiceTabProps {
   draft: ServiceDraft;
   /** Why the last Save stopped on this service. */
   problem?: string;
+  /** Opened to add this service's key: start in the key field. */
+  focusKey?: boolean;
   onChange: (patch: Partial<ServiceDraft>) => void;
 }
 
@@ -405,6 +425,7 @@ function ServiceTab({
   saved,
   draft,
   problem,
+  focusKey,
   onChange,
 }: ServiceTabProps) {
   const [show, setShow] = useState(false);
@@ -453,6 +474,7 @@ function ServiceTab({
               id={`${code}-key`}
               type={show ? "text" : "password"}
               autoComplete="off"
+              autoFocus={focusKey}
               value={draft.apiKey}
               placeholder={
                 hasSavedKey && !draft.clearKey ? "•••••••• (saved)" : "Paste key…"

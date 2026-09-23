@@ -296,6 +296,71 @@ def test_every_default_model_is_the_first_suggestion(client: TestClient):
 
 
 # ---------------------------------------------------------------------------
+# endpoint models
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def fetched(monkeypatch: pytest.MonkeyPatch) -> List[Tuple[Any, ...]]:
+    """Stands in for the SDK call, recording where the key would have gone."""
+    calls: List[Tuple[Any, ...]] = []
+
+    def fake(service, api_key, base_url):
+        calls.append((service, api_key, base_url))
+        return ["qwen2.5:7b", "llama3.2:3b", "qwen2.5:7b"]
+
+    monkeypatch.setattr(config_routes, "_fetch_endpoint_models", fake)
+    return calls
+
+
+def list_models(client: TestClient, service: str):
+    return client.get(f"/config/models/{service}", headers=AUTH)
+
+
+def test_endpoint_models_use_the_saved_key_and_endpoint(
+    client: TestClient, fetched: List[Tuple[Any, ...]]
+):
+    put(client, {"openai": {"api_key": "ollama", "base_url": OLLAMA}})
+
+    response = list_models(client, "openai")
+
+    assert response.status_code == 200
+    assert response.json() == {"models": ["llama3.2:3b", "qwen2.5:7b"], "error": None}
+    assert fetched == [(TranslationService.OPENAI, "ollama", OLLAMA)]
+
+
+def test_endpoint_models_need_a_saved_key(
+    client: TestClient, fetched: List[Tuple[Any, ...]]
+):
+    response = list_models(client, "anthropic")
+
+    assert response.status_code == 200
+    assert response.json()["models"] == []
+    assert response.json()["error"]
+    assert fetched == []
+
+
+def test_a_server_that_is_down_is_an_error_not_a_failure(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+):
+    def refused(service, api_key, base_url):
+        raise ConnectionError("Connection refused")
+
+    monkeypatch.setattr(config_routes, "_fetch_endpoint_models", refused)
+    put(client, {"openai": {"api_key": "ollama", "base_url": OLLAMA}})
+
+    response = list_models(client, "openai")
+
+    assert response.status_code == 200
+    assert response.json() == {"models": [], "error": "Connection refused"}
+
+
+@pytest.mark.parametrize("service", ["gemini", "argos"])
+def test_only_endpoint_services_list_models(client: TestClient, service: str):
+    assert list_models(client, service).status_code == 422
+
+
+# ---------------------------------------------------------------------------
 # validate
 # ---------------------------------------------------------------------------
 
