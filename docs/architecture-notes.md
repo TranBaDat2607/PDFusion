@@ -1722,6 +1722,77 @@ failure, its `strip` choking on a `.relr.dyn` section
 nothing runs linuxdeploy, but it is the first thing to set if anyone re-enables
 the target.
 
+### Why the Linux .deb was larger
+
+v1.2.0 shipped a **759 MB `.deb` against a 471 MB Windows installer**, from
+the same spec. Unpacked, the two trees were 1,446 MB and 834 MB. After the
+changes below the same release builds to a **436 MB `.deb`** (~1.1 GB
+installed). The causes, in order of size, and what now handles each:
+
+1. **tauri-bundler dereferences symlinks** (296 MB unpacked). On Linux
+   PyInstaller keeps a vendored library once, in its wheel's `<pkg>.libs/`,
+   and puts a *symlink* to it at the top of `_internal/`. `build_sidecar.py:stage`
+   preserves those (`copytree(symlinks=True)`), but the bundler follows every
+   link when it copies `resources`, so the `.deb` carried 42 libraries twice,
+   byte for byte — libctranslate2 (78 MB), two OpenBLAS builds, libmupdf, all of
+   opencv's Qt and ffmpeg. Windows has no such links, and 1.7 MB of duplicates.
+   → `scripts/repack_deb.py`, run by `release.yml` after `pnpm tauri build`,
+   turns byte-identical copies back into relative links, keeping the one in
+   the deeper directory as the real file (the direction PyInstaller links in).
+   It links by **content hash**, never by name, so a few cross-wheel
+   duplicates also collapse (the same `libgomp` in `ctranslate2.libs/` and
+   `scikit_learn.libs/`) — the loader resolves both paths to one inode, which
+   is what it did with two identical copies anyway.
+2. **gzip** (~140 MB of download). The bundler writes `data.tar.gz` and has
+   no setting for it; NSIS uses solid LZMA. gzip's 32 KB window also cannot
+   see the duplicates above. → the same repack rebuilds with
+   `dpkg-deb -Zxz -z9`. xz rather than zstd because every dpkg in support reads
+   it (zstd needs dpkg ≥ 1.21.18: Debian 12, Ubuntu 21.10) and it compresses
+   better. The price is install time: xz unpacks this payload in about ten
+   seconds, which is what the Windows installer's LZMA already costs.
+3. **Unstripped shared libraries** (139 MB unpacked). Linux wheels ship their
+   symbol tables inside the `.so` — 60 MB in ctranslate2's extension alone,
+   17 MB in libpython — where Windows wheels keep theirs in PDBs that are never
+   collected. → `build_sidecar.py:strip_shared_libraries`, Linux only,
+   `strip --strip-unneeded` on `_internal/**/*.so*`: what Debian's `dh_strip`
+   does, keeping `.dynsym`. Not PyInstaller's `strip=True`, which also strips
+   the bootloader the Python archive is appended to; not on macOS, where it
+   breaks the ad-hoc signature arm64 dylibs carry.
+4. **Libraries only the Linux environment installs** (~150 MB unpacked).
+   - *opencv's Qt build* (121 MB). BabelDOC wants `opencv-python-headless`,
+     its `rapidocr-onnxruntime` dependency wants `opencv-python`, and both
+     write the same `cv2/` — whichever pip wrote last is what gets frozen. On
+     Linux the GUI build's `cv2` has Qt5, a second ffmpeg and a second OpenBLAS
+     in `DT_NEEDED`, so it cannot be pruned from the spec; the release and CI
+     jobs reinstall the headless wheel instead, and `warn_on_gui_opencv` says
+     so when a local build still has the Qt one. rapidocr itself is already an
+     `exclude`.
+   - `uvloop` and `hf_xet` (25 MB). `uvicorn[standard]` installs uvloop only
+     off Windows; `loop="auto"` falls back to asyncio, which is what Windows
+     runs. huggingface_hub uses `hf_xet` only if it imports and otherwise
+     downloads over HTTP, which is how the chat embedding model has always
+     arrived on Windows. Both are spec `excludes`.
+
+5. **The engine-assets zip is deflated** (71 MB of download). BabelDOC
+   writes `offline_assets_<tag>.zip` with `ZIP_DEFLATED`, and xz cannot improve
+   on deflate output: 217 MB in, 227 MB out. `repack_deb.py:store_asset_zips`
+   rewrites it `ZIP_STORED`, and the 357 MB underneath then compresses to
+   156 MB. Restore is unaffected — `restore_offline_assets_package_async`
+   verifies each member's sha3_256, never the archive — but it is **+129 MB on
+   disk** under `/usr/lib`, the one place this trades against the user. Left
+   out of `fetch_offline_assets` because the Windows installer would face the
+   same trade with LZMA, and that is its own decision.
+
+Measured on one build, each step in turn: 759 MB as shipped → 697 MB from the
+build-side cuts (3, 4) → 510 MB with links and xz (1, 2) → 436 MB with the
+stored zip (5).
+
+What the user sees is unchanged: the same offline engine assets, the same
+first-run setup (checked end to end on the repacked `.deb`: bundled restore,
+an offline Argos translate, and a chat index), and the files PyInstaller built,
+with links where it put links. Two things did move: `dpkg` unpacks xz a few
+seconds slower than gzip, and the zip in (5) takes more disk.
+
 ### What the bundle carries, and what was taken out of it
 
 `excludes` can only drop a whole importable package, and the heavy ones are all

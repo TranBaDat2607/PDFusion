@@ -200,7 +200,7 @@ jobs:
             libssl-dev \
             libxdo-dev
 
-      # The staged sidecar tree is ~1.2 GB and is copied again into the .deb
+      # The staged sidecar tree is ~1 GB and is copied again into the .deb
       # payload, on top of a torch-carrying pip env and a release cargo target.
       # An ubuntu-24.04 runner starts with little headroom over that, and these
       # three SDKs are ~25 GB that nothing here touches. `df` is left in the log
@@ -216,6 +216,17 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
           pip install -e ".[dev]"
+
+      # BabelDOC wants opencv-python-headless; its rapidocr dependency wants
+      # opencv-python, and both write the same `cv2/`. On Linux the latter's
+      # cv2 links Qt5 and a second ffmpeg — 121 MB in `opencv_python.libs/`
+      # the sidecar never loads. Reinstalling headless over it puts back the
+      # cv2 BabelDOC asked for (see build_sidecar.warn_on_gui_opencv).
+      - name: Keep the headless OpenCV build
+        run: |
+          version=$(pip show opencv-python-headless | awk '/^Version:/{print $2}')
+          pip uninstall -y opencv-python
+          pip install --force-reinstall --no-deps "opencv-python-headless==$version"
 
       # ~290 MB of engine assets, deliberately not wired into
       # beforeBundleCommand (see scripts/fetch_offline_assets.py). Without this
@@ -244,6 +255,13 @@ jobs:
       - name: Build the bundle
         working-directory: desktop
         run: pnpm tauri build --verbose
+
+      # tauri-bundler writes every PyInstaller symlink out as a second copy and
+      # compresses with gzip; neither is configurable. The repack restores the
+      # links, stores the (already deflated) engine-assets zip uncompressed and
+      # recompresses with xz: 697 MB → 436 MB. See scripts/repack_deb.py.
+      - name: Repack the .deb
+        run: python scripts/repack_deb.py
 
       - uses: actions/upload-artifact@v4
         with:
@@ -317,7 +335,7 @@ jobs:
             series and will not run this build.
 
             **There is no AppImage in this release.** The translation engine
-            ships as a ~1.2 GB embedded Python runtime, and the AppImage
+            ships as a ~1 GB embedded Python runtime, and the AppImage
             bundler insists on re-resolving the shared-library dependencies of
             every binary inside it — including vendored libraries that only
             resolve through their own `RPATH` at runtime. If you are not on a

@@ -323,6 +323,15 @@ Tauri validates `externalBin` and `resources` at **compile** time, before the
 staged. For frontend/Rust work use `./build-sidecar.sh --stub`; the shell
 rejects anything under 1 MiB and falls back to local Python.
 
+On Linux, follow `pnpm tauri build` with `python scripts/repack_deb.py`, and
+build from an env where `cv2` is `opencv-python-headless` (the release job
+reinstalls it; `build_sidecar.py` warns otherwise). tauri-bundler writes every
+PyInstaller symlink out as a second copy and gzips the result; the repack puts
+the links back, stores the already-deflated engine-assets zip uncompressed, and
+recompresses with xz. Together with stripping the `.so`
+files (in `build_sidecar.py`) that is most of why the `.deb` was ~290 MB larger
+than the Windows installer — see "Why the Linux .deb was larger" in the notes.
+
 Targets: NSIS per-user on Windows, `deb` on Linux (**no AppImage** — linuxdeploy
 cannot walk the PyInstaller tree; see the notes), `dmg`/`app` on macOS
 (unverified). Releases are built by `.github/workflows/release.yml` on a `v*`
