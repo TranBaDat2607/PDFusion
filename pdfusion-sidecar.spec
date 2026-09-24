@@ -342,6 +342,17 @@ excludes = [
     "accelerate",
     "safetensors",
 
+    # --- Optional accelerators the Windows build already runs without ---
+    # Both are installed only off Windows, so the Linux bundle carried them and
+    # the Windows one never has. uvicorn's `loop="auto"` picks uvloop when it
+    # imports and plain asyncio otherwise -- one local client does not need a
+    # faster loop, and it is the loop every Windows user already runs on.
+    # huggingface_hub switches to its Xet transfer backend only when `hf_xet`
+    # is importable and otherwise downloads over plain HTTP, which is how the
+    # chat embedding model has always arrived on Windows. 25 MB unpacked.
+    "uvloop",
+    "hf_xet",
+
     # --- OCR libraries (not used by current pipeline) ---
     "rapidocr_onnxruntime",
     "pytesseract",

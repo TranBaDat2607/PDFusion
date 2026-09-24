@@ -157,6 +157,61 @@ def run_pyinstaller() -> None:
         raise SystemExit(f"PyInstaller output missing: {DIST_DIR / EXE_NAME}")
 
 
+def strip_shared_libraries(tree: Path) -> None:
+    """Drop the symbol tables Linux wheels ship in their shared libraries.
+
+    171 MB of the v1.2.0 Linux tree was symbols no one reads at runtime —
+    60 MB in ctranslate2's extension alone, 17 MB in libpython. Windows wheels
+    keep theirs in separate PDBs that are never collected, which is part of why
+    the Linux tree was so much larger.
+
+    `--strip-unneeded` is what Debian's own `dh_strip` applies to shared
+    libraries: `.dynsym`, the table the dynamic loader and `dlopen` resolve
+    against, is kept. Only `.so` files under `_internal/` are touched — never
+    the executable, which is PyInstaller's bootloader with the Python archive
+    appended to it and would lose that archive. Not PyInstaller's `strip=True`
+    either: that strips the bootloader too.
+
+    Linux only. On macOS stripping invalidates the ad-hoc signature every
+    arm64 dylib carries, and the loader then refuses it.
+    """
+    strip = shutil.which("strip")
+    if strip is None:
+        log("WARN: `strip` not found (binutils); shipping unstripped libraries")
+        return
+    libs = [
+        p
+        for p in (tree / "_internal").rglob("*.so*")
+        if p.is_file() and not p.is_symlink()
+    ]
+    before = sum(p.stat().st_size for p in libs)
+    # Batched: one process per file is ~1,000 spawns.
+    for i in range(0, len(libs), 200):
+        subprocess.run(
+            [strip, "--strip-unneeded", *map(str, libs[i : i + 200])], check=True
+        )
+    after = sum(p.stat().st_size for p in libs)
+    log(f"Stripped {len(libs)} shared libraries: {(before - after) / 1e6:.0f} MB saved")
+
+
+def warn_on_gui_opencv(tree: Path) -> None:
+    """Say so when the bundle carries opencv's Qt build instead of the headless one.
+
+    BabelDOC asks for `opencv-python-headless`, but its `rapidocr-onnxruntime`
+    dependency asks for `opencv-python`, and both install into the same `cv2/`
+    — whichever pip wrote last wins. On Linux the GUI wheel's `cv2` links Qt5
+    and its own ffmpeg from `opencv_python.libs/`, 121 MB that a sidecar with
+    no window never uses. The release and CI workflows reinstall the headless
+    wheel before building; a local build may not have.
+    """
+    if (tree / "_internal" / "opencv_python.libs").is_dir():
+        log(
+            "WARN: cv2 is opencv-python's Qt build (+121 MB). To ship the "
+            "headless one: pip uninstall -y opencv-python && pip install "
+            "--force-reinstall --no-deps opencv-python-headless==<same version>"
+        )
+
+
 def stage(triple: str) -> None:
     exe, internals = staged_paths(triple)
     log(f"Staging into {exe.parent}")
@@ -210,6 +265,11 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     run_pyinstaller()
+    if sys.platform.startswith("linux"):
+        # Before staging, so `dist/` — which the smoke suite also runs — is the
+        # tree that ships.
+        strip_shared_libraries(DIST_DIR)
+        warn_on_gui_opencv(DIST_DIR)
     stage(triple)
     return 0
 

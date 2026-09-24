@@ -220,6 +220,14 @@ jobs:
           pip install -r requirements.txt
           pip install -e ".[dev]"
 
+      # Same as release.yml, so this job tests the cv2 that ships.
+      - name: Keep the headless OpenCV build (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          version=$(pip show opencv-python-headless | awk '/^Version:/{print $2}')
+          pip uninstall -y opencv-python
+          pip install --force-reinstall --no-deps "opencv-python-headless==$version"
+
       - name: Build the sidecar (Windows)
         if: runner.os == 'Windows'
         run: ./build-sidecar.ps1
