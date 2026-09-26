@@ -352,6 +352,33 @@ def test_a_server_that_is_down_is_listing_failed(monkeypatch: pytest.MonkeyPatch
         asyncio.run(catalog_module.list_models("openai", "ollama", LOCAL_BASE_URL))
 
 
+def test_a_failure_names_the_server_it_could_not_reach(monkeypatch: pytest.MonkeyPatch):
+    """The SDK's own text is often just "Connection error.", which doesn't say
+    that the endpoint typed on the card is the server that is down."""
+
+    def down():
+        raise ConnectionError("Connection error.")
+
+    _patch_openai_lister(monkeypatch, down)
+
+    with pytest.raises(catalog_module.ListingFailed) as failure:
+        asyncio.run(catalog_module.list_models("openai", "ollama", LOCAL_BASE_URL))
+    assert LOCAL_BASE_URL in str(failure.value)
+    assert "Connection error." in str(failure.value)
+
+
+def test_a_failure_at_the_providers_own_endpoint_names_the_provider(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    def down():
+        raise ConnectionError("Connection error.")
+
+    _patch_openai_lister(monkeypatch, down)
+
+    with pytest.raises(catalog_module.ListingFailed, match="OpenAI"):
+        asyncio.run(catalog_module.list_models("openai", "sk-test", None))
+
+
 def test_a_listing_past_the_deadline_is_listing_failed(monkeypatch: pytest.MonkeyPatch):
     # `asyncio.run` joins the worker thread before returning, so the stall is
     # kept short rather than released from the test.

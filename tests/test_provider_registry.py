@@ -44,6 +44,8 @@ def test_ids_are_frozen():
 @pytest.mark.parametrize("spec", PROVIDERS, ids=lambda spec: spec.id)
 def test_every_spec_is_complete(spec):
     assert spec.label and spec.short_label
+    # The Models page's card copy comes from here, not the frontend (#86).
+    assert spec.description
     assert spec.protocol in ("openai", "anthropic", "gemini", "argos")
     assert spec.suggested_models, "offer at least the default"
     if spec.requires_key:
@@ -53,6 +55,7 @@ def test_every_spec_is_complete(spec):
         assert spec.lister is not None, "a keyed provider's models are listed"
     if spec.takes_endpoint:
         assert spec.default_base_url
+        assert spec.endpoint_hint, "the Override base URL field says what to put there"
         assert spec.lister is not None, "a custom endpoint's models are listed"
 
 

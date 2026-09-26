@@ -6,51 +6,113 @@ import {
   modelGroups,
   pickerSummary,
   selectionUpdate,
-  servicesToList,
-  settingsTabFor,
+  settingsTargetFor,
+  type ChoiceConfig,
+  type PickerProvider,
 } from "./model-choice";
-import type { ConfigResponse, OptionsResponse } from "@/hooks/useConfig";
 
 const OLLAMA = "http://localhost:11434/v1";
 
-const OPTIONS: Pick<OptionsResponse, "services"> = {
-  services: [
-    { code: "argos", label: "Argos Translate (offline)", models: ["argostranslate"] },
-    { code: "openai", label: "OpenAI", models: ["gpt-4.1", "gpt-5.6-sol"] },
-    { code: "gemini", label: "Google Gemini", models: ["gemini-3.8-flash"] },
-    { code: "anthropic", label: "Anthropic Claude", models: ["claude-sonnet-4-6"] },
-  ],
-};
+type Overrides = Partial<PickerProvider>;
 
-type Service = { has_key?: boolean; model?: string; base_url?: string | null };
-type Config = Parameters<typeof pickerSummary>[0];
+// What `GET /providers` reports, trimmed to what the picker reads. Registry
+// order, which is also the order the groups come out in.
+function providers(overrides: Partial<Record<string, Overrides>> = {}): PickerProvider[] {
+  const base: PickerProvider[] = [
+    {
+      id: "openai",
+      label: "OpenAI",
+      short_label: "OpenAI",
+      requires_key: true,
+      has_key: false,
+      takes_endpoint: true,
+      base_url: null,
+      default_model: "gpt-4.1",
+      model: "gpt-4.1",
+      enabled_models: [],
+      model_is_fixed: false,
+      priority: 0,
+    },
+    {
+      id: "gemini",
+      label: "Google Gemini",
+      short_label: "Gemini",
+      requires_key: true,
+      has_key: false,
+      takes_endpoint: false,
+      base_url: null,
+      default_model: "gemini-3.8-flash",
+      model: "gemini-3.8-flash",
+      enabled_models: [],
+      model_is_fixed: false,
+      priority: 2,
+    },
+    {
+      id: "anthropic",
+      label: "Anthropic Claude",
+      short_label: "Claude",
+      requires_key: true,
+      has_key: false,
+      takes_endpoint: true,
+      base_url: null,
+      default_model: "claude-sonnet-4-6",
+      model: "claude-sonnet-4-6",
+      enabled_models: [],
+      model_is_fixed: false,
+      priority: 1,
+    },
+    {
+      id: "argos",
+      label: "Argos Translate (offline)",
+      short_label: "Argos",
+      requires_key: false,
+      has_key: false,
+      takes_endpoint: false,
+      base_url: null,
+      default_model: "argostranslate",
+      model: "argostranslate",
+      enabled_models: [],
+      model_is_fixed: true,
+      priority: null,
+    },
+  ];
+  return base.map((p) => ({ ...p, ...overrides[p.id] }));
+}
 
 function config(
-  preferred: ConfigResponse["translation"]["preferred_service"],
-  services: Partial<Record<"openai" | "gemini" | "anthropic", Service>> = {},
-): Config {
-  const service = (code: "openai" | "gemini" | "anthropic") => ({
-    has_key: services[code]?.has_key ?? false,
-    model: services[code]?.model ?? OPTIONS.services.find((s) => s.code === code)!.models[0],
-    base_url: services[code]?.base_url ?? null,
-  });
+  provider: string,
+  model: string,
+  answer: { provider: string; model: string } | null = null,
+): ChoiceConfig {
   return {
-    translation: { preferred_service: preferred } as Config["translation"],
-    openai: service("openai"),
-    gemini: service("gemini"),
-    anthropic: service("anthropic"),
-    argos: { has_key: false, model: "argostranslate" },
+    translation: { model: { provider, model } } as ChoiceConfig["translation"],
+    rag: { answer_model: answer } as ChoiceConfig["rag"],
   };
 }
 
-const group = (c: Config, code: string, listed = {}) =>
-  modelGroups(c, OPTIONS, listed).find((g) => g.code === code)!;
+const ARGOS = config("argos", "argostranslate");
+
+const group = (c: ChoiceConfig, list: PickerProvider[], id: string) =>
+  modelGroups(c, list).find((g) => g.id === id)!;
 
 describe("modelGroups", () => {
-  it("offers the suggestions, the default marked", () => {
-    const openai = group(config("openai", { openai: { has_key: true } }), "openai");
+  it("has a group per provider, in registry order", () => {
+    expect(modelGroups(ARGOS, providers()).map((g) => g.id)).toEqual([
+      "openai",
+      "gemini",
+      "anthropic",
+      "argos",
+    ]);
+  });
 
-    expect(openai.hasKey).toBe(true);
+  it("offers the enabled models, the default marked", () => {
+    const list = providers({
+      openai: { has_key: true, enabled_models: ["gpt-4.1", "gpt-5.6-sol"] },
+    });
+
+    const openai = group(ARGOS, list, "openai");
+
+    expect(openai.usable).toBe(true);
     expect(openai.endpoint).toBeNull();
     expect(openai.models).toEqual([
       { model: "gpt-4.1", isDefault: true },
@@ -58,112 +120,108 @@ describe("modelGroups", () => {
     ]);
   });
 
-  it("keeps a saved model the suggestions don't have, first", () => {
-    const openai = group(config("openai", { openai: { model: "gpt-custom" } }), "openai");
+  it("offers the model it runs when none is enabled", () => {
+    // A key saved before any model was switched on still has one to pick.
+    const list = providers({ gemini: { has_key: true } });
 
-    expect(openai.models.map((m) => m.model)).toEqual([
-      "gpt-custom",
-      "gpt-4.1",
-      "gpt-5.6-sol",
+    expect(group(ARGOS, list, "gemini").models.map((m) => m.model)).toEqual([
+      "gemini-3.8-flash",
     ]);
   });
 
-  it("offers a custom endpoint's own models, not the provider's", () => {
-    const c = config("openai", {
-      openai: { has_key: true, base_url: OLLAMA, model: "llama3.2:3b" },
+  it("keeps the translation model on offer after it was switched off", () => {
+    const list = providers({
+      openai: { has_key: true, enabled_models: ["gpt-5.6-sol"] },
     });
 
-    const openai = group(c, "openai", { openai: ["llama3.2:3b", "qwen2.5:7b"] });
+    const openai = group(config("openai", "gpt-custom"), list, "openai");
+
+    expect(openai.models.map((m) => m.model)).toEqual(["gpt-5.6-sol", "gpt-custom"]);
+  });
+
+  it("keeps the answer model on offer too, once", () => {
+    const list = providers({
+      anthropic: { has_key: true, enabled_models: ["claude-sonnet-4-6"] },
+    });
+    const c = config("anthropic", "claude-sonnet-4-6", {
+      provider: "anthropic",
+      model: "claude-opus-5",
+    });
+
+    expect(group(c, list, "anthropic").models.map((m) => m.model)).toEqual([
+      "claude-sonnet-4-6",
+      "claude-opus-5",
+    ]);
+  });
+
+  it("marks no default on a custom endpoint", () => {
+    // The provider's default model is the provider's, not a local server's.
+    const list = providers({
+      openai: {
+        has_key: true,
+        base_url: OLLAMA,
+        enabled_models: ["gpt-4.1", "llama3.2:3b"],
+      },
+    });
+
+    const openai = group(ARGOS, list, "openai");
 
     expect(openai.endpoint).toBe(OLLAMA);
-    expect(openai.models).toEqual([
-      { model: "llama3.2:3b", isDefault: false },
-      { model: "qwen2.5:7b", isDefault: false },
-    ]);
+    expect(openai.models.every((m) => !m.isDefault)).toBe(true);
   });
 
-  it("still offers the saved model before the endpoint answers", () => {
-    const c = config("openai", {
-      openai: { has_key: true, base_url: OLLAMA, model: "llama3.2:3b" },
-    });
+  it("needs a key for a keyed provider without one", () => {
+    const openai = group(ARGOS, providers(), "openai");
 
-    expect(group(c, "openai").models.map((m) => m.model)).toEqual(["llama3.2:3b"]);
+    expect(openai.usable).toBe(false);
+    expect(openai.needsKey).toBe(true);
   });
 
-  it("offers the provider's own list in place of its suggestions", () => {
-    const c = config("openai", { openai: { has_key: true } });
+  it("offers Argos its one fixed model, with no key needed", () => {
+    const argos = group(ARGOS, providers(), "argos");
 
-    const openai = group(c, "openai", { openai: ["gpt-4.1", "gpt-5", "o3"] });
-
-    expect(openai.models).toEqual([
-      { model: "gpt-4.1", isDefault: true },
-      { model: "gpt-5", isDefault: false },
-      { model: "o3", isDefault: false },
-    ]);
-  });
-
-  it("falls back to the suggestions while the provider's list is empty", () => {
-    // A failed listing arrives as an empty list with an error beside it.
-    const c = config("openai", { openai: { has_key: true } });
-
-    expect(group(c, "openai", { openai: [] }).models.map((m) => m.model)).toEqual([
-      "gpt-4.1",
-      "gpt-5.6-sol",
-    ]);
-  });
-
-  it("keeps a saved model the provider's list doesn't have, first", () => {
-    const c = config("openai", { openai: { has_key: true, model: "gpt-custom" } });
-
-    expect(group(c, "openai", { openai: ["gpt-4.1", "o3"] }).models.map((m) => m.model)).toEqual([
-      "gpt-custom",
-      "gpt-4.1",
-      "o3",
-    ]);
-  });
-
-  it("never gives Gemini an endpoint", () => {
-    const c = config("gemini", { gemini: { base_url: OLLAMA } });
-
-    expect(group(c, "gemini").endpoint).toBeNull();
+    expect(argos.usable).toBe(true);
+    expect(argos.needsKey).toBe(false);
+    expect(argos.fixed).toBe(true);
+    expect(argos.models.map((m) => m.model)).toEqual(["argostranslate"]);
   });
 });
 
 describe("selectionUpdate", () => {
-  it("sends the service and model together", () => {
-    const c = config("argos", { anthropic: { has_key: true } });
-
-    expect(selectionUpdate(c, "anthropic", "claude-opus-5")).toEqual({
-      preferred_service: "anthropic",
-      anthropic: { model: "claude-opus-5" },
+  it("sends the provider and model together", () => {
+    expect(selectionUpdate(ARGOS, "anthropic", "claude-opus-5")).toEqual({
+      translation_model: { provider: "anthropic", model: "claude-opus-5" },
     });
   });
 
-  it("sends only what changes", () => {
-    const c = config("openai", { openai: { has_key: true } });
+  it("sends nothing for the model already chosen", () => {
+    expect(selectionUpdate(config("openai", "gpt-4.1"), "openai", "gpt-4.1")).toEqual({});
+    expect(selectionUpdate(ARGOS, "argos", "argostranslate")).toEqual({});
+  });
 
-    expect(selectionUpdate(c, "openai", "gpt-5.6-sol")).toEqual({
-      openai: { model: "gpt-5.6-sol" },
+  it("sends another model of the same provider", () => {
+    expect(selectionUpdate(config("openai", "gpt-4.1"), "openai", "gpt-5.6-sol")).toEqual({
+      translation_model: { provider: "openai", model: "gpt-5.6-sol" },
     });
-    expect(selectionUpdate(c, "openai", "gpt-4.1")).toEqual({});
-    expect(selectionUpdate(c, "argos", null)).toEqual({ preferred_service: "argos" });
   });
 });
 
 describe("isCurrent", () => {
-  it("matches the service and its model", () => {
-    const c = config("openai", { openai: { has_key: true } });
+  it("matches the provider and its model", () => {
+    const c = config("openai", "gpt-4.1");
 
     expect(isCurrent(c, "openai", "gpt-4.1")).toBe(true);
     expect(isCurrent(c, "openai", "gpt-5.6-sol")).toBe(false);
-    expect(isCurrent(c, "anthropic", "claude-sonnet-4-6")).toBe(false);
-    expect(isCurrent(config("argos"), "argos", null)).toBe(true);
+    expect(isCurrent(c, "anthropic", "gpt-4.1")).toBe(false);
+    expect(isCurrent(ARGOS, "argos", "argostranslate")).toBe(true);
   });
 });
 
 describe("pickerSummary", () => {
-  it("names the service and model that will run", () => {
-    expect(pickerSummary(config("openai", { openai: { has_key: true } }))).toEqual({
+  it("names the provider and model that will run", () => {
+    const list = providers({ openai: { has_key: true } });
+
+    expect(pickerSummary(config("openai", "gpt-4.1"), list)).toEqual({
       service: "OpenAI",
       model: "gpt-4.1",
       downgradedFrom: null,
@@ -171,7 +229,7 @@ describe("pickerSummary", () => {
   });
 
   it("names Argos, and why, when the chosen LLM has no key", () => {
-    expect(pickerSummary(config("anthropic"))).toEqual({
+    expect(pickerSummary(config("anthropic", "claude-sonnet-4-6"), providers())).toEqual({
       service: "Argos",
       model: null,
       downgradedFrom: "Claude",
@@ -179,7 +237,7 @@ describe("pickerSummary", () => {
   });
 
   it("has no model for Argos chosen outright", () => {
-    expect(pickerSummary(config("argos"))).toEqual({
+    expect(pickerSummary(ARGOS, providers())).toEqual({
       service: "Argos",
       model: null,
       downgradedFrom: null,
@@ -187,41 +245,69 @@ describe("pickerSummary", () => {
   });
 });
 
-describe("settingsTabFor", () => {
-  it("opens on the chosen LLM, or OpenAI from Argos", () => {
-    expect(settingsTabFor(config("gemini"))).toBe("gemini");
-    expect(settingsTabFor(config("argos"))).toBe("openai");
+describe("settingsTargetFor", () => {
+  it("opens on the chosen LLM", () => {
+    expect(settingsTargetFor(config("gemini", "gemini-3.8-flash"), providers())).toBe(
+      "gemini",
+    );
   });
-});
 
-describe("servicesToList", () => {
-  it("lists every LLM with a key, on its own endpoint or another", () => {
-    // Every provider lists its models for free (#84), so the picker shows what
-    // a key can use in place of the shipped suggestions.
-    const c = config("openai", {
-      openai: { has_key: true, base_url: OLLAMA },
-      anthropic: { has_key: false, base_url: "http://localhost:11434" },
-      gemini: { has_key: true },
-    });
-
-    expect(servicesToList(c)).toEqual(["openai", "gemini"]);
+  it("opens on the first provider that takes an endpoint from Argos", () => {
+    // "Custom model or endpoint…" from Argos: a model of one's own needs a
+    // server, and OpenAI's API is the one local servers speak.
+    expect(settingsTargetFor(ARGOS, providers())).toBe("openai");
   });
 });
 
 describe("chatModel", () => {
-  it("answers with the preferred LLM when it has a key", () => {
-    const c = config("gemini", { gemini: { has_key: true }, openai: { has_key: true } });
+  it("answers with the translation model when its provider has a key", () => {
+    const list = providers({ gemini: { has_key: true }, openai: { has_key: true } });
 
-    expect(chatModel(c)).toEqual({ service: "gemini", model: "gemini-3.8-flash" });
+    expect(chatModel(config("gemini", "gemini-3.7-flash"), list)).toEqual({
+      provider: "gemini",
+      label: "Gemini",
+      model: "gemini-3.7-flash",
+    });
   });
 
-  it("falls back in the chain's order: OpenAI, Claude, Gemini", () => {
-    const c = config("argos", { gemini: { has_key: true }, anthropic: { has_key: true } });
+  it("answers with the answer model first when its provider has a key", () => {
+    const list = providers({ openai: { has_key: true }, anthropic: { has_key: true } });
+    const c = config("openai", "gpt-4.1", { provider: "anthropic", model: "claude-opus-4-7" });
 
-    expect(chatModel(c)).toEqual({ service: "anthropic", model: "claude-sonnet-4-6" });
+    expect(chatModel(c, list)).toEqual({
+      provider: "anthropic",
+      label: "Claude",
+      model: "claude-opus-4-7",
+    });
+  });
+
+  it("passes over an answer model whose provider has no key", () => {
+    const list = providers({ gemini: { has_key: true } });
+    const c = config("gemini", "gemini-3.7-flash", {
+      provider: "anthropic",
+      model: "claude-opus-4-7",
+    });
+
+    expect(chatModel(c, list)?.model).toBe("gemini-3.7-flash");
+  });
+
+  it("falls back by priority: OpenAI, Claude, Gemini", () => {
+    const list = providers({ gemini: { has_key: true }, anthropic: { has_key: true } });
+
+    expect(chatModel(ARGOS, list)).toEqual({
+      provider: "anthropic",
+      label: "Claude",
+      model: "claude-sonnet-4-6",
+    });
+  });
+
+  it("falls back with the model each provider runs", () => {
+    const list = providers({ openai: { has_key: true, model: "gpt-5.6-sol" } });
+
+    expect(chatModel(ARGOS, list)?.model).toBe("gpt-5.6-sol");
   });
 
   it("is null with no key anywhere", () => {
-    expect(chatModel(config("openai"))).toBeNull();
+    expect(chatModel(config("openai", "gpt-4.1"), providers())).toBeNull();
   });
 });

@@ -171,6 +171,9 @@ def test_every_provider_is_listed_in_registry_order_with_its_spec(client: TestCl
         assert entry["suggested_models"] == list(spec.suggested_models)
         assert entry["model_is_fixed"] is spec.model_is_fixed
         assert entry["signup_url"] == spec.signup_url
+        assert entry["description"] == spec.description
+        assert entry["endpoint_hint"] == spec.endpoint_hint
+        assert entry["priority"] == spec.priority
 
 
 def test_key_and_endpoint_come_from_the_saved_settings(

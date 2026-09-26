@@ -6,7 +6,7 @@ import {
   isPairSupported,
   isSourceSupported,
 } from "./translate-request";
-import type { ConfigResponse, OptionsResponse } from "@/hooks/useConfig";
+import type { OptionsResponse } from "@/hooks/useConfig";
 
 const FILE = "D:\\Papers\\attention is all you need.pdf";
 
@@ -33,19 +33,24 @@ const OPTIONS: Pick<OptionsResponse, "services"> = {
 };
 
 type ConfigSlice = Parameters<typeof effectiveService>[0];
+type ProviderSlice = Parameters<typeof effectiveService>[1][number];
 
-function config(
-  preferred: ConfigResponse["translation"]["preferred_service"],
-  keys: Partial<Record<"openai" | "gemini" | "anthropic", boolean>> = {},
-): ConfigSlice {
-  const service = (has_key: boolean) => ({ has_key, model: "m" });
+function config(provider: string): ConfigSlice {
   return {
-    translation: { preferred_service: preferred } as ConfigSlice["translation"],
-    openai: service(keys.openai ?? false),
-    gemini: service(keys.gemini ?? false),
-    anthropic: service(keys.anthropic ?? false),
-    argos: service(false),
+    translation: { model: { provider, model: "m" } } as ConfigSlice["translation"],
   };
+}
+
+/** `GET /providers`, trimmed to what the rule reads. */
+function providers(
+  keys: Partial<Record<"openai" | "gemini" | "anthropic", boolean>> = {},
+): ProviderSlice[] {
+  return [
+    { id: "openai", requires_key: true, has_key: keys.openai ?? false },
+    { id: "gemini", requires_key: true, has_key: keys.gemini ?? false },
+    { id: "anthropic", requires_key: true, has_key: keys.anthropic ?? false },
+    { id: "argos", requires_key: false, has_key: false },
+  ];
 }
 
 describe("buildTranslateBody", () => {
@@ -116,18 +121,28 @@ describe("buildTranslateBody", () => {
 
 describe("effectiveService", () => {
   it("keeps an LLM that has a key", () => {
-    expect(effectiveService(config("openai", { openai: true }))).toBe("openai");
+    expect(effectiveService(config("openai"), providers({ openai: true }))).toBe("openai");
   });
 
   // Mirrors the sidecar's silent downgrade. The toolbar can read "OpenAI"
   // while every run is really Argos.
   it("falls back to argos when the selected LLM has no key", () => {
-    expect(effectiveService(config("openai"))).toBe("argos");
-    expect(effectiveService(config("anthropic"))).toBe("argos");
+    expect(effectiveService(config("openai"), providers())).toBe("argos");
+    expect(effectiveService(config("anthropic"), providers())).toBe("argos");
   });
 
   it("leaves argos alone — it never needs a key", () => {
-    expect(effectiveService(config("argos"))).toBe("argos");
+    expect(effectiveService(config("argos"), providers())).toBe("argos");
+  });
+
+  it("runs a provider that takes no key without one", () => {
+    const local = [...providers(), { id: "local", requires_key: false, has_key: false }];
+    expect(effectiveService(config("local"), local)).toBe("local");
+  });
+
+  it("falls back to argos for a provider it doesn't know yet", () => {
+    // `GET /providers` still loading, or a provider this build lacks.
+    expect(effectiveService(config("openai"), [])).toBe("argos");
   });
 });
 

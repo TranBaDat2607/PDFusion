@@ -15,6 +15,7 @@
  */
 
 import type { ConfigResponse, OptionsResponse, ServiceCode } from "@/hooks/useConfig";
+import type { ProviderInfo } from "@/hooks/useProviders";
 import type { components } from "@/lib/api-types";
 import type { PageRange } from "@/lib/page-range";
 
@@ -64,6 +65,17 @@ export function buildTranslateBody(input: TranslateBodyInput): TranslateRequest 
   };
 }
 
+/** What runs in place of an LLM that can't: the sidecar's fallback. */
+export const OFFLINE_ENGINE = "argos";
+
+type RunnableProvider = { id: string } & Pick<ProviderInfo, "requires_key" | "has_key">;
+
+/** Whether a provider can run as saved, mirroring `AppSettings.has_api_key`:
+ *  it has a key, or takes none. */
+export function canRun(provider: Pick<RunnableProvider, "requires_key" | "has_key">): boolean {
+  return !provider.requires_key || provider.has_key;
+}
+
 /**
  * The service that will really run, mirroring
  * `translators/capabilities.py:resolve_effective_service`.
@@ -74,11 +86,12 @@ export function buildTranslateBody(input: TranslateBodyInput): TranslateRequest 
  * the user Japanese and then fail the job.
  */
 export function effectiveService(
-  config: Pick<ConfigResponse, "translation" | "openai" | "gemini" | "anthropic" | "argos">,
+  config: { translation: Pick<ConfigResponse["translation"], "model"> },
+  providers: readonly RunnableProvider[],
 ): ServiceCode {
-  const requested = config.translation.preferred_service;
-  if (requested === "argos") return "argos";
-  return config[requested]?.has_key ? requested : "argos";
+  const requested = config.translation.model.provider;
+  const provider = providers.find((p) => p.id === requested);
+  return provider && canRun(provider) ? requested : OFFLINE_ENGINE;
 }
 
 function supportedPairs(

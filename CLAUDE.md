@@ -104,9 +104,9 @@ singleton with no job id, so it is polled via `GET /setup/status`.
 | `desktop/src-tauri/tauri.{windows,linux,macos}.conf.json` | Per-platform packaging, merged over the above |
 | `scripts/build_sidecar.py`, `scripts/fetch_offline_assets.py` | All build logic; `build-sidecar.{ps1,sh}` etc. only resolve an interpreter |
 | `desktop/src/components/` | `layout/`, `pdf-viewer/`, `chat/`, `settings/`, `translation/`, `setup/`, `ui/` (shadcn) |
-| `desktop/src/lib/` | `api-client.ts`, `sse.ts`, `store.ts`, plus the pure, unit-tested helpers (`pdf-viewer/`, `export-pdf.ts`, `page-range.ts`, `service-settings.ts`, …) |
+| `desktop/src/lib/` | `api-client.ts`, `sse.ts`, `store.ts`, plus the pure, unit-tested helpers (`pdf-viewer/`, `export-pdf.ts`, `page-range.ts`, `provider-draft.ts`, `model-choice.ts`, …) |
 | `desktop/src/lib/{openapi.json,api-types.d.ts}` | Generated + checked in; CI fails if stale |
-| `desktop/src/hooks/` | `useSidecar`, `useConfig`, `useTranslation`, `useRagIndex`, `useRagAsk`, `useChatHistory`, `useExportTranslated`, `useTranslationEstimate` |
+| `desktop/src/hooks/` | `useSidecar`, `useConfig`, `useProviders`, `useTranslation`, `useRagIndex`, `useRagAsk`, `useChatHistory`, `useExportTranslated`, `useTranslationEstimate` |
 | `api/server.py`, `auth.py`, `jobs.py`, `routes/*`, `schemas.py`, `sse_schemas.py` | FastAPI app, bearer auth, job registry, routes, wire models |
 | `engine_assets.py` | Single source of truth for "the offline engine is installed" |
 | `config/` | `ConfigManager` + Pydantic `AppSettings` (`providers` map, `ModelRef`s) |

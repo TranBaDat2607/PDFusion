@@ -1427,6 +1427,13 @@
             "type": "array"
           }
         },
+        "required": [
+          "models",
+          "hidden",
+          "fetched_at",
+          "key_state",
+          "error"
+        ],
         "title": "ModelCatalogResponse",
         "type": "object"
       },
@@ -1893,12 +1900,27 @@
             "title": "Default Model",
             "type": "string"
           },
+          "description": {
+            "title": "Description",
+            "type": "string"
+          },
           "enabled_models": {
             "items": {
               "type": "string"
             },
             "title": "Enabled Models",
             "type": "array"
+          },
+          "endpoint_hint": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Endpoint Hint"
           },
           "has_key": {
             "title": "Has Key",
@@ -1962,6 +1984,17 @@
             "title": "Model Is Fixed",
             "type": "boolean"
           },
+          "priority": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Priority"
+          },
           "protocol": {
             "enum": [
               "openai",
@@ -2011,16 +2044,28 @@
           "id",
           "label",
           "short_label",
+          "description",
           "protocol",
           "requires_key",
           "takes_endpoint",
+          "default_base_url",
+          "endpoint_hint",
           "default_model",
           "suggested_models",
           "model_is_fixed",
+          "signup_url",
+          "priority",
           "has_key",
+          "base_url",
           "key_state",
+          "last_verified_at",
+          "catalog_fetched_at",
+          "catalog_fresh",
           "model",
-          "temperature"
+          "enabled_models",
+          "temperature",
+          "max_tokens",
+          "max_qps"
         ],
         "title": "ProviderInfo",
         "type": "object"
@@ -2151,6 +2196,11 @@
             "type": "boolean"
           }
         },
+        "required": [
+          "chat_enabled",
+          "auto_process_documents",
+          "answer_model"
+        ],
         "title": "RAGSettings",
         "type": "object"
       },
@@ -2326,7 +2376,7 @@
         "type": "object"
       },
       "TranslationConfig": {
-        "description": "`[translation]` as the frontend reads it: the settings, plus\n`preferred_service` \u2014 `model.provider` \u2014 which the toolbar and Settings\nstill read until they move to `model` (#86, #87).",
+        "description": "`[translation]` as the frontend reads it: the settings, plus\n`preferred_service` \u2014 `model.provider` \u2014 for a client older than #86.",
         "properties": {
           "cache_max_size_mb": {
             "default": 500.0,
@@ -2412,6 +2462,18 @@
           }
         },
         "required": [
+          "default_source_lang",
+          "default_target_lang",
+          "model",
+          "max_pages",
+          "max_file_size_mb",
+          "cache_translations",
+          "cache_ttl_days",
+          "cache_max_size_mb",
+          "cache_translated_pdfs",
+          "pdf_cache_max_size_mb",
+          "preserve_formatting",
+          "min_text_length",
           "preferred_service"
         ],
         "title": "TranslationConfig",
@@ -2657,7 +2719,10 @@
         "required": [
           "valid",
           "key_state",
-          "message"
+          "message",
+          "model_found",
+          "models",
+          "hidden"
         ],
         "title": "VerifyResponse",
         "type": "object"

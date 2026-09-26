@@ -24,7 +24,8 @@ import {
   type ChatMessage,
 } from "@/lib/chat-history";
 import { answerForDocument, needsReindex } from "@/lib/rag-ask";
-import { chatModel, SERVICE_SHORT_LABELS } from "@/lib/model-choice";
+import { chatModel } from "@/lib/model-choice";
+import { useProviders, type ProviderInfo } from "@/hooks/useProviders";
 import { useAppStore } from "@/lib/store";
 import { cn } from "@/lib/utils";
 
@@ -42,6 +43,7 @@ export function ChatPanel({
   const index = useRagIndex();
   const ask = useRagAsk();
   const { data: config } = useConfig();
+  const { data: providers } = useProviders();
   const queryClient = useQueryClient();
   // Saved by the sidecar and read back by document id, so a conversation
   // survives the panel closing, another PDF being opened, and a restart (#31).
@@ -177,7 +179,9 @@ export function ChatPanel({
               {index.state.chunks} chunks
             </Badge>
           )}
-          {config && <AnswerModelBadge config={config} />}
+          {config && providers && (
+            <AnswerModelBadge config={config} providers={providers} />
+          )}
         </div>
         <div className="flex items-center gap-1">
           <Button
@@ -276,8 +280,14 @@ export function ChatPanel({
 
 /** Which model writes the answers. It follows the translation choice but
  *  falls back to any LLM with a key, so it isn't always the toolbar's. */
-function AnswerModelBadge({ config }: { config: ConfigResponse }) {
-  const answering = chatModel(config);
+function AnswerModelBadge({
+  config,
+  providers,
+}: {
+  config: ConfigResponse;
+  providers: ProviderInfo[];
+}) {
+  const answering = chatModel(config, providers);
   return (
     <Tooltip>
       <TooltipTrigger asChild>
@@ -294,7 +304,7 @@ function AnswerModelBadge({ config }: { config: ConfigResponse }) {
       </TooltipTrigger>
       <TooltipContent className="max-w-xs">
         {answering
-          ? `${SERVICE_SHORT_LABELS[answering.service]} writes the answers.`
+          ? `${answering.label} writes the answers.`
           : "No API key is saved, so answers are excerpts from the document. Add a key in Settings for written answers."}
       </TooltipContent>
     </Tooltip>
