@@ -39,6 +39,7 @@ from desktop_pdf_translator.rag.vector_store import ChromaDBManager
 from desktop_pdf_translator.storage.records import IndexRecord, RecordsStore
 
 from conftest import MINIMAL_PDF
+from provider_fakes import make_keyless
 
 QUESTION = "What does the experiment measure?"
 ALPHA = "The experiment measures the thermal conductivity of alpha samples."
@@ -844,6 +845,43 @@ def test_the_translation_model_answers_before_a_higher_priority_provider(
     assert built == [(TranslationService.ANTHROPIC, "claude-opus-5")]
 
 
+def test_a_keyless_provider_answers_when_chosen_as_the_answer_model(
+    chain: EnhancedRAGChain, monkeypatch: pytest.MonkeyPatch
+):
+    """A local server (Ollama, #88) needs no key; chat's own choice must still
+    reach it even though nothing is saved for it."""
+    make_keyless(monkeypatch, "openai")
+    settings = _v2_settings(
+        rag={"answer_model": {"provider": "openai", "model": "llama3.2"}},
+    )
+    monkeypatch.setattr(rag_chain_module, "get_settings", lambda: settings)
+    built = _record_builds(monkeypatch)
+
+    model = chain._answer_model()
+
+    assert model is not None
+    assert model.service == TranslationService.OPENAI
+    assert built == [(TranslationService.OPENAI, "llama3.2")]
+
+
+def test_a_keyless_provider_is_never_the_any_llm_with_a_key_fallback(
+    chain: EnhancedRAGChain, monkeypatch: pytest.MonkeyPatch
+):
+    """Unlike a keyed provider, a keyless local server may not even be
+    running, so it must never be reached for by the "any LLM with a key"
+    fallback — only by naming it outright as `rag.answer_model` or the
+    translation model."""
+    make_keyless(monkeypatch, "openai")
+    settings = _v2_settings()  # translation on Argos, no answer model, no keys
+    monkeypatch.setattr(rag_chain_module, "get_settings", lambda: settings)
+    built = _record_builds(monkeypatch)
+
+    model = chain._answer_model()
+
+    assert model is None
+    assert built == []
+
+
 # ---------------------------------------------------------------------------
 # which model wrote the answer (#87)
 # ---------------------------------------------------------------------------
@@ -956,3 +994,23 @@ def test_a_question_keeps_the_model_it_started_with_if_the_answer_model_changes_
     )
 
     assert (answer.get("provider"), answer.get("model")) == ("anthropic", "claude-opus-5")
+
+
+def test_the_real_ollama_entry_answers_when_chosen_and_is_never_a_fallback(
+    chain: EnhancedRAGChain, monkeypatch: pytest.MonkeyPatch
+):
+    """The registry's own Ollama entry, not a stand-in: no key, chosen for
+    chat it answers; unchosen, with no key anywhere, chat has no model (#88)."""
+    built = _record_builds(monkeypatch)
+    chosen = _v2_settings(rag={"answer_model": {"provider": "ollama", "model": "llama3.2"}})
+    monkeypatch.setattr(rag_chain_module, "get_settings", lambda: chosen)
+
+    model = chain._answer_model()
+
+    assert model is not None and model.service == TranslationService("ollama")
+    assert built == [(TranslationService("ollama"), "llama3.2")]
+
+    unchosen = _v2_settings()
+    monkeypatch.setattr(rag_chain_module, "get_settings", lambda: unchosen)
+
+    assert chain._answer_model() is None

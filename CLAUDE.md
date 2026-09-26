@@ -123,8 +123,8 @@ Everything but `GET /health` requires `Authorization: Bearer <token>`. The
 schema is checked in at `desktop/src/lib/openapi.json` — read it there rather
 than re-deriving from the routes.
 
-`/health` · `/auth/ping` · `GET|PUT /config` · `POST /config/validate` ·
-`GET /config/options` · `GET /config/models/{service}` · `GET|DELETE /config/cache` ·
+`/health` · `/auth/ping` · `GET|PUT /config` ·
+`GET /config/options` · `GET|DELETE /config/cache` ·
 `GET /providers` · `PUT /providers/{id}` · `DELETE /providers/{id}/key` ·
 `GET /providers/{id}/models` · `POST /providers/{id}/verify` ·
 `GET /setup/status` · `POST /setup/engine` ·
@@ -144,6 +144,10 @@ Non-obvious bits of the contract:
   1-indexed pages.
 - There is deliberately no `output_dir` on `/translate`; output is always a
   per-job temp dir.
+- Keys, endpoints and a provider's models change only through `/providers`;
+  `PUT /config` takes the models chosen (`translation_model`, `answer_model`)
+  and refuses the per-service blocks and `preferred_service` retired in #88.
+  A provider id is a plain string on the wire, checked against the registry.
 
 ## Invariants
 
@@ -184,20 +188,21 @@ a test. They are the things most easily undone by "simplifying".
   rewritten by the next save. Per-provider rules are field validators, so a
   bad value drops one field, never a provider's table or the whole map.
 - A saved API key is only ever sent to the endpoint it was saved for: `PUT
-  /config` and `PUT /providers/{id}` 422 an endpoint change without `api_key`
-  in the same body.
+  /providers/{id}` 422s an endpoint change without `api_key` in the same body.
+  A keyless provider (`requires_key=False`, e.g. Ollama) has no key to guard
+  and is sent only its `placeholder_key`.
 - The keystore holds **one master key**, and the decrypt path never mints a
   replacement. Keys it could not read are remembered and written back verbatim,
   so a locked keyring doesn't erase every provider key on the next save.
 - `config.toml` is written to a temp file and `os.replace`d; the `.bak` always
   has the keys stripped — from both shapes, since the first save after a
   conversion backs up a pre-#85 file.
-- **Verifying a key and discovering models never generate text** (#84): Save,
-  `/config/validate`, `/providers/{id}/verify` and the Argos → LLM promotion
-  all *list* the key's models; none calls `validate_configuration`. A typo'd
-  model is caught by looking it up in the list (aliases allowed). Listings
-  live in a cache keyed by `(provider, base_url)` that stores nothing derived
-  from a key, so `PUT /config` invalidates it on every key or endpoint change.
+- **Verifying a key and discovering models never generate text** (#84): the
+  Models page's Verify & save, `/providers/{id}/verify` and the model lists
+  all *list* the key's models; none calls `validate_configuration` (Argos's
+  verify checks its install instead). Listings live in a cache keyed by
+  `(provider, base_url)` that stores nothing derived from a key, so `PUT
+  /providers/{id}` invalidates it on every key or endpoint change.
 - A parameter a model refuses is dropped and recorded, not failed on
   (`param_compat.py`). Model suggestions are not a whitelist; retired ids are
   swapped on load (`RETIRED_MODELS`).
@@ -227,7 +232,12 @@ a test. They are the things most easily undone by "simplifying".
   stdlib-only (it builds `TranslationService`, on the boot path), its
   translator/lister are callables with a function-local import (PyInstaller
   can't see string imports), and provider ids are frozen (cache keys and
-  `config.toml` sections use them).
+  `config.toml` sections use them). **Adding a provider** that speaks an API
+  PDFusion already has is a registry entry plus a recorded listing fixture,
+  and nothing in the frontend or `schemas.py` — follow the checklist in the
+  notes' "Adding a provider" and fix the design, not the checklist, if it
+  needs more. `default_base_url` is *sent* when no endpoint is saved
+  (`registry.endpoint_for`), which is what lets OpenRouter reuse OpenAI's SDK.
 - `max_pages` limits the **selected** pages, not the document; the output is
   always the whole document, with unselected pages copied from the original.
 - Two caches (whole-PDF, paragraph), both SQLite, content-addressed, versioned

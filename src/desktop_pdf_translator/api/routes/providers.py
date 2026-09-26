@@ -6,11 +6,10 @@ a 401/403 there says the key is wrong without a completion being paid for.
 What a listing cannot see (a key with no credit, a model the account may not
 run) is in architecture-notes § "LLM endpoints and models".
 
-`/config/validate` and `/config/models/{service}` are thin wrappers over
-`verify` and `catalog_for` here, until the per-service API is retired (#88).
-So is the key and endpoint half of `PUT /config`: it changes them through
-`endpoint_change_refusal`, `apply_key_and_endpoint` and `save_settings` below,
-the same three `PUT /providers/{id}` uses (#85).
+This is the only place a key or an endpoint changes. `PUT /config` carried a
+block per provider, and `/config/validate` and `/config/models/{service}`
+wrapped `verify` and `catalog_for` here, until #88 retired that per-service
+API.
 """
 
 import asyncio
@@ -22,7 +21,13 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import ValidationError
 
-from ...config import AppSettings, TranslationService, get_config_manager, get_settings
+from ...config import (
+    AppSettings,
+    ProviderId,
+    TranslationService,
+    get_config_manager,
+    get_settings,
+)
 from ...providers import catalog
 from ...providers.listing import ListedModel, Listing, model_matches
 from ...providers.registry import PROVIDERS, ProviderSpec, provider
@@ -125,9 +130,11 @@ def resolve_probe_target(
     """Which key goes to which endpoint: `(api_key, base_url, is_saved_pair)`.
 
     A saved key is only ever sent to the endpoint it was saved for — the rule
-    `PUT /config` keeps (#32). `base_url` `None` is the saved endpoint and
-    `""` the provider's own; naming another one needs the key typed alongside
-    it, or this is a 422. `api_key` is `None` when there is nothing to send.
+    `PUT /providers/{id}` keeps (#32). `base_url` `None` is the saved endpoint
+    and `""` the provider's own; naming another one needs the key typed
+    alongside it, or this is a 422. `api_key` is `None` when there is nothing
+    to send. A keyless provider has no key to guard, so any endpoint may be
+    checked, and a key typed for it is a 422 (#88).
     """
     saved_base_url = getattr(saved, "base_url", None)
     if not spec.takes_endpoint:
@@ -138,6 +145,10 @@ def resolve_probe_target(
         base_url = typed_base_url or None
     same_endpoint = base_url == saved_base_url
 
+    if not spec.requires_key:
+        if typed_key:
+            raise HTTPException(status_code=422, detail=f"{spec.label} takes no API key.")
+        return None, base_url, same_endpoint
     if typed_key:
         return typed_key, base_url, same_endpoint and typed_key == saved.api_key
     if not same_endpoint:
@@ -148,13 +159,32 @@ def resolve_probe_target(
     return saved.api_key or None, base_url, True
 
 
-def _keyed_spec(service: TranslationService) -> ProviderSpec:
-    spec = provider(service.value)
-    if not spec.requires_key:
-        raise HTTPException(
-            status_code=422, detail=f"{spec.label} has no API key to check."
-        )
-    return spec
+def check_offline_engine(spec: ProviderSpec) -> Tuple[bool, str]:
+    """Whether an engine with nothing to list (Argos) is installed. Blocking.
+
+    Its translator's own check reads the installed language pack and sends
+    nothing anywhere. The one seam the route tests replace.
+    """
+    from ...translators.factory import TranslatorFactory
+
+    translator = TranslatorFactory.create_translator(
+        service=TranslationService(spec.id), lang_in="en", lang_out="vi"
+    )
+    return translator.validate_configuration()
+
+
+async def _verify_offline(spec: ProviderSpec, typed_key: Optional[str]) -> VerifyResponse:
+    if typed_key:
+        raise HTTPException(status_code=422, detail=f"{spec.label} takes no API key.")
+    # Off the loop, but without the listing's deadline: the first check
+    # imports argostranslate, which is slow on a cold machine without being a
+    # call that can hang.
+    try:
+        installed, message = await asyncio.to_thread(check_offline_engine, spec)
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("Checking %s failed", spec.id)
+        return VerifyResponse(valid=False, key_state="unverified", message=str(exc))
+    return VerifyResponse(valid=installed, key_state="unverified", message=message)
 
 
 # ---------------------------------------------------------------------------
@@ -172,13 +202,16 @@ async def verify(
 
     The catalog is written only when what was listed is the saved key at the
     saved endpoint: a typed key the user may yet discard must not mark the
-    saved one valid, or invalid.
+    saved one valid, or invalid. An engine with nothing to list (Argos) is
+    checked for its install instead.
     """
-    spec = _keyed_spec(service)
+    spec = provider(service.value)
+    if spec.lister is None:
+        return await _verify_offline(spec, typed_key)
     api_key, base_url, saved_pair = resolve_probe_target(
         spec, _saved(spec.id), typed_key, typed_base_url
     )
-    if api_key is None:
+    if api_key is None and spec.requires_key:
         if get_config_manager().has_unreadable_key(spec.id):
             return VerifyResponse(
                 valid=False,
@@ -231,7 +264,7 @@ async def catalog_for(service: TranslationService, refresh: bool) -> ModelCatalo
     local server that isn't up yet is ordinary.
     """
     spec = provider(service.value)
-    if not spec.requires_key:
+    if spec.lister is None:
         return ModelCatalogResponse(
             models=[ModelRecord(id=m, source="suggested") for m in spec.suggested_models]
         )
@@ -240,7 +273,9 @@ async def catalog_for(service: TranslationService, refresh: bool) -> ModelCatalo
     saved_model = get_settings().model_for(spec.id)
     base_url = saved.base_url
     fallback = _fallback_records(spec, saved_model, custom_endpoint=base_url is not None)
-    if not saved.api_key:
+    # A keyless server lists with no key (`catalog.list_models` hands its SDK
+    # the placeholder); a keyed provider needs its own.
+    if spec.requires_key and not saved.api_key:
         unreadable = get_config_manager().has_unreadable_key(spec.id)
         return ModelCatalogResponse(
             models=fallback,
@@ -393,7 +428,9 @@ async def save_settings(
 async def _provider_info(spec: ProviderSpec, settings: AppSettings) -> ProviderInfo:
     saved = settings.providers[spec.id]
     has_key = bool(saved.api_key) if spec.requires_key else False
-    entry = await catalog_call("get", spec.id, saved.base_url) if has_key else None
+    # A keyless server's row is filled by listing it, like a key's.
+    listable = has_key or (not spec.requires_key and spec.lister is not None)
+    entry = await catalog_call("get", spec.id, saved.base_url) if listable else None
     if spec.requires_key and get_config_manager().has_unreadable_key(spec.id):
         key_state: KeyState = "unreadable"
     elif entry is not None:
@@ -414,6 +451,7 @@ async def _provider_info(spec: ProviderSpec, settings: AppSettings) -> ProviderI
         suggested_models=list(spec.suggested_models),
         model_is_fixed=spec.model_is_fixed,
         signup_url=spec.signup_url,
+        is_llm=spec.is_llm,
         priority=spec.priority,
         has_key=has_key,
         base_url=saved.base_url,
@@ -434,13 +472,13 @@ async def list_providers() -> ProvidersResponse:
     """Every provider, with where its key stands. Reads only; never lists."""
     settings = get_settings()
     return ProvidersResponse(
-        providers=[await _provider_info(spec, settings) for spec in PROVIDERS]
+        providers=[await _provider_info(provider(spec.id), settings) for spec in PROVIDERS]
     )
 
 
 @router.put("/{provider_id}", response_model=ProviderInfo)
 async def update_provider(
-    provider_id: TranslationService, payload: ProviderUpdateRequest
+    provider_id: ProviderId, payload: ProviderUpdateRequest
 ) -> ProviderInfo:
     """Save one provider's key, endpoint, models and parameters.
 
@@ -482,7 +520,7 @@ async def update_provider(
 
 
 @router.delete("/{provider_id}/key", response_model=ProviderInfo)
-async def delete_provider_key(provider_id: TranslationService) -> ProviderInfo:
+async def delete_provider_key(provider_id: ProviderId) -> ProviderInfo:
     """Forget the saved key, a preserved unreadable one included. The
     endpoint stays; a key entered later goes to it."""
     spec = provider(provider_id.value)
@@ -496,13 +534,13 @@ async def delete_provider_key(provider_id: TranslationService) -> ProviderInfo:
 
 @router.get("/{provider_id}/models", response_model=ModelCatalogResponse)
 async def provider_models(
-    provider_id: TranslationService, refresh: bool = False
+    provider_id: ProviderId, refresh: bool = False
 ) -> ModelCatalogResponse:
     return await catalog_for(provider_id, refresh)
 
 
 @router.post("/{provider_id}/verify", response_model=VerifyResponse)
 async def verify_provider(
-    provider_id: TranslationService, payload: VerifyRequest
+    provider_id: ProviderId, payload: VerifyRequest
 ) -> VerifyResponse:
     return await verify(provider_id, payload.api_key, payload.base_url, payload.model)

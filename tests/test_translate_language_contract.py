@@ -131,6 +131,24 @@ def test_llm_with_a_key_is_kept():
     )
 
 
+def test_a_keyless_provider_is_kept_with_no_key_at_all(monkeypatch: pytest.MonkeyPatch):
+    """A keyless local server (Ollama, #88) is always usable, like Argos —
+    `AppSettings.has_api_key` already reads that off `requires_key`, not off
+    an id, so real settings (not `_FakeSettings`, which only knows Argos)
+    exercise it here."""
+    from provider_fakes import make_keyless
+
+    from desktop_pdf_translator.config import AppSettings
+
+    make_keyless(monkeypatch, "openai")
+    settings = AppSettings()
+
+    assert (
+        resolve_effective_service(settings, TranslationService.OPENAI)
+        is TranslationService.OPENAI
+    )
+
+
 # ---------------------------------------------------------------------------
 # Capability matrix
 # ---------------------------------------------------------------------------

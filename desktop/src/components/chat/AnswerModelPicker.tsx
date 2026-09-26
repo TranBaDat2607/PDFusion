@@ -53,7 +53,7 @@ export function AnswerModelPicker({ config, providers, onOpenSettings }: AnswerM
   };
 
   // The offline engine translates but can't write an answer.
-  const groups = modelGroups(config, providers).filter((group) => !group.fixed);
+  const groups = modelGroups(config, providers).filter((group) => group.llm);
 
   return (
     <ModelSelect

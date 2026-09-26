@@ -194,6 +194,12 @@ class BaseTranslator(ABC):
                   max_qps: Optional[float]
                     Overrides the shared rate limiter's default for this
                     backend's service. None keeps the built-in default.
+                  provider_id: Optional[str]
+                    The registry provider this instance serves, which names
+                    its rate limiter. One class serves several providers —
+                    OpenRouter, DeepSeek and Ollama all build
+                    `OpenAITranslator` — and keyed on the class's own name
+                    they drew on OpenAI's budget (#88).
         """
         self.lang_in = self._normalize_language_code(lang_in)
         self.lang_out = self._normalize_language_code(lang_out)
@@ -221,6 +227,9 @@ class BaseTranslator(ABC):
             "cancel_event", None
         )
         self.max_qps: Optional[float] = kwargs.pop("max_qps", None)
+        provider_id: Optional[str] = kwargs.pop("provider_id", None)
+        if provider_id is not None and self._SERVICE_NAME is not None:
+            self._SERVICE_NAME = provider_id
 
         # Initialize translator-specific settings
         self._setup_translator(**kwargs)

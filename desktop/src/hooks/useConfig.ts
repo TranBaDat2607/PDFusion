@@ -10,14 +10,14 @@ import { PROVIDERS_KEY, type ProviderInfo } from "@/hooks/useProviders";
 // drifted from the backend in production before this existed: language
 // fields silently never sent, `pdf_references` vs. `pdf_sources` (#13), and a
 // dead `deep_search`/web-research pair of fields (#14) — see issue #27.
-export type ServiceCode = components["schemas"]["TranslationService"];
+/** A provider's id: a plain string the sidecar checks against its registry,
+ *  so a new provider needs no change here (#88). `GET /providers` lists them. */
+export type ServiceCode = string;
 export type ConfigResponse = components["schemas"]["ConfigResponse"];
 export type LanguageOption = components["schemas"]["LanguageOption"];
 export type ServiceOption = components["schemas"]["ServiceOption"];
 export type OptionsResponse = components["schemas"]["OptionsResponse"];
 export type ConfigUpdate = components["schemas"]["ConfigUpdateRequest"];
-export type ValidateRequest = components["schemas"]["ValidateRequest"];
-export type ValidateResponse = components["schemas"]["ValidateResponse"];
 
 export function useConfig() {
   return useQuery({
@@ -61,16 +61,4 @@ export function useUpdateConfig() {
       }
     },
   });
-}
-
-/** Check credentials with the provider, by listing the key's models (never a
- *  completion) and looking the model up there. Whatever the request leaves out
- *  (the key, the model, the endpoint) the sidecar takes from the saved
- *  settings, and it sends a saved key only to the saved endpoint. */
-export function validateCredentials(input: ValidateRequest) {
-  return api.post<ValidateResponse>("/config/validate", input);
-}
-
-export function useValidateCredentials() {
-  return useMutation({ mutationFn: validateCredentials });
 }

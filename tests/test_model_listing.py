@@ -127,6 +127,57 @@ def test_openai_hides_non_chat_models_on_its_own_endpoint():
     assert seen[0].headers["authorization"] == "Bearer sk-test-key"
 
 
+def test_openai_hides_non_chat_models_at_its_own_url_named_explicitly():
+    """A caller that resolves the endpoint before listing (`registry.
+    endpoint_for`, #88) passes OpenAI's own URL explicitly rather than
+    `None`; the filter must still apply — treating any non-`None` `base_url`
+    as a custom server's would offer `whisper-1` and the embedding models as
+    if OpenAI itself were an OpenAI-compatible local server."""
+    seen: List[httpx.Request] = []
+    client = _mock_client(
+        _openai_handler(_fixture("openai.json"), "api.openai.com", "/v1/models"), seen
+    )
+
+    listing = list_openai_models(
+        "sk-test-key", "https://api.openai.com/v1", http_client=client
+    )
+
+    assert [m.id for m in listing.models] == OPENAI_CHAT_IDS
+    assert set(m.id for m in listing.hidden) == OPENAI_NON_CHAT_IDS
+
+
+def test_openai_hides_non_chat_models_at_its_own_url_with_a_trailing_slash():
+    seen: List[httpx.Request] = []
+    client = _mock_client(
+        _openai_handler(_fixture("openai.json"), "api.openai.com", "/v1/models"), seen
+    )
+
+    listing = list_openai_models(
+        "sk-test-key", "https://api.openai.com/v1/", http_client=client
+    )
+
+    assert set(m.id for m in listing.hidden) == OPENAI_NON_CHAT_IDS
+
+
+def test_openai_hides_nothing_at_another_providers_own_endpoint():
+    """OpenRouter speaks OpenAI's API at its own URL (#88); its ids follow no
+    convention the filter's patterns assume, so nothing is hidden there
+    either — as at a local server's endpoint."""
+    seen: List[httpx.Request] = []
+    client = _mock_client(
+        _openai_handler(_fixture("openai.json"), "openrouter.ai", "/api/v1/models"), seen
+    )
+
+    listing = list_openai_models(
+        "sk-or-test", "https://openrouter.ai/api/v1", http_client=client
+    )
+
+    assert [m.id for m in listing.models] == [
+        m["id"] for m in _fixture("openai.json")["data"]
+    ]
+    assert listing.hidden == ()
+
+
 def test_openai_custom_endpoint_hides_nothing():
     """Ollama / LM Studio name models freely — `nomic-embed-text` or a
     `whisper-*` there may be exactly what the user loaded — so a custom

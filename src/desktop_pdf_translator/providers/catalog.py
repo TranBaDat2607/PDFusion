@@ -28,7 +28,7 @@ from ..storage.migrations import Migration, migrate
 from ..storage.sqlite import ThreadLocalConnections, now_ms
 from ..utils.paths import appdata_dir
 from .listing import ListedModel, Listing
-from .registry import provider
+from .registry import endpoint_for, provider, request_key
 
 logger = logging.getLogger(__name__)
 
@@ -215,7 +215,7 @@ async def list_models(provider_id: str, api_key: str, base_url: Optional[str]) -
     where = base_url or spec.label
 
     def run() -> Listing:
-        return spec.lister()(api_key, base_url)
+        return spec.lister()(request_key(spec, api_key), endpoint_for(spec, base_url))
 
     try:
         return await asyncio.wait_for(asyncio.to_thread(run), timeout=PROBE_TIMEOUT_S)

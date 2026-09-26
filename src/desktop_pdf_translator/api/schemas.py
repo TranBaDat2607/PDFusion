@@ -1,6 +1,6 @@
 """Pydantic request/response schemas for the sidecar API."""
 
-from typing import Annotated, Any, Dict, List, Literal, Optional, Tuple
+from typing import Annotated, Dict, List, Literal, Optional, Tuple
 
 from pydantic import BaseModel, ConfigDict, Field, PositiveInt, field_validator
 
@@ -11,8 +11,8 @@ from ..config import (
     LanguageCode,
     ModelRef,
     ProcessingSettings,
+    ProviderId,
     RAGSettings,
-    TranslationService,
     TranslationSettings,
 )
 from ..config.models import MaxFileSizeMB, MaxPages, normalize_base_url
@@ -43,17 +43,6 @@ def _endpoint_or_blank(value: Optional[str]) -> Optional[str]:
     return normalize_base_url(value)
 
 
-class APIKeyMaskedSettings(BaseModel):
-    """Service config with the API key masked. The frontend never sees real keys."""
-
-    has_key: bool
-    model: str
-    # The server this service talks to when it isn't the provider's own
-    # (OpenAI and Anthropic only). Not a secret, unlike the key beside it.
-    base_url: Optional[str] = None
-    extra: Dict[str, Any] = Field(default_factory=dict)
-
-
 # A response always carries every field, defaulted or not. Without this the
 # generated TypeScript marks each defaulted one optional, and the frontend
 # guards values that are always there.
@@ -61,22 +50,14 @@ _EVERY_FIELD_SENT = ConfigDict(json_schema_serialization_defaults_required=True)
 
 
 class TranslationConfig(TranslationSettings):
-    """`[translation]` as the frontend reads it: the settings, plus
-    `preferred_service` — `model.provider` — for a client older than #86."""
+    """`[translation]` as the frontend reads it."""
 
     model_config = _EVERY_FIELD_SENT
 
-    preferred_service: TranslationService
-
 
 class ConfigResponse(BaseModel):
-    # One block per provider, as before #85, for the frontend until #88: the
-    # key's presence, the endpoint, and the model it runs when chosen
-    # (`AppSettings.model_for`).
-    openai: APIKeyMaskedSettings
-    gemini: APIKeyMaskedSettings
-    anthropic: APIKeyMaskedSettings
-    argos: APIKeyMaskedSettings
+    # Keys, endpoints and each provider's models are `GET /providers`'s; the
+    # per-provider blocks that stood here until #88 are gone.
     # Real nested settings models, not Dict[str, Any] — the latter would erase
     # exactly the fields (default_source_lang, default_target_lang,
     # preferred_service, ...) whose drift from the hand-written frontend types
@@ -88,54 +69,13 @@ class ConfigResponse(BaseModel):
     debug_mode: bool
 
 
-class ServiceCredentialUpdate(BaseModel):
-    """Update payload for one service. `api_key=None` means leave unchanged;
-    `api_key=""` means clear it. `model` is any name the provider serves, not
-    only one `/config/options` suggests."""
-
-    api_key: Optional[str] = None
-    model: Optional[str] = Field(None, max_length=200)
-
-    @field_validator("model")
-    @classmethod
-    def _model_is_named(cls, value: Optional[str]) -> Optional[str]:
-        if value is None:
-            return None
-        value = value.strip()
-        if not value:
-            raise ValueError("must not be blank")
-        return value
-
-
-class EndpointCredentialUpdate(ServiceCredentialUpdate):
-    """For a service that can talk to another server speaking its API: Ollama,
-    LM Studio, a proxy (#32).
-
-    `base_url=None` leaves the endpoint unchanged and `""` returns to the
-    provider's own. Changing it while a key is saved needs the key in the same
-    update, because a saved key is only ever sent to the endpoint it was saved
-    for (`routes/config.py:update_config`).
-    """
-
-    base_url: Optional[str] = None
-
-    @field_validator("base_url")
-    @classmethod
-    def _endpoint(cls, value: Optional[str]) -> Optional[str]:
-        return _endpoint_or_blank(value)
-
-
 class ConfigUpdateRequest(BaseModel):
-    # The per-provider blocks and `preferred_service` are the shape from
-    # before #85, kept for the frontend until #88. A block's `model` becomes
-    # the model that provider runs; `preferred_service` makes that provider's
-    # model the translation model. `PUT /providers/{id}` is the new way to
-    # set a key, and `translation_model` the new way to choose.
-    openai: Optional[EndpointCredentialUpdate] = None
-    gemini: Optional[ServiceCredentialUpdate] = None
-    anthropic: Optional[EndpointCredentialUpdate] = None
-    preferred_service: Optional[TranslationService] = None
-    # Wins over `preferred_service` and the blocks' models in the same body.
+    # Keys, endpoints and a provider's models are `PUT /providers/{id}`'s. The
+    # per-provider blocks and `preferred_service` that were here until #88
+    # were the shape from before #85. Refused rather than ignored: ignored, a
+    # client older than #88 got a 200 for a key that was never saved.
+    model_config = ConfigDict(extra="forbid")
+
     translation_model: Optional[ModelRef] = None
     # Left out: unchanged. `null`: answer with the translation model.
     answer_model: Optional[ModelRef] = None
@@ -148,35 +88,6 @@ class ConfigUpdateRequest(BaseModel):
     max_file_size_mb: Optional[MaxFileSizeMB] = None
     cache_translations: Optional[bool] = None
     cache_translated_pdfs: Optional[bool] = None
-
-
-class ValidateRequest(BaseModel):
-    """What to check against the provider. Whatever is left out comes from the
-    saved settings, and the saved key is only checked against the saved
-    endpoint: naming another one needs the key typed alongside it."""
-
-    service: TranslationService
-    # `None` or `""`: the saved key.
-    api_key: Optional[str] = None
-    # `None` or blank: the saved model.
-    model: Optional[str] = Field(None, max_length=200)
-    # `None`: the saved endpoint. `""`: the provider's own.
-    base_url: Optional[str] = None
-
-    @field_validator("model")
-    @classmethod
-    def _model_or_saved(cls, value: Optional[str]) -> Optional[str]:
-        return (value or "").strip() or None
-
-    @field_validator("base_url")
-    @classmethod
-    def _endpoint(cls, value: Optional[str]) -> Optional[str]:
-        return _endpoint_or_blank(value)
-
-
-class ValidateResponse(BaseModel):
-    valid: bool
-    message: str
 
 
 # ---------------------------------------------------------------------------
@@ -200,7 +111,7 @@ class TranslateRequest(BaseModel):
     # resolved in exactly one place: `translators.capabilities.resolve_languages`.
     source_lang: Optional[LanguageCode] = None
     target_lang: Optional[LanguageCode] = None
-    service: Optional[TranslationService] = None
+    service: Optional[ProviderId] = None
     # No `output_dir`. It let a caller name any writable path on the machine,
     # was never sent by the UI, and — being outside `%TEMP%\pdfusion-translate-*`
     # — was exempt from every cleanup path, so it also leaked whatever it
@@ -252,7 +163,7 @@ class PrewarmRequest(BaseModel):
     Translate. For Argos this triggers the en→vi pack install. For LLMs it
     instantiates the SDK client so the first translate() call avoids cold-start."""
 
-    service: Optional[TranslationService] = None
+    service: Optional[ProviderId] = None
     # Same "None means unspecified" contract as TranslateRequest — pre-warming
     # auto→vi while the toolbar says Japanese warms the wrong backend.
     source_lang: Optional[LanguageCode] = None
@@ -471,17 +382,6 @@ class OptionsResponse(BaseModel):
     services: List[ServiceOption]
 
 
-class EndpointModelsResponse(BaseModel):
-    """The models a service's saved endpoint says it serves.
-
-    A failure is `error`, not an HTTP error: a local server that isn't running
-    yet is ordinary, and the picker still offers the saved model without it.
-    """
-
-    models: List[str] = Field(default_factory=list)
-    error: Optional[str] = None
-
-
 # ---------------------------------------------------------------------------
 # Providers (#84)
 # ---------------------------------------------------------------------------
@@ -507,7 +407,7 @@ class ModelRecord(BaseModel):
 class ProviderInfo(BaseModel):
     model_config = _EVERY_FIELD_SENT
 
-    id: TranslationService
+    id: ProviderId
     label: str
     short_label: str
     description: str
@@ -520,6 +420,8 @@ class ProviderInfo(BaseModel):
     suggested_models: List[str]
     model_is_fixed: bool
     signup_url: Optional[str] = None
+    # It writes text from a prompt, so it can answer in chat (Argos can't).
+    is_llm: bool
     # Its place in chat's "any LLM with a key" fallback, lowest first; `None`
     # for one that never answers in chat. The frontend's copy of that order
     # (`lib/model-choice.ts:chatModel`) reads it here.
@@ -583,8 +485,7 @@ class ProvidersResponse(BaseModel):
 class ModelCatalogResponse(BaseModel):
     """The models the saved key can use at the saved endpoint.
 
-    A failure is `error` in a 200, as with `EndpointModelsResponse`: a local
-    server that isn't up yet is ordinary, and `models` still carries the saved
+    A failure is `error` in a 200: a local server that isn't up yet is ordinary, and `models` still carries the saved
     model (and, on the provider's own endpoint, the suggestions).
     """
 

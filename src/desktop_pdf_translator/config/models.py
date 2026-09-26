@@ -11,6 +11,7 @@ from pydantic import (
     BaseModel,
     ConfigDict,
     Field,
+    AfterValidator,
     ValidationInfo,
     field_validator,
     model_validator,
@@ -30,15 +31,32 @@ class LanguageCode(str, Enum):
 
 # Built from the provider registry, so a provider is added in one place. The
 # member names (`TranslationService.OPENAI`) are the ids upper-cased, and the
-# order is the registry's, which is the OpenAPI enum's.
+# order is the registry's. Internal only: on the wire a provider is a
+# `ProviderId` string (below), so the enum never reaches the OpenAPI schema.
 TranslationService = Enum(
     "TranslationService",
     [(spec.id.upper(), spec.id) for spec in PROVIDERS],
     type=str,
     module=__name__,
 )
-# Pydantic puts this in the OpenAPI schema as the enum's description.
 TranslationService.__doc__ = "Supported translation services."
+
+
+
+def _registry_provider(value: str) -> "TranslationService":
+    return TranslationService(value)  # ValueError for an id no provider has
+
+
+# A provider as the API carries it: its id, a plain string, checked against
+# the registry and handed to the code as the enum above. Published as a
+# string, not an enum of ids, so a provider added to the registry changes
+# neither `openapi.json` nor the generated TypeScript (#88); `GET /providers`
+# is where a client learns which ids exist.
+ProviderId = Annotated[
+    str,
+    AfterValidator(_registry_provider),
+    Field(description="A provider's id, as GET /providers lists them"),
+]
 
 
 def normalize_base_url(value: Optional[str]) -> Optional[str]:
@@ -78,7 +96,7 @@ class ModelRef(BaseModel):
     stale or hand-edited name can't reach its cache keys.
     """
 
-    provider: TranslationService
+    provider: ProviderId
     model: ModelName
 
     @field_validator("model", mode="before")
@@ -145,6 +163,19 @@ class ProviderSettings(BaseModel):
     def _known_provider(cls, value: Optional[str]) -> Optional[str]:
         if value is not None:
             provider(value)  # ValueError for an id no provider has
+        return value
+
+    @field_validator("api_key")
+    @classmethod
+    def _no_key_for_a_keyless_provider(
+        cls, value: Optional[str], info: ValidationInfo
+    ) -> Optional[str]:
+        # One hand-edited into Ollama's table would be sent in place of its
+        # placeholder and could never be cleared: the API refuses a key for
+        # it both ways, while the endpoint rule guards any saved key (#88).
+        spec = _spec_or_none(info.data.get("provider_id"))
+        if spec is not None and not spec.requires_key:
+            return None
         return value
 
     @field_validator("base_url")

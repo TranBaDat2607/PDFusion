@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  rebaseDraft,
+  selectsAnswerModel,
   addCustomModel,
   draftFrom,
   draftProblem,
@@ -38,6 +40,7 @@ function provider(overrides: Partial<ProviderInfo> = {}): ProviderInfo {
     endpoint_hint: null,
     has_key: false,
     id: "openai",
+    is_llm: true,
     key_state: "unverified",
     label: "OpenAI",
     last_verified_at: null,
@@ -319,6 +322,16 @@ describe("needsVerify", () => {
     const p = provider({ base_url: OLLAMA, has_key: true });
     expect(needsVerify(draftFrom(p), p)).toBe(false);
   });
+
+  it("is true for a keyless provider when only the endpoint changed", () => {
+    const p = provider({ requires_key: false, base_url: null, takes_endpoint: true });
+    expect(needsVerify(draft({ baseUrl: OLLAMA }), p)).toBe(true);
+  });
+
+  it("is false for a keyless provider with the endpoint unchanged, even with something typed in the key field", () => {
+    const p = provider({ requires_key: false, base_url: OLLAMA, takes_endpoint: true });
+    expect(needsVerify(draft({ apiKey: "unused-value", baseUrl: OLLAMA }), p)).toBe(false);
+  });
 });
 
 describe("verifyRequest", () => {
@@ -372,6 +385,33 @@ describe("verifyRequest", () => {
       api_key: "sk-new",
       base_url: "",
     });
+  });
+
+  it("is never null for a keyless provider, even with nothing typed and no saved key", () => {
+    const p = provider({
+      requires_key: false,
+      has_key: false,
+      key_state: "unverified",
+      takes_endpoint: true,
+      base_url: null,
+    });
+    expect(verifyRequest(draft(), p)).toEqual({ base_url: "" });
+  });
+
+  it("omits base_url for a keyless provider that takes no endpoint of its own", () => {
+    const p = provider({
+      requires_key: false,
+      has_key: false,
+      key_state: "unverified",
+      takes_endpoint: false,
+    });
+    expect(verifyRequest(draft(), p)).toEqual({});
+  });
+
+  it("never carries api_key for a keyless provider, even with one typed", () => {
+    const p = provider({ requires_key: false, has_key: false, takes_endpoint: false });
+    const req = verifyRequest(draft({ apiKey: "unused-typed-key" }), p);
+    expect(req?.api_key).toBeUndefined();
   });
 });
 
@@ -575,6 +615,18 @@ describe("statusLine", () => {
     expect(statusLine(p, undefined, now)).toEqual({ tone: "ok", text: "No key needed" });
   });
 
+  it("surfaces a catalog error for a keyless provider instead of 'No key needed'", () => {
+    const p = provider({ requires_key: false, has_key: false, key_state: "unverified" });
+    const c = catalog({ error: "connection refused" });
+    expect(statusLine(p, c, now)).toEqual({ tone: "error", text: "connection refused" });
+  });
+
+  it("counts listed models for a keyless provider with a catalog and no error", () => {
+    const p = provider({ requires_key: false, has_key: false, key_state: "unverified" });
+    const c = catalog({ models: [{ id: "llama3.2", source: "listed" }] });
+    expect(statusLine(p, c, now)).toEqual({ tone: "ok", text: "1 model" });
+  });
+
   it("flags an unreadable saved key as an error", () => {
     const p = provider({ requires_key: true, has_key: false, key_state: "unreadable" });
     const result = statusLine(p, undefined, now);
@@ -674,6 +726,8 @@ describe("selectsProvider", () => {
         translationProvider: "argos",
         openedFor: null,
         savedAnyway: false,
+        model: "gpt-4.1",
+        listed: ["gpt-4.1"],
       }),
     ).toBe(true);
   });
@@ -686,6 +740,8 @@ describe("selectsProvider", () => {
         translationProvider: "openai",
         openedFor: "gemini",
         savedAnyway: false,
+        model: "gpt-4.1",
+        listed: ["gpt-4.1"],
       }),
     ).toBe(true);
   });
@@ -698,6 +754,8 @@ describe("selectsProvider", () => {
         translationProvider: "argos",
         openedFor: null,
         savedAnyway: false,
+        model: "gpt-4.1",
+        listed: ["gpt-4.1"],
       }),
     ).toBe(false);
   });
@@ -710,6 +768,8 @@ describe("selectsProvider", () => {
         translationProvider: "argos",
         openedFor: null,
         savedAnyway: false,
+        model: "gpt-4.1",
+        listed: ["gpt-4.1"],
       }),
     ).toBe(false);
   });
@@ -722,6 +782,8 @@ describe("selectsProvider", () => {
         translationProvider: "argos",
         openedFor: null,
         savedAnyway: true,
+        model: "gpt-4.1",
+        listed: ["gpt-4.1"],
       }),
     ).toBe(false);
   });
@@ -734,6 +796,8 @@ describe("selectsProvider", () => {
         translationProvider: "openai",
         openedFor: null,
         savedAnyway: false,
+        model: "gpt-4.1",
+        listed: ["gpt-4.1"],
       }),
     ).toBe(false);
   });
@@ -746,6 +810,8 @@ describe("selectsProvider", () => {
         translationProvider: "openai",
         openedFor: null,
         savedAnyway: false,
+        model: "gpt-4.1",
+        listed: ["gpt-4.1"],
       }),
     ).toBe(false);
   });
@@ -758,7 +824,178 @@ describe("selectsProvider", () => {
         translationProvider: "openai",
         openedFor: "gemini",
         savedAnyway: false,
+        model: "gpt-4.1",
+        listed: ["gpt-4.1"],
       }),
     ).toBe(false);
+  });
+
+  it("switches onto an alias the key listed under its dated id", () => {
+    expect(
+      selectsProvider({
+        provider: provider({ id: "anthropic", has_key: false }),
+        update: { api_key: "sk-new" } as ProviderUpdate,
+        translationProvider: "argos",
+        openedFor: null,
+        savedAnyway: false,
+        model: "claude-haiku-4-5",
+        listed: ["claude-haiku-4-5-20251001"],
+      }),
+    ).toBe(true);
+  });
+
+  it("switches onto an alias the key listed under its tagged id", () => {
+    expect(
+      selectsProvider({
+        provider: provider({ id: "ollama", has_key: false }),
+        update: { api_key: "sk-new" } as ProviderUpdate,
+        translationProvider: "argos",
+        openedFor: null,
+        savedAnyway: false,
+        model: "llama3.2",
+        listed: ["llama3.2:latest"],
+      }),
+    ).toBe(true);
+  });
+
+  it("doesn't switch on a shared prefix without a '-' or ':' separator", () => {
+    // "gpt-4" is a prefix of "gpt-4o" but not followed by a separator, so it's
+    // a different model, not an alias.
+    expect(
+      selectsProvider({
+        provider: provider({ id: "openai", has_key: false }),
+        update: { api_key: "sk-new" } as ProviderUpdate,
+        translationProvider: "argos",
+        openedFor: null,
+        savedAnyway: false,
+        model: "gpt-4",
+        listed: ["gpt-4o"],
+      }),
+    ).toBe(false);
+  });
+
+  it("doesn't switch when only the model name extends a listed id, not the reverse", () => {
+    // Only a *listed* id may extend the saved model name (an alias resolving
+    // to a dated id); the saved model extending a shorter listed id doesn't count.
+    expect(
+      selectsProvider({
+        provider: provider({ id: "anthropic", has_key: false }),
+        update: { api_key: "sk-new" } as ProviderUpdate,
+        translationProvider: "argos",
+        openedFor: null,
+        savedAnyway: false,
+        model: "claude-haiku-4-5-20251001",
+        listed: ["claude-haiku-4-5"],
+      }),
+    ).toBe(false);
+  });
+});
+
+describe("selectsProvider: only onto a model the key can use", () => {
+  const base = {
+    provider: provider({ id: "openai", has_key: false }),
+    update: { api_key: "sk-new" } as ProviderUpdate,
+    translationProvider: "argos",
+    openedFor: null,
+    savedAnyway: false,
+  };
+
+  it("doesn't switch onto a model the key's listing doesn't have", () => {
+    // A saved `enabled_models` the new key can't run would fail every
+    // paragraph, while Argos would have kept working.
+    expect(selectsProvider({ ...base, model: "gpt-custom", listed: ["gpt-4.1"] })).toBe(false);
+  });
+
+  it("doesn't switch when the key's check listed nothing", () => {
+    expect(selectsProvider({ ...base, model: "gpt-4.1", listed: [] })).toBe(false);
+  });
+
+  it("doesn't switch translation when Settings was opened from the chat header", () => {
+    expect(
+      selectsProvider({
+        ...base,
+        translationProvider: "anthropic",
+        openedFor: "openai",
+        openedFrom: "answer",
+        model: "gpt-4.1",
+        listed: ["gpt-4.1"],
+      }),
+    ).toBe(false);
+  });
+});
+
+describe("selectsAnswerModel", () => {
+  const base = {
+    provider: provider({ id: "openai", has_key: false }),
+    update: { api_key: "sk-new" } as ProviderUpdate,
+    openedFor: "openai",
+    openedFrom: "answer" as const,
+    savedAnyway: false,
+    model: "gpt-4.1",
+    listed: ["gpt-4.1"],
+  };
+
+  it("makes the provider answer in chat when Settings was opened from the chat header for it", () => {
+    expect(selectsAnswerModel(base)).toBe(true);
+  });
+
+  it("doesn't when opened from the toolbar, or for another provider", () => {
+    expect(selectsAnswerModel({ ...base, openedFrom: "translation" })).toBe(false);
+    expect(selectsAnswerModel({ ...base, openedFor: "gemini" })).toBe(false);
+  });
+
+  it("doesn't on Save anyway, without a new key, for a provider that had one, or onto an unlisted model", () => {
+    expect(selectsAnswerModel({ ...base, savedAnyway: true })).toBe(false);
+    expect(selectsAnswerModel({ ...base, update: {} as ProviderUpdate })).toBe(false);
+    expect(
+      selectsAnswerModel({ ...base, provider: provider({ id: "openai", has_key: true }) }),
+    ).toBe(false);
+    expect(selectsAnswerModel({ ...base, listed: ["gpt-5.6-sol"] })).toBe(false);
+  });
+
+  it("makes the provider answer in chat onto an alias the key listed under its dated id", () => {
+    expect(
+      selectsAnswerModel({
+        ...base,
+        provider: provider({ id: "anthropic", has_key: false }),
+        openedFor: "anthropic",
+        model: "claude-haiku-4-5",
+        listed: ["claude-haiku-4-5-20251001"],
+      }),
+    ).toBe(true);
+  });
+});
+
+describe("rebaseDraft", () => {
+  it("follows the provider when the draft is untouched", () => {
+    // Choosing a translation model elsewhere moves the outgoing one into its
+    // provider's `enabled_models`; an idle card must show that, or its next
+    // Save writes the old list back.
+    const before = provider({ enabled_models: ["gpt-4.1"] });
+    const after = provider({ enabled_models: ["gpt-5.6-sol", "gpt-4.1"] });
+
+    expect(rebaseDraft(draftFrom(before), before, after)).toEqual(draftFrom(after));
+  });
+
+  it("keeps a draft the user has edited", () => {
+    const before = provider({ enabled_models: ["gpt-4.1"] });
+    const after = provider({ enabled_models: ["gpt-5.6-sol", "gpt-4.1"] });
+    const edited = draft({ apiKey: "sk-typed", enabled: ["gpt-4.1"] });
+
+    expect(rebaseDraft(edited, before, after)).toBe(edited);
+  });
+});
+
+describe("verifyRequest: the endpoint", () => {
+  it("always names the endpoint to check, unchanged or not, blank for the provider's own", () => {
+    // Left out, the sidecar would check the saved endpoint — the same one,
+    // today. Named, a check can never fall through to a different saved
+    // endpoint than the one the card shows.
+    const p = provider({ has_key: true, takes_endpoint: true, base_url: null });
+
+    expect(verifyRequest(draft(), p)).toEqual({ base_url: "" });
+    expect(verifyRequest(draft({ baseUrl: OLLAMA }), provider({ has_key: true, base_url: OLLAMA }))).toEqual({
+      base_url: OLLAMA,
+    });
   });
 });

@@ -55,6 +55,12 @@ _OPENAI_NON_CHAT = re.compile(
 # like its text models, but answer in audio or images, or need a tool loop.
 _GEMINI_NON_TEXT = re.compile(r"-(tts|image|native-audio|computer-use)(-|$)")
 
+# OpenAI's own endpoint, where the id filter above applies. It is sent
+# explicitly since #88 (`registry.endpoint_for`), so "no endpoint" can't be
+# what marks it; any other server — OpenRouter, Ollama, a proxy — names its
+# models its own way.
+_OPENAI_API = "https://api.openai.com/v1"
+
 # Both SDKs read a timeout in seconds. A listing is one small GET; the route's
 # own deadline (`catalog.PROBE_TIMEOUT_S`) sits above this.
 _TIMEOUT_S = 10
@@ -79,7 +85,7 @@ def list_openai_models(
         )
         for model in client.models.list()
     ]
-    if base_url is not None:
+    if base_url is not None and base_url.rstrip("/") != _OPENAI_API:
         # Ollama, LM Studio and proxies name models anything; `whisper-…` or
         # `…-audio` there may well be the chat model the user wants.
         return Listing(models=tuple(models))

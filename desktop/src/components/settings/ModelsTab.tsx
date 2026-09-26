@@ -28,7 +28,6 @@ import {
   useConfig,
   useOptions,
   useUpdateConfig,
-  useValidateCredentials,
   type OptionsResponse,
 } from "@/hooks/useConfig";
 import {
@@ -51,11 +50,14 @@ import {
   modelRows,
   needsVerify,
   providerUpdate,
+  rebaseDraft,
   seedEnabled,
+  selectsAnswerModel,
   selectsProvider,
   statusLine,
   toggleModel,
   verifyRequest,
+  type OpenedFrom,
   type ProviderDraft,
 } from "@/lib/provider-draft";
 import { cn } from "@/lib/utils";
@@ -68,6 +70,9 @@ interface ModelsTabProps {
   /** Opened from a picker for this provider: scroll to its card, and start
    *  in its key field when it has none. */
   focusProvider?: string;
+  /** Which picker opened it: a key saved there chooses the translation
+   *  model, or chat's answer model. */
+  openedFrom?: OpenedFrom;
 }
 
 /**
@@ -75,7 +80,7 @@ interface ModelsTabProps {
  * saving on its own. The sheet used to have a tab per provider and one Save
  * for all of them.
  */
-export function ModelsTab({ focusProvider }: ModelsTabProps) {
+export function ModelsTab({ focusProvider, openedFrom }: ModelsTabProps) {
   const providers = useProviders();
   const { data: options } = useOptions();
 
@@ -107,6 +112,7 @@ export function ModelsTab({ focusProvider }: ModelsTabProps) {
             provider={provider}
             focused={provider.id === focusProvider}
             focusProvider={focusProvider}
+            openedFrom={openedFrom}
           />
         ),
       )}
@@ -130,7 +136,7 @@ function CardHeader({ provider }: { provider: ProviderInfo }) {
           rel="noopener noreferrer"
           className="flex shrink-0 items-center gap-1 text-xs text-primary hover:underline"
         >
-          Get a key
+          {provider.requires_key ? "Get a key" : "Get it"}
           <ExternalLink className="h-3 w-3" />
         </a>
       )}
@@ -142,15 +148,26 @@ interface ProviderCardProps {
   provider: ProviderInfo;
   focused: boolean;
   focusProvider?: string;
+  openedFrom?: OpenedFrom;
 }
 
-function ProviderCard({ provider, focused, focusProvider }: ProviderCardProps) {
+function ProviderCard({ provider, focused, focusProvider, openedFrom }: ProviderCardProps) {
   const qc = useQueryClient();
   const { data: config } = useConfig();
   const updateConfig = useUpdateConfig();
   const save = useSaveProvider();
 
   const [draft, setDraft] = useState<ProviderDraft>(() => draftFrom(provider));
+  // The provider the draft was made from. When the sidecar's copy changes —
+  // another card's save, a model chosen in a picker moving one into this
+  // provider's `enabled_models` — an untouched draft follows it, or its next
+  // Save would write the old list back.
+  const baseline = useRef(provider);
+  useEffect(() => {
+    if (provider === baseline.current) return;
+    setDraft((current) => rebaseDraft(current, baseline.current, provider));
+    baseline.current = provider;
+  }, [provider]);
   const [showKey, setShowKey] = useState(false);
   // Why the last Verify or Save stopped, or what Verify found.
   const [notice, setNotice] = useState<{ ok: boolean; text: string } | null>(null);
@@ -164,7 +181,9 @@ function ProviderCard({ provider, focused, focusProvider }: ProviderCardProps) {
   const [modelsOpen, setModelsOpen] = useState(false);
   const [endpointOpen, setEndpointOpen] = useState(!!provider.base_url);
 
-  const catalog = useProviderModels(provider, modelsOpen && hasSavedKey(provider));
+  // A keyless server lists with no key (#88); a keyed provider needs its own.
+  const listable = !provider.requires_key || hasSavedKey(provider);
+  const catalog = useProviderModels(provider, modelsOpen && listable);
   // A listing of the saved key moves its state on the sidecar (`valid`,
   // `invalid`); refetch the providers so the status line follows.
   useEffect(() => {
@@ -189,7 +208,7 @@ function ProviderCard({ provider, focused, focusProvider }: ProviderCardProps) {
 
   /** List with the draft's key and endpoint. The listing is kept for the
    *  model list, and seeds the enabled models when none are yet. */
-  const runVerify = async (): Promise<ProviderDraft | null> => {
+  const runVerify = async (): Promise<{ draft: ProviderDraft; listed: string[] } | null> => {
     const request = verifyRequest(draft, provider);
     if (!request) {
       setNotice({ ok: false, text: "Enter an API key first." });
@@ -213,7 +232,7 @@ function ProviderCard({ provider, focused, focusProvider }: ProviderCardProps) {
       });
       setModelsOpen(true);
       setNotice({ ok: true, text: result.message });
-      return seeded;
+      return { draft: seeded, listed: [...result.models, ...result.hidden].map((m) => m.id) };
     } catch (e) {
       setNotice({ ok: false, text: (e as Error).message });
       return null;
@@ -238,6 +257,9 @@ function ProviderCard({ provider, focused, focusProvider }: ProviderCardProps) {
       return;
     }
     let toSave = draft;
+    // What a new key's check listed: selecting its provider needs the
+    // model among them. Nothing, when nothing was checked.
+    let listed: string[] = [];
     const anyway = saveAnyway;
     if (toVerify && !anyway) {
       const verified = await runVerify();
@@ -245,31 +267,40 @@ function ProviderCard({ provider, focused, focusProvider }: ProviderCardProps) {
         setSaveAnyway(true);
         return;
       }
-      toSave = verified;
+      toSave = verified.draft;
+      listed = verified.listed;
     }
     const body = providerUpdate(toSave, provider);
     if (Object.keys(body).length === 0) return;
     setBusy("saving");
     try {
       const saved = await save.mutateAsync({ id: provider.id, update: body });
-      const translating = config?.translation.model.provider ?? "";
       // Opened to add this provider's key, or still on the offline engine:
-      // a key that just listed its models is the one to translate with. The
-      // sidecar used to do this itself for `PUT /config`; `PUT /providers`
-      // leaves the choice to the caller.
+      // a key that just listed its models, with the model it runs among
+      // them, is the one to use. The sidecar used to do this itself for
+      // `PUT /config`; `PUT /providers` leaves the choice to the caller.
+      const selection = {
+        provider,
+        update: body,
+        openedFor: focusProvider,
+        openedFrom,
+        savedAnyway: anyway,
+        model: saved.model,
+        listed,
+      };
+      const ref = { provider: saved.id, model: saved.model };
       if (
         selectsProvider({
-          provider,
-          update: body,
-          translationProvider: translating,
-          openedFor: focusProvider,
-          savedAnyway: anyway,
+          ...selection,
+          translationProvider: config?.translation.model.provider ?? "",
         })
       ) {
-        await updateConfig.mutateAsync({
-          translation_model: { provider: saved.id, model: saved.model },
-        });
+        await updateConfig.mutateAsync({ translation_model: ref });
       }
+      if (selectsAnswerModel(selection)) {
+        await updateConfig.mutateAsync({ answer_model: ref });
+      }
+      baseline.current = saved;
       setDraft(draftFrom(saved));
       setTypedListing(null);
       setSaveAnyway(false);
@@ -400,7 +431,7 @@ function ProviderCard({ provider, focused, focusProvider }: ProviderCardProps) {
           <ModelList
             listing={listing}
             loading={catalog.isFetching && !listing}
-            canRefresh={savedKey && !typedListing}
+            canRefresh={listable && !typedListing}
             refreshing={catalog.isFetching}
             onRefresh={refresh}
             draft={draft}
@@ -613,15 +644,20 @@ function OfflineCard({
   provider: ProviderInfo;
   options: OptionsResponse | undefined;
 }) {
-  const validate = useValidateCredentials();
+  const [checking, setChecking] = useState(false);
   const [status, setStatus] = useState<{ valid: boolean; message: string } | null>(null);
   const pairs = pairLabels(options, provider);
 
+  // Verify, for an engine with no key and no models to list, checks its
+  // install: its language pack.
   const check = async () => {
+    setChecking(true);
     try {
-      setStatus(await validate.mutateAsync({ service: provider.id }));
+      setStatus(await verifyProvider(provider.id, {}));
     } catch (e) {
       setStatus({ valid: false, message: (e as Error).message });
+    } finally {
+      setChecking(false);
     }
   };
 
@@ -652,8 +688,8 @@ function OfflineCard({
         </div>
       )}
       <div className="flex flex-wrap items-center gap-3">
-        <Button variant="secondary" size="sm" onClick={check} disabled={validate.isPending}>
-          {validate.isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+        <Button variant="secondary" size="sm" onClick={check} disabled={checking}>
+          {checking && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
           Check install
         </Button>
         {status && (

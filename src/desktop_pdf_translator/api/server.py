@@ -38,7 +38,6 @@ from uvicorn.main import STARTUP_FAILURE
 
 from .. import __version__
 from ..config import TranslationService, get_settings
-from ..providers.registry import keyed_ids
 from ..utils import appdata_dir, configure_logging
 from .auth import init_token, require_token
 from .routes import config as config_routes
@@ -53,12 +52,11 @@ logger = logging.getLogger(__name__)
 
 
 def _should_prewarm_argos(settings) -> bool:
-    """Pre-warm Argos when it's the active default or the only usable backend.
-
-    - Preferred service is Argos → yes.
-    - No LLM API key configured anywhere → Argos is the inevitable fallback.
-    Otherwise skip so LLM-only users don't pay the extra RAM for the
-    CTranslate2 model.
+    """Pre-warm Argos when it is what a translation would run: chosen, or in
+    place of an LLM whose key is missing (`resolve_effective_service`).
+    Otherwise skip, so LLM users don't pay the extra RAM for the CTranslate2
+    model — a keyless local server (Ollama) included, which "no key anywhere"
+    used to count as Argos's turn (#88).
 
     Gated on the pack already being available either way. Pre-warming is a
     background convenience; it must never be what starts an 80 MB download, at
@@ -69,12 +67,10 @@ def _should_prewarm_argos(settings) -> bool:
 
     if not argos_pack_ready():
         return False
-    if settings.translation.model.provider == TranslationService.ARGOS:
-        return True
-    any_llm_key = any(
-        settings.has_api_key(TranslationService(s)) for s in keyed_ids()
-    )
-    return not any_llm_key
+    from ..translators.capabilities import resolve_effective_service
+
+    running = resolve_effective_service(settings, settings.translation.model.provider)
+    return running == TranslationService.ARGOS
 
 
 def _prewarm_argos() -> None:

@@ -40,6 +40,21 @@ export function draftFrom(provider: ProviderInfo): ProviderDraft {
   };
 }
 
+/**
+ * The draft once its provider has changed on the sidecar (another card's
+ * save, a model chosen in a picker): the new provider's own when the user
+ * hasn't touched this one, so an idle card never writes an old list back;
+ * otherwise the user's edits, as they are.
+ */
+export function rebaseDraft(
+  draft: ProviderDraft,
+  baseline: ProviderInfo,
+  next: ProviderInfo,
+): ProviderDraft {
+  const untouched = Object.keys(providerUpdate(draft, baseline)).length === 0;
+  return untouched ? draftFrom(next) : draft;
+}
+
 /** An endpoint the way the sidecar stores it: trimmed, with no trailing
  *  slash, so one server typed two ways compares equal. */
 export function normalizeEndpoint(value: string): string {
@@ -120,6 +135,8 @@ export function providerUpdate(draft: ProviderDraft, provider: ProviderInfo): Pr
  *  switching them needs no check; and a cleared key leaves nothing to check
  *  with, nor any key to send to a new endpoint. */
 export function needsVerify(draft: ProviderDraft, provider: ProviderInfo): boolean {
+  // A keyless server has no key to type; only a new endpoint is news.
+  if (!provider.requires_key) return endpointChanged(draft, provider);
   if (draft.clearKey) return false;
   return typedKey(draft) !== "" || endpointChanged(draft, provider);
 }
@@ -127,18 +144,20 @@ export function needsVerify(draft: ProviderDraft, provider: ProviderInfo): boole
 /**
  * The `POST /providers/{id}/verify` body for a draft: the typed key when there
  * is one, otherwise none, and the sidecar uses the saved key. `null` when
- * there is no key to check with.
+ * there is no key to check with — never for a keyless server.
  */
 export function verifyRequest(
   draft: ProviderDraft,
   provider: ProviderInfo,
 ): VerifyRequest | null {
+  const endpoint = provider.takes_endpoint
+    ? { base_url: normalizeEndpoint(draft.baseUrl) }
+    : {};
+  // A keyless server is always checkable: listing it needs no key (#88).
+  if (!provider.requires_key) return endpoint;
   const apiKey = draft.apiKey.trim();
   if (draft.clearKey || (!apiKey && !hasSavedKey(provider))) return null;
-  return {
-    ...(apiKey ? { api_key: apiKey } : {}),
-    ...(provider.takes_endpoint ? { base_url: normalizeEndpoint(draft.baseUrl) } : {}),
-  };
+  return { ...(apiKey ? { api_key: apiKey } : {}), ...endpoint };
 }
 
 /** Switch a model on (last in the list) or off, keeping the others' order:
@@ -231,6 +250,11 @@ export function timeAgo(iso: string, now: number): string {
   return days === 1 ? "1 day ago" : `${days} days ago`;
 }
 
+function countModels(catalog: ModelCatalog): string {
+  const count = catalog.models.filter((record) => record.source === "listed").length;
+  return `${count} ${count === 1 ? "model" : "models"}`;
+}
+
 export interface StatusLine {
   tone: "ok" | "error" | "muted";
   text: string;
@@ -242,7 +266,12 @@ export function statusLine(
   catalog: ModelCatalog | undefined,
   now: number,
 ): StatusLine {
-  if (!provider.requires_key) return { tone: "ok", text: "No key needed" };
+  if (!provider.requires_key) {
+    // A keyless server's listing says whether it is up (#88).
+    if (catalog?.error) return { tone: "error", text: catalog.error };
+    if (catalog) return { tone: "ok", text: countModels(catalog) };
+    return { tone: "ok", text: "No key needed" };
+  }
   if (provider.key_state === "unreadable") {
     return {
       tone: "error",
@@ -259,34 +288,73 @@ export function statusLine(
       ? ` · checked ${timeAgo(provider.last_verified_at, now)}`
       : "";
     if (!catalog) return { tone: "ok", text: `Verified${checked}` };
-    const count = catalog.models.filter((record) => record.source === "listed").length;
-    return { tone: "ok", text: `${count} ${count === 1 ? "model" : "models"}${checked}` };
+    return { tone: "ok", text: `${countModels(catalog)}${checked}` };
   }
   return { tone: "muted", text: "Not verified" };
 }
 
-/**
- * Whether saving a card also makes its provider the translation provider.
- *
- * Only for a new key that just listed its models — never on "Save anyway",
- * which saves a key the provider turned down — and when either translation is
- * still on the offline engine (an LLM wins once it has a working key; the
- * sidecar did this itself when keys were saved through `PUT /config`), or
- * Settings was opened from a picker's "Add an API key to use X…" for a
- * provider with no key, where the user came to translate with it.
- */
-export function selectsProvider(input: {
+/** Where Settings was opened from, for a provider's card: the toolbar's
+ *  translation picker or the chat header's. */
+export type OpenedFrom = "translation" | "answer";
+
+interface SelectionInput {
   /** As it was before the save. */
   provider: ProviderInfo;
   update: ProviderUpdate;
-  translationProvider: string;
   openedFor?: string | null;
+  openedFrom?: OpenedFrom;
   savedAnyway: boolean;
-}): boolean {
-  const { provider, update, translationProvider, openedFor, savedAnyway } = input;
-  if (!update.api_key || savedAnyway || translationProvider === provider.id) return false;
-  return (
-    translationProvider === OFFLINE_ENGINE ||
-    (openedFor === provider.id && !provider.has_key)
+  /** The model selecting the provider would choose: the one it runs. */
+  model: string;
+  /** What the new key's check listed, hidden models included. */
+  listed: readonly string[];
+}
+
+/** Whether a model name is one of the listed ids, allowing for aliases, as
+ *  `providers/listing.py:model_matches` does: Anthropic lists only
+ *  `claude-haiku-4-5-20251001` for the alias `claude-haiku-4-5`, and Ollama
+ *  `llama3.2:latest` for `llama3.2`. An exact match missed those and left an
+ *  upgraded user on Argos after saving a key that works. */
+function modelListed(model: string, listed: readonly string[]): boolean {
+  return listed.some(
+    (id) => id === model || (id.startsWith(model) && "-:".includes(id.charAt(model.length))),
   );
+}
+
+/** A new key that just listed its models, the model to choose among them:
+ *  never on "Save anyway", which saves a key the provider turned down, and
+ *  never onto a model the key can't use — a translator that fails every
+ *  paragraph, where Argos would have kept working. */
+function workingNewKey(input: SelectionInput): boolean {
+  return (
+    !!input.update.api_key && !input.savedAnyway && modelListed(input.model, input.listed)
+  );
+}
+
+/** Opened from a picker's "Add an API key to use X…" for a provider with no
+ *  key: the user came to use it there. */
+function openedToAdd(input: SelectionInput, from: OpenedFrom): boolean {
+  return (
+    input.openedFor === input.provider.id &&
+    !input.provider.has_key &&
+    (input.openedFrom ?? "translation") === from
+  );
+}
+
+/**
+ * Whether saving a card also makes its provider the translation provider:
+ * with a working new key (`workingNewKey`), when translation is still on the
+ * offline engine — an LLM wins once it has one, as the sidecar did itself for
+ * keys saved through `PUT /config` — or when Settings was opened from the
+ * toolbar picker to add this provider's key.
+ */
+export function selectsProvider(input: SelectionInput & { translationProvider: string }): boolean {
+  if (!workingNewKey(input) || input.translationProvider === input.provider.id) return false;
+  return input.translationProvider === OFFLINE_ENGINE || openedToAdd(input, "translation");
+}
+
+/** Whether saving a card makes its provider answer in chat: Settings was
+ *  opened from the chat header's picker to add its key, and the key works. */
+export function selectsAnswerModel(input: SelectionInput): boolean {
+  return workingNewKey(input) && openedToAdd(input, "answer");
 }
