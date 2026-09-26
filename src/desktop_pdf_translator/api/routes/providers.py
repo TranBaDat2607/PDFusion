@@ -6,11 +6,10 @@ a 401/403 there says the key is wrong without a completion being paid for.
 What a listing cannot see (a key with no credit, a model the account may not
 run) is in architecture-notes § "LLM endpoints and models".
 
-`/config/validate` and `/config/models/{service}` are thin wrappers over
-`verify` and `catalog_for` here, until the per-service API is retired (#88).
-So is the key and endpoint half of `PUT /config`: it changes them through
-`endpoint_change_refusal`, `apply_key_and_endpoint` and `save_settings` below,
-the same three `PUT /providers/{id}` uses (#85).
+This is the only place a key or an endpoint changes. `PUT /config` carried a
+block per provider, and `/config/validate` and `/config/models/{service}`
+wrapped `verify` and `catalog_for` here, until #88 retired that per-service
+API.
 """
 
 import asyncio
@@ -154,13 +153,32 @@ def resolve_probe_target(
     return saved.api_key or None, base_url, True
 
 
-def _keyed_spec(service: TranslationService) -> ProviderSpec:
-    spec = provider(service.value)
-    if not spec.requires_key:
-        raise HTTPException(
-            status_code=422, detail=f"{spec.label} has no API key to check."
-        )
-    return spec
+def check_offline_engine(spec: ProviderSpec) -> Tuple[bool, str]:
+    """Whether an engine with nothing to list (Argos) is installed. Blocking.
+
+    Its translator's own check reads the installed language pack and sends
+    nothing anywhere. The one seam the route tests replace.
+    """
+    from ...translators.factory import TranslatorFactory
+
+    translator = TranslatorFactory.create_translator(
+        service=TranslationService(spec.id), lang_in="en", lang_out="vi"
+    )
+    return translator.validate_configuration()
+
+
+async def _verify_offline(spec: ProviderSpec, typed_key: Optional[str]) -> VerifyResponse:
+    if typed_key:
+        raise HTTPException(status_code=422, detail=f"{spec.label} takes no API key.")
+    # Off the loop, but without the listing's deadline: the first check
+    # imports argostranslate, which is slow on a cold machine without being a
+    # call that can hang.
+    try:
+        installed, message = await asyncio.to_thread(check_offline_engine, spec)
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("Checking %s failed", spec.id)
+        return VerifyResponse(valid=False, key_state="unverified", message=str(exc))
+    return VerifyResponse(valid=installed, key_state="unverified", message=message)
 
 
 # ---------------------------------------------------------------------------
@@ -178,9 +196,12 @@ async def verify(
 
     The catalog is written only when what was listed is the saved key at the
     saved endpoint: a typed key the user may yet discard must not mark the
-    saved one valid, or invalid.
+    saved one valid, or invalid. An engine with nothing to list (Argos) is
+    checked for its install instead.
     """
-    spec = _keyed_spec(service)
+    spec = provider(service.value)
+    if spec.lister is None:
+        return await _verify_offline(spec, typed_key)
     api_key, base_url, saved_pair = resolve_probe_target(
         spec, _saved(spec.id), typed_key, typed_base_url
     )

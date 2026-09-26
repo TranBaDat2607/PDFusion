@@ -2,8 +2,9 @@
 
 Settings are per provider now (`[providers.<id>]`), and a model is chosen as
 `{provider, model}`. `PUT /providers/{id}` edits one provider's table;
-`PUT /config` takes `translation_model` and `answer_model`, and still accepts
-the per-service blocks and `preferred_service` as a compatibility layer.
+`PUT /config` takes `translation_model` and `answer_model`. The per-service
+blocks and `preferred_service` it accepted as a compatibility layer were
+retired in #88, and their key rules ported here.
 
 The key rules carry over unchanged from `/config` (#32, #84): a saved key only
 ever goes to the endpoint it was saved for, a key this process cannot decrypt
@@ -270,6 +271,102 @@ def test_changing_the_endpoint_needs_the_key_again(client: TestClient, manager: 
     assert manager.settings.providers["openai"].base_url is None
 
 
+# Ported from `test_config_api.py` when `PUT /config`'s per-provider blocks
+# were retired (#88): each rule held there, and holds here.
+
+
+@pytest.mark.parametrize("typed_key, saved_key", [("ollama", "ollama"), ("", None)])
+def test_a_key_from_the_environment_never_reaches_a_new_endpoint(
+    client: TestClient,
+    manager: ConfigManager,
+    monkeypatch: pytest.MonkeyPatch,
+    typed_key: str,
+    saved_key: str | None,
+):
+    """The request carries a key, so the change is allowed. The key from the
+    environment replaces the saved one on every start, and would then be sent
+    to the new endpoint."""
+    monkeypatch.setenv("OPENAI_API_KEY", KEY)
+
+    response = put_provider(client, "openai", {"api_key": typed_key, "base_url": ATTACKER})
+
+    assert response.status_code == 200
+    settings = reloaded(manager)
+    assert settings.providers["openai"].base_url == ATTACKER
+    assert (settings.providers["openai"].api_key or None) == saved_key
+
+
+def test_returning_to_the_providers_own_endpoint_needs_the_key_too(
+    client: TestClient, manager: ConfigManager
+):
+    assert put_provider(
+        client, "anthropic", {"api_key": "ollama", "base_url": "http://localhost:11434"}
+    ).status_code == 200
+
+    assert put_provider(client, "anthropic", {"base_url": ""}).status_code == 422
+    assert manager.settings.providers["anthropic"].base_url == "http://localhost:11434"
+
+
+def test_the_same_endpoint_typed_again_is_not_a_change(client: TestClient):
+    put_provider(client, "openai", {"api_key": "ollama", "base_url": OLLAMA})
+
+    assert put_provider(client, "openai", {"base_url": f"  {OLLAMA}/ "}).status_code == 200
+
+
+def test_an_endpoint_needs_no_key_when_none_is_saved(
+    client: TestClient, manager: ConfigManager
+):
+    assert put_provider(client, "openai", {"base_url": OLLAMA}).status_code == 200
+    assert manager.settings.providers["openai"].base_url == OLLAMA
+
+
+@pytest.mark.parametrize(
+    "base_url", ["localhost:11434", "ftp://example.com", "http://", "/"]
+)
+def test_an_endpoint_must_be_a_web_url(client: TestClient, base_url: str):
+    assert put_provider(client, "openai", {"base_url": base_url}).status_code == 422
+
+
+def test_model_names_are_trimmed(client: TestClient, manager: ConfigManager):
+    """Any name, not only a listed one: a local server's models are in no list."""
+    response = put_provider(client, "openai", {"enabled_models": ["  llama3.2:3b "]})
+
+    assert response.status_code == 200
+    assert manager.settings.providers["openai"].enabled_models == ["llama3.2:3b"]
+
+
+def test_a_blank_model_name_is_refused(client: TestClient):
+    assert put_provider(client, "gemini", {"enabled_models": ["   "]}).status_code == 422
+
+
+def test_a_refused_save_keeps_the_catalog(
+    client: TestClient, manager: ConfigManager, store: ModelCatalog
+):
+    seed(manager, providers={"openai": {"api_key": KEY}})
+    fill(store)
+
+    assert put_provider(client, "openai", {"base_url": ATTACKER}).status_code == 422
+
+    assert store.get("openai", None) is not None
+
+
+def test_a_save_that_fails_keeps_the_catalog(
+    client: TestClient,
+    manager: ConfigManager,
+    store: ModelCatalog,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """The file still holds the old key, so its rows still describe it: the
+    catalog is only dropped once the new key is on disk."""
+    seed(manager, providers={"openai": {"api_key": KEY}})
+    fill(store)
+    monkeypatch.setattr(manager, "save_settings", lambda settings: False)
+
+    assert put_provider(client, "openai", {"api_key": "sk-new"}).status_code == 500
+
+    assert store.get("openai", None) is not None
+
+
 def test_changing_the_endpoint_needs_a_key_that_could_not_be_read_again(
     client: TestClient, manager: ConfigManager, unreadable_key: str
 ):
@@ -411,8 +508,29 @@ def test_the_translation_model_is_saved(client: TestClient, manager: ConfigManag
     assert response.status_code == 200
     translation = response.json()["translation"]
     assert translation["model"] == ref
-    assert translation["preferred_service"] == "anthropic"
     assert reloaded(manager).translation.model == config_models.ModelRef(**ref)
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        {"openai": {"api_key": "sk-new"}},
+        {"anthropic": {"base_url": "http://localhost:11434"}},
+        {"preferred_service": "gemini"},
+    ],
+    ids=["key-block", "endpoint-block", "preferred-service"],
+)
+def test_the_retired_per_provider_fields_are_refused(
+    client: TestClient, manager: ConfigManager, body: dict
+):
+    """Retired in #88. Ignored, a client older than that would get a 200 for a
+    key that was never saved, and go on believing it was."""
+    before = manager.config_file.read_text(encoding="utf-8") if manager.config_file.exists() else None
+
+    assert put_config(client, body).status_code == 422
+
+    after = manager.config_file.read_text(encoding="utf-8") if manager.config_file.exists() else None
+    assert after == before
 
 
 def test_a_translation_model_with_an_unknown_provider_is_refused(client: TestClient):
@@ -454,113 +572,14 @@ def test_an_answer_model_left_out_is_left_as_it_is(client: TestClient, manager: 
     assert reloaded(manager).rag.answer_model == config_models.ModelRef(**ref)
 
 
-def test_the_translation_model_wins_over_a_legacy_preferred_service(
-    client: TestClient, manager: ConfigManager
-):
-    ref = {"provider": "openai", "model": "gpt-5.6-luna"}
-
-    response = put_config(client, {"preferred_service": "gemini", "translation_model": ref})
-
-    assert response.status_code == 200
-    assert response.json()["translation"]["model"] == ref
-    assert reloaded(manager).translation.model == config_models.ModelRef(**ref)
-
-
 # ---------------------------------------------------------------------------
 # PUT /config / GET /config: the per-service compatibility layer
 # ---------------------------------------------------------------------------
 
 
-def test_a_legacy_service_and_model_set_the_translation_model(
-    client: TestClient, manager: ConfigManager
-):
-    response = put_config(
-        client, {"preferred_service": "openai", "openai": {"model": "gpt-5.6-terra"}}
-    )
-
-    assert response.status_code == 200
-    config = response.json()
-    assert config["translation"]["model"] == {"provider": "openai", "model": "gpt-5.6-terra"}
-    assert config["translation"]["preferred_service"] == "openai"
-    assert config["openai"]["model"] == "gpt-5.6-terra"
-    assert reloaded(manager).translation.model == config_models.ModelRef(
-        provider="openai", model="gpt-5.6-terra"
-    )
-
-
-def test_a_model_for_another_provider_leaves_translation_alone(
-    client: TestClient, manager: ConfigManager
-):
-    seed(manager, translation={"model": {"provider": "openai", "model": "gpt-4.1"}})
-
-    response = put_config(client, {"gemini": {"model": "gemini-x"}})
-
-    assert response.status_code == 200
-    config = get_config(client)
-    assert config["gemini"]["model"] == "gemini-x"
-    assert config["translation"]["model"] == {"provider": "openai", "model": "gpt-4.1"}
-    assert reloaded(manager).model_for("gemini") == "gemini-x"
-
-
-def test_get_config_reports_each_providers_current_model(
-    client: TestClient, manager: ConfigManager
-):
-    seed(
-        manager,
-        providers={"anthropic": {"enabled_models": ["claude-opus-5", "claude-sonnet-4-6"]}},
-        translation={"model": {"provider": "openai", "model": "gpt-5.6-sol"}},
-        rag={"answer_model": {"provider": "anthropic", "model": "claude-opus-5"}},
-    )
-
-    config = get_config(client)
-
-    assert config["openai"]["model"] == "gpt-5.6-sol"
-    assert config["anthropic"]["model"] == "claude-opus-5"
-    assert config["argos"]["model"] == "argostranslate"
-    assert config["translation"]["preferred_service"] == "openai"
-    assert config["translation"]["model"] == {"provider": "openai", "model": "gpt-5.6-sol"}
-    assert config["rag"]["answer_model"] == {"provider": "anthropic", "model": "claude-opus-5"}
-
-
 # ---------------------------------------------------------------------------
 # promotion off Argos
 # ---------------------------------------------------------------------------
-
-
-def test_promotion_checks_the_providers_current_model_and_translates_with_it(
-    client: TestClient, manager: ConfigManager, lister: FakeLister
-):
-    """The model checked is `model_for(openai)` — the first enabled model — not
-    the registry default, which this listing does not have."""
-    seed(manager, providers={"openai": {"enabled_models": ["gpt-5.6-luna"]}})
-    lister.result = Listing(models=(ListedModel(id="gpt-5.6-luna"),))
-
-    response = put_config(client, {"openai": {"api_key": KEY}})
-
-    assert response.status_code == 200
-    assert lister.calls == [("openai", KEY, None)]
-    assert response.json()["translation"]["model"] == {
-        "provider": "openai",
-        "model": "gpt-5.6-luna",
-    }
-    assert reloaded(manager).translation.model.provider == "openai"
-
-
-def test_no_promotion_when_the_providers_current_model_is_not_listed(
-    client: TestClient, manager: ConfigManager, lister: FakeLister
-):
-    """The listing has the registry default but not the model the user picked
-    for OpenAI, so OpenAI would fail every paragraph: stay on Argos."""
-    seed(manager, providers={"openai": {"enabled_models": ["gpt-5.6-luna"]}})
-    lister.result = Listing(models=(ListedModel(id="gpt-4.1"),))
-
-    response = put_config(client, {"openai": {"api_key": KEY}})
-
-    assert response.status_code == 200
-    assert response.json()["translation"]["model"]["provider"] == "argos"
-    saved = reloaded(manager)
-    assert saved.translation.model.provider == "argos"
-    assert saved.providers["openai"].api_key == KEY
 
 
 # ---------------------------------------------------------------------------

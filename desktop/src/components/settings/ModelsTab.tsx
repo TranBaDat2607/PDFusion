@@ -28,7 +28,6 @@ import {
   useConfig,
   useOptions,
   useUpdateConfig,
-  useValidateCredentials,
   type OptionsResponse,
 } from "@/hooks/useConfig";
 import {
@@ -613,15 +612,20 @@ function OfflineCard({
   provider: ProviderInfo;
   options: OptionsResponse | undefined;
 }) {
-  const validate = useValidateCredentials();
+  const [checking, setChecking] = useState(false);
   const [status, setStatus] = useState<{ valid: boolean; message: string } | null>(null);
   const pairs = pairLabels(options, provider);
 
+  // Verify, for an engine with no key and no models to list, checks its
+  // install: its language pack.
   const check = async () => {
+    setChecking(true);
     try {
-      setStatus(await validate.mutateAsync({ service: provider.id }));
+      setStatus(await verifyProvider(provider.id, {}));
     } catch (e) {
       setStatus({ valid: false, message: (e as Error).message });
+    } finally {
+      setChecking(false);
     }
   };
 
@@ -652,8 +656,8 @@ function OfflineCard({
         </div>
       )}
       <div className="flex flex-wrap items-center gap-3">
-        <Button variant="secondary" size="sm" onClick={check} disabled={validate.isPending}>
-          {validate.isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+        <Button variant="secondary" size="sm" onClick={check} disabled={checking}>
+          {checking && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
           Check install
         </Button>
         {status && (

@@ -1,41 +1,6 @@
 {
   "components": {
     "schemas": {
-      "APIKeyMaskedSettings": {
-        "description": "Service config with the API key masked. The frontend never sees real keys.",
-        "properties": {
-          "base_url": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Base Url"
-          },
-          "extra": {
-            "additionalProperties": true,
-            "title": "Extra",
-            "type": "object"
-          },
-          "has_key": {
-            "title": "Has Key",
-            "type": "boolean"
-          },
-          "model": {
-            "title": "Model",
-            "type": "string"
-          }
-        },
-        "required": [
-          "has_key",
-          "model"
-        ],
-        "title": "APIKeyMaskedSettings",
-        "type": "object"
-      },
       "AskProgressPayload": {
         "properties": {
           "message": {
@@ -645,24 +610,12 @@
       },
       "ConfigResponse": {
         "properties": {
-          "anthropic": {
-            "$ref": "#/components/schemas/APIKeyMaskedSettings"
-          },
-          "argos": {
-            "$ref": "#/components/schemas/APIKeyMaskedSettings"
-          },
           "debug_mode": {
             "title": "Debug Mode",
             "type": "boolean"
           },
-          "gemini": {
-            "$ref": "#/components/schemas/APIKeyMaskedSettings"
-          },
           "gui": {
             "$ref": "#/components/schemas/GUISettings"
-          },
-          "openai": {
-            "$ref": "#/components/schemas/APIKeyMaskedSettings"
           },
           "processing": {
             "$ref": "#/components/schemas/ProcessingSettings"
@@ -675,10 +628,6 @@
           }
         },
         "required": [
-          "openai",
-          "gemini",
-          "anthropic",
-          "argos",
           "translation",
           "rag",
           "gui",
@@ -689,21 +638,12 @@
         "type": "object"
       },
       "ConfigUpdateRequest": {
+        "additionalProperties": false,
         "properties": {
           "answer_model": {
             "anyOf": [
               {
                 "$ref": "#/components/schemas/ModelRef"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "anthropic": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/EndpointCredentialUpdate"
               },
               {
                 "type": "null"
@@ -763,16 +703,6 @@
               }
             ]
           },
-          "gemini": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/ServiceCredentialUpdate"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
           "max_file_size_mb": {
             "anyOf": [
               {
@@ -811,28 +741,6 @@
               }
             ],
             "title": "Max Parallel Chunks"
-          },
-          "openai": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/EndpointCredentialUpdate"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "preferred_service": {
-            "anyOf": [
-              {
-                "description": "A provider's id, as GET /providers lists them",
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Preferred Service"
           },
           "translation_model": {
             "anyOf": [
@@ -935,72 +843,6 @@
         "description": "The terminal `cancelled` event on both RAG streams \u2014 `api/routes/rag.py`\nsends a literal `{}` for it today.",
         "properties": {},
         "title": "EmptyPayload",
-        "type": "object"
-      },
-      "EndpointCredentialUpdate": {
-        "description": "For a service that can talk to another server speaking its API: Ollama,\nLM Studio, a proxy (#32).\n\n`base_url=None` leaves the endpoint unchanged and `\"\"` returns to the\nprovider's own. Changing it while a key is saved needs the key in the same\nupdate, because a saved key is only ever sent to the endpoint it was saved\nfor (`routes/config.py:update_config`).",
-        "properties": {
-          "api_key": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Api Key"
-          },
-          "base_url": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Base Url"
-          },
-          "model": {
-            "anyOf": [
-              {
-                "maxLength": 200,
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Model"
-          }
-        },
-        "title": "EndpointCredentialUpdate",
-        "type": "object"
-      },
-      "EndpointModelsResponse": {
-        "description": "The models a service's saved endpoint says it serves.\n\nA failure is `error`, not an HTTP error: a local server that isn't running\nyet is ordinary, and the picker still offers the saved model without it.",
-        "properties": {
-          "error": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Error"
-          },
-          "models": {
-            "items": {
-              "type": "string"
-            },
-            "title": "Models",
-            "type": "array"
-          }
-        },
-        "title": "EndpointModelsResponse",
         "type": "object"
       },
       "EngineAssetGroup": {
@@ -1425,7 +1267,7 @@
         "type": "object"
       },
       "ModelCatalogResponse": {
-        "description": "The models the saved key can use at the saved endpoint.\n\nA failure is `error` in a 200, as with `EndpointModelsResponse`: a local\nserver that isn't up yet is ordinary, and `models` still carries the saved\nmodel (and, on the provider's own endpoint, the suggestions).",
+        "description": "The models the saved key can use at the saved endpoint.\n\nA failure is `error` in a 200: a local server that isn't up yet is ordinary, and `models` still carries the saved\nmodel (and, on the provider's own endpoint, the suggestions).",
         "properties": {
           "error": {
             "anyOf": [
@@ -2271,36 +2113,6 @@
         "title": "ResetIndexesResponse",
         "type": "object"
       },
-      "ServiceCredentialUpdate": {
-        "description": "Update payload for one service. `api_key=None` means leave unchanged;\n`api_key=\"\"` means clear it. `model` is any name the provider serves, not\nonly one `/config/options` suggests.",
-        "properties": {
-          "api_key": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Api Key"
-          },
-          "model": {
-            "anyOf": [
-              {
-                "maxLength": 200,
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Model"
-          }
-        },
-        "title": "ServiceCredentialUpdate",
-        "type": "object"
-      },
       "ServiceOption": {
         "properties": {
           "code": {
@@ -2432,7 +2244,7 @@
         "type": "object"
       },
       "TranslationConfig": {
-        "description": "`[translation]` as the frontend reads it: the settings, plus\n`preferred_service` \u2014 `model.provider` \u2014 for a client older than #86.",
+        "description": "`[translation]` as the frontend reads it.",
         "properties": {
           "cache_max_size_mb": {
             "default": 500.0,
@@ -2507,11 +2319,6 @@
             "title": "Pdf Cache Max Size Mb",
             "type": "number"
           },
-          "preferred_service": {
-            "description": "A provider's id, as GET /providers lists them",
-            "title": "Preferred Service",
-            "type": "string"
-          },
           "preserve_formatting": {
             "default": true,
             "description": "Preserve PDF formatting",
@@ -2531,8 +2338,7 @@
           "cache_translated_pdfs",
           "pdf_cache_max_size_mb",
           "preserve_formatting",
-          "min_text_length",
-          "preferred_service"
+          "min_text_length"
         ],
         "title": "TranslationConfig",
         "type": "object"
@@ -2569,73 +2375,6 @@
           "output_tokens"
         ],
         "title": "TranslationEstimate",
-        "type": "object"
-      },
-      "ValidateRequest": {
-        "description": "What to check against the provider. Whatever is left out comes from the\nsaved settings, and the saved key is only checked against the saved\nendpoint: naming another one needs the key typed alongside it.",
-        "properties": {
-          "api_key": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Api Key"
-          },
-          "base_url": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Base Url"
-          },
-          "model": {
-            "anyOf": [
-              {
-                "maxLength": 200,
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Model"
-          },
-          "service": {
-            "description": "A provider's id, as GET /providers lists them",
-            "title": "Service",
-            "type": "string"
-          }
-        },
-        "required": [
-          "service"
-        ],
-        "title": "ValidateRequest",
-        "type": "object"
-      },
-      "ValidateResponse": {
-        "properties": {
-          "message": {
-            "title": "Message",
-            "type": "string"
-          },
-          "valid": {
-            "title": "Valid",
-            "type": "boolean"
-          }
-        },
-        "required": [
-          "valid",
-          "message"
-        ],
-        "title": "ValidateResponse",
         "type": "object"
       },
       "ValidationError": {
@@ -2881,6 +2620,7 @@
         ]
       },
       "put": {
+        "description": "Save the models chosen, the languages, the limits and the switches.\n\nNo key or endpoint changes here, so nothing here can send a key anywhere\nnew; `PUT /providers/{id}` is where those change, under the rule that a\nsaved key only goes to the endpoint it was saved for.",
         "operationId": "update_config_config_put",
         "parameters": [
           {
@@ -3064,66 +2804,6 @@
         ]
       }
     },
-    "/config/models/{service}": {
-      "get": {
-        "description": "The ids the saved key can use at the saved endpoint.\n\nA wrapper over the catalog (`GET /providers/{id}/models`) for the\ntoolbar's model picker: listed models only \u2014 the picker adds the saved\nmodel and, without a list, the suggestions itself. Always the saved key\nwith the saved endpoint, the pair `PUT /config` keeps together, so this\ncan't send a key anywhere new.",
-        "operationId": "list_endpoint_models_config_models__service__get",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "service",
-            "required": true,
-            "schema": {
-              "description": "A provider's id, as GET /providers lists them",
-              "title": "Service",
-              "type": "string"
-            }
-          },
-          {
-            "in": "header",
-            "name": "authorization",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Authorization"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/EndpointModelsResponse"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "List Endpoint Models",
-        "tags": [
-          "config"
-        ]
-      }
-    },
     "/config/options": {
       "get": {
         "operationId": "get_options_config_options_get",
@@ -3168,66 +2848,6 @@
           }
         },
         "summary": "Get Options",
-        "tags": [
-          "config"
-        ]
-      }
-    },
-    "/config/validate": {
-      "post": {
-        "description": "Check credentials with the provider, by listing the key's models.\n\nA wrapper over `POST /providers/{id}/verify`. Whatever the request leaves\nout comes from the saved settings: the key, the model, the endpoint. The\nsaved key is only sent to the saved endpoint, the rule `PUT /config`\nkeeps; checking another endpoint needs the key typed alongside it.",
-        "operationId": "validate_credentials_config_validate_post",
-        "parameters": [
-          {
-            "in": "header",
-            "name": "authorization",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Authorization"
-            }
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/ValidateRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ValidateResponse"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Validate Credentials",
         "tags": [
           "config"
         ]

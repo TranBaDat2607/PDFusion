@@ -655,8 +655,42 @@ def test_gemini_ignores_an_endpoint(
     assert lister.calls == [("gemini", KEY, None)]
 
 
-def test_argos_has_no_key_to_verify(client: TestClient, lister: FakeLister):
-    assert verify(client, "argos", {}).status_code == 422
+def test_verifying_argos_checks_its_install(
+    client: TestClient, lister: FakeLister, monkeypatch: pytest.MonkeyPatch
+):
+    """Argos has no key and no model list; what can be wrong with it is its
+    language pack. The check moved here from `POST /config/validate` (#88)."""
+    checked = []
+
+    def check(spec):
+        checked.append(spec.id)
+        return True, "Argos is installed: English → Vietnamese."
+
+    monkeypatch.setattr(providers_routes, "check_offline_engine", check)
+
+    response = verify(client, "argos", {})
+
+    assert response.status_code == 200
+    assert response.json()["valid"] is True
+    assert response.json()["message"] == "Argos is installed: English → Vietnamese."
+    assert checked == ["argos"]
+    assert lister.calls == []
+
+
+def test_an_argos_install_that_fails_its_check_is_not_valid(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setattr(
+        providers_routes, "check_offline_engine", lambda spec: (False, "No language pack")
+    )
+
+    body = verify(client, "argos", {}).json()
+
+    assert (body["valid"], body["message"]) == (False, "No language pack")
+
+
+def test_argos_takes_no_key_to_verify(client: TestClient, lister: FakeLister):
+    assert verify(client, "argos", {"api_key": "sk-anything"}).status_code == 422
     assert lister.calls == []
 
 
@@ -782,18 +816,6 @@ def test_verifying_anything_else_leaves_the_catalog_alone(
 # ---------------------------------------------------------------------------
 
 
-def test_the_listing_a_promotion_made_shows_the_key_as_valid(
-    client: TestClient, lister: FakeLister
-):
-    """The key was just listed; asking again on the next screen would be a
-    second round-trip for nothing."""
-    response = client.put("/config", json={"openai": {"api_key": KEY}}, headers=AUTH)
-
-    assert response.status_code == 200
-    assert lister.calls == [("openai", KEY, None)]
-    assert providers(client)["openai"]["key_state"] == "valid"
-
-
 # ---------------------------------------------------------------------------
 # never generates (#84's acceptance criterion)
 # ---------------------------------------------------------------------------
@@ -805,26 +827,31 @@ def test_no_flow_that_checks_a_key_generates_text(
     lister: FakeLister,
     monkeypatch: pytest.MonkeyPatch,
 ):
-    """Verify, Save (`/config/validate`), the Argos → LLM promotion and the
-    model pickers each check a key by listing, and none of them builds a
-    translator or asks one to validate — which sent a "Hello" completion."""
+    """The Models page's Verify & save, its model list and its Refresh each
+    check a key by listing, and none of them builds a translator or asks one
+    to validate — which sent a "Hello" completion. (`/config/validate` and the
+    Argos → LLM promotion in `PUT /config`, which this also covered, were
+    retired in #88; the promotion is the Models page's now, and lists nothing
+    of its own.)"""
     guard = install_full_guard(monkeypatch)
     lister.result = ANTHROPIC_LISTING
 
-    # Auto-promotion: first key saved while still on Argos.
-    assert client.put("/config", json={"anthropic": {"api_key": KEY}}, headers=AUTH).status_code == 200
-    # Save's check.
-    assert client.post(
-        "/config/validate", json={"service": "anthropic"}, headers=AUTH
+    # Verify & save: the typed key's check, then the save.
+    assert verify(client, "anthropic", {"api_key": KEY}).status_code == 200
+    assert client.put("/providers/anthropic", json={"api_key": KEY}, headers=AUTH).status_code == 200
+    # Selecting the provider that key belongs to.
+    assert client.put(
+        "/config",
+        json={"translation_model": {"provider": "anthropic", "model": "claude-sonnet-4-6"}},
+        headers=AUTH,
     ).status_code == 200
-    assert guard.calls == []
-    # Verify.
+    # Verify again with the saved key, the model list and its Refresh.
     assert verify(client, "anthropic", {"model": "claude-sonnet-4-6"}).status_code == 200
-    # The model pickers.
+    assert models(client, "anthropic").status_code == 200
     assert models(client, "anthropic", refresh=True).status_code == 200
-    assert client.get("/config/models/anthropic", headers=AUTH).status_code == 200
 
     assert guard.calls == []
-    # Each of the first four listed (the last may be served from the catalog).
-    assert len(lister.calls) >= 4
+    # Every step but the save and the choice listed (the list may be served
+    # from the catalog the saved key's Verify filled).
+    assert len(lister.calls) >= 3
     assert all(call == ("anthropic", KEY, None) for call in lister.calls)

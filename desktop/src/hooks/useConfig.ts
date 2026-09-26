@@ -18,8 +18,6 @@ export type LanguageOption = components["schemas"]["LanguageOption"];
 export type ServiceOption = components["schemas"]["ServiceOption"];
 export type OptionsResponse = components["schemas"]["OptionsResponse"];
 export type ConfigUpdate = components["schemas"]["ConfigUpdateRequest"];
-export type ValidateRequest = components["schemas"]["ValidateRequest"];
-export type ValidateResponse = components["schemas"]["ValidateResponse"];
 
 export function useConfig() {
   return useQuery({
@@ -63,16 +61,4 @@ export function useUpdateConfig() {
       }
     },
   });
-}
-
-/** Check credentials with the provider, by listing the key's models (never a
- *  completion) and looking the model up there. Whatever the request leaves out
- *  (the key, the model, the endpoint) the sidecar takes from the saved
- *  settings, and it sends a saved key only to the saved endpoint. */
-export function validateCredentials(input: ValidateRequest) {
-  return api.post<ValidateResponse>("/config/validate", input);
-}
-
-export function useValidateCredentials() {
-  return useMutation({ mutationFn: validateCredentials });
 }

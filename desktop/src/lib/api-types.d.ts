@@ -30,7 +30,14 @@ export interface paths {
         };
         /** Get Config */
         get: operations["get_config_config_get"];
-        /** Update Config */
+        /**
+         * Update Config
+         * @description Save the models chosen, the languages, the limits and the switches.
+         *
+         *     No key or endpoint changes here, so nothing here can send a key anywhere
+         *     new; `PUT /providers/{id}` is where those change, under the rule that a
+         *     saved key only goes to the endpoint it was saved for.
+         */
         put: operations["update_config_config_put"];
         post?: never;
         delete?: never;
@@ -65,32 +72,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/config/models/{service}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * List Endpoint Models
-         * @description The ids the saved key can use at the saved endpoint.
-         *
-         *     A wrapper over the catalog (`GET /providers/{id}/models`) for the
-         *     toolbar's model picker: listed models only — the picker adds the saved
-         *     model and, without a list, the suggestions itself. Always the saved key
-         *     with the saved endpoint, the pair `PUT /config` keeps together, so this
-         *     can't send a key anywhere new.
-         */
-        get: operations["list_endpoint_models_config_models__service__get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/config/options": {
         parameters: {
             query?: never;
@@ -102,31 +83,6 @@ export interface paths {
         get: operations["get_options_config_options_get"];
         put?: never;
         post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/config/validate": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Validate Credentials
-         * @description Check credentials with the provider, by listing the key's models.
-         *
-         *     A wrapper over `POST /providers/{id}/verify`. Whatever the request leaves
-         *     out comes from the saved settings: the key, the model, the endpoint. The
-         *     saved key is only sent to the saved endpoint, the rule `PUT /config`
-         *     keeps; checking another endpoint needs the key typed alongside it.
-         */
-        post: operations["validate_credentials_config_validate_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -610,22 +566,6 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
-        /**
-         * APIKeyMaskedSettings
-         * @description Service config with the API key masked. The frontend never sees real keys.
-         */
-        APIKeyMaskedSettings: {
-            /** Base Url */
-            base_url?: string | null;
-            /** Extra */
-            extra?: {
-                [key: string]: unknown;
-            };
-            /** Has Key */
-            has_key: boolean;
-            /** Model */
-            model: string;
-        };
         /** AskProgressPayload */
         AskProgressPayload: {
             /** Message */
@@ -944,13 +884,9 @@ export interface components {
         };
         /** ConfigResponse */
         ConfigResponse: {
-            anthropic: components["schemas"]["APIKeyMaskedSettings"];
-            argos: components["schemas"]["APIKeyMaskedSettings"];
             /** Debug Mode */
             debug_mode: boolean;
-            gemini: components["schemas"]["APIKeyMaskedSettings"];
             gui: components["schemas"]["GUISettings"];
-            openai: components["schemas"]["APIKeyMaskedSettings"];
             processing: components["schemas"]["ProcessingSettings"];
             rag: components["schemas"]["RAGSettings"];
             translation: components["schemas"]["TranslationConfig"];
@@ -958,7 +894,6 @@ export interface components {
         /** ConfigUpdateRequest */
         ConfigUpdateRequest: {
             answer_model?: components["schemas"]["ModelRef"] | null;
-            anthropic?: components["schemas"]["EndpointCredentialUpdate"] | null;
             /** Cache Translated Pdfs */
             cache_translated_pdfs?: boolean | null;
             /** Cache Translations */
@@ -967,16 +902,12 @@ export interface components {
             chat_enabled?: boolean | null;
             default_source_lang?: components["schemas"]["LanguageCode"] | null;
             default_target_lang?: components["schemas"]["LanguageCode"] | null;
-            gemini?: components["schemas"]["ServiceCredentialUpdate"] | null;
             /** Max File Size Mb */
             max_file_size_mb?: number | null;
             /** Max Pages */
             max_pages?: number | null;
             /** Max Parallel Chunks */
             max_parallel_chunks?: number | null;
-            openai?: components["schemas"]["EndpointCredentialUpdate"] | null;
-            /** Preferred Service */
-            preferred_service?: string | null;
             translation_model?: components["schemas"]["ModelRef"] | null;
         };
         /** DocumentListResponse */
@@ -1012,37 +943,6 @@ export interface components {
          *     sends a literal `{}` for it today.
          */
         EmptyPayload: Record<string, never>;
-        /**
-         * EndpointCredentialUpdate
-         * @description For a service that can talk to another server speaking its API: Ollama,
-         *     LM Studio, a proxy (#32).
-         *
-         *     `base_url=None` leaves the endpoint unchanged and `""` returns to the
-         *     provider's own. Changing it while a key is saved needs the key in the same
-         *     update, because a saved key is only ever sent to the endpoint it was saved
-         *     for (`routes/config.py:update_config`).
-         */
-        EndpointCredentialUpdate: {
-            /** Api Key */
-            api_key?: string | null;
-            /** Base Url */
-            base_url?: string | null;
-            /** Model */
-            model?: string | null;
-        };
-        /**
-         * EndpointModelsResponse
-         * @description The models a service's saved endpoint says it serves.
-         *
-         *     A failure is `error`, not an HTTP error: a local server that isn't running
-         *     yet is ordinary, and the picker still offers the saved model without it.
-         */
-        EndpointModelsResponse: {
-            /** Error */
-            error?: string | null;
-            /** Models */
-            models?: string[];
-        };
         /** EngineAssetGroup */
         EngineAssetGroup: {
             /** Detail */
@@ -1251,8 +1151,7 @@ export interface components {
          * ModelCatalogResponse
          * @description The models the saved key can use at the saved endpoint.
          *
-         *     A failure is `error` in a 200, as with `EndpointModelsResponse`: a local
-         *     server that isn't up yet is ordinary, and `models` still carries the saved
+         *     A failure is `error` in a 200: a local server that isn't up yet is ordinary, and `models` still carries the saved
          *     model (and, on the provider's own endpoint, the suggestions).
          */
         ModelCatalogResponse: {
@@ -1619,18 +1518,6 @@ export interface components {
             /** Removed */
             removed: number;
         };
-        /**
-         * ServiceCredentialUpdate
-         * @description Update payload for one service. `api_key=None` means leave unchanged;
-         *     `api_key=""` means clear it. `model` is any name the provider serves, not
-         *     only one `/config/options` suggests.
-         */
-        ServiceCredentialUpdate: {
-            /** Api Key */
-            api_key?: string | null;
-            /** Model */
-            model?: string | null;
-        };
         /** ServiceOption */
         ServiceOption: {
             /** Code */
@@ -1673,8 +1560,7 @@ export interface components {
         };
         /**
          * TranslationConfig
-         * @description `[translation]` as the frontend reads it: the settings, plus
-         *     `preferred_service` — `model.provider` — for a client older than #86.
+         * @description `[translation]` as the frontend reads it.
          */
         TranslationConfig: {
             /**
@@ -1738,11 +1624,6 @@ export interface components {
              */
             pdf_cache_max_size_mb: number;
             /**
-             * Preferred Service
-             * @description A provider's id, as GET /providers lists them
-             */
-            preferred_service: string;
-            /**
              * Preserve Formatting
              * @description Preserve PDF formatting
              * @default true
@@ -1765,32 +1646,6 @@ export interface components {
             pages_selected: number;
             /** Paragraphs */
             paragraphs: number;
-        };
-        /**
-         * ValidateRequest
-         * @description What to check against the provider. Whatever is left out comes from the
-         *     saved settings, and the saved key is only checked against the saved
-         *     endpoint: naming another one needs the key typed alongside it.
-         */
-        ValidateRequest: {
-            /** Api Key */
-            api_key?: string | null;
-            /** Base Url */
-            base_url?: string | null;
-            /** Model */
-            model?: string | null;
-            /**
-             * Service
-             * @description A provider's id, as GET /providers lists them
-             */
-            service: string;
-        };
-        /** ValidateResponse */
-        ValidateResponse: {
-            /** Message */
-            message: string;
-            /** Valid */
-            valid: boolean;
         };
         /** ValidationError */
         ValidationError: {
@@ -2010,39 +1865,6 @@ export interface operations {
             };
         };
     };
-    list_endpoint_models_config_models__service__get: {
-        parameters: {
-            query?: never;
-            header?: {
-                authorization?: string | null;
-            };
-            path: {
-                service: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["EndpointModelsResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
     get_options_config_options_get: {
         parameters: {
             query?: never;
@@ -2061,41 +1883,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["OptionsResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    validate_credentials_config_validate_post: {
-        parameters: {
-            query?: never;
-            header?: {
-                authorization?: string | null;
-            };
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["ValidateRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ValidateResponse"];
                 };
             };
             /** @description Validation Error */
