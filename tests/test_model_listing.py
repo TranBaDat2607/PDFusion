@@ -170,6 +170,55 @@ def test_openai_created_seconds_become_milliseconds():
     assert ListedModel(id="whisper-1", created_at=1677532384000) in listing.hidden
 
 
+def _openai_list_of(ids: List[str]) -> Callable[[httpx.Request], httpx.Response]:
+    body = {
+        "object": "list",
+        "data": [{"id": i, "object": "model", "created": 1, "owned_by": "openai"} for i in ids],
+    }
+    return lambda request: httpx.Response(200, json=body)
+
+
+# Served by OpenAI but not by `chat.completions`, the only call the translator
+# makes: completions-only, Responses-only, speech and video models whose ids the
+# issue's prefix patterns miss.
+OPENAI_UNCALLABLE_IDS = [
+    "gpt-3.5-turbo-instruct",
+    "o1-pro",
+    "o3-pro",
+    "codex-mini-latest",
+    "gpt-5-codex",
+    "computer-use-preview",
+    "o3-deep-research",
+    "o4-mini-deep-research",
+    "gpt-4o-mini-tts",
+    "sora-2",
+    "chatgpt-image-latest",
+]
+
+# Chat models whose ids contain one of those words, which must stay on offer.
+OPENAI_CHAT_LOOKALIKES = [
+    "gpt-4o-search-preview",
+    "gpt-4.1-nano",
+    "o4-mini",
+    "gpt-5-chat-latest",
+]
+
+
+def test_openai_hides_models_chat_completions_cannot_call():
+    """The picker saves a listed model without a check, so one the translator
+    can't call would fail every paragraph with a 404 — which isn't fatal, so
+    the job runs to the end and hands back the source text."""
+    seen: List[httpx.Request] = []
+    client = _mock_client(
+        _openai_list_of(OPENAI_UNCALLABLE_IDS + OPENAI_CHAT_LOOKALIKES), seen
+    )
+
+    listing = list_openai_models("sk-test-key", None, http_client=client)
+
+    assert [m.id for m in listing.models] == OPENAI_CHAT_LOOKALIKES
+    assert [m.id for m in listing.hidden] == OPENAI_UNCALLABLE_IDS
+
+
 # --- Anthropic --------------------------------------------------------------
 
 
@@ -338,6 +387,33 @@ def test_gemini_keeps_generate_content_models_across_pages():
     assert len(seen) == 2
     assert "pageToken" not in seen[0].url.params
     assert seen[1].url.params["pageToken"] == GEMINI_PAGE2_TOKEN
+
+
+def test_gemini_hides_generate_content_models_that_do_not_answer_in_text():
+    """Gemini's speech, image and computer-use variants all advertise
+    `generateContent`, but a translation needs text back."""
+    text = ["models/gemini-2.5-flash", "models/gemini-2.5-pro", "models/gemma-3-27b-it"]
+    other = [
+        "models/gemini-2.5-flash-preview-tts",
+        "models/gemini-2.5-pro-preview-tts",
+        "models/gemini-2.5-flash-image",
+        "models/gemini-2.0-flash-preview-image-generation",
+        "models/gemini-2.5-flash-native-audio-preview-09-2025",
+        "models/gemini-2.5-computer-use-preview-10-2025",
+    ]
+    body = {
+        "models": [
+            {"name": name, "supportedGenerationMethods": ["generateContent", "countTokens"]}
+            for name in text + other
+        ]
+    }
+    seen: List[httpx.Request] = []
+    client = _mock_client(lambda request: httpx.Response(200, json=body), seen)
+
+    listing = list_gemini_models("gm-test-key", http_client=client)
+
+    assert [m.id for m in listing.models] == [n.removeprefix("models/") for n in text]
+    assert [m.id for m in listing.hidden] == [n.removeprefix("models/") for n in other]
 
 
 # --- A refused key ----------------------------------------------------------

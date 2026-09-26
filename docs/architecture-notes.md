@@ -1290,17 +1290,25 @@ settings page (#86).
 **One lister per protocol** (`providers/listing.py`), each importing its SDK
 inside the function and reached through `ProviderSpec.lister`:
 
-- **OpenAI** (`GET /v1/models`) returns everything the key reaches —
-  embeddings, speech, images — with nothing but the id to say which chat. A
-  regex on the id (`_OPENAI_NON_CHAT`) moves those into `hidden` rather than
-  dropping them, since a heuristic can be wrong. On a custom endpoint nothing
-  is filtered: Ollama or LM Studio can call a chat model anything.
+- **OpenAI** (`GET /v1/models`) returns everything the key reaches, with
+  nothing but the id to say which models `chat.completions` — the only call
+  the translator makes — will serve. A regex on the id (`_OPENAI_NON_CHAT`)
+  moves the rest into `hidden` rather than dropping them, since a heuristic can
+  be wrong: embeddings, speech, images and video, and also the completions-only
+  `-instruct` models and the Responses-only ones (`-pro`, `codex`,
+  `computer-use`, `deep-research`). The issue's prefix list let those through,
+  and the toolbar saves a listed model unchecked, so each would have 404ed on
+  every paragraph of a job that then ran to the end on source text. On a
+  custom endpoint nothing is filtered: Ollama or LM Studio can call a chat
+  model anything.
 - **Anthropic** (`GET /v1/models`) is walked page by page on
   `has_more`/`last_id`. The old code asked for 100 and never fetched a second
   page.
 - **Gemini** (`models.list()`, paged by the SDK) keeps only models whose
   `supported_actions` include `generateContent`. That is the API's own
-  statement of capability, so the rest are dropped, not hidden. Google answers
+  statement of capability, so the rest are dropped, not hidden. The speech,
+  image and computer-use variants advertise `generateContent` too but don't
+  answer in text; an id regex (`_GEMINI_NON_TEXT`) moves them into `hidden`. Google answers
   a bad key with 400 `API_KEY_INVALID`, not 401, which is why failures are
   sorted by `translators/base.py:is_fatal_translation_error` — the same test
   that aborts a translation, with its "api key not valid" marker — rather than

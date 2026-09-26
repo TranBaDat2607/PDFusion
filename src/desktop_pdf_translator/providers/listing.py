@@ -36,12 +36,24 @@ class Listing:
     hidden: Tuple[ListedModel, ...] = ()
 
 
-# OpenAI's list is every model the key can reach — embeddings, speech, images —
-# with nothing in the response that says which ones chat. Only the id does.
+# OpenAI's list is every model the key can reach, with nothing in the response
+# that says which ones `chat.completions` — the only call the translator makes —
+# will serve. Only the id does. Beyond the embedding, speech and image models,
+# that rules out the completions-only `-instruct` models and the Responses-only
+# ones (`-pro`, `codex`, `computer-use`, `deep-research`): picked from the
+# toolbar, which saves a listed model unchecked, each would 404 on every
+# paragraph, and a 404 isn't fatal, so the job would run to the end on source
+# text. Words match whole `-`-separated parts, so `o4-mini` and
+# `gpt-4o-search-preview` stay on offer.
 _OPENAI_NON_CHAT = re.compile(
-    r"^(text-embedding-|tts-|whisper-|dall-e-|gpt-image-|davinci|babbage)"
-    r"|moderation|-realtime|-audio|-transcribe"
+    r"^(davinci|babbage|dall-e|whisper|sora)"
+    r"|(^|-)(tts|embedding|image|moderation|realtime|audio|transcribe|instruct"
+    r"|codex|computer-use|deep-research|pro)(-|$)"
 )
+
+# Gemini's speech, image and computer-use variants advertise `generateContent`
+# like its text models, but answer in audio or images, or need a tool loop.
+_GEMINI_NON_TEXT = re.compile(r"-(tts|image|native-audio|computer-use)(-|$)")
 
 # Both SDKs read a timeout in seconds. A listing is one small GET; the route's
 # own deadline (`catalog.PROBE_TIMEOUT_S`) sits above this.
@@ -132,8 +144,8 @@ def list_gemini_models(
     models = []
     # The pager fetches the next page as iteration reaches it.
     for model in client.models.list():
-        # Unlike OpenAI's id heuristic this is the API's own statement of what
-        # a model does, so the rest (embeddings, Imagen) are dropped, not hidden.
+        # Unlike an id heuristic this is the API's own statement of what a
+        # model does, so the rest (embeddings, Imagen) are dropped, not hidden.
         if "generateContent" not in (model.supported_actions or ()):
             continue
         models.append(
@@ -144,7 +156,10 @@ def list_gemini_models(
                 output_tokens=model.output_token_limit,
             )
         )
-    return Listing(models=tuple(models))
+    return Listing(
+        models=tuple(m for m in models if not _GEMINI_NON_TEXT.search(m.id)),
+        hidden=tuple(m for m in models if _GEMINI_NON_TEXT.search(m.id)),
+    )
 
 
 def model_matches(model: str, ids: Iterable[str]) -> bool:
