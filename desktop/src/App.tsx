@@ -35,6 +35,7 @@ import {
   parsePageRanges,
 } from "@/lib/page-range";
 import { useAppStore } from "@/lib/store";
+import type { OpenedFrom } from "@/lib/provider-draft";
 import { api } from "@/lib/api-client";
 
 const queryClient = new QueryClient({
@@ -124,6 +125,9 @@ function Workspace() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   // The provider card Settings → Models opens at; unset opens at the top.
   const [settingsProvider, setSettingsProvider] = useState<string | undefined>();
+  // Which picker opened it, for "Add an API key": the key then chooses the
+  // translation model, or chat's answer model.
+  const [settingsFrom, setSettingsFrom] = useState<OpenedFrom>("translation");
   const [aboutOpen, setAboutOpen] = useState(false);
   // A Translate click that covered more pages than one translation may, held
   // while the user answers the offer. `path` guards against a document opened
@@ -377,6 +381,7 @@ function Workspace() {
         }
         onOpenSettings={(provider) => {
           setSettingsProvider(provider);
+          setSettingsFrom("translation");
           setSettingsOpen(true);
         }}
       />
@@ -385,6 +390,7 @@ function Workspace() {
           onPickFile={handlePickFile}
           onOpenSettings={(provider) => {
             setSettingsProvider(provider);
+            setSettingsFrom("answer");
             setSettingsOpen(true);
           }}
         />
@@ -414,6 +420,7 @@ function Workspace() {
         open={settingsOpen}
         onOpenChange={setSettingsOpen}
         focusProvider={settingsProvider}
+        openedFrom={settingsFrom}
       />
       <AboutDialog open={aboutOpen} onOpenChange={setAboutOpen} />
     </div>

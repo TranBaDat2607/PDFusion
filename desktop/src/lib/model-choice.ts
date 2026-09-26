@@ -53,6 +53,8 @@ export interface ModelGroup {
   usable: boolean;
   /** Takes a key and has none: offers "Add an API key", not its models. */
   needsKey: boolean;
+  /** Takes no key: usable, though nothing says a local server is running. */
+  keyless: boolean;
   /** Its model is a fixed identifier (Argos): nothing to choose. */
   fixed: boolean;
   /** Writes text from a prompt, so it can answer in chat. */
@@ -89,6 +91,7 @@ export function modelGroups(
       label: provider.label,
       usable: canRun(provider),
       needsKey: provider.requires_key && !provider.has_key,
+      keyless: !provider.requires_key,
       fixed: provider.model_is_fixed,
       llm: provider.is_llm,
       endpoint,

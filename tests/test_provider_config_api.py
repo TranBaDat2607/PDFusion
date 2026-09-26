@@ -376,6 +376,11 @@ def test_changing_the_endpoint_needs_a_key_that_could_not_be_read_again(
     assert "API key" in response.json()["detail"]
     assert manager.settings.providers["openai"].base_url is None
     assert unreadable_key in manager.config_file.read_text(encoding="utf-8")
+    # The refusal forgot nothing: the next unrelated save still writes the
+    # key back (what `PUT /config`'s multi-provider version of this guarded).
+    assert manager.has_unreadable_key("openai")
+    assert put_provider(client, "gemini", {"temperature": 0.5}).status_code == 200
+    assert unreadable_key in manager.config_file.read_text(encoding="utf-8")
 
 
 def test_an_unrelated_provider_change_keeps_a_key_it_could_not_read(

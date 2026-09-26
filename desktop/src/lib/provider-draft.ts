@@ -40,6 +40,21 @@ export function draftFrom(provider: ProviderInfo): ProviderDraft {
   };
 }
 
+/**
+ * The draft once its provider has changed on the sidecar (another card's
+ * save, a model chosen in a picker): the new provider's own when the user
+ * hasn't touched this one, so an idle card never writes an old list back;
+ * otherwise the user's edits, as they are.
+ */
+export function rebaseDraft(
+  draft: ProviderDraft,
+  baseline: ProviderInfo,
+  next: ProviderInfo,
+): ProviderDraft {
+  const untouched = Object.keys(providerUpdate(draft, baseline)).length === 0;
+  return untouched ? draftFrom(next) : draft;
+}
+
 /** An endpoint the way the sidecar stores it: trimmed, with no trailing
  *  slash, so one server typed two ways compares equal. */
 export function normalizeEndpoint(value: string): string {
@@ -278,28 +293,56 @@ export function statusLine(
   return { tone: "muted", text: "Not verified" };
 }
 
-/**
- * Whether saving a card also makes its provider the translation provider.
- *
- * Only for a new key that just listed its models — never on "Save anyway",
- * which saves a key the provider turned down — and when either translation is
- * still on the offline engine (an LLM wins once it has a working key; the
- * sidecar did this itself when keys were saved through `PUT /config`), or
- * Settings was opened from a picker's "Add an API key to use X…" for a
- * provider with no key, where the user came to translate with it.
- */
-export function selectsProvider(input: {
+/** Where Settings was opened from, for a provider's card: the toolbar's
+ *  translation picker or the chat header's. */
+export type OpenedFrom = "translation" | "answer";
+
+interface SelectionInput {
   /** As it was before the save. */
   provider: ProviderInfo;
   update: ProviderUpdate;
-  translationProvider: string;
   openedFor?: string | null;
+  openedFrom?: OpenedFrom;
   savedAnyway: boolean;
-}): boolean {
-  const { provider, update, translationProvider, openedFor, savedAnyway } = input;
-  if (!update.api_key || savedAnyway || translationProvider === provider.id) return false;
+  /** The model selecting the provider would choose: the one it runs. */
+  model: string;
+  /** What the new key's check listed, hidden models included. */
+  listed: readonly string[];
+}
+
+/** A new key that just listed its models, the model to choose among them:
+ *  never on "Save anyway", which saves a key the provider turned down, and
+ *  never onto a model the key can't use — a translator that fails every
+ *  paragraph, where Argos would have kept working. The sidecar checked the
+ *  same when it promoted off Argos itself, before #88. */
+function workingNewKey(input: SelectionInput): boolean {
+  return !!input.update.api_key && !input.savedAnyway && input.listed.includes(input.model);
+}
+
+/** Opened from a picker's "Add an API key to use X…" for a provider with no
+ *  key: the user came to use it there. */
+function openedToAdd(input: SelectionInput, from: OpenedFrom): boolean {
   return (
-    translationProvider === OFFLINE_ENGINE ||
-    (openedFor === provider.id && !provider.has_key)
+    input.openedFor === input.provider.id &&
+    !input.provider.has_key &&
+    (input.openedFrom ?? "translation") === from
   );
+}
+
+/**
+ * Whether saving a card also makes its provider the translation provider:
+ * with a working new key (`workingNewKey`), when translation is still on the
+ * offline engine — an LLM wins once it has one, as the sidecar did itself for
+ * keys saved through `PUT /config` — or when Settings was opened from the
+ * toolbar picker to add this provider's key.
+ */
+export function selectsProvider(input: SelectionInput & { translationProvider: string }): boolean {
+  if (!workingNewKey(input) || input.translationProvider === input.provider.id) return false;
+  return input.translationProvider === OFFLINE_ENGINE || openedToAdd(input, "translation");
+}
+
+/** Whether saving a card makes its provider answer in chat: Settings was
+ *  opened from the chat header's picker to add its key, and the key works. */
+export function selectsAnswerModel(input: SelectionInput): boolean {
+  return workingNewKey(input) && openedToAdd(input, "answer");
 }

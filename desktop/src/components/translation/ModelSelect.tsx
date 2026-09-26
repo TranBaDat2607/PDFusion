@@ -148,7 +148,7 @@ function GroupHeading({ group }: { group: ModelGroup }) {
     ? "no key"
     : group.endpoint
       ? hostOf(group.endpoint)
-      : group.fixed
+      : group.fixed || group.keyless
         ? "no key needed"
         : "ready";
   return (

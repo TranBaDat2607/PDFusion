@@ -50,11 +50,14 @@ import {
   modelRows,
   needsVerify,
   providerUpdate,
+  rebaseDraft,
   seedEnabled,
+  selectsAnswerModel,
   selectsProvider,
   statusLine,
   toggleModel,
   verifyRequest,
+  type OpenedFrom,
   type ProviderDraft,
 } from "@/lib/provider-draft";
 import { cn } from "@/lib/utils";
@@ -67,6 +70,9 @@ interface ModelsTabProps {
   /** Opened from a picker for this provider: scroll to its card, and start
    *  in its key field when it has none. */
   focusProvider?: string;
+  /** Which picker opened it: a key saved there chooses the translation
+   *  model, or chat's answer model. */
+  openedFrom?: OpenedFrom;
 }
 
 /**
@@ -74,7 +80,7 @@ interface ModelsTabProps {
  * saving on its own. The sheet used to have a tab per provider and one Save
  * for all of them.
  */
-export function ModelsTab({ focusProvider }: ModelsTabProps) {
+export function ModelsTab({ focusProvider, openedFrom }: ModelsTabProps) {
   const providers = useProviders();
   const { data: options } = useOptions();
 
@@ -106,6 +112,7 @@ export function ModelsTab({ focusProvider }: ModelsTabProps) {
             provider={provider}
             focused={provider.id === focusProvider}
             focusProvider={focusProvider}
+            openedFrom={openedFrom}
           />
         ),
       )}
@@ -141,15 +148,26 @@ interface ProviderCardProps {
   provider: ProviderInfo;
   focused: boolean;
   focusProvider?: string;
+  openedFrom?: OpenedFrom;
 }
 
-function ProviderCard({ provider, focused, focusProvider }: ProviderCardProps) {
+function ProviderCard({ provider, focused, focusProvider, openedFrom }: ProviderCardProps) {
   const qc = useQueryClient();
   const { data: config } = useConfig();
   const updateConfig = useUpdateConfig();
   const save = useSaveProvider();
 
   const [draft, setDraft] = useState<ProviderDraft>(() => draftFrom(provider));
+  // The provider the draft was made from. When the sidecar's copy changes —
+  // another card's save, a model chosen in a picker moving one into this
+  // provider's `enabled_models` — an untouched draft follows it, or its next
+  // Save would write the old list back.
+  const baseline = useRef(provider);
+  useEffect(() => {
+    if (provider === baseline.current) return;
+    setDraft((current) => rebaseDraft(current, baseline.current, provider));
+    baseline.current = provider;
+  }, [provider]);
   const [showKey, setShowKey] = useState(false);
   // Why the last Verify or Save stopped, or what Verify found.
   const [notice, setNotice] = useState<{ ok: boolean; text: string } | null>(null);
@@ -190,7 +208,7 @@ function ProviderCard({ provider, focused, focusProvider }: ProviderCardProps) {
 
   /** List with the draft's key and endpoint. The listing is kept for the
    *  model list, and seeds the enabled models when none are yet. */
-  const runVerify = async (): Promise<ProviderDraft | null> => {
+  const runVerify = async (): Promise<{ draft: ProviderDraft; listed: string[] } | null> => {
     const request = verifyRequest(draft, provider);
     if (!request) {
       setNotice({ ok: false, text: "Enter an API key first." });
@@ -214,7 +232,7 @@ function ProviderCard({ provider, focused, focusProvider }: ProviderCardProps) {
       });
       setModelsOpen(true);
       setNotice({ ok: true, text: result.message });
-      return seeded;
+      return { draft: seeded, listed: [...result.models, ...result.hidden].map((m) => m.id) };
     } catch (e) {
       setNotice({ ok: false, text: (e as Error).message });
       return null;
@@ -239,6 +257,9 @@ function ProviderCard({ provider, focused, focusProvider }: ProviderCardProps) {
       return;
     }
     let toSave = draft;
+    // What a new key's check listed: selecting its provider needs the
+    // model among them. Nothing, when nothing was checked.
+    let listed: string[] = [];
     const anyway = saveAnyway;
     if (toVerify && !anyway) {
       const verified = await runVerify();
@@ -246,31 +267,40 @@ function ProviderCard({ provider, focused, focusProvider }: ProviderCardProps) {
         setSaveAnyway(true);
         return;
       }
-      toSave = verified;
+      toSave = verified.draft;
+      listed = verified.listed;
     }
     const body = providerUpdate(toSave, provider);
     if (Object.keys(body).length === 0) return;
     setBusy("saving");
     try {
       const saved = await save.mutateAsync({ id: provider.id, update: body });
-      const translating = config?.translation.model.provider ?? "";
       // Opened to add this provider's key, or still on the offline engine:
-      // a key that just listed its models is the one to translate with. The
-      // sidecar used to do this itself for `PUT /config`; `PUT /providers`
-      // leaves the choice to the caller.
+      // a key that just listed its models, with the model it runs among
+      // them, is the one to use. The sidecar used to do this itself for
+      // `PUT /config`; `PUT /providers` leaves the choice to the caller.
+      const selection = {
+        provider,
+        update: body,
+        openedFor: focusProvider,
+        openedFrom,
+        savedAnyway: anyway,
+        model: saved.model,
+        listed,
+      };
+      const ref = { provider: saved.id, model: saved.model };
       if (
         selectsProvider({
-          provider,
-          update: body,
-          translationProvider: translating,
-          openedFor: focusProvider,
-          savedAnyway: anyway,
+          ...selection,
+          translationProvider: config?.translation.model.provider ?? "",
         })
       ) {
-        await updateConfig.mutateAsync({
-          translation_model: { provider: saved.id, model: saved.model },
-        });
+        await updateConfig.mutateAsync({ translation_model: ref });
       }
+      if (selectsAnswerModel(selection)) {
+        await updateConfig.mutateAsync({ answer_model: ref });
+      }
+      baseline.current = saved;
       setDraft(draftFrom(saved));
       setTypedListing(null);
       setSaveAnyway(false);

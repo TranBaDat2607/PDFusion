@@ -481,3 +481,14 @@ describe("answeredBy", () => {
     expect(answeredBy(providers(), undefined, undefined)).toBeNull();
   });
 });
+
+describe("modelGroups: keyless", () => {
+  it("marks a provider that takes no key, which a key can't vouch for", () => {
+    // Usable with no key — but that says nothing about whether a local
+    // server is running, so the heading mustn't call it ready (#88).
+    const list = [...providers(), { ...providers()[0], id: "local", requires_key: false, priority: null }];
+
+    expect(modelGroups(ARGOS, list).find((g) => g.id === "local")?.keyless).toBe(true);
+    expect(modelGroups(ARGOS, list).find((g) => g.id === "openai")?.keyless).toBe(false);
+  });
+});

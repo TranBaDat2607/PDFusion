@@ -994,3 +994,23 @@ def test_a_question_keeps_the_model_it_started_with_if_the_answer_model_changes_
     )
 
     assert (answer.get("provider"), answer.get("model")) == ("anthropic", "claude-opus-5")
+
+
+def test_the_real_ollama_entry_answers_when_chosen_and_is_never_a_fallback(
+    chain: EnhancedRAGChain, monkeypatch: pytest.MonkeyPatch
+):
+    """The registry's own Ollama entry, not a stand-in: no key, chosen for
+    chat it answers; unchosen, with no key anywhere, chat has no model (#88)."""
+    built = _record_builds(monkeypatch)
+    chosen = _v2_settings(rag={"answer_model": {"provider": "ollama", "model": "llama3.2"}})
+    monkeypatch.setattr(rag_chain_module, "get_settings", lambda: chosen)
+
+    model = chain._answer_model()
+
+    assert model is not None and model.service == TranslationService("ollama")
+    assert built == [(TranslationService("ollama"), "llama3.2")]
+
+    unchosen = _v2_settings()
+    monkeypatch.setattr(rag_chain_module, "get_settings", lambda: unchosen)
+
+    assert chain._answer_model() is None

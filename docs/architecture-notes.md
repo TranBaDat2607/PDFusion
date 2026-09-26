@@ -1298,6 +1298,18 @@ Gemini's):
 
 If a provider needs more than that, fix the design, not the checklist.
 
+Two things that make that hold, both easy to undo: a translator class serves
+several providers (OpenRouter, DeepSeek and Ollama all build
+`OpenAITranslator`), so the factory passes `provider_id` and the rate limiter
+is named after the provider, not the class — keyed on the class, all four
+drew on OpenAI's budget and the others' `default_qps` was never read. And a
+keyless provider never holds a key: `ProviderSettings` drops one hand-edited
+into its table, which would otherwise go out in place of the placeholder and
+could never be cleared, since the API refuses a key for it both ways. Argos
+is pre-warmed only when it is what a translation would run
+(`resolve_effective_service`), not whenever no key is saved: Ollama needs
+none.
+
 What listing can and can't tell, per provider: OpenRouter serves its model list
 without a key, so Verify can't tell a bad OpenRouter key from a good one — the
 first paragraph's 401 aborts the job instead. DeepSeek answers a bad key with
@@ -1615,9 +1627,12 @@ under vitest; `components/settings/ModelsTab.tsx` only draws them.
   key can use, or else the first model listed, so a fresh key offers
   something in the pickers straight away. A list already made is kept.
 - **Saving a key can select its provider** (`selectsProvider`): only a new
-  key that listed its models (never *Save anyway*), and only when translation
-  is still on Argos, or Settings was opened from a picker's "Add an API key to
-  use X…" for a provider with no key. `PUT /config` used to promote off Argos
+  key that listed its models (never *Save anyway*), only onto a model that
+  listing has — a saved `enabled_models` the new key can't run would fail
+  every paragraph where Argos kept working — and only when translation is
+  still on Argos, or Settings was opened from the toolbar's "Add an API key
+  to use X…" for a provider with no key. Opened from the chat header's, the
+  same key chooses chat's answer model instead (`selectsAnswerModel`). `PUT /config` used to promote off Argos
   by itself when a key arrived through it; `PUT /providers` leaves the choice
   to the caller, so the card makes it with `translation_model`.
 - **The status line** is `statusLine`: `✓ 42 models · checked 2 min ago`, the
@@ -1626,7 +1641,10 @@ under vitest; `components/settings/ModelsTab.tsx` only draws them.
   the language pairs it ships (from `/config/options`) and an install check.
 - **A draft lives as long as its card.** Cards are built when the sheet opens
   and dropped when it closes or the tab changes; a refetch of `/providers`
-  (window focus does one) never resets what is being typed.
+  (window focus does one) never resets what is being typed. An untouched
+  draft does follow its provider (`rebaseDraft`): choosing a translation
+  model moves the outgoing one into its provider's `enabled_models`, and an
+  idle card that kept the old list would write it back on its next Save.
 
 ### PDF viewer
 

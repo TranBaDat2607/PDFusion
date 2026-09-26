@@ -86,4 +86,6 @@ class TranslatorFactory:
         # saved, and a keyless server's placeholder key (#88).
         config["base_url"] = endpoint_for(spec, config.get("base_url"))
         config["api_key"] = request_key(spec, config.get("api_key"))
+        # Names its rate limiter: a class can serve several providers.
+        config["provider_id"] = provider_id
         return config

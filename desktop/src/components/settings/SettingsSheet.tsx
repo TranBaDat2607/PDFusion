@@ -52,6 +52,7 @@ import {
   type LimitOption,
 } from "@/lib/performance-settings";
 import { useConfig, useUpdateConfig } from "@/hooks/useConfig";
+import type { OpenedFrom } from "@/lib/provider-draft";
 import { cn } from "@/lib/utils";
 
 type TabValue = "models" | "cache" | "chat";
@@ -62,9 +63,15 @@ interface SettingsSheetProps {
   /** Open on Models, at this provider's card. Unset opens on Models at the
    *  top. */
   focusProvider?: string;
+  openedFrom?: OpenedFrom;
 }
 
-export function SettingsSheet({ open, onOpenChange, focusProvider }: SettingsSheetProps) {
+export function SettingsSheet({
+  open,
+  onOpenChange,
+  focusProvider,
+  openedFrom,
+}: SettingsSheetProps) {
   const [tab, setTab] = useState<TabValue>("models");
   // Reset on opening only, never while open: a Cache switch refetches the
   // config and must not move the user off the tab they're on.
@@ -94,7 +101,7 @@ export function SettingsSheet({ open, onOpenChange, focusProvider }: SettingsShe
             </TabsList>
 
             <TabsContent value="models" className="mt-4">
-              <ModelsTab focusProvider={focusProvider} />
+              <ModelsTab focusProvider={focusProvider} openedFrom={openedFrom} />
             </TabsContent>
 
             <TabsContent value="cache" className="mt-4">

@@ -165,6 +165,19 @@ class ProviderSettings(BaseModel):
             provider(value)  # ValueError for an id no provider has
         return value
 
+    @field_validator("api_key")
+    @classmethod
+    def _no_key_for_a_keyless_provider(
+        cls, value: Optional[str], info: ValidationInfo
+    ) -> Optional[str]:
+        # One hand-edited into Ollama's table would be sent in place of its
+        # placeholder and could never be cleared: the API refuses a key for
+        # it both ways, while the endpoint rule guards any saved key (#88).
+        spec = _spec_or_none(info.data.get("provider_id"))
+        if spec is not None and not spec.requires_key:
+            return None
+        return value
+
     @field_validator("base_url")
     @classmethod
     def _normalize_base_url(cls, value: Optional[str], info: ValidationInfo) -> Optional[str]:

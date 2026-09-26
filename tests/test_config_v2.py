@@ -636,3 +636,13 @@ def test_a_legacy_key_is_kept_when_the_new_table_has_none(manager: ConfigManager
 
     assert settings.providers["openai"].api_key == "sk-legacy"
     assert settings.model_for("openai") == "gpt-4.1"
+
+
+def test_a_provider_that_takes_no_key_keeps_none():
+    """A key hand-edited into a keyless provider's table (Ollama's) would be
+    sent in place of its placeholder, and could never be cleared: the API
+    refuses a key for it both ways, while the endpoint rule treats a saved key
+    as one to guard (#88)."""
+    settings = AppSettings(providers={"ollama": {"api_key": "sk-hand-edited"}})
+
+    assert settings.providers["ollama"].api_key is None

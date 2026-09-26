@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  rebaseDraft,
+  selectsAnswerModel,
   addCustomModel,
   draftFrom,
   draftProblem,
@@ -724,6 +726,8 @@ describe("selectsProvider", () => {
         translationProvider: "argos",
         openedFor: null,
         savedAnyway: false,
+        model: "gpt-4.1",
+        listed: ["gpt-4.1"],
       }),
     ).toBe(true);
   });
@@ -736,6 +740,8 @@ describe("selectsProvider", () => {
         translationProvider: "openai",
         openedFor: "gemini",
         savedAnyway: false,
+        model: "gpt-4.1",
+        listed: ["gpt-4.1"],
       }),
     ).toBe(true);
   });
@@ -748,6 +754,8 @@ describe("selectsProvider", () => {
         translationProvider: "argos",
         openedFor: null,
         savedAnyway: false,
+        model: "gpt-4.1",
+        listed: ["gpt-4.1"],
       }),
     ).toBe(false);
   });
@@ -760,6 +768,8 @@ describe("selectsProvider", () => {
         translationProvider: "argos",
         openedFor: null,
         savedAnyway: false,
+        model: "gpt-4.1",
+        listed: ["gpt-4.1"],
       }),
     ).toBe(false);
   });
@@ -772,6 +782,8 @@ describe("selectsProvider", () => {
         translationProvider: "argos",
         openedFor: null,
         savedAnyway: true,
+        model: "gpt-4.1",
+        listed: ["gpt-4.1"],
       }),
     ).toBe(false);
   });
@@ -784,6 +796,8 @@ describe("selectsProvider", () => {
         translationProvider: "openai",
         openedFor: null,
         savedAnyway: false,
+        model: "gpt-4.1",
+        listed: ["gpt-4.1"],
       }),
     ).toBe(false);
   });
@@ -796,6 +810,8 @@ describe("selectsProvider", () => {
         translationProvider: "openai",
         openedFor: null,
         savedAnyway: false,
+        model: "gpt-4.1",
+        listed: ["gpt-4.1"],
       }),
     ).toBe(false);
   });
@@ -808,7 +824,106 @@ describe("selectsProvider", () => {
         translationProvider: "openai",
         openedFor: "gemini",
         savedAnyway: false,
+        model: "gpt-4.1",
+        listed: ["gpt-4.1"],
       }),
     ).toBe(false);
+  });
+});
+
+describe("selectsProvider: only onto a model the key can use", () => {
+  const base = {
+    provider: provider({ id: "openai", has_key: false }),
+    update: { api_key: "sk-new" } as ProviderUpdate,
+    translationProvider: "argos",
+    openedFor: null,
+    savedAnyway: false,
+  };
+
+  it("doesn't switch onto a model the key's listing doesn't have", () => {
+    // A saved `enabled_models` the new key can't run would fail every
+    // paragraph, while Argos would have kept working.
+    expect(selectsProvider({ ...base, model: "gpt-custom", listed: ["gpt-4.1"] })).toBe(false);
+  });
+
+  it("doesn't switch when the key's check listed nothing", () => {
+    expect(selectsProvider({ ...base, model: "gpt-4.1", listed: [] })).toBe(false);
+  });
+
+  it("doesn't switch translation when Settings was opened from the chat header", () => {
+    expect(
+      selectsProvider({
+        ...base,
+        translationProvider: "anthropic",
+        openedFor: "openai",
+        openedFrom: "answer",
+        model: "gpt-4.1",
+        listed: ["gpt-4.1"],
+      }),
+    ).toBe(false);
+  });
+});
+
+describe("selectsAnswerModel", () => {
+  const base = {
+    provider: provider({ id: "openai", has_key: false }),
+    update: { api_key: "sk-new" } as ProviderUpdate,
+    openedFor: "openai",
+    openedFrom: "answer" as const,
+    savedAnyway: false,
+    model: "gpt-4.1",
+    listed: ["gpt-4.1"],
+  };
+
+  it("makes the provider answer in chat when Settings was opened from the chat header for it", () => {
+    expect(selectsAnswerModel(base)).toBe(true);
+  });
+
+  it("doesn't when opened from the toolbar, or for another provider", () => {
+    expect(selectsAnswerModel({ ...base, openedFrom: "translation" })).toBe(false);
+    expect(selectsAnswerModel({ ...base, openedFor: "gemini" })).toBe(false);
+  });
+
+  it("doesn't on Save anyway, without a new key, for a provider that had one, or onto an unlisted model", () => {
+    expect(selectsAnswerModel({ ...base, savedAnyway: true })).toBe(false);
+    expect(selectsAnswerModel({ ...base, update: {} as ProviderUpdate })).toBe(false);
+    expect(
+      selectsAnswerModel({ ...base, provider: provider({ id: "openai", has_key: true }) }),
+    ).toBe(false);
+    expect(selectsAnswerModel({ ...base, listed: ["gpt-5.6-sol"] })).toBe(false);
+  });
+});
+
+describe("rebaseDraft", () => {
+  it("follows the provider when the draft is untouched", () => {
+    // Choosing a translation model elsewhere moves the outgoing one into its
+    // provider's `enabled_models`; an idle card must show that, or its next
+    // Save writes the old list back.
+    const before = provider({ enabled_models: ["gpt-4.1"] });
+    const after = provider({ enabled_models: ["gpt-5.6-sol", "gpt-4.1"] });
+
+    expect(rebaseDraft(draftFrom(before), before, after)).toEqual(draftFrom(after));
+  });
+
+  it("keeps a draft the user has edited", () => {
+    const before = provider({ enabled_models: ["gpt-4.1"] });
+    const after = provider({ enabled_models: ["gpt-5.6-sol", "gpt-4.1"] });
+    const edited = draft({ apiKey: "sk-typed", enabled: ["gpt-4.1"] });
+
+    expect(rebaseDraft(edited, before, after)).toBe(edited);
+  });
+});
+
+describe("verifyRequest: the endpoint", () => {
+  it("always names the endpoint to check, unchanged or not, blank for the provider's own", () => {
+    // Left out, the sidecar would check the saved endpoint — the same one,
+    // today. Named, a check can never fall through to a different saved
+    // endpoint than the one the card shows.
+    const p = provider({ has_key: true, takes_endpoint: true, base_url: null });
+
+    expect(verifyRequest(draft(), p)).toEqual({ base_url: "" });
+    expect(verifyRequest(draft({ baseUrl: OLLAMA }), provider({ has_key: true, base_url: OLLAMA }))).toEqual({
+      base_url: OLLAMA,
+    });
   });
 });

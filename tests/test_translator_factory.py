@@ -91,3 +91,52 @@ def test_constructing_the_openai_translator_makes_no_network_call(
     )
 
     assert isinstance(translator, OpenAITranslator)
+
+
+# ---------------------------------------------------------------------------
+# each provider has a rate limiter of its own
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def fresh_limiters(monkeypatch: pytest.MonkeyPatch) -> dict:
+    """An empty limiter table, so a rate set here doesn't outlive the test."""
+    from desktop_pdf_translator.translators import rate_limiter
+
+    limiters: dict = {}
+    monkeypatch.setattr(rate_limiter, "_LIMITERS", limiters)
+    return limiters
+
+
+def test_a_provider_borrowing_openais_translator_runs_under_its_own_limiter(
+    monkeypatch: pytest.MonkeyPatch, fresh_limiters: dict
+):
+    """OpenRouter, DeepSeek and Ollama reuse `OpenAITranslator`. Keyed on the
+    class's own name, all four drew on OpenAI's budget, and the registry's
+    `default_qps` for the others was never read."""
+    from desktop_pdf_translator.providers.registry import provider
+
+    settings = _settings(openai={"api_key": "sk-test"})
+    monkeypatch.setattr(factory_module, "get_settings", lambda: settings)
+
+    TranslatorFactory.create_translator(service="ollama", lang_in="en", lang_out="vi")
+
+    assert set(fresh_limiters) == {"ollama"}
+    assert fresh_limiters["ollama"]._rate == provider("ollama").default_qps
+
+
+def test_a_max_qps_saved_for_one_provider_leaves_openais_limiter_alone(
+    monkeypatch: pytest.MonkeyPatch, fresh_limiters: dict
+):
+    from desktop_pdf_translator.providers.registry import provider
+
+    settings = _settings(
+        openai={"api_key": "sk-test"}, deepseek={"api_key": "sk-ds", "max_qps": 0.5}
+    )
+    monkeypatch.setattr(factory_module, "get_settings", lambda: settings)
+
+    TranslatorFactory.create_translator(service="openai", lang_in="en", lang_out="vi")
+    TranslatorFactory.create_translator(service="deepseek", lang_in="en", lang_out="vi")
+
+    assert fresh_limiters["openai"]._rate == provider("openai").default_qps
+    assert fresh_limiters["deepseek"]._rate == 0.5
