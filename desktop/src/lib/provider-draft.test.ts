@@ -308,6 +308,13 @@ describe("needsVerify", () => {
     expect(needsVerify(draft({ clearKey: true }), provider({ has_key: true }))).toBe(false);
   });
 
+  it("is false for clearing the key while changing the endpoint", () => {
+    // Nothing is left to check with, and the sidecar takes `api_key: ""` with
+    // a new `base_url`: no saved key goes to the new endpoint.
+    const p = provider({ base_url: null, has_key: true, takes_endpoint: true });
+    expect(needsVerify(draft({ baseUrl: OLLAMA, clearKey: true }), p)).toBe(false);
+  });
+
   it("is false for an untouched draft", () => {
     const p = provider({ base_url: OLLAMA, has_key: true });
     expect(needsVerify(draftFrom(p), p)).toBe(false);
