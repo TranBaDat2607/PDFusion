@@ -10,7 +10,9 @@ import { PROVIDERS_KEY, type ProviderInfo } from "@/hooks/useProviders";
 // drifted from the backend in production before this existed: language
 // fields silently never sent, `pdf_references` vs. `pdf_sources` (#13), and a
 // dead `deep_search`/web-research pair of fields (#14) — see issue #27.
-export type ServiceCode = components["schemas"]["TranslationService"];
+/** A provider's id: a plain string the sidecar checks against its registry,
+ *  so a new provider needs no change here (#88). `GET /providers` lists them. */
+export type ServiceCode = string;
 export type ConfigResponse = components["schemas"]["ConfigResponse"];
 export type LanguageOption = components["schemas"]["LanguageOption"];
 export type ServiceOption = components["schemas"]["ServiceOption"];

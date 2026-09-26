@@ -90,3 +90,32 @@ def test_cli_runs_in_a_fresh_interpreter() -> None:
     assert result.returncode == 0, result.stderr
     schema = json.loads(result.stdout)
     assert schema["openapi"].startswith("3.")
+
+
+def test_the_schema_names_no_provider() -> None:
+    """A provider id is a plain string on the wire, checked against the
+    registry. An enum of them would put every provider added to
+    `providers/registry.py` into `openapi.json` and the generated types, and
+    adding one is meant to be a registry entry alone (#88)."""
+    from desktop_pdf_translator.providers.registry import PROVIDERS
+
+    schema = generate_schema()
+    ids = {spec.id for spec in PROVIDERS}
+
+    def enums(node):
+        if isinstance(node, dict):
+            if "enum" in node:
+                yield node["enum"]
+            for value in node.values():
+                yield from enums(value)
+        elif isinstance(node, list):
+            for value in node:
+                yield from enums(value)
+
+    # `protocol` is the API a provider speaks — the SDK it needs, which is
+    # code — not which providers exist. Its values share names with the
+    # providers that own those APIs; an OpenAI-compatible provider adds none.
+    del schema["components"]["schemas"]["ProviderInfo"]["properties"]["protocol"]
+
+    assert "TranslationService" not in schema["components"]["schemas"]
+    assert [e for e in enums(schema) if ids & set(e)] == []

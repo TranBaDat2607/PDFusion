@@ -11,6 +11,7 @@ from pydantic import (
     BaseModel,
     ConfigDict,
     Field,
+    AfterValidator,
     ValidationInfo,
     field_validator,
     model_validator,
@@ -37,8 +38,24 @@ TranslationService = Enum(
     type=str,
     module=__name__,
 )
-# Pydantic puts this in the OpenAPI schema as the enum's description.
 TranslationService.__doc__ = "Supported translation services."
+
+
+
+def _registry_provider(value: str) -> "TranslationService":
+    return TranslationService(value)  # ValueError for an id no provider has
+
+
+# A provider as the API carries it: its id, a plain string, checked against
+# the registry and handed to the code as the enum above. Published as a
+# string, not an enum of ids, so a provider added to the registry changes
+# neither `openapi.json` nor the generated TypeScript (#88); `GET /providers`
+# is where a client learns which ids exist.
+ProviderId = Annotated[
+    str,
+    AfterValidator(_registry_provider),
+    Field(description="A provider's id, as GET /providers lists them"),
+]
 
 
 def normalize_base_url(value: Optional[str]) -> Optional[str]:
@@ -78,7 +95,7 @@ class ModelRef(BaseModel):
     stale or hand-edited name can't reach its cache keys.
     """
 
-    provider: TranslationService
+    provider: ProviderId
     model: ModelName
 
     @field_validator("model", mode="before")

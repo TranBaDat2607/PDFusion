@@ -825,12 +825,14 @@
           "preferred_service": {
             "anyOf": [
               {
-                "$ref": "#/components/schemas/TranslationService"
+                "description": "A provider's id, as GET /providers lists them",
+                "type": "string"
               },
               {
                 "type": "null"
               }
-            ]
+            ],
+            "title": "Preferred Service"
           },
           "translation_model": {
             "anyOf": [
@@ -1560,7 +1562,9 @@
             "type": "string"
           },
           "provider": {
-            "$ref": "#/components/schemas/TranslationService"
+            "description": "A provider's id, as GET /providers lists them",
+            "title": "Provider",
+            "type": "string"
           }
         },
         "required": [
@@ -1759,12 +1763,14 @@
           "service": {
             "anyOf": [
               {
-                "$ref": "#/components/schemas/TranslationService"
+                "description": "A provider's id, as GET /providers lists them",
+                "type": "string"
               },
               {
                 "type": "null"
               }
-            ]
+            ],
+            "title": "Service"
           },
           "source_lang": {
             "anyOf": [
@@ -1973,7 +1979,9 @@
             "type": "boolean"
           },
           "id": {
-            "$ref": "#/components/schemas/TranslationService"
+            "description": "A provider's id, as GET /providers lists them",
+            "title": "Id",
+            "type": "string"
           },
           "key_state": {
             "enum": [
@@ -2380,12 +2388,14 @@
           "service": {
             "anyOf": [
               {
-                "$ref": "#/components/schemas/TranslationService"
+                "description": "A provider's id, as GET /providers lists them",
+                "type": "string"
               },
               {
                 "type": "null"
               }
-            ]
+            ],
+            "title": "Service"
           },
           "source_lang": {
             "anyOf": [
@@ -2498,7 +2508,9 @@
             "type": "number"
           },
           "preferred_service": {
-            "$ref": "#/components/schemas/TranslationService"
+            "description": "A provider's id, as GET /providers lists them",
+            "title": "Preferred Service",
+            "type": "string"
           },
           "preserve_formatting": {
             "default": true,
@@ -2559,17 +2571,6 @@
         "title": "TranslationEstimate",
         "type": "object"
       },
-      "TranslationService": {
-        "description": "Supported translation services.",
-        "enum": [
-          "openai",
-          "gemini",
-          "anthropic",
-          "argos"
-        ],
-        "title": "TranslationService",
-        "type": "string"
-      },
       "ValidateRequest": {
         "description": "What to check against the provider. Whatever is left out comes from the\nsaved settings, and the saved key is only checked against the saved\nendpoint: naming another one needs the key typed alongside it.",
         "properties": {
@@ -2608,7 +2609,9 @@
             "title": "Model"
           },
           "service": {
-            "$ref": "#/components/schemas/TranslationService"
+            "description": "A provider's id, as GET /providers lists them",
+            "title": "Service",
+            "type": "string"
           }
         },
         "required": [
@@ -3071,7 +3074,9 @@
             "name": "service",
             "required": true,
             "schema": {
-              "$ref": "#/components/schemas/TranslationService"
+              "description": "A provider's id, as GET /providers lists them",
+              "title": "Service",
+              "type": "string"
             }
           },
           {
@@ -3424,7 +3429,9 @@
             "name": "provider_id",
             "required": true,
             "schema": {
-              "$ref": "#/components/schemas/TranslationService"
+              "description": "A provider's id, as GET /providers lists them",
+              "title": "Provider Id",
+              "type": "string"
             }
           },
           {
@@ -3492,7 +3499,9 @@
             "name": "provider_id",
             "required": true,
             "schema": {
-              "$ref": "#/components/schemas/TranslationService"
+              "description": "A provider's id, as GET /providers lists them",
+              "title": "Provider Id",
+              "type": "string"
             }
           },
           {
@@ -3549,7 +3558,9 @@
             "name": "provider_id",
             "required": true,
             "schema": {
-              "$ref": "#/components/schemas/TranslationService"
+              "description": "A provider's id, as GET /providers lists them",
+              "title": "Provider Id",
+              "type": "string"
             }
           },
           {
@@ -3616,7 +3627,9 @@
             "name": "provider_id",
             "required": true,
             "schema": {
-              "$ref": "#/components/schemas/TranslationService"
+              "description": "A provider's id, as GET /providers lists them",
+              "title": "Provider Id",
+              "type": "string"
             }
           },
           {

@@ -36,13 +36,14 @@ export interface TranslateBodyInput {
 type TranslateRequest = components["schemas"]["TranslateRequest"];
 
 export function buildTranslateBody(input: TranslateBodyInput): TranslateRequest {
-  // `sourceLang`/`targetLang`/`service` arrive as plain strings — the toolbar
+  // `sourceLang`/`targetLang` arrive as plain strings — the toolbar
   // dropdowns and the config values feeding them are typed loosely all the
-  // way up (`LanguageOption.code`/`ServiceOption.code` are plain `string` in
-  // `api/schemas.py` too, since GET /config/options is generic dropdown
-  // data) — but every real value does come from `LanguageCode`/
-  // `TranslationService` on the backend, so narrowing here is a boundary
-  // cast, not an escape from the request's real contract.
+  // way up (`LanguageOption.code` is a plain `string` in `api/schemas.py` too,
+  // since GET /config/options is generic dropdown data) — but every real value
+  // does come from `LanguageCode` on the backend, so narrowing here is a
+  // boundary cast, not an escape from the request's real contract. `service`
+  // is a plain string on the wire as well: a provider id the sidecar checks
+  // against its registry (#88).
   //
   // The three are genuinely omitted (not sent as `undefined`) when unset:
   // conditionally spreading them, rather than always assigning the key, keeps

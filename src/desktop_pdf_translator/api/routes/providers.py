@@ -22,7 +22,13 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import ValidationError
 
-from ...config import AppSettings, TranslationService, get_config_manager, get_settings
+from ...config import (
+    AppSettings,
+    ProviderId,
+    TranslationService,
+    get_config_manager,
+    get_settings,
+)
 from ...providers import catalog
 from ...providers.listing import ListedModel, Listing, model_matches
 from ...providers.registry import PROVIDERS, ProviderSpec, provider
@@ -440,7 +446,7 @@ async def list_providers() -> ProvidersResponse:
 
 @router.put("/{provider_id}", response_model=ProviderInfo)
 async def update_provider(
-    provider_id: TranslationService, payload: ProviderUpdateRequest
+    provider_id: ProviderId, payload: ProviderUpdateRequest
 ) -> ProviderInfo:
     """Save one provider's key, endpoint, models and parameters.
 
@@ -482,7 +488,7 @@ async def update_provider(
 
 
 @router.delete("/{provider_id}/key", response_model=ProviderInfo)
-async def delete_provider_key(provider_id: TranslationService) -> ProviderInfo:
+async def delete_provider_key(provider_id: ProviderId) -> ProviderInfo:
     """Forget the saved key, a preserved unreadable one included. The
     endpoint stays; a key entered later goes to it."""
     spec = provider(provider_id.value)
@@ -496,13 +502,13 @@ async def delete_provider_key(provider_id: TranslationService) -> ProviderInfo:
 
 @router.get("/{provider_id}/models", response_model=ModelCatalogResponse)
 async def provider_models(
-    provider_id: TranslationService, refresh: bool = False
+    provider_id: ProviderId, refresh: bool = False
 ) -> ModelCatalogResponse:
     return await catalog_for(provider_id, refresh)
 
 
 @router.post("/{provider_id}/verify", response_model=VerifyResponse)
 async def verify_provider(
-    provider_id: TranslationService, payload: VerifyRequest
+    provider_id: ProviderId, payload: VerifyRequest
 ) -> VerifyResponse:
     return await verify(provider_id, payload.api_key, payload.base_url, payload.model)

@@ -975,7 +975,8 @@ export interface components {
             /** Max Parallel Chunks */
             max_parallel_chunks?: number | null;
             openai?: components["schemas"]["EndpointCredentialUpdate"] | null;
-            preferred_service?: components["schemas"]["TranslationService"] | null;
+            /** Preferred Service */
+            preferred_service?: string | null;
             translation_model?: components["schemas"]["ModelRef"] | null;
         };
         /** DocumentListResponse */
@@ -1299,7 +1300,11 @@ export interface components {
         ModelRef: {
             /** Model */
             model: string;
-            provider: components["schemas"]["TranslationService"];
+            /**
+             * Provider
+             * @description A provider's id, as GET /providers lists them
+             */
+            provider: string;
         };
         /** OptionsResponse */
         OptionsResponse: {
@@ -1422,7 +1427,8 @@ export interface components {
          *     instantiates the SDK client so the first translate() call avoids cold-start.
          */
         PrewarmRequest: {
-            service?: components["schemas"]["TranslationService"] | null;
+            /** Service */
+            service?: string | null;
             source_lang?: components["schemas"]["LanguageCode"] | null;
             target_lang?: components["schemas"]["LanguageCode"] | null;
         };
@@ -1516,7 +1522,11 @@ export interface components {
             endpoint_hint: string | null;
             /** Has Key */
             has_key: boolean;
-            id: components["schemas"]["TranslationService"];
+            /**
+             * Id
+             * @description A provider's id, as GET /providers lists them
+             */
+            id: string;
             /**
              * Key State
              * @enum {string}
@@ -1650,7 +1660,8 @@ export interface components {
                 number,
                 number
             ][] | null;
-            service?: components["schemas"]["TranslationService"] | null;
+            /** Service */
+            service?: string | null;
             source_lang?: components["schemas"]["LanguageCode"] | null;
             target_lang?: components["schemas"]["LanguageCode"] | null;
             /**
@@ -1726,7 +1737,11 @@ export interface components {
              * @default 1000
              */
             pdf_cache_max_size_mb: number;
-            preferred_service: components["schemas"]["TranslationService"];
+            /**
+             * Preferred Service
+             * @description A provider's id, as GET /providers lists them
+             */
+            preferred_service: string;
             /**
              * Preserve Formatting
              * @description Preserve PDF formatting
@@ -1752,12 +1767,6 @@ export interface components {
             paragraphs: number;
         };
         /**
-         * TranslationService
-         * @description Supported translation services.
-         * @enum {string}
-         */
-        TranslationService: "openai" | "gemini" | "anthropic" | "argos";
-        /**
          * ValidateRequest
          * @description What to check against the provider. Whatever is left out comes from the
          *     saved settings, and the saved key is only checked against the saved
@@ -1770,7 +1779,11 @@ export interface components {
             base_url?: string | null;
             /** Model */
             model?: string | null;
-            service: components["schemas"]["TranslationService"];
+            /**
+             * Service
+             * @description A provider's id, as GET /providers lists them
+             */
+            service: string;
         };
         /** ValidateResponse */
         ValidateResponse: {
@@ -2004,7 +2017,7 @@ export interface operations {
                 authorization?: string | null;
             };
             path: {
-                service: components["schemas"]["TranslationService"];
+                service: string;
             };
             cookie?: never;
         };
@@ -2223,7 +2236,7 @@ export interface operations {
                 authorization?: string | null;
             };
             path: {
-                provider_id: components["schemas"]["TranslationService"];
+                provider_id: string;
             };
             cookie?: never;
         };
@@ -2260,7 +2273,7 @@ export interface operations {
                 authorization?: string | null;
             };
             path: {
-                provider_id: components["schemas"]["TranslationService"];
+                provider_id: string;
             };
             cookie?: never;
         };
@@ -2295,7 +2308,7 @@ export interface operations {
                 authorization?: string | null;
             };
             path: {
-                provider_id: components["schemas"]["TranslationService"];
+                provider_id: string;
             };
             cookie?: never;
         };
@@ -2328,7 +2341,7 @@ export interface operations {
                 authorization?: string | null;
             };
             path: {
-                provider_id: components["schemas"]["TranslationService"];
+                provider_id: string;
             };
             cookie?: never;
         };

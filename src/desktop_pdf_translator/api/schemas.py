@@ -11,8 +11,8 @@ from ..config import (
     LanguageCode,
     ModelRef,
     ProcessingSettings,
+    ProviderId,
     RAGSettings,
-    TranslationService,
     TranslationSettings,
 )
 from ..config.models import MaxFileSizeMB, MaxPages, normalize_base_url
@@ -66,7 +66,7 @@ class TranslationConfig(TranslationSettings):
 
     model_config = _EVERY_FIELD_SENT
 
-    preferred_service: TranslationService
+    preferred_service: ProviderId
 
 
 class ConfigResponse(BaseModel):
@@ -134,7 +134,7 @@ class ConfigUpdateRequest(BaseModel):
     openai: Optional[EndpointCredentialUpdate] = None
     gemini: Optional[ServiceCredentialUpdate] = None
     anthropic: Optional[EndpointCredentialUpdate] = None
-    preferred_service: Optional[TranslationService] = None
+    preferred_service: Optional[ProviderId] = None
     # Wins over `preferred_service` and the blocks' models in the same body.
     translation_model: Optional[ModelRef] = None
     # Left out: unchanged. `null`: answer with the translation model.
@@ -155,7 +155,7 @@ class ValidateRequest(BaseModel):
     saved settings, and the saved key is only checked against the saved
     endpoint: naming another one needs the key typed alongside it."""
 
-    service: TranslationService
+    service: ProviderId
     # `None` or `""`: the saved key.
     api_key: Optional[str] = None
     # `None` or blank: the saved model.
@@ -200,7 +200,7 @@ class TranslateRequest(BaseModel):
     # resolved in exactly one place: `translators.capabilities.resolve_languages`.
     source_lang: Optional[LanguageCode] = None
     target_lang: Optional[LanguageCode] = None
-    service: Optional[TranslationService] = None
+    service: Optional[ProviderId] = None
     # No `output_dir`. It let a caller name any writable path on the machine,
     # was never sent by the UI, and — being outside `%TEMP%\pdfusion-translate-*`
     # — was exempt from every cleanup path, so it also leaked whatever it
@@ -252,7 +252,7 @@ class PrewarmRequest(BaseModel):
     Translate. For Argos this triggers the en→vi pack install. For LLMs it
     instantiates the SDK client so the first translate() call avoids cold-start."""
 
-    service: Optional[TranslationService] = None
+    service: Optional[ProviderId] = None
     # Same "None means unspecified" contract as TranslateRequest — pre-warming
     # auto→vi while the toolbar says Japanese warms the wrong backend.
     source_lang: Optional[LanguageCode] = None
@@ -507,7 +507,7 @@ class ModelRecord(BaseModel):
 class ProviderInfo(BaseModel):
     model_config = _EVERY_FIELD_SENT
 
-    id: TranslationService
+    id: ProviderId
     label: str
     short_label: str
     description: str

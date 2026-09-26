@@ -11,6 +11,7 @@ from ...config import (
     AppSettings,
     LanguageCode,
     ModelRef,
+    ProviderId,
     TranslationService,
     get_config_manager,
     get_settings,
@@ -288,7 +289,7 @@ async def get_options() -> OptionsResponse:
 
 
 @router.get("/models/{service}", response_model=EndpointModelsResponse)
-async def list_endpoint_models(service: TranslationService) -> EndpointModelsResponse:
+async def list_endpoint_models(service: ProviderId) -> EndpointModelsResponse:
     """The ids the saved key can use at the saved endpoint.
 
     A wrapper over the catalog (`GET /providers/{id}/models`) for the
