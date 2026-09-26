@@ -7,7 +7,7 @@ from typing import Any, Dict, FrozenSet, List, Optional
 
 from openai import OpenAI
 
-from ..config import OpenAISettings
+from ..providers.registry import provider
 from .base import BaseTranslator, LANGUAGE_DISPLAY_NAMES, TranslationCancelled
 from .translation_cache import llm_cache_get as _llm_cache_get, llm_cache_set as _llm_cache_set
 
@@ -38,7 +38,7 @@ class OpenAITranslator(BaseTranslator):
         if not self.api_key:
             raise ValueError("OpenAI API key is required")
 
-        self.model = kwargs.get("model") or OpenAISettings.model_fields["model"].default
+        self.model = kwargs.get("model") or provider("openai").default_model
         self.temperature = kwargs.get("temperature", 0.3)
         self.max_tokens = kwargs.get("max_tokens", 4000)
         self.base_url = kwargs.get("base_url")

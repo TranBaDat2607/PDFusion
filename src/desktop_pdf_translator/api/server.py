@@ -69,7 +69,7 @@ def _should_prewarm_argos(settings) -> bool:
 
     if not argos_pack_ready():
         return False
-    if settings.translation.preferred_service == TranslationService.ARGOS:
+    if settings.translation.model.provider == TranslationService.ARGOS:
         return True
     any_llm_key = any(
         settings.has_api_key(TranslationService(s)) for s in keyed_ids()

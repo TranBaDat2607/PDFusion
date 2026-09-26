@@ -10,7 +10,7 @@ from typing import Optional, Dict, Any, Tuple
 import tomlkit
 from pydantic import ValidationError
 
-from ..providers.registry import keyed_ids, provider
+from ..providers.registry import PROVIDERS, keyed_ids, provider
 from .models import RETIRED_MODELS, AppSettings, normalize_base_url
 from ..utils import (
     SELF_DESCRIBING_PREFIXES,
@@ -29,6 +29,11 @@ logger = logging.getLogger(__name__)
 
 # The services whose settings carry an API key, from the provider registry.
 KEYED_SERVICES = keyed_ids()
+
+# Where a `ModelRef` sits in the settings. A bad one is dropped whole, back to
+# its default: half a reference (a model with no provider) can't be repaired
+# by dropping a field, and failing twice would cost its whole section.
+_MODEL_REF_PATHS = (("translation", "model"), ("rag", "answer_model"))
 
 
 class ConfigManager:
@@ -82,7 +87,11 @@ class ConfigManager:
             try:
                 with open(self.config_file, "r", encoding="utf-8") as f:
                     file_config = tomlkit.load(f)
-                config_data.update(dict(file_config))
+                # Plain dicts from here on: the conversion below rebuilds
+                # tables, and tomlkit's refuse a None value.
+                config_data.update(file_config.unwrap())
+                self._convert_v1(config_data)
+                self._drop_unknown_providers(config_data)
                 self._decrypt_sensitive_data(config_data)
                 logger.info(f"Loaded configuration from {self.config_file}")
             except Exception as e:
@@ -92,6 +101,7 @@ class ConfigManager:
         env_config = self._load_from_environment()
         self._keep_environment_keys_off_endpoints(config_data, env_config)
         self._deep_merge(config_data, env_config)
+        self._apply_environment_models(config_data, self._models_from_environment())
 
         self._replace_retired_models(config_data)
         
@@ -127,7 +137,9 @@ class ConfigManager:
 
         pruned = copy.deepcopy(config_data)
         for err in error.errors():
-            loc = err.get("loc", ())
+            loc = tuple(err.get("loc", ()))
+            if loc[:2] in _MODEL_REF_PATHS:
+                loc = loc[:2]
             self._pop_path(pruned, loc)
 
         try:
@@ -139,7 +151,10 @@ class ConfigManager:
             # invalid (handles cross-field validators we can't pinpoint).
             for err in e2.errors():
                 loc = err.get("loc", ())
-                if loc:
+                if loc and loc[0] == "providers" and len(loc) > 1:
+                    # One provider, never the map: that would be every key.
+                    self._pop_path(pruned, loc[:2])
+                elif loc:
                     pruned.pop(loc[0], None)
             try:
                 settings = AppSettings(**pruned)
@@ -168,6 +183,88 @@ class ConfigManager:
             node.pop(loc[-1], None)
 
     @staticmethod
+    def _convert_v1(config_data: Dict[str, Any]) -> None:
+        """Turn a config from before #85 into today's shape, in place.
+
+        Before, each provider had a top-level table holding its key *and* the
+        model it ran, and `translation.preferred_service` said which one
+        translated. Now keys and parameters are under `providers.<id>`, the
+        model that translates is `translation.model`, and each provider's old
+        model becomes the first of its `enabled_models` — so `model_for` hands
+        back the same model for every provider as before.
+
+        Only the shape changes. Keys move as they were stored, ciphertext and
+        salt alike; `_decrypt_sensitive_data` runs afterwards, on the new
+        shape, and the next save writes that shape. Where a file somehow holds
+        both shapes for one provider, the new one wins, but for a key only the
+        old one has.
+        """
+        legacy = {
+            spec.id: config_data.pop(spec.id)
+            for spec in PROVIDERS
+            if isinstance(config_data.get(spec.id), dict)
+        }
+        translation = config_data.get("translation")
+        preferred = (
+            translation.pop("preferred_service", None)
+            if isinstance(translation, dict)
+            else None
+        )
+        if not legacy and preferred is None:
+            return
+
+        providers = config_data.get("providers")
+        if not isinstance(providers, dict):
+            providers = config_data["providers"] = {}
+        models: Dict[str, str] = {}
+        for provider_id, section in legacy.items():
+            section = dict(section)
+            model = section.pop("model", None)
+            if isinstance(model, str) and model.strip():
+                models[provider_id] = model.strip()
+            if provider_id in providers:
+                # The new table wins, except that a key only the old one holds
+                # is still the provider's key; left behind, the next save
+                # would drop it for good.
+                entry = providers[provider_id]
+                if isinstance(entry, dict) and not entry.get("api_key") and section.get("api_key"):
+                    entry["api_key"] = section["api_key"]
+                    if "api_key_salt" in section:
+                        entry["api_key_salt"] = section["api_key_salt"]
+                continue
+            if provider_id in models and not provider(provider_id).model_is_fixed:
+                section["enabled_models"] = [models[provider_id]]
+            providers[provider_id] = section
+
+        if (
+            isinstance(preferred, str)
+            and preferred in {spec.id for spec in PROVIDERS}
+            and not (isinstance(translation, dict) and "model" in translation)
+        ):
+            translation["model"] = {
+                "provider": preferred,
+                "model": models.get(preferred) or provider(preferred).default_model,
+            }
+        logger.info("Converted a config from before #85; the next save writes the new shape")
+
+    @staticmethod
+    def _drop_unknown_providers(config_data: Dict[str, Any]) -> None:
+        """Leave out a `providers` entry no registry provider has.
+
+        `AppSettings` refuses one, and the load path's recovery would then
+        drop the entry anyway; doing it here keeps that recovery for real
+        mistakes. A newer version's provider, after a downgrade, is the likely
+        cause — and its key is not one this version could use.
+        """
+        providers = config_data.get("providers")
+        if not isinstance(providers, dict):
+            return
+        known = {spec.id for spec in PROVIDERS}
+        for provider_id in [p for p in providers if p not in known]:
+            logger.warning("Ignoring settings for unknown provider %r", provider_id)
+            del providers[provider_id]
+
+    @staticmethod
     def _replace_retired_models(config_data: Dict[str, Any]) -> None:
         """Swap a saved model its provider has shut down for today's default.
 
@@ -175,22 +272,40 @@ class ConfigManager:
         that later went away sits in every file that was ever saved, and a new
         default alone reaches none of them (#32). Only the IDs in
         `RETIRED_MODELS` move: a model this app has never heard of is the
-        user's to name, and may well be served by their own endpoint.
+        user's to name, and may well be served by their own endpoint. Every
+        place a model is named gets the same treatment: the translation and
+        answer models, and each provider's `enabled_models`.
         """
-        defaults = AppSettings()
-        for service, retired in RETIRED_MODELS.items():
-            section = config_data.get(service)
-            if not isinstance(section, dict):
-                continue
-            model = section.get("model")
-            if isinstance(model, str) and model.strip() in retired:
-                replacement = getattr(defaults, service).model
+
+        def replacement(service: Any, model: Any) -> Optional[str]:
+            retired = RETIRED_MODELS.get(service) if isinstance(service, str) else None
+            if retired and isinstance(model, str) and model.strip() in retired:
+                default = provider(service).default_model
                 logger.info(
                     "%s model %s has been shut down by its provider; using %s",
-                    service, model, replacement,
+                    service, model, default,
                 )
-                section["model"] = replacement
-    
+                return default
+            return None
+
+        for section_name, field in _MODEL_REF_PATHS:
+            section = config_data.get(section_name)
+            ref = section.get(field) if isinstance(section, dict) else None
+            if isinstance(ref, dict):
+                new = replacement(ref.get("provider"), ref.get("model"))
+                if new is not None:
+                    ref["model"] = new
+
+        providers = config_data.get("providers")
+        if not isinstance(providers, dict):
+            return
+        for provider_id, entry in providers.items():
+            models = entry.get("enabled_models") if isinstance(entry, dict) else None
+            if not isinstance(models, list):
+                continue
+            swapped = [replacement(provider_id, m) or m for m in models]
+            entry["enabled_models"] = list(dict.fromkeys(swapped))
+
     def save_settings(self, settings: AppSettings) -> bool:
         """Save settings to the TOML file, atomically.
 
@@ -264,8 +379,13 @@ class ConfigManager:
         backup = self.config_file.with_name(self.config_file.name + ".bak")
         try:
             document = tomlkit.parse(previous)
-            for service in KEYED_SERVICES:
-                section = document.get(service)
+            # Both shapes: the save that converts a config from before #85
+            # backs up the old one, whose keys sit in top-level tables.
+            sections = [document.get(spec.id) for spec in PROVIDERS]
+            providers = document.get("providers")
+            if isinstance(providers, dict):
+                sections += list(providers.values())
+            for section in sections:
                 if isinstance(section, dict):
                     section.pop("api_key", None)
                     section.pop("api_key_salt", None)
@@ -281,14 +401,15 @@ class ConfigManager:
         """Load configuration from environment variables."""
         env_config = {}
         
-        # Per-service API key + model overrides, e.g. OPENAI_API_KEY /
-        # OPENAI_MODEL.
+        # Per-provider API keys, e.g. OPENAI_API_KEY. `<PREFIX>_MODEL` is read
+        # by `_models_from_environment`: a model is no longer a field of the
+        # provider's section, so it can't be merged in like one.
         for service in KEYED_SERVICES:
             prefix = provider(service).env_prefix
             if api_key := os.getenv(f"{prefix}_API_KEY"):
-                env_config.setdefault(service, {})["api_key"] = api_key
-            if model := os.getenv(f"{prefix}_MODEL"):
-                env_config.setdefault(service, {})["model"] = model
+                env_config.setdefault("providers", {}).setdefault(service, {})[
+                    "api_key"
+                ] = api_key
 
         # Application settings
         if debug := os.getenv("DEBUG_MODE"):
@@ -310,6 +431,41 @@ class ConfigManager:
         return env_config
     
     @staticmethod
+    def _models_from_environment() -> Dict[str, str]:
+        """`OPENAI_MODEL` & friends, per provider id."""
+        models = {}
+        for service in KEYED_SERVICES:
+            model = os.getenv(f"{provider(service).env_prefix}_MODEL", "").strip()
+            if model:
+                models[service] = model
+        return models
+
+    @staticmethod
+    def _apply_environment_models(
+        config_data: Dict[str, Any], models: Dict[str, str]
+    ) -> None:
+        """Make an environment model the one its provider runs, as
+        `AppSettings.remember_model` would, and the translation model when its
+        provider is the one translating — what `OPENAI_MODEL` did when the
+        model was a field of `[openai]`."""
+        if not models:
+            return
+        providers = config_data.get("providers")
+        if not isinstance(providers, dict):
+            providers = config_data["providers"] = {}
+        for service, model in models.items():
+            entry = providers.get(service)
+            if not isinstance(entry, dict):
+                entry = providers[service] = {}
+            enabled = entry.get("enabled_models")
+            enabled = enabled if isinstance(enabled, list) else []
+            entry["enabled_models"] = [model] + [m for m in enabled if m != model]
+            translation = config_data.get("translation")
+            ref = translation.get("model") if isinstance(translation, dict) else None
+            if isinstance(ref, dict) and ref.get("provider") == service:
+                ref["model"] = model
+
+    @staticmethod
     def _keep_environment_keys_off_endpoints(
         config_data: Dict[str, Any], env_config: Dict[str, Any]
     ) -> None:
@@ -322,11 +478,15 @@ class ConfigManager:
         start, which would then go to whatever endpoint was saved (#32). So a
         service with an endpoint of its own keeps the key saved with it.
         """
+        env_providers = env_config.get("providers") or {}
+        saved_providers = config_data.get("providers")
+        if not isinstance(saved_providers, dict):
+            saved_providers = {}
         for service in KEYED_SERVICES:
-            env_section = env_config.get(service)
+            env_section = env_providers.get(service)
             if not env_section or "api_key" not in env_section:
                 continue
-            section = config_data.get(service)
+            section = saved_providers.get(service)
             base_url = section.get("base_url") if isinstance(section, dict) else None
             try:
                 base_url = normalize_base_url(base_url)
@@ -382,33 +542,37 @@ class ConfigManager:
         `forget_unreadable_key`), so clearing a key still clears it.
         """
         safe_config = config_dict.copy()
+        providers = safe_config.get("providers")
+        if not isinstance(providers, dict):
+            return safe_config
+        providers = safe_config["providers"] = providers.copy()
 
         for service in KEYED_SERVICES:
-            if service in safe_config and isinstance(safe_config[service], dict):
-                safe_config[service] = safe_config[service].copy()
-                api_key = safe_config[service].get("api_key")
+            if service in providers and isinstance(providers[service], dict):
+                section = providers[service] = providers[service].copy()
+                api_key = section.get("api_key")
                 if not api_key:
                     preserved = self._unreadable_keys.get(service)
                     if preserved is not None:
                         stored, stored_salt = preserved
-                        safe_config[service]["api_key"] = stored
+                        section["api_key"] = stored
                         if stored_salt:
-                            safe_config[service]["api_key_salt"] = stored_salt
+                            section["api_key_salt"] = stored_salt
                         else:
-                            safe_config[service].pop("api_key_salt", None)
+                            section.pop("api_key_salt", None)
                         continue
-                    safe_config[service]["api_key"] = ""
-                    safe_config[service].pop("api_key_salt", None)
+                    section["api_key"] = ""
+                    section.pop("api_key_salt", None)
                     continue
                 if isinstance(api_key, str) and api_key.startswith("${"):
-                    safe_config[service]["api_key_salt"] = ""
+                    section["api_key_salt"] = ""
                     continue
                 encrypted_key, salt = encrypt_api_key(api_key)
-                safe_config[service]["api_key"] = encrypted_key
+                section["api_key"] = encrypted_key
                 if salt:
-                    safe_config[service]["api_key_salt"] = salt
+                    section["api_key_salt"] = salt
                 else:
-                    safe_config[service].pop("api_key_salt", None)
+                    section.pop("api_key_salt", None)
 
         return safe_config
 
@@ -423,10 +587,13 @@ class ConfigManager:
         only required for the legacy one. Re-encryption into this platform's
         current scheme happens on the next `save_settings`.
         """
+        providers = config_data.get("providers")
+        if not isinstance(providers, dict):
+            return
         for service in KEYED_SERVICES:
-            if service not in config_data or not isinstance(config_data[service], dict):
+            if service not in providers or not isinstance(providers[service], dict):
                 continue
-            service_data = config_data[service]
+            service_data = providers[service]
             encrypted_key = service_data.get("api_key")
             salt = service_data.get("api_key_salt")
             if not isinstance(salt, str):
@@ -452,12 +619,14 @@ class ConfigManager:
                         "and restart, or enter the key again in Settings.",
                         service,
                     )
-                    # Dropped, not set to None: `service_data` is a tomlkit
-                    # table and those refuse a None value. Assigning one raised
-                    # out of the whole `load_settings` file branch, which left
-                    # the *ciphertext* standing as the key — sent verbatim to
-                    # the provider as a credential. Removing the field lets
-                    # `AppSettings`'s own default (None) apply.
+                    # Dropped, so `AppSettings`'s own default (None) applies.
+                    # This was once an assignment of None into a tomlkit
+                    # table, which refuses one: the raise aborted the whole
+                    # `load_settings` file branch and left the *ciphertext*
+                    # standing as the key — sent verbatim to the provider as
+                    # a credential. The file is unwrapped to plain dicts now,
+                    # but whatever goes wrong here, the ciphertext must not
+                    # survive as the key.
                     service_data.pop("api_key", None)
                 else:
                     self._unreadable_keys.pop(service, None)

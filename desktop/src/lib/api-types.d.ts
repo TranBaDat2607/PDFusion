@@ -215,6 +215,52 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/providers/{provider_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Update Provider
+         * @description Save one provider's key, endpoint, models and parameters.
+         *
+         *     Saves without checking the key with the provider: `POST .../verify` is
+         *     that step, and "Save anyway" has to exist. Unlike `PUT /config`, a first
+         *     key saved here does not move translation off Argos by itself; the caller
+         *     chooses with `PUT /config`'s `translation_model`.
+         */
+        put: operations["update_provider_providers__provider_id__put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/providers/{provider_id}/key": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Delete Provider Key
+         * @description Forget the saved key, a preserved unreadable one included. The
+         *     endpoint stays; a key entered later goes to it.
+         */
+        delete: operations["delete_provider_key_providers__provider_id__key_delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/providers/{provider_id}/models": {
         parameters: {
             query?: never;
@@ -893,10 +939,11 @@ export interface components {
             openai: components["schemas"]["APIKeyMaskedSettings"];
             processing: components["schemas"]["ProcessingSettings"];
             rag: components["schemas"]["RAGSettings"];
-            translation: components["schemas"]["TranslationSettings"];
+            translation: components["schemas"]["TranslationConfig"];
         };
         /** ConfigUpdateRequest */
         ConfigUpdateRequest: {
+            answer_model?: components["schemas"]["ModelRef"] | null;
             anthropic?: components["schemas"]["EndpointCredentialUpdate"] | null;
             /** Cache Translated Pdfs */
             cache_translated_pdfs?: boolean | null;
@@ -915,6 +962,7 @@ export interface components {
             max_parallel_chunks?: number | null;
             openai?: components["schemas"]["EndpointCredentialUpdate"] | null;
             preferred_service?: components["schemas"]["TranslationService"] | null;
+            translation_model?: components["schemas"]["ModelRef"] | null;
         };
         /** DocumentListResponse */
         DocumentListResponse: {
@@ -1226,6 +1274,19 @@ export interface components {
              */
             source: "listed" | "saved" | "suggested";
         };
+        /**
+         * ModelRef
+         * @description One model of one provider: what translates, or what answers in chat.
+         *
+         *     Any name the provider serves, not only a suggested one (#32). A provider
+         *     whose model is a fixed identifier (Argos) always names that one, so a
+         *     stale or hand-edited name can't reach its cache keys.
+         */
+        ModelRef: {
+            /** Model */
+            model: string;
+            provider: components["schemas"]["TranslationService"];
+        };
         /** OptionsResponse */
         OptionsResponse: {
             /** Languages */
@@ -1433,6 +1494,8 @@ export interface components {
             default_base_url?: string | null;
             /** Default Model */
             default_model: string;
+            /** Enabled Models */
+            enabled_models?: string[];
             /** Has Key */
             has_key: boolean;
             id: components["schemas"]["TranslationService"];
@@ -1445,6 +1508,12 @@ export interface components {
             label: string;
             /** Last Verified At */
             last_verified_at?: string | null;
+            /** Max Qps */
+            max_qps?: number | null;
+            /** Max Tokens */
+            max_tokens?: number | null;
+            /** Model */
+            model: string;
             /** Model Is Fixed */
             model_is_fixed: boolean;
             /**
@@ -1462,6 +1531,33 @@ export interface components {
             suggested_models: string[];
             /** Takes Endpoint */
             takes_endpoint: boolean;
+            /** Temperature */
+            temperature: number;
+        };
+        /**
+         * ProviderUpdateRequest
+         * @description One provider's key, endpoint, models and parameters. Left out (or
+         *     `null`), each is unchanged.
+         *
+         *     `api_key=""` clears the key. `base_url=""` returns to the provider's own
+         *     endpoint; changing it while a key is saved needs `api_key` in the same
+         *     body, the rule `PUT /config` keeps (#32). Bounds that differ per provider
+         *     — the temperature ceiling, whether it takes an endpoint at all — are
+         *     checked against the registry, and a 422 names the one broken.
+         */
+        ProviderUpdateRequest: {
+            /** Api Key */
+            api_key?: string | null;
+            /** Base Url */
+            base_url?: string | null;
+            /** Enabled Models */
+            enabled_models?: string[] | null;
+            /** Max Qps */
+            max_qps?: number | null;
+            /** Max Tokens */
+            max_tokens?: number | null;
+            /** Temperature */
+            temperature?: number | null;
         };
         /** ProvidersResponse */
         ProvidersResponse: {
@@ -1473,6 +1569,8 @@ export interface components {
          * @description RAG (Retrieval-Augmented Generation) settings.
          */
         RAGSettings: {
+            /** @description The model that answers in chat. None = the translation model */
+            answer_model?: components["schemas"]["ModelRef"] | null;
             /**
              * Auto Process Documents
              * @description Auto-process documents for RAG
@@ -1543,33 +1641,12 @@ export interface components {
             visible_page: number;
         };
         /**
-         * TranslationEstimate
-         * @description A rough count (`translators/usage_estimate.py`): PyMuPDF's text blocks
-         *     stand in for BabelDOC's paragraphs, and characters for tokens.
+         * TranslationConfig
+         * @description `[translation]` as the frontend reads it: the settings, plus
+         *     `preferred_service` — `model.provider` — which the toolbar and Settings
+         *     still read until they move to `model` (#86, #87).
          */
-        TranslationEstimate: {
-            /** Input Tokens */
-            input_tokens: number;
-            /** Output Tokens */
-            output_tokens: number;
-            /** Page Count */
-            page_count: number;
-            /** Pages Selected */
-            pages_selected: number;
-            /** Paragraphs */
-            paragraphs: number;
-        };
-        /**
-         * TranslationService
-         * @description Supported translation services.
-         * @enum {string}
-         */
-        TranslationService: "openai" | "gemini" | "anthropic" | "argos";
-        /**
-         * TranslationSettings
-         * @description Translation-specific settings.
-         */
-        TranslationSettings: {
+        TranslationConfig: {
             /**
              * Cache Max Size Mb
              * @description Soft cap for translation cache size (MB)
@@ -1622,16 +1699,14 @@ export interface components {
              * @default 5
              */
             min_text_length: number;
+            /** @description The model that translates */
+            model?: components["schemas"]["ModelRef"];
             /**
              * Pdf Cache Max Size Mb
              * @description Soft cap for the translated-PDF cache; oldest entries are LRU-evicted past this
              * @default 1000
              */
             pdf_cache_max_size_mb: number;
-            /**
-             * @description Preferred translation service
-             * @default argos
-             */
             preferred_service: components["schemas"]["TranslationService"];
             /**
              * Preserve Formatting
@@ -1640,6 +1715,29 @@ export interface components {
              */
             preserve_formatting: boolean;
         };
+        /**
+         * TranslationEstimate
+         * @description A rough count (`translators/usage_estimate.py`): PyMuPDF's text blocks
+         *     stand in for BabelDOC's paragraphs, and characters for tokens.
+         */
+        TranslationEstimate: {
+            /** Input Tokens */
+            input_tokens: number;
+            /** Output Tokens */
+            output_tokens: number;
+            /** Page Count */
+            page_count: number;
+            /** Pages Selected */
+            pages_selected: number;
+            /** Paragraphs */
+            paragraphs: number;
+        };
+        /**
+         * TranslationService
+         * @description Supported translation services.
+         * @enum {string}
+         */
+        TranslationService: "openai" | "gemini" | "anthropic" | "argos";
         /**
          * ValidateRequest
          * @description What to check against the provider. Whatever is left out comes from the
@@ -2086,6 +2184,76 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ProvidersResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_provider_providers__provider_id__put: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                provider_id: components["schemas"]["TranslationService"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ProviderUpdateRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProviderInfo"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_provider_key_providers__provider_id__key_delete: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                provider_id: components["schemas"]["TranslationService"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProviderInfo"];
                 };
             };
             /** @description Validation Error */

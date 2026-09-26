@@ -8,16 +8,21 @@ run) is in architecture-notes § "LLM endpoints and models".
 
 `/config/validate` and `/config/models/{service}` are thin wrappers over
 `verify` and `catalog_for` here, until the per-service API is retired (#88).
+So is the key and endpoint half of `PUT /config`: it changes them through
+`endpoint_change_refusal`, `apply_key_and_endpoint` and `save_settings` below,
+the same three `PUT /providers/{id}` uses (#85).
 """
 
 import asyncio
 import logging
 import sqlite3
-from typing import Iterable, List, Optional, Tuple
+from dataclasses import dataclass
+from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 from fastapi import APIRouter, Depends, HTTPException
+from pydantic import ValidationError
 
-from ...config import TranslationService, get_config_manager, get_settings
+from ...config import AppSettings, TranslationService, get_config_manager, get_settings
 from ...providers import catalog
 from ...providers.listing import ListedModel, Listing, model_matches
 from ...providers.registry import PROVIDERS, ProviderSpec, provider
@@ -29,6 +34,7 @@ from ..schemas import (
     ModelRecord,
     ProviderInfo,
     ProvidersResponse,
+    ProviderUpdateRequest,
     VerifyRequest,
     VerifyResponse,
 )
@@ -107,7 +113,7 @@ def _listed_response(
 
 
 def _saved(service_id: str):
-    return getattr(get_settings(), service_id)
+    return get_settings().providers[service_id]
 
 
 def resolve_probe_target(
@@ -231,8 +237,9 @@ async def catalog_for(service: TranslationService, refresh: bool) -> ModelCatalo
         )
 
     saved = _saved(spec.id)
-    base_url = getattr(saved, "base_url", None)
-    fallback = _fallback_records(spec, saved.model, custom_endpoint=base_url is not None)
+    saved_model = get_settings().model_for(spec.id)
+    base_url = saved.base_url
+    fallback = _fallback_records(spec, saved_model, custom_endpoint=base_url is not None)
     if not saved.api_key:
         unreadable = get_config_manager().has_unreadable_key(spec.id)
         return ModelCatalogResponse(
@@ -243,7 +250,7 @@ async def catalog_for(service: TranslationService, refresh: bool) -> ModelCatalo
 
     entry = await catalog_call("get", spec.id, base_url)
     if entry is not None and not refresh and catalog.is_fresh(entry):
-        return _listed_response(entry.listing, entry.fetched_at, saved.model, entry.key_state)
+        return _listed_response(entry.listing, entry.fetched_at, saved_model, entry.key_state)
 
     try:
         listing = await catalog.list_models(spec.id, saved.api_key, base_url)
@@ -259,7 +266,7 @@ async def catalog_for(service: TranslationService, refresh: bool) -> ModelCatalo
         if entry is not None and entry.listing is not None:
             # A stale list beats none while the server is away.
             return _listed_response(
-                entry.listing, entry.fetched_at, saved.model, entry.key_state, str(exc)
+                entry.listing, entry.fetched_at, saved_model, entry.key_state, str(exc)
             )
         return ModelCatalogResponse(
             models=fallback,
@@ -269,7 +276,113 @@ async def catalog_for(service: TranslationService, refresh: bool) -> ModelCatalo
 
     now = now_ms()
     await catalog_call("put", spec.id, base_url, listing, now=now)
-    return _listed_response(listing, now, saved.model, "valid")
+    return _listed_response(listing, now, saved_model, "valid")
+
+
+# ---------------------------------------------------------------------------
+# changing a provider's settings, shared with PUT /config
+# ---------------------------------------------------------------------------
+
+
+def endpoint_change_refusal(
+    current: Dict[str, Any],
+    spec: ProviderSpec,
+    api_key: Optional[str],
+    base_url: Optional[str],
+) -> Optional[str]:
+    """Why this update may not change the endpoint, or `None` if it may.
+
+    A saved key is only ever sent to the endpoint it was saved for. `GET
+    /config` never hands a key out; without this, anything able to change the
+    endpoint could point it at a server of its own and read the key off the
+    next request (#32). A key the manager is preserving unread counts as
+    saved: it decrypts again once the keystore is reachable, and would then go
+    to whatever endpoint was set meanwhile.
+
+    Callers check every provider in a request before applying anything, so a
+    refusal leaves the settings and the preserved-key records untouched.
+    """
+    if api_key is not None or base_url is None:
+        return None
+    section = current["providers"][spec.id]
+    if (base_url or None) == section.get("base_url"):
+        return None
+    if section.get("api_key") or get_config_manager().has_unreadable_key(spec.id):
+        return f"Enter the {spec.label} API key again to change its endpoint."
+    return None
+
+
+@dataclass
+class KeyChange:
+    # A key was set or cleared: it is now the only key, and a ciphertext the
+    # manager preserves unread must not come back on the save.
+    rekeyed: bool = False
+    # A key or the endpoint changed: the catalog's rows describe the old pair.
+    stale_catalog: bool = False
+    # A non-empty key was set.
+    new_key: bool = False
+
+
+def apply_key_and_endpoint(
+    current: Dict[str, Any],
+    spec: ProviderSpec,
+    api_key: Optional[str],
+    base_url: Optional[str],
+) -> KeyChange:
+    """Set the key (`""` clears it) and the endpoint (`""` is the provider's
+    own) in a settings dump; `None` leaves either alone. Only after
+    `endpoint_change_refusal`."""
+    section = current["providers"][spec.id]
+    change = KeyChange()
+    if api_key is not None:
+        section["api_key"] = api_key or None
+        change.rekeyed = change.stale_catalog = True
+        change.new_key = bool(api_key)
+    if base_url is not None and (base_url or None) != section.get("base_url"):
+        section["base_url"] = base_url or None
+        change.stale_catalog = True
+    return change
+
+
+def _validation_detail(exc: ValidationError) -> str:
+    error = exc.errors()[0]
+    where = ".".join(str(part) for part in error.get("loc", ()))
+    return f"{where}: {error.get('msg')}" if where else str(error.get("msg"))
+
+
+async def save_settings(
+    current: Dict[str, Any],
+    rekeyed: Iterable[str] = (),
+    stale_catalog: Iterable[str] = (),
+) -> AppSettings:
+    """Validate a settings dump, save it, and make it the settings.
+
+    A value the registry refuses for its provider (a temperature over its
+    ceiling) is a 422 before anything changes. Preserved ciphertext is
+    forgotten only for a key actually being replaced, and only once the new
+    settings are known to be valid. The catalog is dropped after the save,
+    never before: a refused save must leave it describing the key that is
+    still in the file.
+    """
+    mgr = get_config_manager()
+    try:
+        new_settings = AppSettings(**current)
+    except ValidationError as exc:
+        raise HTTPException(status_code=422, detail=_validation_detail(exc)) from None
+    for provider_id in rekeyed:
+        mgr.forget_unreadable_key(provider_id)
+    # Off the loop thread: `save_settings` fsyncs and rewrites the backup, and
+    # this loop is also carrying any in-flight translation's SSE stream.
+    if not await asyncio.to_thread(mgr.save_settings, new_settings):
+        # Nothing was written, so a key dropped from the preserved-ciphertext
+        # records above is still in the file. Re-read it, or a later unrelated
+        # save would blank the value this request failed to replace.
+        await asyncio.to_thread(mgr.load_settings)
+        raise HTTPException(status_code=500, detail="Failed to save settings")
+    mgr._settings = new_settings  # refresh cached singleton
+    for provider_id in stale_catalog:
+        await catalog_call("invalidate", provider_id)
+    return new_settings
 
 
 # ---------------------------------------------------------------------------
@@ -277,45 +390,105 @@ async def catalog_for(service: TranslationService, refresh: bool) -> ModelCatalo
 # ---------------------------------------------------------------------------
 
 
+async def _provider_info(spec: ProviderSpec, settings: AppSettings) -> ProviderInfo:
+    saved = settings.providers[spec.id]
+    has_key = bool(saved.api_key) if spec.requires_key else False
+    entry = await catalog_call("get", spec.id, saved.base_url) if has_key else None
+    if spec.requires_key and get_config_manager().has_unreadable_key(spec.id):
+        key_state: KeyState = "unreadable"
+    elif entry is not None:
+        key_state = entry.key_state
+    else:
+        key_state = "unverified"
+    return ProviderInfo(
+        id=TranslationService(spec.id),
+        label=spec.label,
+        short_label=spec.short_label,
+        protocol=spec.protocol,
+        requires_key=spec.requires_key,
+        takes_endpoint=spec.takes_endpoint,
+        default_base_url=spec.default_base_url,
+        default_model=spec.default_model,
+        suggested_models=list(spec.suggested_models),
+        model_is_fixed=spec.model_is_fixed,
+        signup_url=spec.signup_url,
+        has_key=has_key,
+        base_url=saved.base_url,
+        key_state=key_state,
+        last_verified_at=_iso(entry.verified_at) if entry else None,
+        catalog_fetched_at=_iso(entry.fetched_at) if entry else None,
+        catalog_fresh=bool(entry and catalog.is_fresh(entry)),
+        model=settings.model_for(spec.id),
+        enabled_models=list(saved.enabled_models),
+        temperature=saved.temperature,
+        max_tokens=saved.max_tokens,
+        max_qps=saved.max_qps,
+    )
+
+
 @router.get("", response_model=ProvidersResponse)
 async def list_providers() -> ProvidersResponse:
     """Every provider, with where its key stands. Reads only; never lists."""
     settings = get_settings()
-    mgr = get_config_manager()
-    providers = []
-    for spec in PROVIDERS:
-        saved = getattr(settings, spec.id)
-        has_key = bool(getattr(saved, "api_key", None))
-        base_url = getattr(saved, "base_url", None)
-        entry = await catalog_call("get", spec.id, base_url) if has_key else None
-        if spec.requires_key and mgr.has_unreadable_key(spec.id):
-            key_state: KeyState = "unreadable"
-        elif entry is not None:
-            key_state = entry.key_state
-        else:
-            key_state = "unverified"
-        providers.append(
-            ProviderInfo(
-                id=TranslationService(spec.id),
-                label=spec.label,
-                short_label=spec.short_label,
-                protocol=spec.protocol,
-                requires_key=spec.requires_key,
-                takes_endpoint=spec.takes_endpoint,
-                default_base_url=spec.default_base_url,
-                default_model=spec.default_model,
-                suggested_models=list(spec.suggested_models),
-                model_is_fixed=spec.model_is_fixed,
-                signup_url=spec.signup_url,
-                has_key=has_key,
-                base_url=base_url,
-                key_state=key_state,
-                last_verified_at=_iso(entry.verified_at) if entry else None,
-                catalog_fetched_at=_iso(entry.fetched_at) if entry else None,
-                catalog_fresh=bool(entry and catalog.is_fresh(entry)),
-            )
+    return ProvidersResponse(
+        providers=[await _provider_info(spec, settings) for spec in PROVIDERS]
+    )
+
+
+@router.put("/{provider_id}", response_model=ProviderInfo)
+async def update_provider(
+    provider_id: TranslationService, payload: ProviderUpdateRequest
+) -> ProviderInfo:
+    """Save one provider's key, endpoint, models and parameters.
+
+    Saves without checking the key with the provider: `POST .../verify` is
+    that step, and "Save anyway" has to exist. Unlike `PUT /config`, a first
+    key saved here does not move translation off Argos by itself; the caller
+    chooses with `PUT /config`'s `translation_model`.
+    """
+    spec = provider(provider_id.value)
+    if payload.api_key is not None and not spec.requires_key:
+        raise HTTPException(status_code=422, detail=f"{spec.label} takes no API key.")
+    if payload.base_url and not spec.takes_endpoint:
+        raise HTTPException(
+            status_code=422, detail=f"{spec.label} takes no endpoint of its own."
         )
-    return ProvidersResponse(providers=providers)
+    current = get_config_manager().settings.model_dump()
+    refusal = endpoint_change_refusal(current, spec, payload.api_key, payload.base_url)
+    if refusal:
+        raise HTTPException(status_code=422, detail=refusal)
+    change = apply_key_and_endpoint(current, spec, payload.api_key, payload.base_url)
+
+    section = current["providers"][spec.id]
+    # `null` leaves these two alone; the two that can be unset take `null`
+    # sent explicitly as "back to the built-in default".
+    for field in ("enabled_models", "temperature"):
+        value = getattr(payload, field)
+        if value is not None:
+            section[field] = value
+    for field in ("max_tokens", "max_qps"):
+        if field in payload.model_fields_set:
+            section[field] = getattr(payload, field)
+
+    settings = await save_settings(
+        current,
+        rekeyed=[spec.id] if change.rekeyed else [],
+        stale_catalog=[spec.id] if change.stale_catalog else [],
+    )
+    return await _provider_info(spec, settings)
+
+
+@router.delete("/{provider_id}/key", response_model=ProviderInfo)
+async def delete_provider_key(provider_id: TranslationService) -> ProviderInfo:
+    """Forget the saved key, a preserved unreadable one included. The
+    endpoint stays; a key entered later goes to it."""
+    spec = provider(provider_id.value)
+    if not spec.requires_key:
+        raise HTTPException(status_code=422, detail=f"{spec.label} has no API key.")
+    current = get_config_manager().settings.model_dump()
+    current["providers"][spec.id]["api_key"] = None
+    settings = await save_settings(current, rekeyed=[spec.id], stale_catalog=[spec.id])
+    return await _provider_info(spec, settings)
 
 
 @router.get("/{provider_id}/models", response_model=ModelCatalogResponse)

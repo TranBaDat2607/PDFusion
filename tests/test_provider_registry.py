@@ -59,7 +59,7 @@ def test_every_spec_is_complete(spec):
 @pytest.mark.parametrize("spec", PROVIDERS, ids=lambda spec: spec.id)
 def test_the_default_model_is_the_first_suggestion_and_the_settings_default(spec):
     assert spec.suggested_models[0] == spec.default_model
-    assert getattr(AppSettings(), spec.id).model == spec.default_model
+    assert AppSettings().model_for(spec.id) == spec.default_model
 
 
 @pytest.mark.parametrize("spec", PROVIDERS, ids=lambda spec: spec.id)
@@ -93,7 +93,7 @@ def test_priorities_are_distinct():
 def test_has_api_key_takes_a_member_or_its_value(service):
     """`TranslationSettings` doesn't validate assignment, so a plain string can
     reach it; the old if/elif compared with `==` and took either."""
-    settings = AppSettings(gemini={"api_key": "k"})
+    settings = AppSettings(providers={"gemini": {"api_key": "k"}})
 
     assert settings.has_api_key(service)
     assert AppSettings().has_api_key("argos")

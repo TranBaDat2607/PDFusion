@@ -9,6 +9,7 @@ from .sse_schemas import AskResultPayload
 from ..config import (
     GUISettings,
     LanguageCode,
+    ModelRef,
     ProcessingSettings,
     RAGSettings,
     TranslationService,
@@ -53,7 +54,18 @@ class APIKeyMaskedSettings(BaseModel):
     extra: Dict[str, Any] = Field(default_factory=dict)
 
 
+class TranslationConfig(TranslationSettings):
+    """`[translation]` as the frontend reads it: the settings, plus
+    `preferred_service` — `model.provider` — which the toolbar and Settings
+    still read until they move to `model` (#86, #87)."""
+
+    preferred_service: TranslationService
+
+
 class ConfigResponse(BaseModel):
+    # One block per provider, as before #85, for the frontend until #88: the
+    # key's presence, the endpoint, and the model it runs when chosen
+    # (`AppSettings.model_for`).
     openai: APIKeyMaskedSettings
     gemini: APIKeyMaskedSettings
     anthropic: APIKeyMaskedSettings
@@ -61,9 +73,8 @@ class ConfigResponse(BaseModel):
     # Real nested settings models, not Dict[str, Any] — the latter would erase
     # exactly the fields (default_source_lang, default_target_lang,
     # preferred_service, ...) whose drift from the hand-written frontend types
-    # is what issue #27 is about. `routes/config.py` passes the settings
-    # objects straight through; the wire format is identical either way.
-    translation: TranslationSettings
+    # is what issue #27 is about.
+    translation: TranslationConfig
     rag: RAGSettings
     gui: GUISettings
     processing: ProcessingSettings
@@ -108,10 +119,19 @@ class EndpointCredentialUpdate(ServiceCredentialUpdate):
 
 
 class ConfigUpdateRequest(BaseModel):
+    # The per-provider blocks and `preferred_service` are the shape from
+    # before #85, kept for the frontend until #88. A block's `model` becomes
+    # the model that provider runs; `preferred_service` makes that provider's
+    # model the translation model. `PUT /providers/{id}` is the new way to
+    # set a key, and `translation_model` the new way to choose.
     openai: Optional[EndpointCredentialUpdate] = None
     gemini: Optional[ServiceCredentialUpdate] = None
     anthropic: Optional[EndpointCredentialUpdate] = None
     preferred_service: Optional[TranslationService] = None
+    # Wins over `preferred_service` and the blocks' models in the same body.
+    translation_model: Optional[ModelRef] = None
+    # Left out: unchanged. `null`: answer with the translation model.
+    answer_model: Optional[ModelRef] = None
     default_source_lang: Optional[LanguageCode] = None
     default_target_lang: Optional[LanguageCode] = None
     chat_enabled: Optional[bool] = None
@@ -491,6 +511,50 @@ class ProviderInfo(BaseModel):
     last_verified_at: Optional[str] = None
     catalog_fetched_at: Optional[str] = None
     catalog_fresh: bool = False
+    # The saved settings beside the key (#85). `model` is the one it runs
+    # when chosen without one named: `enabled_models[0]`, or the translation
+    # model when this provider translates, or its default.
+    model: str
+    enabled_models: List[str] = Field(default_factory=list)
+    temperature: float
+    max_tokens: Optional[int] = None
+    max_qps: Optional[float] = None
+
+
+class ProviderUpdateRequest(BaseModel):
+    """One provider's key, endpoint, models and parameters. Left out (or
+    `null`), each is unchanged.
+
+    `api_key=""` clears the key. `base_url=""` returns to the provider's own
+    endpoint; changing it while a key is saved needs `api_key` in the same
+    body, the rule `PUT /config` keeps (#32). Bounds that differ per provider
+    — the temperature ceiling, whether it takes an endpoint at all — are
+    checked against the registry, and a 422 names the one broken.
+    """
+
+    api_key: Optional[str] = None
+    base_url: Optional[str] = None
+    enabled_models: Optional[List[Annotated[str, Field(max_length=200)]]] = Field(
+        None, max_length=500
+    )
+    temperature: Optional[float] = Field(None, ge=0.0, le=2.0)
+    max_tokens: Optional[int] = Field(None, ge=1)
+    max_qps: Optional[float] = Field(None, ge=0.1, le=200.0)
+
+    @field_validator("base_url")
+    @classmethod
+    def _endpoint(cls, value: Optional[str]) -> Optional[str]:
+        return _endpoint_or_blank(value)
+
+    @field_validator("enabled_models")
+    @classmethod
+    def _models_are_named(cls, value: Optional[List[str]]) -> Optional[List[str]]:
+        if value is None:
+            return None
+        names = [name.strip() for name in value]
+        if not all(names):
+            raise ValueError("a model name must not be blank")
+        return list(dict.fromkeys(names))
 
 
 class ProvidersResponse(BaseModel):

@@ -44,7 +44,7 @@ class TranslatorFactory:
 
         # Use provided service or fallback to config
         if service is None:
-            service = settings.translation.preferred_service
+            service = settings.translation.model.provider
 
         # Use provided languages or fallback to config
         if lang_in is None:
@@ -74,9 +74,11 @@ class TranslatorFactory:
 
     @classmethod
     def _get_service_config(self, service: TranslationService, settings) -> Dict:
-        """Get configuration for specific service.
-
-        A service's settings section is exactly the keyword arguments its
-        translator takes, so the whole section goes.
-        """
-        return getattr(settings, TranslationService(service).value).model_dump()
+        """The keyword arguments `service`'s translator takes: its provider
+        settings, less the list of models offered, plus the model it runs
+        (`AppSettings.model_for`). A caller naming a model of its own — chat's
+        `answer_model` — passes `model=`, which wins."""
+        provider_id = TranslationService(service).value
+        config = settings.providers[provider_id].model_dump(exclude={"enabled_models"})
+        config["model"] = settings.model_for(provider_id)
+        return config

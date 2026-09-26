@@ -276,7 +276,7 @@ class PDFProcessor:
             source_lang, target_lang = resolve_languages(
                 self.settings, source_lang, target_lang
             )
-            translation_service = translation_service or self.settings.translation.preferred_service
+            translation_service = translation_service or self.settings.translation.model.provider
 
             # Soft-fallback: if the user picked an LLM service but didn't
             # provide a key, silently fall back to Argos and let the UI toast.
@@ -699,10 +699,7 @@ class PDFProcessor:
         so changing model (e.g. gpt-4 → gpt-4o) invalidates cache entries
         without manual intervention. Argos has a fixed model.
         """
-        spec = provider(TranslationService(service).value)
-        if spec.model_is_fixed:
-            return spec.default_model
-        return getattr(getattr(self.settings, spec.id, None), "model", None)
+        return self.settings.model_for(service)
 
     def _resolve_effective_service(
         self, requested: TranslationService

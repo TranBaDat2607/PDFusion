@@ -62,10 +62,15 @@ def test_every_sse_model_lands_in_components_schemas() -> None:
 def test_config_response_no_longer_erases_nested_settings() -> None:
     """The fix this issue required: ConfigResponse's translation/rag/gui/
     processing fields must be real models, or the generated frontend type for
-    `GET /config` would be strictly worse than what it replaces."""
+    `GET /config` would be strictly worse than what it replaces. `translation`
+    is `TranslationSettings` plus the `preferred_service` the frontend still
+    reads (#85)."""
     schema = generate_schema()
     props = schema["components"]["schemas"]["ConfigResponse"]["properties"]
-    assert props["translation"] == {"$ref": "#/components/schemas/TranslationSettings"}
+    assert props["translation"] == {"$ref": "#/components/schemas/TranslationConfig"}
+    translation = schema["components"]["schemas"]["TranslationConfig"]["properties"]
+    assert translation["model"]["$ref"] == "#/components/schemas/ModelRef"
+    assert "preferred_service" in translation
     assert props["rag"] == {"$ref": "#/components/schemas/RAGSettings"}
     assert props["gui"] == {"$ref": "#/components/schemas/GUISettings"}
     assert props["processing"] == {"$ref": "#/components/schemas/ProcessingSettings"}

@@ -90,6 +90,13 @@ class ProviderSpec:
     model_is_fixed: bool = False
     # Where to get a key, linked from the Settings page (#86).
     signup_url: Optional[str] = None
+    # The highest `temperature` its API takes. OpenAI's scale runs to 2; the
+    # others refuse anything above 1 with a 400 on every paragraph.
+    max_temperature: float = 1.0
+    # `max_tokens` a fresh config carries. `None` leaves it to the translator:
+    # OpenAI's reasoning models refuse the parameter outright, while
+    # Anthropic's API requires one on every request.
+    default_max_tokens: Optional[int] = None
 
 
 def _openai_translator() -> type:
@@ -158,6 +165,7 @@ PROVIDERS: Tuple[ProviderSpec, ...] = (
         default_qps=5.0,
         priority=0,
         signup_url="https://platform.openai.com/api-keys",
+        max_temperature=2.0,
     ),
     ProviderSpec(
         id="gemini",
@@ -224,6 +232,7 @@ PROVIDERS: Tuple[ProviderSpec, ...] = (
             "claude-opus-4-1-20250805",
         }),
         signup_url="https://console.anthropic.com/settings/keys",
+        default_max_tokens=4000,
     ),
     ProviderSpec(
         id="argos",

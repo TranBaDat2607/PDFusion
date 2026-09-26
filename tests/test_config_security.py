@@ -275,9 +275,9 @@ def manager(tmp_path, monkeypatch: pytest.MonkeyPatch) -> ConfigManager:
 
 def _with_key(key: str = KEY, model: str | None = None) -> AppSettings:
     settings = AppSettings()
-    settings.openai.api_key = key
+    settings.providers["openai"].api_key = key
     if model is not None:
-        settings.openai.model = model
+        settings.remember_model("openai", model)
     return settings
 
 
@@ -290,7 +290,7 @@ def test_settings_round_trip_through_the_file(manager: ConfigManager):
     assert manager.save_settings(_with_key())
 
     reloaded = ConfigManager(config_dir=manager.config_dir).load_settings()
-    assert reloaded.openai.api_key == KEY
+    assert reloaded.providers["openai"].api_key == KEY
 
 
 def test_the_key_is_not_written_in_the_clear(manager: ConfigManager):
@@ -311,7 +311,7 @@ def test_a_failed_write_leaves_the_previous_config_intact(
     assert manager.save_settings(_with_key("sk-replacement")) is False
 
     assert manager.config_file.read_text(encoding="utf-8") == before
-    assert ConfigManager(config_dir=manager.config_dir).load_settings().openai.api_key == KEY
+    assert ConfigManager(config_dir=manager.config_dir).load_settings().providers["openai"].api_key == KEY
 
 
 def test_a_failed_write_leaves_no_temp_file_behind(
@@ -380,7 +380,7 @@ def test_the_backup_of_a_legacy_config_holds_no_legacy_key(manager: ConfigManage
     ciphertext, salt_b64 = _write_legacy_config(manager.config_file)
 
     settings = ConfigManager(config_dir=manager.config_dir).load_settings()
-    assert settings.openai.api_key == KEY  # the legacy value still loads
+    assert settings.providers["openai"].api_key == KEY  # the legacy value still loads
     assert manager.save_settings(settings)
 
     backup = (manager.config_dir / "config.toml.bak").read_text(encoding="utf-8")
@@ -397,13 +397,13 @@ def test_a_migrating_save_rewrites_the_key_in_the_keystore_scheme(
     _write_legacy_config(manager.config_file)
 
     settings = ConfigManager(config_dir=manager.config_dir).load_settings()
-    assert settings.openai.api_key == KEY
+    assert settings.providers["openai"].api_key == KEY
     assert manager.save_settings(settings)
 
     saved = manager.config_file.read_text(encoding="utf-8")
     assert KEYSTORE_PREFIX in saved
     assert "api_key_salt" not in saved
-    assert ConfigManager(config_dir=manager.config_dir).load_settings().openai.api_key == KEY
+    assert ConfigManager(config_dir=manager.config_dir).load_settings().providers["openai"].api_key == KEY
 
 
 @on_windows
@@ -417,7 +417,7 @@ def test_a_migrating_save_rewrites_the_key_as_a_dpapi_blob(manager: ConfigManage
     saved = manager.config_file.read_text(encoding="utf-8")
     assert DPAPI_PREFIX in saved
     assert "api_key_salt" not in saved
-    assert ConfigManager(config_dir=manager.config_dir).load_settings().openai.api_key == KEY
+    assert ConfigManager(config_dir=manager.config_dir).load_settings().providers["openai"].api_key == KEY
 
 
 # ---------------------------------------------------------------------------
@@ -459,28 +459,28 @@ def test_a_key_that_cannot_be_decrypted_survives_an_unrelated_save(
     """
     assert manager.save_settings(_with_key(model="gpt-first"))
     stored_value = tomlkit.parse(manager.config_file.read_text(encoding="utf-8"))[
-        "openai"
-    ]["api_key"]
+        "providers"
+    ]["openai"]["api_key"]
     assert str(stored_value).startswith(KEYSTORE_PREFIX)
 
     entries = _lock_the_keystore(fake_keystore)
 
     locked = ConfigManager(config_dir=manager.config_dir)
     settings = locked.load_settings()
-    assert settings.openai.api_key is None, "an unreadable key is never handed out"
+    assert settings.providers["openai"].api_key is None, "an unreadable key is never handed out"
 
-    settings.openai.model = "gpt-second"  # an unrelated change, saved
+    settings.remember_model("openai", "gpt-second")  # an unrelated change, saved
     assert locked.save_settings(settings)
 
     saved = tomlkit.parse(manager.config_file.read_text(encoding="utf-8"))
-    assert saved["openai"]["api_key"] == stored_value
-    assert saved["openai"]["model"] == "gpt-second"
+    assert saved["providers"]["openai"]["api_key"] == stored_value
+    assert saved["providers"]["openai"]["enabled_models"][0] == "gpt-second"
 
     # And when the keystore comes back, nobody re-enters anything.
     _unlock_the_keystore(fake_keystore, entries)
     reloaded = ConfigManager(config_dir=manager.config_dir).load_settings()
-    assert reloaded.openai.api_key == KEY
-    assert reloaded.openai.model == "gpt-second"
+    assert reloaded.providers["openai"].api_key == KEY
+    assert reloaded.model_for("openai") == "gpt-second"
 
 
 def test_a_key_that_cannot_be_decrypted_never_becomes_the_key(
@@ -497,15 +497,15 @@ def test_a_key_that_cannot_be_decrypted_never_becomes_the_key(
     """
     assert manager.save_settings(_with_key(model="gpt-configured"))
     stored_value = tomlkit.parse(manager.config_file.read_text(encoding="utf-8"))[
-        "openai"
-    ]["api_key"]
+        "providers"
+    ]["openai"]["api_key"]
     _lock_the_keystore(fake_keystore)
 
     settings = ConfigManager(config_dir=manager.config_dir).load_settings()
 
-    assert settings.openai.api_key is None
-    assert settings.openai.api_key != str(stored_value)
-    assert settings.openai.model == "gpt-configured", "the file still loaded"
+    assert settings.providers["openai"].api_key is None
+    assert settings.providers["openai"].api_key != str(stored_value)
+    assert settings.model_for("openai") == "gpt-configured", "the file still loaded"
 
 
 def test_the_backup_of_a_preserved_key_still_holds_no_key_material(
@@ -539,12 +539,12 @@ def test_clearing_a_key_that_cannot_be_decrypted_still_clears_it(
     assert locked.has_unreadable_key("openai")
 
     locked.forget_unreadable_key("openai")
-    settings.openai.api_key = None
+    settings.providers["openai"].api_key = None
     assert locked.save_settings(settings)
 
     saved = tomlkit.parse(manager.config_file.read_text(encoding="utf-8"))
-    assert saved["openai"]["api_key"] == ""
-    assert "api_key_salt" not in saved["openai"]
+    assert saved["providers"]["openai"]["api_key"] == ""
+    assert "api_key_salt" not in saved["providers"]["openai"]
 
 
 def test_resetting_to_defaults_does_not_write_a_preserved_key_back(
@@ -558,4 +558,4 @@ def test_resetting_to_defaults_does_not_write_a_preserved_key_back(
     locked.reset_to_defaults()
 
     saved = tomlkit.parse(manager.config_file.read_text(encoding="utf-8"))
-    assert saved["openai"]["api_key"] == ""
+    assert saved["providers"]["openai"]["api_key"] == ""

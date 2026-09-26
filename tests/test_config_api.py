@@ -118,8 +118,8 @@ def test_an_endpoint_is_saved_with_its_key(client: TestClient, manager: ConfigMa
     assert response.status_code == 200
     assert response.json()["openai"]["base_url"] == OLLAMA
     reloaded = ConfigManager(config_dir=manager.config_dir).load_settings()
-    assert reloaded.openai.base_url == OLLAMA
-    assert reloaded.openai.api_key == "ollama"
+    assert reloaded.providers["openai"].base_url == OLLAMA
+    assert reloaded.providers["openai"].api_key == "ollama"
 
 
 def test_the_promotion_listing_checks_the_new_endpoint(
@@ -143,7 +143,7 @@ def test_changing_the_endpoint_needs_the_key_again(
     assert response.status_code == 422
     assert "API key" in response.json()["detail"]
     assert manager.config_file.read_text(encoding="utf-8") == before
-    assert manager.settings.openai.base_url is None
+    assert manager.settings.providers["openai"].base_url is None
 
 
 @pytest.mark.parametrize("typed_key, saved_key", [("ollama", "ollama"), ("", None)])
@@ -164,8 +164,8 @@ def test_a_key_from_the_environment_never_reaches_a_new_endpoint(
 
     assert response.status_code == 200
     reloaded = ConfigManager(config_dir=manager.config_dir).load_settings()
-    assert reloaded.openai.base_url == attacker
-    assert (reloaded.openai.api_key or None) == saved_key
+    assert reloaded.providers["openai"].base_url == attacker
+    assert (reloaded.providers["openai"].api_key or None) == saved_key
 
 
 def test_returning_to_the_provider_endpoint_needs_the_key_too(
@@ -174,7 +174,7 @@ def test_returning_to_the_provider_endpoint_needs_the_key_too(
     put(client, {"anthropic": {"api_key": "ollama", "base_url": "http://localhost:11434"}})
 
     assert put(client, {"anthropic": {"base_url": ""}}).status_code == 422
-    assert manager.settings.anthropic.base_url == "http://localhost:11434"
+    assert manager.settings.providers["anthropic"].base_url == "http://localhost:11434"
 
 
 def test_the_same_endpoint_typed_again_is_not_a_change(client: TestClient):
@@ -187,7 +187,7 @@ def test_an_endpoint_needs_no_key_when_none_is_saved(
     client: TestClient, manager: ConfigManager
 ):
     assert put(client, {"openai": {"base_url": OLLAMA}}).status_code == 200
-    assert manager.settings.openai.base_url == OLLAMA
+    assert manager.settings.providers["openai"].base_url == OLLAMA
 
 
 # ---------------------------------------------------------------------------
@@ -210,7 +210,7 @@ def unreadable_key(manager: ConfigManager) -> str:
         f'[openai]\napi_key = "{stored}"\n', encoding="utf-8"
     )
     manager._settings = None
-    assert manager.settings.openai.api_key is None
+    assert manager.settings.providers["openai"].api_key is None
     assert manager.has_unreadable_key("openai")
     return stored
 
@@ -236,7 +236,7 @@ def test_changing_the_endpoint_needs_a_key_that_could_not_be_read_again(
 
     assert response.status_code == 422
     assert "API key" in response.json()["detail"]
-    assert manager.settings.openai.base_url is None
+    assert manager.settings.providers["openai"].base_url is None
     assert unreadable_key in manager.config_file.read_text(encoding="utf-8")
 
 
@@ -249,8 +249,8 @@ def test_a_key_typed_over_one_that_could_not_be_read_replaces_it(
     assert unreadable_key not in manager.config_file.read_text(encoding="utf-8")
     assert not manager.has_unreadable_key("openai")
     reloaded = ConfigManager(config_dir=manager.config_dir).load_settings()
-    assert reloaded.openai.api_key == KEY
-    assert reloaded.openai.base_url == OLLAMA
+    assert reloaded.providers["openai"].api_key == KEY
+    assert reloaded.providers["openai"].base_url == OLLAMA
 
 
 def test_clearing_a_key_that_could_not_be_read_clears_it(
@@ -284,7 +284,7 @@ def test_a_refused_endpoint_change_forgets_no_preserved_key(
 
     assert refused.status_code == 422
     assert manager.has_unreadable_key("openai")
-    assert manager.settings.openai.api_key is None  # nothing was applied
+    assert manager.settings.providers["openai"].api_key is None  # nothing was applied
     assert put(client, {"chat_enabled": True}).status_code == 200
     assert unreadable_key in manager.config_file.read_text(encoding="utf-8")
 
@@ -303,7 +303,7 @@ def test_an_endpoint_must_be_a_web_url(client: TestClient, base_url: str):
 
 def test_a_model_is_any_name_trimmed(client: TestClient, manager: ConfigManager):
     assert put(client, {"openai": {"model": "  llama3.2:3b "}}).status_code == 200
-    assert manager.settings.openai.model == "llama3.2:3b"
+    assert manager.settings.model_for("openai") == "llama3.2:3b"
 
 
 def test_a_blank_model_is_refused(client: TestClient):
@@ -317,7 +317,7 @@ def test_every_default_model_is_the_first_suggestion(client: TestClient):
     defaults = AppSettings()
 
     for service in services:
-        assert service["models"][0] == getattr(defaults, service["code"]).model
+        assert service["models"][0] == defaults.model_for(service["code"])
 
 
 # ---------------------------------------------------------------------------
@@ -594,7 +594,7 @@ def test_no_promotion_without_a_listing_that_has_the_model(
     assert preferred(response) == "argos"
     assert lister.calls == [("openai", KEY, None)]
     reloaded = ConfigManager(config_dir=manager.config_dir).load_settings()
-    assert reloaded.openai.api_key == KEY
+    assert reloaded.providers["openai"].api_key == KEY
 
 
 def test_a_key_the_promotion_saw_refused_is_recorded_invalid(

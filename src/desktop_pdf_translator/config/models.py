@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Annotated, Dict, FrozenSet, List, Optional, Literal
 from urllib.parse import urlsplit
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, ValidationInfo, field_validator, model_validator
 
 from ..providers.registry import PROVIDERS, provider
 
@@ -60,68 +60,123 @@ RETIRED_MODELS: Dict[str, FrozenSet[str]] = {
 }
 
 
-class OpenAISettings(BaseModel):
-    """OpenAI translation service settings."""
-    
-    api_key: Optional[str] = Field(None, description="OpenAI API key")
-    model: str = Field(provider("openai").default_model, description="OpenAI model to use")
-    base_url: Optional[str] = Field(
-        None, description="OpenAI-compatible API endpoint. None = api.openai.com"
-    )
-    temperature: float = Field(0.3, ge=0.0, le=2.0, description="Translation creativity")
-    max_tokens: Optional[int] = Field(None, description="Maximum tokens per request")
-    max_qps: Optional[float] = Field(
-        None, ge=0.1, le=200.0,
-        description="Requests/sec cap shared across every concurrent job. None = built-in default",
-    )
-
-    @field_validator("base_url")
-    @classmethod
-    def _normalize_base_url(cls, value: Optional[str]) -> Optional[str]:
-        return normalize_base_url(value)
+ModelName = Annotated[str, Field(min_length=1, max_length=200)]
 
 
-class GeminiSettings(BaseModel):
-    """Google Gemini translation service settings."""
-    
-    api_key: Optional[str] = Field(None, description="Google AI API key")
-    model: str = Field(provider("gemini").default_model, description="Gemini model to use")
-    temperature: float = Field(0.3, ge=0.0, le=1.0, description="Translation creativity")
-    max_qps: Optional[float] = Field(
-        None, ge=0.1, le=200.0,
-        description="Requests/sec cap shared across every concurrent job. None = built-in default",
-    )
+class ModelRef(BaseModel):
+    """One model of one provider: what translates, or what answers in chat.
 
-
-class AnthropicSettings(BaseModel):
-    """Anthropic (Claude) translation service settings."""
-
-    api_key: Optional[str] = Field(None, description="Anthropic API key")
-    model: str = Field(provider("anthropic").default_model, description="Anthropic model to use")
-    base_url: Optional[str] = Field(
-        None, description="Anthropic-compatible API endpoint. None = api.anthropic.com"
-    )
-    temperature: float = Field(0.3, ge=0.0, le=1.0, description="Translation creativity")
-    max_tokens: int = Field(4000, ge=1, description="Maximum tokens per request")
-    max_qps: Optional[float] = Field(
-        None, ge=0.1, le=200.0,
-        description="Requests/sec cap shared across every concurrent job. None = built-in default",
-    )
-
-    @field_validator("base_url")
-    @classmethod
-    def _normalize_base_url(cls, value: Optional[str]) -> Optional[str]:
-        return normalize_base_url(value)
-
-
-class ArgosSettings(BaseModel):
-    """Argos Translate (offline NMT) settings.
-
-    Argos has no API key and a single fixed "model" identifier. Kept here so the
-    frontend service-tab metadata stays uniform across all backends.
+    Any name the provider serves, not only a suggested one (#32). A provider
+    whose model is a fixed identifier (Argos) always names that one, so a
+    stale or hand-edited name can't reach its cache keys.
     """
 
-    model: str = Field(provider("argos").default_model, description="Argos identifier (fixed)")
+    provider: TranslationService
+    model: ModelName
+
+    @field_validator("model", mode="before")
+    @classmethod
+    def _strip(cls, value):
+        return value.strip() if isinstance(value, str) else value
+
+    @model_validator(mode="after")
+    def _pin_fixed_model(self) -> "ModelRef":
+        spec = provider(self.provider.value)
+        if spec.model_is_fixed:
+            self.model = spec.default_model
+        return self
+
+
+class ProviderSettings(BaseModel):
+    """One provider's credentials and parameters — the same class for every
+    provider, so adding one is a registry entry (#85).
+
+    Which *model* runs is not here: that is `translation.model` and
+    `rag.answer_model`. `enabled_models` is the provider's own list, in order;
+    its first entry is the model this provider runs when it is chosen without
+    one naming it (`AppSettings.model_for`).
+
+    The rules that differ per provider — the temperature ceiling, whether an
+    endpoint is taken, the default `max_tokens` — are read from its
+    `ProviderSpec` through `provider_id`, which `AppSettings` fills in from the
+    map's key. They are field validators rather than one model validator so
+    that a bad value fails at `providers.<id>.<field>`: the load path drops
+    exactly that field and keeps the provider's key (`ConfigManager.
+    _load_with_invalid_fields_dropped`).
+    """
+
+    # Filled in from the `providers` map key; never written to `config.toml`.
+    # Declared first: the validators below read it from `info.data`.
+    provider_id: Optional[str] = Field(None, exclude=True)
+    api_key: Optional[str] = Field(None, description="API key")
+    base_url: Optional[str] = Field(
+        None, description="API endpoint of the user's own. None = the provider's"
+    )
+    enabled_models: List[ModelName] = Field(
+        default_factory=list, description="Models offered for this provider, current first"
+    )
+    temperature: float = Field(0.3, ge=0.0, le=2.0, description="Translation creativity")
+    max_tokens: Optional[int] = Field(None, ge=1, description="Maximum tokens per request")
+    max_qps: Optional[float] = Field(
+        None, ge=0.1, le=200.0,
+        description="Requests/sec cap shared across every concurrent job. None = built-in default",
+    )
+
+    @model_validator(mode="before")
+    @classmethod
+    def _registry_defaults(cls, data):
+        # `None` too, not only a missing value: it is how `PUT /providers`
+        # says "the default", and Anthropic's API refuses a request without one.
+        if isinstance(data, dict) and data.get("max_tokens") is None:
+            spec = _spec_or_none(data.get("provider_id"))
+            if spec is not None and spec.default_max_tokens is not None:
+                data = {**data, "max_tokens": spec.default_max_tokens}
+        return data
+
+    @field_validator("provider_id")
+    @classmethod
+    def _known_provider(cls, value: Optional[str]) -> Optional[str]:
+        if value is not None:
+            provider(value)  # ValueError for an id no provider has
+        return value
+
+    @field_validator("base_url")
+    @classmethod
+    def _normalize_base_url(cls, value: Optional[str], info: ValidationInfo) -> Optional[str]:
+        value = normalize_base_url(value)
+        spec = _spec_or_none(info.data.get("provider_id"))
+        if value is not None and spec is not None and not spec.takes_endpoint:
+            raise ValueError(f"{spec.label} takes no endpoint of its own")
+        return value
+
+    @field_validator("enabled_models", mode="before")
+    @classmethod
+    def _dedupe(cls, value):
+        if not isinstance(value, list):
+            return value
+        names = [v.strip() if isinstance(v, str) else v for v in value]
+        return list(dict.fromkeys(names))
+
+    @field_validator("temperature")
+    @classmethod
+    def _temperature_in_range(cls, value: float, info: ValidationInfo) -> float:
+        spec = _spec_or_none(info.data.get("provider_id"))
+        if spec is not None and value > spec.max_temperature:
+            raise ValueError(
+                f"{spec.label} takes a temperature of at most {spec.max_temperature}"
+            )
+        return value
+
+
+def _spec_or_none(provider_id):
+    try:
+        return provider(provider_id) if isinstance(provider_id, str) else None
+    except ValueError:
+        return None
+
+
+def _providers_default() -> Dict[str, "ProviderSettings"]:
+    return {spec.id: ProviderSettings(provider_id=spec.id) for spec in PROVIDERS}
 
 
 # Bounds shared with `PUT /config` (`api/schemas.py`), so the API answers 422
@@ -143,9 +198,14 @@ class TranslationSettings(BaseModel):
         LanguageCode.VIETNAMESE, 
         description="Default target language (Vietnamese priority)"
     )
-    preferred_service: TranslationService = Field(
-        TranslationService.ARGOS,
-        description="Preferred translation service"
+    # What translates. Argos until a key is saved for an LLM, which is when
+    # `PUT /config` moves off it by itself. Replaced `preferred_service` plus
+    # the model in each provider's section (#85); see `ConfigManager._convert_v1`.
+    model: ModelRef = Field(
+        default_factory=lambda: ModelRef(
+            provider=TranslationService.ARGOS, model=provider("argos").default_model
+        ),
+        description="The model that translates",
     )
     # Pages one translation may cover — the selected pages, not the document's
     # length (#33). A longer PDF is translated part by part.
@@ -205,17 +265,19 @@ class RAGSettings(BaseModel):
         True, description="Show the Chat button and index PDFs for chat"
     )
     auto_process_documents: bool = Field(True, description="Auto-process documents for RAG")
+    # `None` answers with the translation model. Either way the answer falls
+    # back to any LLM with a key (`rag_chain._answer_model`).
+    answer_model: Optional[ModelRef] = Field(
+        None, description="The model that answers in chat. None = the translation model"
+    )
 
 
 class AppSettings(BaseModel):
     """Main application settings model."""
     
-    # Service configurations
-    openai: OpenAISettings = Field(default_factory=OpenAISettings)
-    gemini: GeminiSettings = Field(default_factory=GeminiSettings)
-    anthropic: AnthropicSettings = Field(default_factory=AnthropicSettings)
-    argos: ArgosSettings = Field(default_factory=ArgosSettings)
-    
+    # One entry per registry provider, keyed by its (frozen) id.
+    providers: Dict[str, ProviderSettings] = Field(default_factory=_providers_default)
+
     # Application settings
     translation: TranslationSettings = Field(default_factory=TranslationSettings)
     gui: GUISettings = Field(default_factory=GUISettings)
@@ -224,6 +286,24 @@ class AppSettings(BaseModel):
 
     # Application metadata
     debug_mode: bool = Field(False, description="Enable debug logging")
+
+    @field_validator("providers", mode="before")
+    @classmethod
+    def _every_provider(cls, value):
+        """Name each entry after its key, and give every registry provider
+        one. An id no provider has fails at `providers.<id>.provider_id`."""
+        if not isinstance(value, dict):
+            return value
+        filled = {}
+        for provider_id, entry in value.items():
+            if isinstance(entry, ProviderSettings):
+                entry = entry.model_dump()
+            if isinstance(entry, dict):
+                entry = {**entry, "provider_id": provider_id}
+            filled[provider_id] = entry
+        for spec in PROVIDERS:
+            filled.setdefault(spec.id, {"provider_id": spec.id})
+        return filled
 
     @field_validator('translation')
     @classmethod
@@ -241,7 +321,46 @@ class AppSettings(BaseModel):
         spec = provider(TranslationService(service).value)
         if not spec.requires_key:
             return True
-        return bool(getattr(self, spec.id).api_key)
+        return bool(self.providers[spec.id].api_key)
+
+    def model_for(self, provider_id) -> str:
+        """The model `provider_id` runs when it is chosen without one named.
+
+        The translation model when it is that provider's; otherwise the first
+        of its `enabled_models` — which is where a model picked for it earlier
+        went (`remember_model`) — and otherwise its default. The per-service
+        `model` of `GET /config` is this, so switching providers and back keeps
+        each one's model, as when each section held its own.
+        """
+        spec = provider(TranslationService(provider_id).value)
+        if spec.model_is_fixed:
+            return spec.default_model
+        if self.translation.model.provider.value == spec.id:
+            return self.translation.model.model
+        enabled = self.providers[spec.id].enabled_models
+        return enabled[0] if enabled else spec.default_model
+
+    def remember_model(self, provider_id, model: str) -> None:
+        """Make `model` the one `provider_id` runs by default: first in its
+        `enabled_models`, which it joins if it wasn't there. A no-op for a
+        provider whose model is fixed."""
+        spec = provider(TranslationService(provider_id).value)
+        if spec.model_is_fixed:
+            return
+        entry = self.providers[spec.id]
+        entry.enabled_models = [model] + [m for m in entry.enabled_models if m != model]
+
+    def translate_with(self, ref: ModelRef) -> None:
+        """Make `ref` the translation model.
+
+        Both models are remembered for their providers: the outgoing one so
+        that its provider still reports it once it no longer translates, and
+        the new one so that it stays its provider's after a switch away.
+        """
+        outgoing = self.translation.model
+        self.remember_model(outgoing.provider, outgoing.model)
+        self.remember_model(ref.provider, ref.model)
+        self.translation.model = ModelRef(provider=ref.provider, model=ref.model)
 
 class FileMetadata(BaseModel):
     """Metadata for processed PDF files."""

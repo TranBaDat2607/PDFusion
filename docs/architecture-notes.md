@@ -570,12 +570,14 @@ All routes (except `GET /health`) require `Authorization: Bearer <token>`.
 |---|---|---|
 | GET | `/health` | Liveness probe (no auth) |
 | GET | `/auth/ping` | Auth probe — used by the Rust shell after startup |
-| GET | `/config` | Current settings (API keys masked). OpenAI and Anthropic report their endpoint as `base_url`, `null` for the provider's own |
-| PUT | `/config` | Update API keys / models / endpoints / language defaults. `model` is free text. `openai` and `anthropic` take `base_url` (`""` = the provider's own); changing it while a key is saved needs `api_key` in the same body, or **422** — see "LLM endpoints and models" |
+| GET | `/config` | Current settings (API keys masked). `translation.model` and `rag.answer_model` are `{provider, model}`. Until #88 it also carries the pre-#85 view: a block per provider whose `model` is `model_for` its id, and `translation.preferred_service` (= `translation.model.provider`). OpenAI and Anthropic report their endpoint as `base_url`, `null` for the provider's own |
+| PUT | `/config` | Update the translation and answer models (`translation_model`, `answer_model` as `{provider, model}`; `answer_model: null` sent explicitly clears it), language defaults and limits. The pre-#85 per-provider blocks and `preferred_service` still work: a block's `model` becomes the model that provider runs, and `translation_model` wins over both. `openai` and `anthropic` take `base_url` (`""` = the provider's own); changing it while a key is saved needs `api_key` in the same body, or **422** — see "LLM endpoints and models" |
 | POST | `/config/validate` | Check credentials by **listing** the key's models (never a completion), off the event loop and under a deadline; `valid` also needs the model among them, aliases allowed. `api_key` / `model` / `base_url` left out come from the saved settings, and the saved key is only checked against the saved endpoint (**422** otherwise). A wrapper over `POST /providers/{id}/verify` |
 | GET | `/config/options` | Static dropdown data (languages, services, model *suggestions* with each service's default first) + `supported_pairs` per service (`null` = unrestricted) |
 | GET | `/config/models/{service}` | The ids the saved key can use at the saved endpoint, sorted (any LLM; **422** for Argos). A wrapper over the catalog, so a fresh listing is served without a round-trip. A server that's down is `{models: [], error}`, not an HTTP error |
-| GET | `/providers` | Every registry entry plus `has_key`, `base_url`, `key_state` (`unverified` \| `valid` \| `invalid` \| `unreadable`), `last_verified_at` and the catalog's freshness. Reads only; never lists |
+| GET | `/providers` | Every registry entry plus `has_key`, `base_url`, `key_state` (`unverified` \| `valid` \| `invalid` \| `unreadable`), `last_verified_at` and the catalog's freshness, and its saved `model` (`model_for`), `enabled_models`, `temperature`, `max_tokens` and `max_qps`. Reads only; never lists |
+| PUT | `/providers/{id}` | Save one provider's `api_key` (`""` clears), `base_url` (`""` = the provider's own), `enabled_models` and parameters (`max_tokens` / `max_qps` sent as `null` go back to the default); left out, each is unchanged. Answers with its `/providers` row. The #32 endpoint rule gives **422**, and so does a value its spec refuses (a temperature over its ceiling, an endpoint for Gemini). Saves without checking the key, and never moves translation off Argos |
+| DELETE | `/providers/{id}/key` | Forget the saved key, an unreadable one included, and drop its catalog rows; the endpoint stays. **422** for Argos |
 | GET | `/providers/{id}/models?refresh=false` | The catalog for the saved key and endpoint: `models` / `hidden` as records (`source`: `listed` \| `saved` \| `suggested`), listed again when older than 24 h or on `refresh`. A failure is `error` in a 200 |
 | POST | `/providers/{id}/verify` | List with a typed key and/or endpoint, saving nothing: `{valid, key_state, message, model_found, models, hidden}`. The #32 rule as `/config/validate` has it — a different endpoint needs the key typed (**422**) |
 | GET | `/config/cache` | Both caches' stats: `paragraph` (entries, expired, hit rate, size, TTL) and `pdf` (entries, hit rate, size, LRU cap) |
@@ -1024,7 +1026,8 @@ to keep (#31), each with a test in `test_rag_isolation.py`:
   own knowledge, as if the document had said it.
 - **The answer model is looked up for every question**
   (`EnhancedRAGChain._answer_model`), from `get_settings()` as it is at that
-  moment, and rebuilt only when the service, key or model changed. `PUT /config`
+  moment, and rebuilt only when the service, key, model or endpoint changed —
+  which is also how a new `rag.answer_model` applies. `PUT /config`
   replaces the settings object, so a chain that kept the one it started with
   ignored a key saved later. **Never rebuild the chain or rerun `_recover` to
   pick up settings**: `_recover` fails every `indexing` row, so an index being
@@ -1159,11 +1162,13 @@ Three things close that gap:
   key, so the LLM wording would send the user to check a credential they never
   set and to "switch to Argos" while already on it.
 
-Relatedly, `PUT /config` **only auto-promotes `preferred_service` off Argos
-when listing with the new key succeeds and the saved model is on the list**
-(one provider round-trip, only on that path, and never a completion — see
-"Verifying keys and discovering models"). An explicit `preferred_service` in
-the payload is always honoured — that's the user's own choice. Promoting on a
+Relatedly, `PUT /config` **only auto-promotes the translation model off Argos
+when listing with the new key succeeds and the provider's model
+(`AppSettings.model_for`) is on the list** (one provider round-trip, only on
+that path, and never a completion — see "Verifying keys and discovering
+models"). An explicit `translation_model` or `preferred_service` in the payload
+is always honoured — that's the user's own choice. `PUT /providers/{id}` never
+promotes; it only saves. Promoting on a
 typo'd key used to move the user from a working offline translator onto one
 that fails every paragraph silently.
 
@@ -1242,11 +1247,98 @@ Four things about it are deliberate:
   enum and of `/config/options`; append new providers to keep both stable.
   The fallback order is `priority`, not position.
 
-A settings section's fields are exactly the keyword arguments its translator
-takes, so `TranslatorFactory._get_service_config` passes the whole section.
-Until the config is reshaped (#85), a new provider still needs a settings
-class and an `AppSettings` field; `test_provider_registry.py` fails when a
-spec's default model and its settings default disagree.
+A provider's settings are exactly the keyword arguments its translator
+takes, less `enabled_models` and plus the model it runs, so
+`TranslatorFactory._get_service_config` passes them whole. Since #85 every
+provider's settings are the one `ProviderSettings` class, keyed by id under
+`AppSettings.providers`, so a new provider needs no settings class and no
+`AppSettings` field — only its spec. The two per-provider bounds that used to
+live on separate classes are spec fields too: `max_temperature` (OpenAI's scale
+runs to 2, the others' to 1) and `default_max_tokens` (Anthropic requires one).
+
+### Providers and model choices in config.toml (#85)
+
+Before #85, each provider had a top-level table holding its key *and* the
+model it ran, and `translation.preferred_service` said which one translated.
+That shape could not choose a chat model apart from the translation model,
+nor a set of models for the pickers, and every new provider needed a new
+Pydantic class plus fields on the config API. Now:
+
+```toml
+[providers.openai]            # one table per registry id, all the same class
+api_key = "…encrypted…"
+base_url = "http://localhost:11434/v1"   # absent = the provider's own
+enabled_models = ["gpt-4.1", "gpt-5.6-sol"]
+temperature = 0.3
+
+[translation]
+model = { provider = "anthropic", model = "claude-sonnet-4-6" }
+
+[rag]
+answer_model = { provider = "openai", model = "gpt-4.1" }   # absent = the translation model
+```
+
+- **Which model a provider runs** when chosen without one named is
+  `AppSettings.model_for(id)`: the translation model's name when that provider
+  translates, otherwise the first of its `enabled_models`, otherwise its
+  default. `enabled_models` is ordered for this reason: choosing a model for a
+  provider, by any route, moves it to the front (`remember_model`), and
+  switching the translation model remembers the outgoing one too
+  (`translate_with`). So switching providers and back keeps each one's model,
+  as when each section held its own. `GET /config`'s per-provider `model` is
+  `model_for`, and so is the model a `/translate` with an explicit `service`
+  runs.
+- **`ModelRef` is checked against the registry**: an unknown provider fails,
+  and a fixed-model provider (Argos) always names its default.
+- **Per-provider rules are field validators, not a model validator.**
+  `AppSettings` fills each entry's `provider_id` (never saved) from its key,
+  and the validators read the spec from it, so a bad value fails at
+  `providers.<id>.<field>` and the load path drops only that field. The
+  recovery's second pass drops at most one provider's table, never the map:
+  that would be every key at once. A `ModelRef` that fails is dropped whole,
+  since half a reference can't be repaired field by field. A provider id no
+  registry entry has is left out as the file loads (a downgrade is the likely
+  cause), and refused when it comes through the API.
+- **Chat's answer model** is `rag.answer_model`, then the translation model,
+  then every LLM by `priority` with its `model_for`, one candidate per
+  provider; the first whose provider has a key answers. See "Chat answers".
+
+**Converting a config from before #85** happens as it loads, beside
+`_replace_retired_models` (`ConfigManager._convert_v1`): each top-level
+provider table moves under `providers.<id>`, its `model` becomes
+`enabled_models = [model]`, and `preferred_service` plus that service's model
+become `translation.model`. Only the shape changes — keys move as they were
+stored, ciphertext and salt alike, and are decrypted afterwards on the new
+shape. The file is not rewritten on load; the next save writes the new shape.
+`RETIRED_MODELS` applies after the conversion, to the translation and answer
+models and to every `enabled_models` entry. A file holding both shapes for one
+provider keeps the new one, except for a key only the old table has. `<PREFIX>_MODEL` in the environment is applied the
+way a model chosen in the app is: it goes first in `enabled_models`, and
+becomes the translation model's name when its provider translates.
+
+**The key rules, per provider id.** Every rule below held for the old top-level
+tables and now holds for `providers.<id>`, and the tests that guard them were
+ported one-for-one (`test_config_security.py`, `test_config_manager_load.py`,
+`test_config_api.py`), with the conversion's own in `test_config_v2.py`:
+
+- Keys are encrypted on save and decrypted on load
+  (`_remove_sensitive_data`, `_decrypt_sensitive_data`), each under
+  `providers.<id>`.
+- A key that can't be decrypted is remembered by provider id
+  (`_unreadable_keys`) and written back verbatim, never blanked. Only setting
+  or clearing that provider's key — `PUT /config`'s block, `PUT
+  /providers/{id}`'s `api_key`, `DELETE /providers/{id}/key` — forgets it, and
+  only once the new settings have validated.
+- `_write_backup` strips `api_key` and `api_key_salt` from **both** shapes: the
+  first save after a conversion backs up the old file, whose keys sit in
+  top-level tables.
+- The save is a temp file plus `os.replace`, unchanged.
+- Environment keys come from each spec's `env_prefix` and are ignored for a
+  provider with a custom `base_url` (`_keep_environment_keys_off_endpoints`).
+- An endpoint change without `api_key` in the same body is a **422** whenever a
+  key is saved, unreadable ones included, on `PUT /config` and `PUT
+  /providers/{id}` alike. Both go through `routes/providers.py`'s
+  `endpoint_change_refusal`, `apply_key_and_endpoint` and `save_settings`.
 
 ### Verifying keys and discovering models
 
@@ -1421,7 +1513,8 @@ things about it are deliberate:
 
 The chat panel's header names the answering model (`chatModel`, a copy of
 `rag_chain._answer_model`'s order). It isn't always the toolbar's model: chat
-falls back to any LLM with a key.
+falls back to any LLM with a key. The copy doesn't know `rag.answer_model`
+yet, which only `PUT /config` can set until the chat-panel picker (#87).
 
 ### PDF viewer
 
@@ -1664,6 +1757,7 @@ deliberately not implemented: the panes scroll and zoom independently.
 - Defaults / reference: `config/default_config.toml`.
 - `.env` is auto-loaded via `python-dotenv` and overrides the TOML, except an API key for a service set to its own endpoint (see "LLM endpoints and models"). It's searched at the **repo root** (resolved from `__file__`, not `cwd` — `cwd` is non-writable `C:\Program Files\…` on an installed launch) and in the AppData config dir. See `config/manager.py:_load_dotenv`.
 - Singleton: `get_config_manager()` / `get_settings()` from `desktop_pdf_translator.config`.
+- Keys and parameters are under `[providers.<id>]`; the model that translates is `translation.model` and the one that answers chat is `rag.answer_model`. A config from before #85 converts as it loads; see "Providers and model choices in config.toml".
 - A saved model its provider has shut down loads as the service's current default (`RETIRED_MODELS`); see "LLM endpoints and models".
 - `[translation]` also holds the two translation limits, `max_pages` (pages one translation covers) and `max_file_size_mb`; see "Page ranges and limits".
 - Cache-related settings live under `[translation]` in `AppSettings` (`config/models.py`): `cache_translations` (paragraph cache, default on), `cache_translated_pdfs` (whole-PDF cache, default on), `pdf_cache_max_size_mb` (LRU cap, default 1000). Changing `pdf_cache_max_size_mb` applies without a sidecar restart (re-read on every eviction pass).

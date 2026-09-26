@@ -10,6 +10,7 @@ from ...processors.pdf_cache import get_pdf_cache
 from ...config import (
     AppSettings,
     LanguageCode,
+    ModelRef,
     TranslationService,
     get_config_manager,
     get_settings,
@@ -23,6 +24,8 @@ from ...translators.capabilities import (
 from ...providers import catalog
 from ...providers.listing import model_matches
 from ...providers.registry import (
+    PROVIDERS,
+    ProviderSpec,
     keyed_ids,
     llm_ids_by_priority,
     provider,
@@ -40,22 +43,30 @@ from ..schemas import (
     LanguageOption,
     PdfCacheStatsResponse,
     ServiceOption,
+    TranslationConfig,
     ValidateRequest,
     ValidateResponse,
 )
-from .providers import catalog_call, catalog_for, verify
+from .providers import (
+    apply_key_and_endpoint,
+    catalog_call,
+    catalog_for,
+    endpoint_change_refusal,
+    save_settings,
+    verify,
+)
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/config", tags=["config"], dependencies=[Depends(require_token)])
 
 
-def _mask(service_settings) -> APIKeyMaskedSettings:
-    # ArgosSettings has no api_key attribute, so getattr falls through to False.
+def _mask(settings: AppSettings, spec: ProviderSpec) -> APIKeyMaskedSettings:
+    saved = settings.providers[spec.id]
     return APIKeyMaskedSettings(
-        has_key=bool(getattr(service_settings, "api_key", None)),
-        model=service_settings.model,
-        base_url=getattr(service_settings, "base_url", None),
+        has_key=spec.requires_key and bool(saved.api_key),
+        model=settings.model_for(spec.id),
+        base_url=saved.base_url,
         extra={},
     )
 
@@ -64,14 +75,10 @@ def _mask(service_settings) -> APIKeyMaskedSettings:
 async def get_config() -> ConfigResponse:
     s = get_settings()
     return ConfigResponse(
-        openai=_mask(s.openai),
-        gemini=_mask(s.gemini),
-        anthropic=_mask(s.anthropic),
-        argos=_mask(s.argos),
-        # Pass the settings objects straight through — ConfigResponse's fields
-        # are now real nested models, not Dict[str, Any], so there's nothing
-        # left for model_dump() to do here. Same wire format either way.
-        translation=s.translation,
+        **{spec.id: _mask(s, spec) for spec in PROVIDERS},
+        translation=TranslationConfig(
+            **s.translation.model_dump(), preferred_service=s.translation.model.provider
+        ),
         rag=s.rag,
         gui=s.gui,
         processing=s.processing,
@@ -79,83 +86,72 @@ async def get_config() -> ConfigResponse:
     )
 
 
+def _choose_model(settings: AppSettings, service: TranslationService, model: str) -> None:
+    """A per-provider block's `model`: what that provider runs from now on,
+    and so the translation model when it is the provider translating."""
+    if settings.translation.model.provider == service:
+        settings.translate_with(ModelRef(provider=service, model=model))
+    else:
+        settings.remember_model(service, model)
+
+
 @router.put("", response_model=ConfigResponse)
 async def update_config(payload: ConfigUpdateRequest) -> ConfigResponse:
     mgr = get_config_manager()
     current = mgr.settings.model_dump()
 
+    # The per-provider blocks, for the providers that take a key.
+    blocks = [
+        (TranslationService(p), getattr(payload, p))
+        for p in keyed_ids()
+        if getattr(payload, p) is not None
+    ]
     # Track which LLM services received a non-empty key in *this* PUT, so we
-    # can auto-promote the user's preferred_service from Argos to that LLM
-    # (in `ProviderSpec.priority` order if several keys arrive at once).
-    LLM_SERVICES = tuple(TranslationService(p) for p in keyed_ids())
+    # can auto-promote the translation off Argos to that LLM (in
+    # `ProviderSpec.priority` order if several keys arrive at once).
     newly_keyed: list[TranslationService] = []
+    rekeyed: list[str] = []
     # Providers whose catalog rows describe a key or endpoint this PUT
     # replaces. Nothing in a row is derived from the key, so a change can't be
     # told from the row itself; it has to be dropped here.
-    rekeyed: list[TranslationService] = []
+    stale_catalog: list[str] = []
 
-    # Endpoint changes are all vetted before anything is applied. The check
-    # reads only the saved section and this service's own update, so hoisting
-    # it changes no answer — but it means a refusal leaves `current` and the
-    # manager's preserved-key records untouched, instead of part-way through.
-    for service in LLM_SERVICES:
-        update = getattr(payload, service.value)
-        if update is None or update.api_key is not None:
-            continue
-        base_url = getattr(update, "base_url", None)
-        if base_url is None:
-            continue
-        section = current[service.value]
-        if (base_url or None) == section.get("base_url"):
-            continue
-        # A saved key is only ever sent to the endpoint it was saved for.
-        # `GET /config` never hands a key out; without this, anything able to
-        # call `PUT /config` could point the endpoint at a server of its own
-        # and read the key off the next request (#32). A key the manager is
-        # preserving unread counts as saved: it decrypts again once the
-        # keystore is reachable, and would then go to whatever endpoint was
-        # set meanwhile.
-        if section.get("api_key") or mgr.has_unreadable_key(service.value):
-            raise HTTPException(
-                status_code=422,
-                detail=(
-                    f"Enter the {SERVICE_LABELS[service]} API key again "
-                    "to change its endpoint."
-                ),
-            )
+    # Endpoint changes are all vetted before anything is applied, so a
+    # refusal leaves `current` and the manager's preserved-key records
+    # untouched, instead of part-way through.
+    for service, update in blocks:
+        refusal = endpoint_change_refusal(
+            current, provider(service.value), update.api_key, getattr(update, "base_url", None)
+        )
+        if refusal:
+            raise HTTPException(status_code=422, detail=refusal)
 
-    for service in LLM_SERVICES:
-        update = getattr(payload, service.value)
-        if update is None:
-            continue
-        section = current[service.value]
-        if update.api_key is not None:
-            new_key = update.api_key or None
-            section["api_key"] = new_key
-            # Set or cleared, this is now the only key for the service: an
-            # earlier ciphertext the manager is preserving because it could not
-            # read it must not come back on the save below.
-            mgr.forget_unreadable_key(service.value)
-            rekeyed.append(service)
-            if new_key:
-                newly_keyed.append(service)
+    for service, update in blocks:
+        change = apply_key_and_endpoint(
+            current, provider(service.value), update.api_key, getattr(update, "base_url", None)
+        )
+        if change.rekeyed:
+            rekeyed.append(service.value)
+        if change.stale_catalog:
+            stale_catalog.append(service.value)
+        if change.new_key:
+            newly_keyed.append(service)
+
+    # Model choices go through the settings object, which knows how a choice
+    # for one provider relates to the translation model.
+    draft = AppSettings(**current)
+    for service, update in blocks:
         if update.model is not None:
-            section["model"] = update.model
-        base_url = getattr(update, "base_url", None)
-        if base_url is not None and (base_url or None) != section.get("base_url"):
-            section["base_url"] = base_url or None
-            if service not in rekeyed:
-                rekeyed.append(service)
+            _choose_model(draft, service, update.model)
 
     promotion_listing = None
     promotion_refused = False
+    chosen = None
     if payload.preferred_service is not None:
         # An explicit choice is the user's to make — honoured unconditionally.
-        current["translation"]["preferred_service"] = payload.preferred_service.value
-    elif (
-        current["translation"].get("preferred_service") == TranslationService.ARGOS.value
-        and newly_keyed
-    ):
+        service = payload.preferred_service
+        draft.translate_with(ModelRef(provider=service, model=draft.model_for(service)))
+    elif draft.translation.model.provider == TranslationService.ARGOS and newly_keyed:
         priority = tuple(TranslationService(p) for p in llm_ids_by_priority())
         chosen = next((s for s in priority if s in newly_keyed), newly_keyed[0])
         # Promote only on a key that actually works, with a model it can use.
@@ -164,25 +160,23 @@ async def update_config(payload: ConfigUpdateRequest) -> ConfigResponse:
         # from then on — while Argos would have kept working. One listing,
         # never a completion (#84), and only on the rare "first key saved while
         # still on Argos" path.
-        section = current[chosen.value]
+        section = draft.providers[chosen.value]
+        model = draft.model_for(chosen)
         ok = False
         try:
             promotion_listing = await catalog.list_models(
-                chosen.value, section["api_key"], section.get("base_url")
+                chosen.value, section.api_key, section.base_url
             )
         except (catalog.KeyRejected, catalog.ListingFailed) as exc:
             promotion_refused = isinstance(exc, catalog.KeyRejected)
             message = str(exc)
         else:
             listed = promotion_listing.models + promotion_listing.hidden
-            ok = model_matches(section["model"], (m.id for m in listed))
-            message = f"{section['model']} is not among the models it can use"
+            ok = model_matches(model, (m.id for m in listed))
+            message = f"{model} is not among the models it can use"
         if ok:
-            current["translation"]["preferred_service"] = chosen.value
-            logger.info(
-                "Auto-switching preferred_service argos -> %s after key save",
-                chosen.value,
-            )
+            draft.translate_with(ModelRef(provider=chosen, model=model))
+            logger.info("Auto-switching translation argos -> %s after key save", chosen.value)
         else:
             logger.warning(
                 "Key saved for %s but it did not validate (%s) — staying on "
@@ -191,6 +185,13 @@ async def update_config(payload: ConfigUpdateRequest) -> ConfigResponse:
                 message,
             )
 
+    # Last, so it wins over the per-provider blocks and `preferred_service`.
+    if payload.translation_model is not None:
+        draft.translate_with(payload.translation_model)
+    if "answer_model" in payload.model_fields_set:
+        draft.rag.answer_model = payload.answer_model
+
+    current = draft.model_dump()
     if payload.default_source_lang is not None:
         current["translation"]["default_source_lang"] = payload.default_source_lang.value
     if payload.default_target_lang is not None:
@@ -208,30 +209,17 @@ async def update_config(payload: ConfigUpdateRequest) -> ConfigResponse:
     if payload.cache_translated_pdfs is not None:
         current["translation"]["cache_translated_pdfs"] = payload.cache_translated_pdfs
 
-    new_settings = AppSettings(**current)
-    # Off the loop thread: `save_settings` fsyncs and rewrites the backup, and
-    # this loop is also carrying any in-flight translation's SSE stream.
-    if not await asyncio.to_thread(mgr.save_settings, new_settings):
-        # Nothing was written, so a key dropped from the preserved-ciphertext
-        # records above is still in the file. Re-read it, or a later unrelated
-        # save would blank the value this request failed to replace.
-        await asyncio.to_thread(mgr.load_settings)
-        raise HTTPException(status_code=500, detail="Failed to save settings")
-    mgr._settings = new_settings  # refresh cached singleton
+    saved = await save_settings(current, rekeyed=rekeyed, stale_catalog=stale_catalog)
 
-    # After the save, never before: a refused save must leave the catalog
-    # describing the key that is still in the file.
-    for service in rekeyed:
-        await catalog_call("invalidate", service.value)
     if promotion_listing is not None:
         # The promotion listed exactly the pair just saved — and after the
         # invalidation above, which would otherwise drop it again. Keeping it
         # spares the picker a second round-trip.
         await catalog_call(
-            "put", chosen.value, current[chosen.value].get("base_url"), promotion_listing
+            "put", chosen.value, saved.providers[chosen.value].base_url, promotion_listing
         )
     elif promotion_refused:
-        await catalog_call("mark_invalid", chosen.value, current[chosen.value].get("base_url"))
+        await catalog_call("mark_invalid", chosen.value, saved.providers[chosen.value].base_url)
     return await get_config()
 
 
@@ -265,7 +253,7 @@ async def validate_credentials(payload: ValidateRequest) -> ValidateResponse:
             return ValidateResponse(valid=False, message=str(exc))
         return ValidateResponse(valid=is_valid, message=message)
 
-    model = payload.model or getattr(get_settings(), payload.service.value).model
+    model = payload.model or get_settings().model_for(payload.service)
     result = await verify(payload.service, payload.api_key, payload.base_url, model)
     # Save's check: the key works *and* the model is one it can use, so a
     # mistyped name turns up before a document fails on it paragraph by
