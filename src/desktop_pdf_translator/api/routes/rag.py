@@ -350,7 +350,14 @@ async def _save_exchange(document_id: str, question: str, answer: Dict[str, Any]
     was removed mid-question.
     """
     try:
-        await asyncio.to_thread(get_records_store().add_exchange, document_id, question, answer)
+        await asyncio.to_thread(
+            get_records_store().add_exchange,
+            document_id,
+            question,
+            answer,
+            answer.get("provider"),
+            answer.get("model"),
+        )
     except Exception:  # noqa: BLE001
         logger.warning(
             "Could not save the chat history of document %s", document_id, exc_info=True
@@ -520,6 +527,8 @@ async def get_chat_history(document_id: str) -> ChatHistoryResponse:
                 text=message.content,
                 answer=message.answer,
                 created_at=ms_to_iso(message.created_at),
+                provider=message.provider,
+                model=message.model,
             )
             for message in messages
         ]

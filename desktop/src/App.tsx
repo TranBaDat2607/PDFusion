@@ -381,7 +381,13 @@ function Workspace() {
         }}
       />
       <div className="relative flex-1 overflow-hidden">
-        <MainLayout onPickFile={handlePickFile} />
+        <MainLayout
+          onPickFile={handlePickFile}
+          onOpenSettings={(provider) => {
+            setSettingsProvider(provider);
+            setSettingsOpen(true);
+          }}
+        />
         <ProgressOverlay
           state={translation.state}
           onCancel={translation.cancel}

@@ -157,3 +157,42 @@ def test_threads_opening_one_database_at_once_migrate_it_once(tmp_path: Path):
 def test_two_steps_claiming_one_version_is_a_programming_error(tmp_path: Path):
     with pytest.raises(ValueError):
         migrate(tmp_path / "store.db", [_create(1, "a"), _create(1, "b")])
+
+
+def test_a_version_2_records_database_gains_provider_and_model_on_chat_messages(
+    tmp_path: Path,
+):
+    """#87: a v2 database (documents, a ready index, saved chat messages) opens
+    at version 3 with `chat_messages.provider`/`.model` added, every existing
+    row kept, and its pre-existing rows reading back with both columns NULL."""
+    from desktop_pdf_translator.storage import records as records_module
+
+    db = tmp_path / "pdfusion.db"
+    migrate(db, records_module._MIGRATIONS[:2])
+    conn = sqlite3.connect(db)
+    conn.execute(
+        "INSERT INTO documents (id, display_name, size_bytes, created_at, last_opened_at) "
+        "VALUES ('doc-a', 'paper.pdf', 1234, 0, 0)"
+    )
+    conn.execute(
+        "INSERT INTO chat_messages (document_id, role, content, created_at) "
+        "VALUES ('doc-a', 'user', 'What is measured?', 0)"
+    )
+    conn.execute(
+        "INSERT INTO chat_messages (document_id, role, content, answer_json, created_at) "
+        "VALUES ('doc-a', 'assistant', 'It measures tensile strength.', '{}', 0)"
+    )
+    conn.commit()
+    conn.close()
+
+    version = migrate(db, records_module._MIGRATIONS)
+
+    assert version == 3
+    conn = sqlite3.connect(db)
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(chat_messages)")}
+    assert {"provider", "model"} <= columns
+    rows = conn.execute(
+        "SELECT role, provider, model FROM chat_messages WHERE document_id = 'doc-a' ORDER BY id"
+    ).fetchall()
+    conn.close()
+    assert rows == [("user", None, None), ("assistant", None, None)]

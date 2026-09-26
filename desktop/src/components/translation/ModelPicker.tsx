@@ -1,24 +1,9 @@
 import { useState } from "react";
-import {
-  AlertTriangle,
-  Check,
-  ChevronsUpDown,
-  KeyRound,
-  Settings2,
-  ShieldCheck,
-} from "lucide-react";
+import { AlertTriangle, ChevronsUpDown, ShieldCheck } from "lucide-react";
 
+import { ModelSelect } from "@/components/translation/ModelSelect";
 import { Button } from "@/components/ui/button";
-import {
-  Command,
-  CommandEmpty,
-  CommandGroup,
-  CommandInput,
-  CommandItem,
-  CommandList,
-  CommandSeparator,
-} from "@/components/ui/command";
-import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { PopoverTrigger } from "@/components/ui/popover";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import type { ConfigResponse } from "@/hooks/useConfig";
 import type { ProviderInfo } from "@/hooks/useProviders";
@@ -27,7 +12,6 @@ import {
   modelGroups,
   pickerSummary,
   settingsTargetFor,
-  type ModelGroup,
 } from "@/lib/model-choice";
 import { cn } from "@/lib/utils";
 
@@ -40,9 +24,9 @@ interface ModelPickerProps {
 }
 
 /**
- * The provider and its model, picked in one place. It offers the models
- * switched on in Settings → Models (#86), so opening it asks no server
- * anything; a name of one's own is added there, where it is checked.
+ * The translation model: the provider and its model, picked in one place. It
+ * offers the models switched on in Settings → Models (#86), so opening it asks
+ * no server anything; a name of one's own is added there.
  */
 export function ModelPicker({
   config,
@@ -52,15 +36,6 @@ export function ModelPicker({
 }: ModelPickerProps) {
   const [open, setOpen] = useState(false);
   const summary = pickerSummary(config, providers);
-  const groups = modelGroups(config, providers);
-  const pick = (provider: string, model: string) => {
-    onSelect(provider, model);
-    setOpen(false);
-  };
-  const toSettings = (provider: string) => {
-    setOpen(false);
-    onOpenSettings(provider);
-  };
 
   const trigger = (
     <PopoverTrigger asChild>
@@ -94,125 +69,28 @@ export function ModelPicker({
   );
 
   return (
-    <Popover open={open} onOpenChange={setOpen}>
-      {summary.downgradedFrom ? (
-        <Tooltip>
-          <TooltipTrigger asChild>{trigger}</TooltipTrigger>
-          <TooltipContent className="max-w-xs">
-            {summary.downgradedFrom} has no API key, so Argos translates offline
-            instead (English → Vietnamese only). Pick it to add a key.
-          </TooltipContent>
-        </Tooltip>
-      ) : (
-        trigger
-      )}
-      <PopoverContent align="start" className="w-[340px] p-0">
-        <Command filter={matchesEveryWord}>
-          <CommandInput placeholder="Search models…" />
-          <CommandList className="max-h-[420px]">
-            <CommandEmpty>No model matches.</CommandEmpty>
-            {groups.map((group) => (
-              <CommandGroup key={group.id} heading={<GroupHeading group={group} />}>
-                {group.needsKey ? (
-                  <CommandItem
-                    value={`${group.id} ${group.label} add api key`}
-                    onSelect={() => toSettings(group.id)}
-                  >
-                    <KeyRound className="text-muted-foreground" />
-                    <span className="text-muted-foreground">
-                      Add an API key to use {group.label}…
-                    </span>
-                  </CommandItem>
-                ) : group.fixed ? (
-                  group.models.map(({ model }) => (
-                    <CommandItem
-                      key={model}
-                      value={`${group.id} ${group.label} offline`}
-                      onSelect={() => pick(group.id, model)}
-                    >
-                      <CurrentMark on={isCurrent(config, group.id, model)} />
-                      <span className="flex-1">Offline, on this computer</span>
-                      <span className="text-[10px] text-muted-foreground">free</span>
-                    </CommandItem>
-                  ))
-                ) : (
-                  group.models.map(({ model, isDefault }) => (
-                    <CommandItem
-                      key={model}
-                      value={`${group.id} ${model}`}
-                      keywords={[group.label]}
-                      onSelect={() => pick(group.id, model)}
-                    >
-                      <CurrentMark on={isCurrent(config, group.id, model)} />
-                      <span className="flex-1 truncate font-mono text-xs">{model}</span>
-                      {isDefault && (
-                        <span className="text-[10px] text-muted-foreground">default</span>
-                      )}
-                    </CommandItem>
-                  ))
-                )}
-              </CommandGroup>
-            ))}
-            <CommandSeparator />
-            <CommandGroup>
-              <CommandItem
-                value="custom model endpoint settings"
-                onSelect={() => toSettings(settingsTargetFor(config, providers))}
-              >
-                <Settings2 className="text-muted-foreground" />
-                More models, keys and endpoints…
-              </CommandItem>
-            </CommandGroup>
-          </CommandList>
-          <p className="border-t border-border px-3 py-2 text-[11px] leading-snug text-muted-foreground">
-            Translations are cached per model, so a document done with one model
-            is translated again, and billed again, with another.
-          </p>
-        </Command>
-      </PopoverContent>
-    </Popover>
+    <ModelSelect
+      open={open}
+      onOpenChange={setOpen}
+      trigger={
+        summary.downgradedFrom ? (
+          <Tooltip>
+            <TooltipTrigger asChild>{trigger}</TooltipTrigger>
+            <TooltipContent className="max-w-xs">
+              {summary.downgradedFrom} has no API key, so {summary.service} translates
+              offline instead. Pick it to add a key.
+            </TooltipContent>
+          </Tooltip>
+        ) : (
+          trigger
+        )
+      }
+      groups={modelGroups(config, providers)}
+      isCurrent={(provider, model) => isCurrent(config, provider, model)}
+      onPick={onSelect}
+      onOpenSettings={onOpenSettings}
+      settingsTarget={settingsTargetFor(config, providers)}
+      note="Translations are cached per model, so a document done with one model is translated again, and billed again, with another."
+    />
   );
-}
-
-/** cmdk's default match is fuzzy, which for model names is noise: "gemma"
- *  matched "Add an API key to use Google Gemini" letter by letter. */
-function matchesEveryWord(value: string, search: string, keywords?: string[]): number {
-  const haystack = [value, ...(keywords ?? [])].join(" ").toLowerCase();
-  const words = search.toLowerCase().split(/\s+/).filter(Boolean);
-  return words.every((word) => haystack.includes(word)) ? 1 : 0;
-}
-
-function CurrentMark({ on }: { on: boolean }) {
-  return <Check className={cn("text-primary", on ? "opacity-100" : "opacity-0")} />;
-}
-
-function GroupHeading({ group }: { group: ModelGroup }) {
-  const status = group.needsKey
-    ? "no key"
-    : group.endpoint
-      ? hostOf(group.endpoint)
-      : group.fixed
-        ? "no key needed"
-        : "ready";
-  return (
-    <div className="flex items-center justify-between gap-2">
-      <span>{group.label}</span>
-      <span
-        className={cn(
-          "font-normal",
-          group.usable ? "text-primary" : "text-muted-foreground",
-        )}
-      >
-        {status}
-      </span>
-    </div>
-  );
-}
-
-function hostOf(url: string): string {
-  try {
-    return new URL(url).host;
-  } catch {
-    return url;
-  }
 }

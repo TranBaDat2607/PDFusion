@@ -56,7 +56,8 @@ def test_a_new_database_starts_at_the_current_schema_with_foreign_keys_on(
     records: RecordsStore,
 ):
     conn = records._conn()
-    assert conn.execute("PRAGMA user_version").fetchone()[0] == 2
+    # 3: the model that wrote each answer (#87).
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == 3
     assert conn.execute("PRAGMA foreign_keys").fetchone()[0] == 1
 
 
@@ -251,7 +252,7 @@ def test_a_version_1_database_gains_chat_history_and_keeps_its_records(tmp_path:
     records = RecordsStore(db)
 
     assert records.ready_index("doc-a", MODEL, CHUNKER).id == "index-a"
-    assert records._conn().execute("PRAGMA user_version").fetchone()[0] == 2
+    assert records._conn().execute("PRAGMA user_version").fetchone()[0] == 3
     records.add_exchange("doc-a", "What is measured?", ANSWER)
     assert [m.role for m in records.messages("doc-a")] == ["user", "assistant"]
 
@@ -324,6 +325,25 @@ def test_clearing_a_conversation_keeps_the_document_and_its_index(records: Recor
 
     assert records.messages(doc) == []
     assert records.ready_index(doc, MODEL, CHUNKER).id == index
+
+
+def test_add_exchange_saves_the_answering_provider_and_model_on_the_assistant_row_only(
+    records: RecordsStore,
+):
+    """#87: which model wrote each answer. The user row never carries one; an
+    answer no model wrote (called with neither) leaves both `None` too."""
+    doc = _document(records)
+    records.add_exchange(
+        doc, "What is measured?", ANSWER, provider="anthropic", model="claude-opus-5"
+    )
+    records.add_exchange(doc, "Anything else?", {"answer": "No."})
+
+    question, answer, question2, answer2 = records.messages(doc)
+
+    assert (question.provider, question.model) == (None, None)
+    assert (answer.provider, answer.model) == ("anthropic", "claude-opus-5")
+    assert (question2.provider, question2.model) == (None, None)
+    assert (answer2.provider, answer2.model) == (None, None)
 
 
 def test_the_document_list_says_what_is_stored_for_each(records: RecordsStore):

@@ -11,10 +11,12 @@ import { toReferenceRows } from "@/lib/rag-references";
 
 interface AssistantMessageProps {
   answer: RagAnswer;
+  /** Which model wrote it ("Claude · claude-opus-5"); null when none did. */
+  byline?: string | null;
   onJumpToPage?: (page: number) => void;
 }
 
-export function AssistantMessage({ answer, onJumpToPage }: AssistantMessageProps) {
+export function AssistantMessage({ answer, byline, onJumpToPage }: AssistantMessageProps) {
   const references = toReferenceRows(answer);
   return (
     <div className="flex w-full max-w-[95%] gap-3 rounded-lg border-l-2 border-primary bg-card/50 p-4">
@@ -36,6 +38,9 @@ export function AssistantMessage({ answer, onJumpToPage }: AssistantMessageProps
             items={references}
             onItemClick={(item) => item.page && onJumpToPage?.(item.page)}
           />
+        )}
+        {byline && (
+          <p className="font-mono text-[10px] text-muted-foreground">{byline}</p>
         )}
       </div>
     </div>

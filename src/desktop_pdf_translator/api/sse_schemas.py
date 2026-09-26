@@ -206,3 +206,7 @@ class AskResultPayload(BaseModel):
     sources_used: Optional[Dict[str, int]] = None
     timestamp: Optional[str] = None
     elapsed_seconds: Optional[float] = None
+    # The provider and model that wrote the answer; `None` when no model did
+    # (the template answer, or nothing found to answer from) (#87).
+    provider: Optional[str] = None
+    model: Optional[str] = None

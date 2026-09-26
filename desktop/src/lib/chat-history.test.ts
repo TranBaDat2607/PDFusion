@@ -10,6 +10,8 @@ function makeAnswer(answer: string): RagAnswer {
     processing_time: 1.0,
     sources_used: { pdf_sources: 1 },
     timestamp: "2026-09-12T00:00:00",
+    provider: null,
+    model: null,
   };
 }
 

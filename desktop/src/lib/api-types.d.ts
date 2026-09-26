@@ -664,6 +664,11 @@ export interface components {
              * @default null
              */
             elapsed_seconds: number | null;
+            /**
+             * Model
+             * @default null
+             */
+            model: string | null;
             /** Pdf References */
             pdf_references?: components["schemas"]["PdfReferencePayload"][];
             /**
@@ -671,6 +676,11 @@ export interface components {
              * @default null
              */
             processing_time: number | null;
+            /**
+             * Provider
+             * @default null
+             */
+            provider: string | null;
             /** Quality Metrics */
             quality_metrics?: {
                 [key: string]: number;
@@ -802,6 +812,10 @@ export interface components {
             created_at: string;
             /** Id */
             id: number;
+            /** Model */
+            model?: string | null;
+            /** Provider */
+            provider?: string | null;
             /**
              * Role
              * @enum {string}

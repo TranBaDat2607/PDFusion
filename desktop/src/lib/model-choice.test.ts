@@ -1,8 +1,12 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  answerModelUpdate,
+  answeredBy,
   chatModel,
+  followingModel,
   isCurrent,
+  isCurrentAnswer,
   modelGroups,
   pickerSummary,
   selectionUpdate,
@@ -260,6 +264,35 @@ describe("settingsTargetFor", () => {
 });
 
 describe("chatModel", () => {
+  it("answers with the answer model first", () => {
+    const list = providers({ openai: { has_key: true }, anthropic: { has_key: true } });
+    const c = config("openai", "gpt-4.1", { provider: "anthropic", model: "claude-opus-5" });
+
+    expect(chatModel(c, list)).toEqual({
+      provider: "anthropic",
+      label: "Claude",
+      model: "claude-opus-5",
+    });
+  });
+
+  it("gives way to the translation model when the answer model's provider has no key", () => {
+    const list = providers({ openai: { has_key: true } });
+    const c = config("openai", "gpt-5.6-sol", { provider: "gemini", model: "gemini-3.8-flash" });
+
+    expect(chatModel(c, list)).toEqual({
+      provider: "openai",
+      label: "OpenAI",
+      model: "gpt-5.6-sol",
+    });
+  });
+
+  it("then falls back by priority, past a keyless answer and translation model", () => {
+    const list = providers({ gemini: { has_key: true } });
+    const c = config("anthropic", "claude-opus-5", { provider: "openai", model: "gpt-4.1" });
+
+    expect(chatModel(c, list)?.provider).toBe("gemini");
+  });
+
   it("answers with the translation model when its provider has a key", () => {
     const list = providers({ gemini: { has_key: true }, openai: { has_key: true } });
 
@@ -268,27 +301,6 @@ describe("chatModel", () => {
       label: "Gemini",
       model: "gemini-3.7-flash",
     });
-  });
-
-  it("answers with the answer model first when its provider has a key", () => {
-    const list = providers({ openai: { has_key: true }, anthropic: { has_key: true } });
-    const c = config("openai", "gpt-4.1", { provider: "anthropic", model: "claude-opus-4-7" });
-
-    expect(chatModel(c, list)).toEqual({
-      provider: "anthropic",
-      label: "Claude",
-      model: "claude-opus-4-7",
-    });
-  });
-
-  it("passes over an answer model whose provider has no key", () => {
-    const list = providers({ gemini: { has_key: true } });
-    const c = config("gemini", "gemini-3.7-flash", {
-      provider: "anthropic",
-      model: "claude-opus-4-7",
-    });
-
-    expect(chatModel(c, list)?.model).toBe("gemini-3.7-flash");
   });
 
   it("falls back by priority: OpenAI, Claude, Gemini", () => {
@@ -309,5 +321,112 @@ describe("chatModel", () => {
 
   it("is null with no key anywhere", () => {
     expect(chatModel(config("openai", "gpt-4.1"), providers())).toBeNull();
+  });
+});
+
+describe("followingModel", () => {
+  it("answers with the translation model when its provider has a key, even over a higher-priority key", () => {
+    const list = providers({ gemini: { has_key: true }, openai: { has_key: true } });
+
+    expect(followingModel(config("gemini", "gemini-3.7-flash"), list)).toEqual({
+      provider: "gemini",
+      label: "Gemini",
+      model: "gemini-3.7-flash",
+    });
+  });
+
+  it("ignores a saved answer model — it shows what following translation would do", () => {
+    const list = providers({ openai: { has_key: true }, anthropic: { has_key: true } });
+    const c = config("openai", "gpt-4.1", { provider: "anthropic", model: "claude-opus-5" });
+
+    expect(followingModel(c, list)).toEqual({
+      provider: "openai",
+      label: "OpenAI",
+      model: "gpt-4.1",
+    });
+  });
+
+  it("falls back by priority, with the model the provider runs, when translation is offline", () => {
+    const list = providers({ anthropic: { has_key: true, model: "claude-opus-5" } });
+
+    expect(followingModel(ARGOS, list)).toEqual({
+      provider: "anthropic",
+      label: "Claude",
+      model: "claude-opus-5",
+    });
+  });
+
+  it("falls back past a keyless translation provider, by priority", () => {
+    const list = providers({ openai: { has_key: true }, gemini: { has_key: true } });
+    const c = config("anthropic", "claude-sonnet-4-6");
+
+    expect(followingModel(c, list)).toEqual({
+      provider: "openai",
+      label: "OpenAI",
+      model: "gpt-4.1",
+    });
+  });
+
+  it("is null with no key anywhere", () => {
+    expect(followingModel(config("openai", "gpt-4.1"), providers())).toBeNull();
+  });
+});
+
+describe("answerModelUpdate", () => {
+  it("sends the model picked for chat", () => {
+    expect(answerModelUpdate(config("openai", "gpt-4.1"), { provider: "anthropic", model: "claude-opus-5" })).toEqual({
+      answer_model: { provider: "anthropic", model: "claude-opus-5" },
+    });
+  });
+
+  it("sends null for Same as translation", () => {
+    const c = config("openai", "gpt-4.1", { provider: "anthropic", model: "claude-opus-5" });
+
+    expect(answerModelUpdate(c, null)).toEqual({ answer_model: null });
+  });
+
+  it("sends a model even when it is the translation model", () => {
+    // Pinned: it stays when the translation model changes later.
+    expect(answerModelUpdate(config("openai", "gpt-4.1"), { provider: "openai", model: "gpt-4.1" })).toEqual({
+      answer_model: { provider: "openai", model: "gpt-4.1" },
+    });
+  });
+
+  it("sends nothing for the choice already saved", () => {
+    const c = config("openai", "gpt-4.1", { provider: "anthropic", model: "claude-opus-5" });
+
+    expect(answerModelUpdate(c, { provider: "anthropic", model: "claude-opus-5" })).toEqual({});
+    expect(answerModelUpdate(config("openai", "gpt-4.1"), null)).toEqual({});
+  });
+});
+
+describe("isCurrentAnswer", () => {
+  it("marks Same as translation while no answer model is saved", () => {
+    const c = config("openai", "gpt-4.1");
+
+    expect(isCurrentAnswer(c, null)).toBe(true);
+    expect(isCurrentAnswer(c, { provider: "openai", model: "gpt-4.1" })).toBe(false);
+  });
+
+  it("marks the saved answer model", () => {
+    const c = config("openai", "gpt-4.1", { provider: "anthropic", model: "claude-opus-5" });
+
+    expect(isCurrentAnswer(c, { provider: "anthropic", model: "claude-opus-5" })).toBe(true);
+    expect(isCurrentAnswer(c, null)).toBe(false);
+  });
+});
+
+describe("answeredBy", () => {
+  it("names the provider by its short label, then the model", () => {
+    expect(answeredBy(providers(), "anthropic", "claude-opus-5")).toBe("Claude · claude-opus-5");
+  });
+
+  it("keeps a provider id this build doesn't know", () => {
+    expect(answeredBy(providers(), "gone", "m-1")).toBe("gone · m-1");
+  });
+
+  it("is null for an answer no model wrote, or one saved before models were recorded", () => {
+    expect(answeredBy(providers(), null, null)).toBeNull();
+    expect(answeredBy(providers(), undefined, undefined)).toBeNull();
   });
 });

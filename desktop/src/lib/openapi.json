@@ -107,6 +107,18 @@
             "default": null,
             "title": "Elapsed Seconds"
           },
+          "model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Model"
+          },
           "pdf_references": {
             "items": {
               "$ref": "#/components/schemas/PdfReferencePayload"
@@ -125,6 +137,18 @@
             ],
             "default": null,
             "title": "Processing Time"
+          },
+          "provider": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Provider"
           },
           "quality_metrics": {
             "additionalProperties": {
@@ -342,6 +366,28 @@
           "id": {
             "title": "Id",
             "type": "integer"
+          },
+          "model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model"
+          },
+          "provider": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Provider"
           },
           "role": {
             "enum": [
