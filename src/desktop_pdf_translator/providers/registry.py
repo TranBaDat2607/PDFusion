@@ -181,9 +181,9 @@ PROVIDERS: Tuple[ProviderSpec, ...] = (
         takes_endpoint=True,
         default_base_url="https://api.openai.com/v1",
         endpoint_hint=(
-            "Leave blank for OpenAI. For a local model, use Ollama at "
-            "http://localhost:11434/v1 or LM Studio at http://localhost:1234/v1, "
-            "with any API key."
+            "Leave blank for OpenAI. For another server speaking its API, such as "
+            "LM Studio at http://localhost:1234/v1, use any API key. Ollama has a "
+            "card of its own, with no key."
         ),
         lister=_openai_lister,
         default_qps=5.0,
@@ -320,6 +320,32 @@ PROVIDERS: Tuple[ProviderSpec, ...] = (
         default_qps=5.0,
         priority=4,
         signup_url="https://platform.deepseek.com/api_keys",
+        max_temperature=2.0,
+    ),
+    ProviderSpec(
+        id="ollama",
+        label="Ollama (local)",
+        short_label="Ollama",
+        description="Models running on this computer, or another on your network. No key.",
+        protocol="openai",
+        default_model="llama3.2",
+        suggested_models=("llama3.2", "qwen2.5", "gemma3"),
+        translator=_openai_translator,
+        requires_key=False,
+        # OpenAI's SDK won't build a client without a key; Ollama ignores it.
+        placeholder_key="ollama",
+        takes_endpoint=True,
+        default_base_url="http://localhost:11434/v1",
+        endpoint_hint=(
+            "Leave blank for Ollama on this computer. For another machine, use "
+            "its address, as http://192.168.1.20:11434/v1."
+        ),
+        lister=_openai_lister,
+        # One local model serves few requests at once.
+        default_qps=2.0,
+        # Never a chat fallback: a local server may not be running.
+        priority=None,
+        signup_url="https://ollama.com/download",
         max_temperature=2.0,
     ),
 )
