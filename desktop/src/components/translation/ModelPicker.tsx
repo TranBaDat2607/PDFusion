@@ -61,7 +61,8 @@ export function ModelPicker({
   const [open, setOpen] = useState(false);
   const summary = pickerSummary(config);
 
-  // Only once opened: each is a round-trip to a server that may not be up.
+  // Only once opened: a list the sidecar hasn't cached is a round-trip to a
+  // provider, or to a local server that may not be up.
   const listed = servicesToList(config);
   const lists = useQueries({
     queries: listed.map((code) => ({
@@ -262,7 +263,7 @@ function GroupHeading({
       </div>
       {listing?.error && (
         <p className="mt-0.5 font-normal text-destructive" title={listing.error}>
-          Couldn't list this server's models — {truncate(listing.error, 80)}
+          Couldn't list models — {truncate(listing.error, 80)}
         </p>
       )}
     </div>

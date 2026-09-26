@@ -49,6 +49,13 @@ export function useUpdateConfig() {
     onSuccess: (data, update) => {
       const previous = qc.getQueryData<ConfigResponse>(["config"]);
       qc.setQueryData(["config"], data);
+      // The picker's model lists are keyed on the endpoint, not the key, so a
+      // new key at the same endpoint would go on showing the old key's list.
+      // Refetching is cheap: the sidecar answers from its catalog, which it
+      // drops itself on a key or endpoint change (#84).
+      if (update.openai || update.gemini || update.anthropic) {
+        void qc.invalidateQueries({ queryKey: ["config", "endpoint-models"] });
+      }
 
       const label = (code: string) => {
         const options = qc.getQueryData<OptionsResponse>(["config", "options"]);
@@ -66,8 +73,8 @@ export function useUpdateConfig() {
         return;
       }
 
-      // …and the server only promotes on a key that *validates*. When it
-      // doesn't, the save still succeeds but nothing visible changes — which
+      // …and the server only promotes on a key whose model list it could read
+      // and that has the saved model on it (#84). When it doesn't, the save still succeeds but nothing visible changes — which
       // reads as "my key was accepted" for a key the provider just rejected.
       // Same priority the server promotes by (`routes/config.py`): one PUT
       // can carry keys for several services, and only the first by this order
@@ -80,7 +87,7 @@ export function useUpdateConfig() {
         previous?.translation.preferred_service === "argos" &&
         data.translation.preferred_service === "argos"
       ) {
-        toast.warning(`${label(savedKeyFor)} did not accept that key`, {
+        toast.warning(`${label(savedKeyFor)} did not accept that key or model`, {
           description:
             "The key is saved, but translation stays on Argos (offline). Use Validate to check it.",
         });
@@ -89,9 +96,10 @@ export function useUpdateConfig() {
   });
 }
 
-/** Check credentials with the provider. Whatever the request leaves out (the
- *  key, the model, the endpoint) the sidecar takes from the saved settings,
- *  and it sends a saved key only to the saved endpoint. */
+/** Check credentials with the provider, by listing the key's models (never a
+ *  completion) and looking the model up there. Whatever the request leaves out
+ *  (the key, the model, the endpoint) the sidecar takes from the saved
+ *  settings, and it sends a saved key only to the saved endpoint. */
 export function validateCredentials(input: ValidateRequest) {
   return api.post<ValidateResponse>("/config/validate", input);
 }

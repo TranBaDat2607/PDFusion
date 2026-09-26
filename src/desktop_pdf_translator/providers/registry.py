@@ -25,10 +25,13 @@ Provider ids are frozen. Both translation caches key on them
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Callable, FrozenSet, List, Literal, Optional, Tuple
+from typing import TYPE_CHECKING, Callable, FrozenSet, Literal, Optional, Tuple
+
+if TYPE_CHECKING:
+    from .listing import Listing
 
 Protocol = Literal["openai", "anthropic", "gemini", "argos"]
-ModelLister = Callable[[str, Optional[str]], List[str]]
+ModelLister = Callable[[str, Optional[str]], "Listing"]
 
 
 @dataclass(frozen=True)
@@ -59,8 +62,9 @@ class ProviderSpec:
     # Where requests go with no endpoint of the user's own: the SDK's default,
     # recorded for the Settings page's placeholder (#86), not passed to the SDK.
     default_base_url: Optional[str] = None
-    # Returns `list(api_key, base_url) -> model ids`, for a custom endpoint whose
-    # models are in no list we could ship. Imports on call.
+    # Returns `list(api_key, base_url) -> Listing`: the models a key can use.
+    # It is also how a key is verified — never by generating text (#84) — so
+    # every keyed provider has one. Imports on call.
     lister: Optional[Callable[[], ModelLister]] = None
     # Requests/sec its shared limiter runs at with no `max_qps` configured.
     # Provider limits vary by two orders of magnitude across tiers, so these
@@ -124,6 +128,12 @@ def _anthropic_lister() -> ModelLister:
     return list_anthropic_models
 
 
+def _gemini_lister() -> ModelLister:
+    from .listing import list_gemini_models
+
+    return list_gemini_models
+
+
 # In the order `TranslationService` lists them, which is the order of the
 # OpenAPI enum and of `/config/options`. Appending keeps both stable.
 PROVIDERS: Tuple[ProviderSpec, ...] = (
@@ -164,6 +174,7 @@ PROVIDERS: Tuple[ProviderSpec, ...] = (
         ),
         translator=_gemini_translator,
         env_prefix="GEMINI",
+        lister=_gemini_lister,
         default_qps=5.0,
         priority=2,
         retired_models=frozenset({

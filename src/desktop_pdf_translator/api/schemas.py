@@ -449,3 +449,100 @@ class EndpointModelsResponse(BaseModel):
 
     models: List[str] = Field(default_factory=list)
     error: Optional[str] = None
+
+
+# ---------------------------------------------------------------------------
+# Providers (#84)
+# ---------------------------------------------------------------------------
+
+# `unverified`: never checked, or nothing to check with. `unreadable`: a key is
+# saved but this process could not decrypt it (a locked keyring).
+KeyState = Literal["unverified", "valid", "invalid", "unreadable"]
+
+
+class ModelRecord(BaseModel):
+    id: str
+    display_name: Optional[str] = None
+    context_tokens: Optional[int] = None
+    output_tokens: Optional[int] = None
+    created_at: Optional[str] = None
+    # `listed`: the endpoint said it serves it. `saved`: the configured model,
+    # kept on offer when no list has it, so a name typed by hand never
+    # disappears. `suggested`: the registry's suggestions, standing in when
+    # there is no list for the provider's own endpoint.
+    source: Literal["listed", "saved", "suggested"]
+
+
+class ProviderInfo(BaseModel):
+    id: TranslationService
+    label: str
+    short_label: str
+    protocol: Literal["openai", "anthropic", "gemini", "argos"]
+    requires_key: bool
+    takes_endpoint: bool
+    default_base_url: Optional[str] = None
+    default_model: str
+    suggested_models: List[str]
+    model_is_fixed: bool
+    signup_url: Optional[str] = None
+    has_key: bool
+    base_url: Optional[str] = None
+    key_state: KeyState
+    last_verified_at: Optional[str] = None
+    catalog_fetched_at: Optional[str] = None
+    catalog_fresh: bool = False
+
+
+class ProvidersResponse(BaseModel):
+    providers: List[ProviderInfo]
+
+
+class ModelCatalogResponse(BaseModel):
+    """The models the saved key can use at the saved endpoint.
+
+    A failure is `error` in a 200, as with `EndpointModelsResponse`: a local
+    server that isn't up yet is ordinary, and `models` still carries the saved
+    model (and, on the provider's own endpoint, the suggestions).
+    """
+
+    models: List[ModelRecord] = Field(default_factory=list)
+    # What the non-chat id filter took out, for a "show all".
+    hidden: List[ModelRecord] = Field(default_factory=list)
+    fetched_at: Optional[str] = None
+    key_state: KeyState = "unverified"
+    error: Optional[str] = None
+
+
+class VerifyRequest(BaseModel):
+    """A key and endpoint to check by listing, saving nothing. Left out, each
+    comes from the saved settings — but the saved key is only ever sent to the
+    saved endpoint."""
+
+    # `None` or `""`: the saved key.
+    api_key: Optional[str] = None
+    # `None`: the saved endpoint. `""`: the provider's own.
+    base_url: Optional[str] = None
+    # Checked against the list when given; `None` or blank: not checked.
+    model: Optional[str] = Field(None, max_length=200)
+
+    @field_validator("model")
+    @classmethod
+    def _model_or_none(cls, value: Optional[str]) -> Optional[str]:
+        return (value or "").strip() or None
+
+    @field_validator("base_url")
+    @classmethod
+    def _endpoint(cls, value: Optional[str]) -> Optional[str]:
+        return _endpoint_or_blank(value)
+
+
+class VerifyResponse(BaseModel):
+    # The key works at that endpoint: the listing succeeded.
+    valid: bool
+    key_state: KeyState
+    message: str
+    # Whether `model` is among the listed ids, aliases allowed; `None` when no
+    # model was given or nothing was listed.
+    model_found: Optional[bool] = None
+    models: List[ModelRecord] = Field(default_factory=list)
+    hidden: List[ModelRecord] = Field(default_factory=list)

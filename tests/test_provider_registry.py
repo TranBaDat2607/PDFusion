@@ -49,6 +49,8 @@ def test_every_spec_is_complete(spec):
     if spec.requires_key:
         assert spec.env_prefix, "a keyed provider reads its key from the environment"
         assert spec.priority is not None, "a keyed provider is a chat fallback"
+        # Listing is how a key is verified without generating text (#84).
+        assert spec.lister is not None, "a keyed provider's models are listed"
     if spec.takes_endpoint:
         assert spec.default_base_url
         assert spec.lister is not None, "a custom endpoint's models are listed"

@@ -543,7 +543,9 @@ now a Windows + Linux matrix) is what settles the PyInstaller half.
 | `src/desktop_pdf_translator/config/` | `ConfigManager` + Pydantic `AppSettings` (unchanged) |
 | `src/desktop_pdf_translator/processors/` | `PDFProcessor` async generator wrapping BabelDOC (unchanged) |
 | `src/desktop_pdf_translator/providers/registry.py` | The provider registry: one `ProviderSpec` per provider, which every per-provider rule is read from. Stdlib-only — see "Provider registry" |
-| `src/desktop_pdf_translator/providers/listing.py` | Asking an endpoint which models it serves, one function per protocol; imports its SDK on call |
+| `src/desktop_pdf_translator/providers/listing.py` | Asking an endpoint which models a key can use, one function per protocol, and the non-chat filter; imports its SDK on call |
+| `src/desktop_pdf_translator/providers/catalog.py` | The model catalog (a cache, keyed by provider and endpoint) and `list_models`, which sorts a failed listing into a refused key or anything else — see "Verifying keys and discovering models" |
+| `src/desktop_pdf_translator/api/routes/providers.py` | `/providers`: key state, the catalog, `verify`; `/config/validate` and `/config/models` wrap it |
 | `src/desktop_pdf_translator/translators/` | `BaseTranslator`, OpenAI/Gemini/Anthropic/Argos + `TranslatorFactory` |
 | `src/desktop_pdf_translator/translators/rate_limiter.py` | Process-wide token-bucket QPS limiter, one singleton per LLM service |
 | `src/desktop_pdf_translator/translators/usage_estimate.py` | The rough token count behind `POST /translate/estimate`: characters per token, the prompt each paragraph carries, how much longer a translation comes back. Stdlib-only, and held to the real prompts by `test_usage_estimate.py` |
@@ -570,9 +572,12 @@ All routes (except `GET /health`) require `Authorization: Bearer <token>`.
 | GET | `/auth/ping` | Auth probe — used by the Rust shell after startup |
 | GET | `/config` | Current settings (API keys masked). OpenAI and Anthropic report their endpoint as `base_url`, `null` for the provider's own |
 | PUT | `/config` | Update API keys / models / endpoints / language defaults. `model` is free text. `openai` and `anthropic` take `base_url` (`""` = the provider's own); changing it while a key is saved needs `api_key` in the same body, or **422** — see "LLM endpoints and models" |
-| POST | `/config/validate` | Check credentials with the provider, off the event loop and under a deadline. `api_key` / `model` / `base_url` left out come from the saved settings, and the saved key is only checked against the saved endpoint (**422** otherwise) |
+| POST | `/config/validate` | Check credentials by **listing** the key's models (never a completion), off the event loop and under a deadline; `valid` also needs the model among them, aliases allowed. `api_key` / `model` / `base_url` left out come from the saved settings, and the saved key is only checked against the saved endpoint (**422** otherwise). A wrapper over `POST /providers/{id}/verify` |
 | GET | `/config/options` | Static dropdown data (languages, services, model *suggestions* with each service's default first) + `supported_pairs` per service (`null` = unrestricted) |
-| GET | `/config/models/{service}` | The models the saved endpoint serves (`openai` / `anthropic` only; **422** otherwise), always asked with the saved key. A server that's down is `{models: [], error}`, not an HTTP error — see "LLM endpoints and models" |
+| GET | `/config/models/{service}` | The ids the saved key can use at the saved endpoint, sorted (any LLM; **422** for Argos). A wrapper over the catalog, so a fresh listing is served without a round-trip. A server that's down is `{models: [], error}`, not an HTTP error |
+| GET | `/providers` | Every registry entry plus `has_key`, `base_url`, `key_state` (`unverified` \| `valid` \| `invalid` \| `unreadable`), `last_verified_at` and the catalog's freshness. Reads only; never lists |
+| GET | `/providers/{id}/models?refresh=false` | The catalog for the saved key and endpoint: `models` / `hidden` as records (`source`: `listed` \| `saved` \| `suggested`), listed again when older than 24 h or on `refresh`. A failure is `error` in a 200 |
+| POST | `/providers/{id}/verify` | List with a typed key and/or endpoint, saving nothing: `{valid, key_state, message, model_found, models, hidden}`. The #32 rule as `/config/validate` has it — a different endpoint needs the key typed (**422**) |
 | GET | `/config/cache` | Both caches' stats: `paragraph` (entries, expired, hit rate, size, TTL) and `pdf` (entries, hit rate, size, LRU cap) |
 | DELETE | `/config/cache?scope=all\|expired&target=paragraph\|pdf\|all` | Clear the cache `target` names (`paragraph` by default); `scope=expired` reaps expired paragraphs and never touches the PDF cache. Any other value is **422**, not a clear |
 | GET | `/setup/status` | Which engine assets are installed, plus the running install's phase and the last one's error. Stat calls only — polled twice a second during an install |
@@ -971,7 +976,7 @@ three kinds of store with different rules (#59):
 |---|---|---|
 | `pdfusion.db` (`storage/records.py`) | **Records.** `documents` (id = SHA-256 of the file's bytes), `document_locations` (every path a document was opened from), `rag_indexes` (one row per chat index: embedding model and dimension, chunker version, `indexing` → `ready` \| `failed`), `chat_messages` (a document's saved chat, schema v2) | System of record. Foreign keys with `ON DELETE CASCADE`; at most one `ready` index per document, model and chunker, enforced by a partial unique index. A file from a newer build refuses to open (`on_too_new="raise"`) |
 | `vectors/` (`rag/vector_store.py`) | **Derived.** One ChromaDB collection per `rag_indexes` row, named `rag_<id>` | Rebuildable. Chunks carry only what retrieval reads; a document's id and path live in the records |
-| `translation_cache/`, `translated_pdf_cache/` | **Caches** — see "Two-tier translation caching" | Disposable: clearing them never touches a record. `pdf_translations.file_hash` equals `documents.id` by value |
+| `translation_cache/`, `translated_pdf_cache/`, `model_catalog/` | **Caches** — see "Two-tier translation caching" and "Verifying keys and discovering models" | Disposable: clearing them never touches a record. `pdf_translations.file_hash` equals `documents.id` by value |
 
 All SQLite goes through `storage/sqlite.py` and `storage/migrations.py`. To
 change a schema, append a `Migration` to that store's `_MIGRATIONS`.
@@ -1155,15 +1160,17 @@ Three things close that gap:
   set and to "switch to Argos" while already on it.
 
 Relatedly, `PUT /config` **only auto-promotes `preferred_service` off Argos
-when the new key validates** (one provider round-trip, only on that path). An
-explicit `preferred_service` in the payload is always honoured — that's the
-user's own choice. Promoting on a typo'd key used to move the user from a
-working offline translator onto one that fails every paragraph silently.
+when listing with the new key succeeds and the saved model is on the list**
+(one provider round-trip, only on that path, and never a completion — see
+"Verifying keys and discovering models"). An explicit `preferred_service` in
+the payload is always honoured — that's the user's own choice. Promoting on a
+typo'd key used to move the user from a working offline translator onto one
+that fails every paragraph silently.
 
-Two things that probe has to keep: it runs under `_VALIDATE_PROBE_TIMEOUT_S`
-(Gemini's `validate_configuration` passes no timeout of its own, and this is
-the *save* path now, not just the Validate button), and a timeout reports the
-same "don't promote" as a rejection. The frontend's warning toast in
+Two things that listing has to keep: it runs under `catalog.PROBE_TIMEOUT_S`
+(Gemini's client honours its own timeout loosely, and this is the *save* path,
+not just the Validate button), and a timeout reports the same "don't promote"
+as a rejection. The frontend's warning toast in
 `useConfig.ts` picks the provider to name using the **same priority order** the
 server promotes by — one PUT can carry several keys, and only the first is
 probed, so the two orders must not drift apart.
@@ -1206,8 +1213,9 @@ how each differs (#83). A frozen `ProviderSpec` per provider carries its
 label, default and suggested models, whether it takes a key or an endpoint,
 the environment variable prefix, the default QPS, its place in the "any LLM
 with a key" fallback order (`priority`), supported language pairs, retired
-model ids, and two lazy callables: the translator class and, for a provider
-that takes an endpoint, the model lister (`providers/listing.py`). Everything
+model ids, and two lazy callables: the translator class and the model lister
+(`providers/listing.py`), which every keyed provider has, since listing is how
+its key is verified (#84). Everything
 that used to branch per provider reads it: `TranslationService` itself is
 built from `PROVIDERS`, and `SERVICE_LABELS`, `SUPPORTED_PAIRS`,
 `RETIRED_MODELS`, `KEYED_SERVICES`, the rate limiter's defaults, the
@@ -1240,6 +1248,86 @@ Until the config is reshaped (#85), a new provider still needs a settings
 class and an `AppSettings` field; `test_provider_registry.py` fails when a
 spec's default model and its settings default disagree.
 
+### Verifying keys and discovering models
+
+**Verifying a key and discovering models never generate text** (#84). Each
+translator's `validate_configuration` used to send a "Hello" completion, and
+Settings → Save, `POST /config/validate` and the Argos → LLM promotion all went
+through it. Every provider serves the list of models a key can use for free,
+so listing does both jobs at once: a 401/403 means the key is wrong, and the
+list is what the model picker offers. Nothing in the verify, save, promotion or
+picker paths may call `validate_configuration` or build a translator;
+`tests/test_config_api.py` and `tests/test_providers_api.py` fail if one does.
+(Argos keeps its `validate_configuration`: it checks the installed pack and
+sends nothing anywhere.)
+
+The old rule said a check must send what `translate` sends, "since a check that
+sent less would pass a model that fails every paragraph". Two things have since
+covered most of that: `param_compat` drops a parameter a model refuses on the
+first paragraph that meets it, and a fatal 401/403 aborts the job instead of
+producing a document of source text ("Translator failures are counted, not
+swallowed"). A mistyped model is still caught before it is saved:
+`/config/validate` looks the saved or typed name up in the list
+(`listing.model_matches`), allowing Anthropic's undated aliases
+(`claude-haiku-4-5` for `claude-haiku-4-5-20251001`) and Ollama's implicit tag
+(`llama3.2` for `llama3.2:latest`). A miss is `valid: false`, and the Settings
+sheet offers "Save anyway".
+
+**What listing alone can't catch**, and a translation will report as failed
+paragraphs (or, for a 401/403, abort on):
+
+- a key with no credit or over its quota — OpenAI lists models for a key with
+  a zero balance, and the 429 `insufficient_quota` only comes on a completion;
+- a model the account may see but not run — OpenAI's organisation-verified
+  models, for one;
+- a region the provider won't serve;
+- a model that is listed but refuses a parameter `param_compat` doesn't know.
+
+An opt-in "Test model" button that sends one tiny request — clicked, never run
+automatically — is the planned escape hatch for those, deferred to the Models
+settings page (#86).
+
+**One lister per protocol** (`providers/listing.py`), each importing its SDK
+inside the function and reached through `ProviderSpec.lister`:
+
+- **OpenAI** (`GET /v1/models`) returns everything the key reaches —
+  embeddings, speech, images — with nothing but the id to say which chat. A
+  regex on the id (`_OPENAI_NON_CHAT`) moves those into `hidden` rather than
+  dropping them, since a heuristic can be wrong. On a custom endpoint nothing
+  is filtered: Ollama or LM Studio can call a chat model anything.
+- **Anthropic** (`GET /v1/models`) is walked page by page on
+  `has_more`/`last_id`. The old code asked for 100 and never fetched a second
+  page.
+- **Gemini** (`models.list()`, paged by the SDK) keeps only models whose
+  `supported_actions` include `generateContent`. That is the API's own
+  statement of capability, so the rest are dropped, not hidden. Google answers
+  a bad key with 400 `API_KEY_INVALID`, not 401, which is why failures are
+  sorted by `translators/base.py:is_fatal_translation_error` — the same test
+  that aborts a translation, with its "api key not valid" marker — rather than
+  by status alone.
+
+`catalog.list_models` runs the lister through `asyncio.to_thread` under
+`PROBE_TIMEOUT_S` and turns every failure into `KeyRejected` (a refused key) or
+`ListingFailed` (anything else). It is the one seam the route tests replace.
+
+**The catalog** (`providers/catalog.py`, `model_catalog/catalog.db`) is a cache,
+not a record: a listing can always be asked for again. It goes through
+`storage/sqlite.py`, is versioned by an appended `Migration`, and a file from a
+newer build is set aside (`on_too_new="reset"`). Rows are keyed by
+`(provider_id, base_url)` and carry the listing, when it was fetched, and the
+key's state (`valid` after a listing, `invalid` after a refusal). Three rules:
+
+- **Nothing derived from a key is stored** — not the key, not a hash of it. So
+  a key change can't be detected from the row; `PUT /config` calls
+  `invalidate(provider)` whenever it saves or clears a key or moves an
+  endpoint. A key swapped in `.env` between runs is bounded only by the 24 h
+  TTL.
+- **Only the saved pair is written.** `verify` with a typed key, or against
+  another endpoint, saves nothing: a key the user may yet discard must not mark
+  the saved one valid or invalid.
+- **A stale list beats none.** When listing fails and an old listing exists,
+  `GET /providers/{id}/models` serves it with the `error` beside it.
+
 ### LLM endpoints and models
 
 Settings takes any model name, and OpenAI and Anthropic each take an endpoint
@@ -1250,8 +1338,9 @@ provider (#32). README has the recipe. Four rules hold that together:
   /config` never reveals a key, but `base_url` decides where the next request
   goes, and with it the key in its auth header. So `PUT /config` refuses (422)
   an endpoint change, clearing one included, unless the same body carries
-  `api_key`, and `POST /config/validate` uses the saved key only against the
-  saved endpoint. Together they keep anything holding the bearer token from
+  `api_key`, and `POST /config/validate` and `POST /providers/{id}/verify`
+  use the saved key only against the saved endpoint
+  (`routes/providers.py:resolve_probe_target`). Together they keep anything holding the bearer token from
   reading a key off the wire; don't loosen either for convenience. The Settings
   sheet mirrors the rule (`lib/service-settings.ts:endpointNeedsKey`) so the
   user meets it before the 422. Endpoints are normalized in one place,
@@ -1273,10 +1362,9 @@ provider (#32). README has the recipe. Four rules hold that together:
   for OpenAI's `max_tokens`, as `max_completion_tokens`. The refusal word is
   load-bearing: "max_tokens is too large" names the parameter too, and wants a
   smaller number. The record lasts as long as the process.
-  `validate_configuration` goes through the same path (`backoff=False`) with
-  the same parameters as `translate`, since a check that sent less would pass a
-  model that fails every paragraph. The wording matched is OpenAI's documented
-  one; Anthropic's has not been captured, so if a Claude model still fails on
+  Nothing checks a model by sending it a completion any more (see "Verifying
+  keys and discovering models"); a refused parameter is adapted to on the
+  first paragraph instead. The wording matched is OpenAI's documented one; Anthropic's has not been captured, so if a Claude model still fails on
   `temperature`, compare its message with the markers first.
 - **Model suggestions are not a whitelist.** `/config/options` lists each
   service's default first, and `tests/test_config_api.py` fails when a default
@@ -1291,9 +1379,10 @@ provider (#32). README has the recipe. Four rules hold that together:
   alone, since a local server can call its models anything.
 
 Two smaller consequences. The chat answer model is rebuilt when the endpoint
-changes (`rag_chain._answer_model` keys on it). And every credentials probe
-passes `base_url` explicitly, `None` included (`routes/config.py:_probe_kwargs`),
-because `TranslatorFactory` starts from the *saved* settings. A keyless local
+changes (`rag_chain._answer_model` keys on it). And every listing names its
+endpoint explicitly, `None` (the provider's own) included
+(`routes/providers.py:resolve_probe_target`), so a check of a typed endpoint
+can never fall through to the saved one. A keyless local
 server still needs some key typed: without one, OpenAI or Anthropic falls back
 to Argos (`capabilities.resolve_effective_service`), a rule #32 left as it was.
 
@@ -1315,10 +1404,12 @@ things about it are deliberate:
 - **Only names from a list are picked here.** They save with no provider
   check, since a listed name can't be mistyped. A name of one's own goes
   through Settings, which checks it first.
-- **A custom endpoint shows its own list** (`GET /config/models/{service}`,
-  fetched once the picker opens) in place of the provider's suggestions, which
-  Ollama or LM Studio don't have. The saved model is always offered, so it
-  still shows while that server is down.
+- **A keyed service shows what its key can use** (`GET /config/models/{service}`,
+  fetched once the picker opens, served from the catalog while fresh) in place
+  of the shipped suggestions. Until that list arrives, or when it fails, the
+  provider's own endpoint falls back to the suggestions; a custom endpoint has
+  none of the provider's models, so it offers only the saved model, which is
+  always offered and still shows while that server is down.
 
 The chat panel's header names the answering model (`chatModel`, a copy of
 `rag_chain._answer_model`'s order). It isn't always the toolbar's model: chat

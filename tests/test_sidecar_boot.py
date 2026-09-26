@@ -90,6 +90,10 @@ def _run_probe(code: str) -> str:
         # Imported by `config.models` and `translators.rate_limiter`, and so by
         # nearly everything. Its translators and listers import on call.
         "desktop_pdf_translator.providers.registry",
+        # Imported at module level by `api/routes/config.py` and the providers
+        # route. The listers they reach import their SDK inside the function.
+        "desktop_pdf_translator.providers.catalog",
+        "desktop_pdf_translator.api.routes.providers",
     ],
 )
 def test_boot_path_does_not_import_the_heavy_stack(module: str) -> None:
