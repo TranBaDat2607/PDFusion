@@ -166,10 +166,10 @@ export interface AnsweringModel {
 
 /**
  * The LLM that writes chat answers, mirroring
- * `rag/rag_chain.py:EnhancedRAGChain._answer_model`: the translation model
- * when its provider is an LLM with a key, else every LLM by `priority` with
- * the model it runs. `null` with no key at all, when chat answers with
- * excerpts from the document instead.
+ * `rag/rag_chain.py:EnhancedRAGChain._answer_model`: `rag.answer_model`, then
+ * the translation model, whichever first has an LLM provider with a key, else
+ * every LLM by `priority` with the model it runs. `null` with no key at all,
+ * when chat answers with excerpts from the document instead.
  */
 export function chatModel(
   config: ChoiceConfig,
@@ -178,6 +178,7 @@ export function chatModel(
   const llms = providers.filter((p) => p.priority !== null && p.priority !== undefined);
   const byPriority = [...llms].sort((a, b) => (a.priority ?? 0) - (b.priority ?? 0));
   const candidates: ModelRef[] = [
+    ...(config.rag.answer_model ? [config.rag.answer_model] : []),
     config.translation.model,
     ...byPriority.map((p) => ({ provider: p.id, model: p.model }) as ModelRef),
   ];

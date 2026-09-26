@@ -117,8 +117,10 @@ export function providerUpdate(draft: ProviderDraft, provider: ProviderInfo): Pr
 
 /** Whether saving checks with the provider first: a new key, or a key going
  *  to a new endpoint. Models are picked from the provider's own list, so
- *  switching them needs no check. */
+ *  switching them needs no check; and a cleared key leaves nothing to check
+ *  with, nor any key to send to a new endpoint. */
 export function needsVerify(draft: ProviderDraft, provider: ProviderInfo): boolean {
+  if (draft.clearKey) return false;
   return typedKey(draft) !== "" || endpointChanged(draft, provider);
 }
 

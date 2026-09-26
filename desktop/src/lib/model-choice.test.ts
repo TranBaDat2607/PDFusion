@@ -270,6 +270,27 @@ describe("chatModel", () => {
     });
   });
 
+  it("answers with the answer model first when its provider has a key", () => {
+    const list = providers({ openai: { has_key: true }, anthropic: { has_key: true } });
+    const c = config("openai", "gpt-4.1", { provider: "anthropic", model: "claude-opus-4-7" });
+
+    expect(chatModel(c, list)).toEqual({
+      provider: "anthropic",
+      label: "Claude",
+      model: "claude-opus-4-7",
+    });
+  });
+
+  it("passes over an answer model whose provider has no key", () => {
+    const list = providers({ gemini: { has_key: true } });
+    const c = config("gemini", "gemini-3.7-flash", {
+      provider: "anthropic",
+      model: "claude-opus-4-7",
+    });
+
+    expect(chatModel(c, list)?.model).toBe("gemini-3.7-flash");
+  });
+
   it("falls back by priority: OpenAI, Claude, Gemini", () => {
     const list = providers({ gemini: { has_key: true }, anthropic: { has_key: true } });
 
