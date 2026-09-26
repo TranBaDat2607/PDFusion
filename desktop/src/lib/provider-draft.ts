@@ -310,13 +310,25 @@ interface SelectionInput {
   listed: readonly string[];
 }
 
+/** Whether a model name is one of the listed ids, allowing for aliases, as
+ *  `providers/listing.py:model_matches` does: Anthropic lists only
+ *  `claude-haiku-4-5-20251001` for the alias `claude-haiku-4-5`, and Ollama
+ *  `llama3.2:latest` for `llama3.2`. An exact match missed those and left an
+ *  upgraded user on Argos after saving a key that works. */
+function modelListed(model: string, listed: readonly string[]): boolean {
+  return listed.some(
+    (id) => id === model || (id.startsWith(model) && "-:".includes(id.charAt(model.length))),
+  );
+}
+
 /** A new key that just listed its models, the model to choose among them:
  *  never on "Save anyway", which saves a key the provider turned down, and
  *  never onto a model the key can't use — a translator that fails every
- *  paragraph, where Argos would have kept working. The sidecar checked the
- *  same when it promoted off Argos itself, before #88. */
+ *  paragraph, where Argos would have kept working. */
 function workingNewKey(input: SelectionInput): boolean {
-  return !!input.update.api_key && !input.savedAnyway && input.listed.includes(input.model);
+  return (
+    !!input.update.api_key && !input.savedAnyway && modelListed(input.model, input.listed)
+  );
 }
 
 /** Opened from a picker's "Add an API key to use X…" for a provider with no

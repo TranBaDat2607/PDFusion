@@ -829,6 +829,66 @@ describe("selectsProvider", () => {
       }),
     ).toBe(false);
   });
+
+  it("switches onto an alias the key listed under its dated id", () => {
+    expect(
+      selectsProvider({
+        provider: provider({ id: "anthropic", has_key: false }),
+        update: { api_key: "sk-new" } as ProviderUpdate,
+        translationProvider: "argos",
+        openedFor: null,
+        savedAnyway: false,
+        model: "claude-haiku-4-5",
+        listed: ["claude-haiku-4-5-20251001"],
+      }),
+    ).toBe(true);
+  });
+
+  it("switches onto an alias the key listed under its tagged id", () => {
+    expect(
+      selectsProvider({
+        provider: provider({ id: "ollama", has_key: false }),
+        update: { api_key: "sk-new" } as ProviderUpdate,
+        translationProvider: "argos",
+        openedFor: null,
+        savedAnyway: false,
+        model: "llama3.2",
+        listed: ["llama3.2:latest"],
+      }),
+    ).toBe(true);
+  });
+
+  it("doesn't switch on a shared prefix without a '-' or ':' separator", () => {
+    // "gpt-4" is a prefix of "gpt-4o" but not followed by a separator, so it's
+    // a different model, not an alias.
+    expect(
+      selectsProvider({
+        provider: provider({ id: "openai", has_key: false }),
+        update: { api_key: "sk-new" } as ProviderUpdate,
+        translationProvider: "argos",
+        openedFor: null,
+        savedAnyway: false,
+        model: "gpt-4",
+        listed: ["gpt-4o"],
+      }),
+    ).toBe(false);
+  });
+
+  it("doesn't switch when only the model name extends a listed id, not the reverse", () => {
+    // Only a *listed* id may extend the saved model name (an alias resolving
+    // to a dated id); the saved model extending a shorter listed id doesn't count.
+    expect(
+      selectsProvider({
+        provider: provider({ id: "anthropic", has_key: false }),
+        update: { api_key: "sk-new" } as ProviderUpdate,
+        translationProvider: "argos",
+        openedFor: null,
+        savedAnyway: false,
+        model: "claude-haiku-4-5-20251001",
+        listed: ["claude-haiku-4-5"],
+      }),
+    ).toBe(false);
+  });
 });
 
 describe("selectsProvider: only onto a model the key can use", () => {
@@ -891,6 +951,18 @@ describe("selectsAnswerModel", () => {
       selectsAnswerModel({ ...base, provider: provider({ id: "openai", has_key: true }) }),
     ).toBe(false);
     expect(selectsAnswerModel({ ...base, listed: ["gpt-5.6-sol"] })).toBe(false);
+  });
+
+  it("makes the provider answer in chat onto an alias the key listed under its dated id", () => {
+    expect(
+      selectsAnswerModel({
+        ...base,
+        provider: provider({ id: "anthropic", has_key: false }),
+        openedFor: "anthropic",
+        model: "claude-haiku-4-5",
+        listed: ["claude-haiku-4-5-20251001"],
+      }),
+    ).toBe(true);
   });
 });
 
