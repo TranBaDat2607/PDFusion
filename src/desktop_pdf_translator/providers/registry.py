@@ -283,6 +283,28 @@ PROVIDERS: Tuple[ProviderSpec, ...] = (
         auto_source="en",
         model_is_fixed=True,
     ),
+    ProviderSpec(
+        id="openrouter",
+        label="OpenRouter",
+        short_label="OpenRouter",
+        description="One key for hundreds of models from many labs, through OpenAI's API.",
+        # OpenAI's API at its own URL, so OpenAI's translator and lister.
+        protocol="openai",
+        default_model="openai/gpt-4.1",
+        suggested_models=(
+            "openai/gpt-4.1",
+            "anthropic/claude-sonnet-4.6",
+            "google/gemini-3.8-flash",
+        ),
+        translator=_openai_translator,
+        env_prefix="OPENROUTER",
+        default_base_url="https://openrouter.ai/api/v1",
+        lister=_openai_lister,
+        default_qps=5.0,
+        priority=3,
+        signup_url="https://openrouter.ai/settings/keys",
+        max_temperature=2.0,
+    ),
 )
 
 _BY_ID = {spec.id: spec for spec in PROVIDERS}
