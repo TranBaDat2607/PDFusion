@@ -209,17 +209,22 @@ async def list_models(provider_id: str, api_key: str, base_url: Optional[str]) -
     """
     from ..translators.base import is_fatal_translation_error
 
+    spec = provider(provider_id)
+    # The SDKs' own text is often only "Connection error.", which doesn't say
+    # that the endpoint on the card is the server that's down.
+    where = base_url or spec.label
+
     def run() -> Listing:
-        return provider(provider_id).lister()(api_key, base_url)
+        return spec.lister()(api_key, base_url)
 
     try:
         return await asyncio.wait_for(asyncio.to_thread(run), timeout=PROBE_TIMEOUT_S)
     except (asyncio.TimeoutError, TimeoutError):
-        raise ListingFailed(f"Timed out contacting {base_url or provider_id}.") from None
+        raise ListingFailed(f"Timed out contacting {where}.") from None
     except Exception as exc:  # noqa: BLE001 — sorted into the two outcomes
         # The same test that aborts a translation on a bad key, so the two
         # can't disagree about one. It also catches Gemini, which answers a
         # bad key with 400 API_KEY_INVALID rather than 401.
         if is_fatal_translation_error(exc):
             raise KeyRejected(str(exc)) from exc
-        raise ListingFailed(str(exc)) from exc
+        raise ListingFailed(f"Couldn't list the models at {where}: {exc}") from exc

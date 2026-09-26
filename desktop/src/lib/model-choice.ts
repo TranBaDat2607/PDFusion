@@ -6,114 +6,116 @@
  * so changing the model was a trip through the sheet, and the toolbar went on
  * naming a keyless LLM while Argos ran in its place. Pure, so the rules run
  * under vitest's node environment like `translate-request.ts`.
+ *
+ * Every provider fact comes from `GET /providers`, which reads the registry
+ * (`providers/registry.py`); nothing here names a provider (#86).
  */
 
-import type {
-  ConfigResponse,
-  ConfigUpdate,
-  OptionsResponse,
-  ServiceCode,
-} from "@/hooks/useConfig";
-import { effectiveService } from "@/lib/translate-request";
-import { LLM_SERVICES, takesEndpoint, type LlmServiceCode } from "@/lib/service-settings";
+import type { ConfigResponse, ConfigUpdate } from "@/hooks/useConfig";
+import type { ProviderInfo } from "@/hooks/useProviders";
+import { canRun, effectiveService } from "@/lib/translate-request";
 
-type Config = Pick<
-  ConfigResponse,
-  "translation" | "openai" | "gemini" | "anthropic" | "argos"
+export type PickerProvider = Pick<
+  ProviderInfo,
+  | "id"
+  | "label"
+  | "short_label"
+  | "requires_key"
+  | "has_key"
+  | "takes_endpoint"
+  | "base_url"
+  | "default_model"
+  | "model"
+  | "enabled_models"
+  | "model_is_fixed"
+  | "priority"
 >;
 
-/** Short names, for the toolbar and the Settings tab row, where the full ones
- *  ("Argos Translate (offline)") are too wide. */
-export const SERVICE_SHORT_LABELS: Record<ServiceCode, string> = {
-  argos: "Argos",
-  openai: "OpenAI",
-  gemini: "Gemini",
-  anthropic: "Claude",
+export type ChoiceConfig = {
+  translation: Pick<ConfigResponse["translation"], "model">;
+  rag: Pick<ConfigResponse["rag"], "answer_model">;
 };
+
+type ModelRef = ConfigResponse["translation"]["model"];
 
 export interface ModelEntry {
   model: string;
-  /** The app's default for the service: the first suggestion. */
+  /** The provider's default model, on its own endpoint. */
   isDefault: boolean;
 }
 
-export interface ServiceGroup {
-  code: ServiceCode;
+export interface ModelGroup {
+  id: string;
   label: string;
-  /** Argos needs none, so it always has one. */
-  hasKey: boolean;
-  /** The server a service was pointed at in place of the provider's own. */
+  /** Can run now: it has a key, or takes none. */
+  usable: boolean;
+  /** Takes a key and has none: offers "Add an API key", not its models. */
+  needsKey: boolean;
+  /** Its model is a fixed identifier (Argos): nothing to choose. */
+  fixed: boolean;
+  /** The server it was pointed at in place of the provider's own. */
   endpoint: string | null;
   models: ModelEntry[];
 }
 
 /**
- * Every service with the models it offers.
- *
- * A keyed service offers what its key can use (`endpointModels`, listed by
- * the sidecar, #84). Until that list arrives, or when it fails, the provider's
- * own endpoint falls back to the shipped suggestions; another server offers
- * nothing but the saved model, since it has none of the provider's models. The
- * saved model always stays on offer, so a name typed in Settings never
- * vanishes from the list.
+ * The models a provider offers: the ones switched on for it in Settings →
+ * Models (#86), in order. The translation and answer models stay on offer
+ * even once switched off, so the picker can always show what is chosen; and
+ * with none switched on, the model it runs, so a provider with a key always
+ * has one to pick.
  */
+function offeredModels(provider: PickerProvider, config: ChoiceConfig): string[] {
+  if (provider.model_is_fixed) return [provider.default_model];
+  const chosen = [config.translation.model, config.rag.answer_model]
+    .filter((ref): ref is ModelRef => !!ref && ref.provider === provider.id)
+    .map((ref) => ref.model);
+  const names = [...provider.enabled_models, ...chosen];
+  return names.length > 0 ? [...new Set(names)] : [provider.model];
+}
+
 export function modelGroups(
-  config: Config,
-  options: Pick<OptionsResponse, "services">,
-  endpointModels: Partial<Record<LlmServiceCode, string[]>> = {},
-): ServiceGroup[] {
-  return options.services.map((option) => {
-    const code = option.code as ServiceCode;
-    if (code === "argos") {
-      return { code, label: option.label, hasKey: true, endpoint: null, models: [] };
-    }
-    const saved = config[code];
-    const endpoint = (takesEndpoint(code) && saved.base_url) || null;
-    const listed = endpointModels[code] ?? [];
-    const offered = listed.length > 0 || endpoint ? listed : option.models;
-    const names = [saved.model, ...offered.filter((m) => m !== saved.model)];
-    // Suggestion order is the server's (default first); the saved model goes
-    // first only when it's a name the list doesn't have.
-    const ordered = offered.includes(saved.model) ? offered : names;
+  config: ChoiceConfig,
+  providers: readonly PickerProvider[],
+): ModelGroup[] {
+  return providers.map((provider) => {
+    const endpoint = (provider.takes_endpoint && provider.base_url) || null;
     return {
-      code,
-      label: option.label,
-      hasKey: saved.has_key,
+      id: provider.id,
+      label: provider.label,
+      usable: canRun(provider),
+      needsKey: provider.requires_key && !provider.has_key,
+      fixed: provider.model_is_fixed,
       endpoint,
-      models: ordered.map((model) => ({
+      models: offeredModels(provider, config).map((model) => ({
         model,
-        isDefault: !endpoint && model === option.models[0],
+        isDefault: !endpoint && model === provider.default_model,
       })),
     };
   });
 }
 
 /** Whether this entry is what Translate would run now. */
-export function isCurrent(config: Config, code: ServiceCode, model: string | null): boolean {
-  if (config.translation.preferred_service !== code) return false;
-  return code === "argos" || config[code].model === model;
+export function isCurrent(config: ChoiceConfig, provider: string, model: string): boolean {
+  const current = config.translation.model;
+  return current.provider === provider && current.model === model;
 }
 
-/**
- * The `PUT /config` body for picking an entry: only what changes. The
- * service and its model go in one request, so the toolbar never shows one
- * without the other.
- */
+/** The `PUT /config` body for picking an entry: provider and model in one
+ *  reference, so the toolbar never shows one without the other. */
 export function selectionUpdate(
-  config: Config,
-  code: ServiceCode,
-  model: string | null,
+  config: ChoiceConfig,
+  provider: string,
+  model: string,
 ): ConfigUpdate {
-  const update: ConfigUpdate = {};
-  if (config.translation.preferred_service !== code) update.preferred_service = code;
-  if (code !== "argos" && model && config[code].model !== model) {
-    update[code] = { model };
-  }
-  return update;
+  if (isCurrent(config, provider, model)) return {};
+  return {
+    translation_model: { provider, model } as NonNullable<ConfigUpdate["translation_model"]>,
+  };
 }
 
 export interface PickerSummary {
-  /** The service that will run, short name. */
+  /** The provider that will run, short name. */
   service: string;
   /** Its model, or null for Argos. */
   model: string | null;
@@ -121,51 +123,69 @@ export interface PickerSummary {
   downgradedFrom: string | null;
 }
 
+const shortLabel = (providers: readonly PickerProvider[], id: string) =>
+  providers.find((p) => p.id === id)?.short_label ?? id;
+
 /**
- * What the picker's button says. It names the service that will *run*: an
+ * What the picker's button says. It names the provider that will *run*: an
  * LLM with no key is swapped for Argos by the sidecar, and the button used to
  * go on naming the LLM and its model through the whole Argos run.
  */
-export function pickerSummary(config: Config): PickerSummary {
-  const requested = config.translation.preferred_service;
-  const running = effectiveService(config);
+export function pickerSummary(
+  config: ChoiceConfig,
+  providers: readonly PickerProvider[],
+): PickerSummary {
+  const requested = config.translation.model;
+  const running = effectiveService(config, providers);
+  const fixed = providers.find((p) => p.id === running)?.model_is_fixed ?? true;
   return {
-    service: SERVICE_SHORT_LABELS[running],
-    model: running === "argos" ? null : config[running].model,
-    downgradedFrom: running === requested ? null : SERVICE_SHORT_LABELS[requested],
+    service: shortLabel(providers, running),
+    model: fixed ? null : requested.model,
+    downgradedFrom: running === requested.provider ? null : shortLabel(providers, requested.provider),
   };
 }
 
-/** The LLM service to open Settings on for "Custom model or endpoint…". */
-export function settingsTabFor(config: Config): LlmServiceCode {
-  const preferred = config.translation.preferred_service;
-  return preferred === "argos" ? "openai" : preferred;
+/** The provider Settings opens on for "Custom model or endpoint…": the one
+ *  translating, or from a fixed-model engine the first that takes an
+ *  endpoint, since a model of one's own needs a server. */
+export function settingsTargetFor(
+  config: ChoiceConfig,
+  providers: readonly PickerProvider[],
+): string {
+  const current = providers.find((p) => p.id === config.translation.model.provider);
+  if (current && !current.model_is_fixed) return current.id;
+  return (providers.find((p) => p.takes_endpoint) ?? providers[0]).id;
 }
 
-/** Services the picker asks for their model list: every one with a key,
- *  since listing is free with any valid key (#84). */
-export function servicesToList(config: Config): LlmServiceCode[] {
-  return LLM_SERVICES.filter((code) => config[code].has_key);
+export interface AnsweringModel {
+  provider: string;
+  /** Short name, for the chat header. */
+  label: string;
+  model: string;
 }
-
-// Order `rag_chain.py:_LLM_SERVICES` tries them in (`ProviderSpec.priority` in
-// `providers/registry.py`), which differs from the Settings tab order.
-const CHAT_ORDER: readonly LlmServiceCode[] = ["openai", "anthropic", "gemini"];
 
 /**
  * The LLM that writes chat answers, mirroring
- * `rag/rag_chain.py:EnhancedRAGChain._answer_model`: the preferred service
- * when it's an LLM with a key, else the first that has one. `null` with no
- * key at all, when chat answers with excerpts from the document instead.
+ * `rag/rag_chain.py:EnhancedRAGChain._answer_model`: the translation model
+ * when its provider is an LLM with a key, else every LLM by `priority` with
+ * the model it runs. `null` with no key at all, when chat answers with
+ * excerpts from the document instead.
  */
 export function chatModel(
-  config: Config,
-): { service: LlmServiceCode; model: string } | null {
-  const preferred = config.translation.preferred_service;
-  const candidates: LlmServiceCode[] =
-    preferred === "argos"
-      ? [...CHAT_ORDER]
-      : [preferred, ...CHAT_ORDER.filter((c) => c !== preferred)];
-  const service = candidates.find((code) => config[code].has_key);
-  return service ? { service, model: config[service].model } : null;
+  config: ChoiceConfig,
+  providers: readonly PickerProvider[],
+): AnsweringModel | null {
+  const llms = providers.filter((p) => p.priority !== null && p.priority !== undefined);
+  const byPriority = [...llms].sort((a, b) => (a.priority ?? 0) - (b.priority ?? 0));
+  const candidates: ModelRef[] = [
+    config.translation.model,
+    ...byPriority.map((p) => ({ provider: p.id, model: p.model }) as ModelRef),
+  ];
+  for (const ref of candidates) {
+    const provider = llms.find((p) => p.id === ref.provider);
+    if (provider && canRun(provider)) {
+      return { provider: provider.id, label: provider.short_label, model: ref.model };
+    }
+  }
+  return null;
 }

@@ -2,7 +2,7 @@
 
 from typing import Annotated, Any, Dict, List, Literal, Optional, Tuple
 
-from pydantic import BaseModel, Field, PositiveInt, field_validator
+from pydantic import BaseModel, ConfigDict, Field, PositiveInt, field_validator
 
 from .sse_schemas import AskResultPayload
 
@@ -54,10 +54,17 @@ class APIKeyMaskedSettings(BaseModel):
     extra: Dict[str, Any] = Field(default_factory=dict)
 
 
+# A response always carries every field, defaulted or not. Without this the
+# generated TypeScript marks each defaulted one optional, and the frontend
+# guards values that are always there.
+_EVERY_FIELD_SENT = ConfigDict(json_schema_serialization_defaults_required=True)
+
+
 class TranslationConfig(TranslationSettings):
     """`[translation]` as the frontend reads it: the settings, plus
-    `preferred_service` — `model.provider` — which the toolbar and Settings
-    still read until they move to `model` (#86, #87)."""
+    `preferred_service` — `model.provider` — for a client older than #86."""
+
+    model_config = _EVERY_FIELD_SENT
 
     preferred_service: TranslationService
 
@@ -494,17 +501,25 @@ class ModelRecord(BaseModel):
 
 
 class ProviderInfo(BaseModel):
+    model_config = _EVERY_FIELD_SENT
+
     id: TranslationService
     label: str
     short_label: str
+    description: str
     protocol: Literal["openai", "anthropic", "gemini", "argos"]
     requires_key: bool
     takes_endpoint: bool
     default_base_url: Optional[str] = None
+    endpoint_hint: Optional[str] = None
     default_model: str
     suggested_models: List[str]
     model_is_fixed: bool
     signup_url: Optional[str] = None
+    # Its place in chat's "any LLM with a key" fallback, lowest first; `None`
+    # for one that never answers in chat. The frontend's copy of that order
+    # (`lib/model-choice.ts:chatModel`) reads it here.
+    priority: Optional[int] = None
     has_key: bool
     base_url: Optional[str] = None
     key_state: KeyState
@@ -569,6 +584,8 @@ class ModelCatalogResponse(BaseModel):
     model (and, on the provider's own endpoint, the suggestions).
     """
 
+    model_config = _EVERY_FIELD_SENT
+
     models: List[ModelRecord] = Field(default_factory=list)
     # What the non-chat id filter took out, for a "show all".
     hidden: List[ModelRecord] = Field(default_factory=list)
@@ -601,6 +618,8 @@ class VerifyRequest(BaseModel):
 
 
 class VerifyResponse(BaseModel):
+    model_config = _EVERY_FIELD_SENT
+
     # The key works at that endpoint: the listing succeeded.
     valid: bool
     key_state: KeyState

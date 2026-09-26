@@ -1242,11 +1242,11 @@ export interface components {
          */
         ModelCatalogResponse: {
             /** Error */
-            error?: string | null;
+            error: string | null;
             /** Fetched At */
-            fetched_at?: string | null;
+            fetched_at: string | null;
             /** Hidden */
-            hidden?: components["schemas"]["ModelRecord"][];
+            hidden: components["schemas"]["ModelRecord"][];
             /**
              * Key State
              * @default unverified
@@ -1254,7 +1254,7 @@ export interface components {
              */
             key_state: "unverified" | "valid" | "invalid" | "unreadable";
             /** Models */
-            models?: components["schemas"]["ModelRecord"][];
+            models: components["schemas"]["ModelRecord"][];
         };
         /** ModelRecord */
         ModelRecord: {
@@ -1482,20 +1482,24 @@ export interface components {
         /** ProviderInfo */
         ProviderInfo: {
             /** Base Url */
-            base_url?: string | null;
+            base_url: string | null;
             /** Catalog Fetched At */
-            catalog_fetched_at?: string | null;
+            catalog_fetched_at: string | null;
             /**
              * Catalog Fresh
              * @default false
              */
             catalog_fresh: boolean;
             /** Default Base Url */
-            default_base_url?: string | null;
+            default_base_url: string | null;
             /** Default Model */
             default_model: string;
+            /** Description */
+            description: string;
             /** Enabled Models */
-            enabled_models?: string[];
+            enabled_models: string[];
+            /** Endpoint Hint */
+            endpoint_hint: string | null;
             /** Has Key */
             has_key: boolean;
             id: components["schemas"]["TranslationService"];
@@ -1507,15 +1511,17 @@ export interface components {
             /** Label */
             label: string;
             /** Last Verified At */
-            last_verified_at?: string | null;
+            last_verified_at: string | null;
             /** Max Qps */
-            max_qps?: number | null;
+            max_qps: number | null;
             /** Max Tokens */
-            max_tokens?: number | null;
+            max_tokens: number | null;
             /** Model */
             model: string;
             /** Model Is Fixed */
             model_is_fixed: boolean;
+            /** Priority */
+            priority: number | null;
             /**
              * Protocol
              * @enum {string}
@@ -1526,7 +1532,7 @@ export interface components {
             /** Short Label */
             short_label: string;
             /** Signup Url */
-            signup_url?: string | null;
+            signup_url: string | null;
             /** Suggested Models */
             suggested_models: string[];
             /** Takes Endpoint */
@@ -1570,7 +1576,7 @@ export interface components {
          */
         RAGSettings: {
             /** @description The model that answers in chat. None = the translation model */
-            answer_model?: components["schemas"]["ModelRef"] | null;
+            answer_model: components["schemas"]["ModelRef"] | null;
             /**
              * Auto Process Documents
              * @description Auto-process documents for RAG
@@ -1643,8 +1649,7 @@ export interface components {
         /**
          * TranslationConfig
          * @description `[translation]` as the frontend reads it: the settings, plus
-         *     `preferred_service` — `model.provider` — which the toolbar and Settings
-         *     still read until they move to `model` (#86, #87).
+         *     `preferred_service` — `model.provider` — for a client older than #86.
          */
         TranslationConfig: {
             /**
@@ -1700,7 +1705,7 @@ export interface components {
              */
             min_text_length: number;
             /** @description The model that translates */
-            model?: components["schemas"]["ModelRef"];
+            model: components["schemas"]["ModelRef"];
             /**
              * Pdf Cache Max Size Mb
              * @description Soft cap for the translated-PDF cache; oldest entries are LRU-evicted past this
@@ -1790,7 +1795,7 @@ export interface components {
         /** VerifyResponse */
         VerifyResponse: {
             /** Hidden */
-            hidden?: components["schemas"]["ModelRecord"][];
+            hidden: components["schemas"]["ModelRecord"][];
             /**
              * Key State
              * @enum {string}
@@ -1799,9 +1804,9 @@ export interface components {
             /** Message */
             message: string;
             /** Model Found */
-            model_found?: boolean | null;
+            model_found: boolean | null;
             /** Models */
-            models?: components["schemas"]["ModelRecord"][];
+            models: components["schemas"]["ModelRecord"][];
             /** Valid */
             valid: boolean;
         };

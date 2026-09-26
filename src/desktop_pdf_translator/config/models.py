@@ -7,7 +7,14 @@ from pathlib import Path
 from typing import Annotated, Dict, FrozenSet, List, Optional, Literal
 from urllib.parse import urlsplit
 
-from pydantic import BaseModel, Field, ValidationInfo, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    ValidationInfo,
+    field_validator,
+    model_validator,
+)
 
 from ..providers.registry import PROVIDERS, provider
 
@@ -255,6 +262,10 @@ class ProcessingSettings(BaseModel):
 
 class RAGSettings(BaseModel):
     """RAG (Retrieval-Augmented Generation) settings."""
+
+    # `GET /config` returns this as it is, every field included; the flag
+    # says so in the generated TypeScript (`api/schemas.py:_EVERY_FIELD_SENT`).
+    model_config = ConfigDict(json_schema_serialization_defaults_required=True)
 
     # Settings → Chat's "Enable chat". Off removes the Chat button and the panel,
     # so no PDF is indexed. A new name, not the old `enabled`: the toolbar wrote

@@ -28,10 +28,11 @@ import {
 import { api } from "@/lib/api-client";
 import type { components } from "@/lib/api-types";
 import { basename } from "@/lib/export-pdf";
+import { useProviders } from "@/hooks/useProviders";
 import { selectionUpdate } from "@/lib/model-choice";
 import { parsePageRanges } from "@/lib/page-range";
-import type { LlmServiceCode } from "@/lib/service-settings";
 import {
+  OFFLINE_ENGINE,
   effectiveService,
   isPairSupported,
   isSourceSupported,
@@ -89,9 +90,9 @@ interface ContextBarProps {
   /** True when a translation has completed for the current document, so the
    *  user can re-run it with the PDF-level cache bypassed. */
   canReTranslate: boolean;
-  /** Settings, on this service's tab — the model picker's way to a key or a
-   *  model name of one's own. */
-  onOpenSettings: (service: LlmServiceCode) => void;
+  /** Settings → Models at this provider's card — the model picker's way to a
+   *  key, or to models it doesn't offer yet. */
+  onOpenSettings: (provider: string) => void;
 }
 
 export function ContextBar({
@@ -104,6 +105,7 @@ export function ContextBar({
 }: ContextBarProps) {
   const { data: config } = useConfig();
   const { data: options } = useOptions();
+  const { data: providers } = useProviders();
   const update = useUpdateConfig();
 
   const originalPath = useAppStore((s) => s.originalPdfPath);
@@ -115,13 +117,13 @@ export function ContextBar({
 
   const sourceLang = config?.translation.default_source_lang ?? "auto";
   const targetLang = config?.translation.default_target_lang ?? "vi";
-  const service = config?.translation.preferred_service ?? "openai";
+  const service = config?.translation.model.provider;
 
   // Which languages the backend that will *actually* run can handle. An LLM
   // with no API key is silently downgraded to Argos by the sidecar, so this
   // asks about the effective service — offering Japanese under a keyless
   // "OpenAI" selection would produce a job the sidecar refuses.
-  const running = config ? effectiveService(config) : null;
+  const running = config && providers ? effectiveService(config, providers) : null;
   const sourceSupported = (code: string) =>
     !options || !running ? true : isSourceSupported(options, running, code);
   const targetSupported = (code: string) =>
@@ -268,10 +270,10 @@ export function ContextBar({
 
       <div className="mx-1 h-5 w-px bg-border" />
 
-      {config && options && (
+      {config && providers && (
         <ModelPicker
           config={config}
-          options={options}
+          providers={providers}
           onOpenSettings={onOpenSettings}
           onSelect={(v, model) => {
             const change = selectionUpdate(config, v, model);
@@ -282,7 +284,7 @@ export function ContextBar({
                   description: (e as Error).message,
                 }),
             });
-            if (change.preferred_service) {
+            if (v !== service) {
               prewarm({ source_lang: sourceLang, target_lang: targetLang, service: v });
             }
           }}
@@ -290,7 +292,7 @@ export function ContextBar({
       )}
 
       {/* What an LLM run would cost, roughly. Argos costs nothing to call. */}
-      {originalPath && running && running !== "argos" && (
+      {originalPath && running && running !== OFFLINE_ENGINE && (
         <TokenEstimate filePath={originalPath} targetLang={targetLang} />
       )}
 

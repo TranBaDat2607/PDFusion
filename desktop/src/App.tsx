@@ -36,7 +36,6 @@ import {
 } from "@/lib/page-range";
 import { useAppStore } from "@/lib/store";
 import { api } from "@/lib/api-client";
-import type { LlmServiceCode } from "@/lib/service-settings";
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -123,8 +122,8 @@ function EngineGate() {
 
 function Workspace() {
   const [settingsOpen, setSettingsOpen] = useState(false);
-  // Which tab Settings opens on; unset opens on the service in use.
-  const [settingsTab, setSettingsTab] = useState<LlmServiceCode | undefined>();
+  // The provider card Settings → Models opens at; unset opens at the top.
+  const [settingsProvider, setSettingsProvider] = useState<string | undefined>();
   const [aboutOpen, setAboutOpen] = useState(false);
   // A Translate click that covered more pages than one translation may, held
   // while the user answers the offer. `path` guards against a document opened
@@ -156,7 +155,7 @@ function Workspace() {
         ? {
             sourceLang: config.translation.default_source_lang,
             targetLang: config.translation.default_target_lang,
-            service: config.translation.preferred_service,
+            service: config.translation.model.provider,
           }
         : {},
     [config],
@@ -358,7 +357,7 @@ function Workspace() {
     <div className="relative flex h-full w-full flex-col bg-background text-foreground">
       <Header
         onOpenSettings={() => {
-          setSettingsTab(undefined);
+          setSettingsProvider(undefined);
           setSettingsOpen(true);
         }}
         onOpenAbout={() => setAboutOpen(true)}
@@ -376,8 +375,8 @@ function Workspace() {
         canReTranslate={
           !!originalPath && !isTranslationBusy(translation.state)
         }
-        onOpenSettings={(service) => {
-          setSettingsTab(service);
+        onOpenSettings={(provider) => {
+          setSettingsProvider(provider);
           setSettingsOpen(true);
         }}
       />
@@ -408,7 +407,7 @@ function Workspace() {
       <SettingsSheet
         open={settingsOpen}
         onOpenChange={setSettingsOpen}
-        initialTab={settingsTab}
+        focusProvider={settingsProvider}
       />
       <AboutDialog open={aboutOpen} onOpenChange={setAboutOpen} />
     </div>

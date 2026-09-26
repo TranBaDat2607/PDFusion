@@ -1,11 +1,9 @@
 import { useState } from "react";
-import { useQueries } from "@tanstack/react-query";
 import {
   AlertTriangle,
   Check,
   ChevronsUpDown,
   KeyRound,
-  Loader2,
   Settings2,
   ShieldCheck,
 } from "lucide-react";
@@ -22,83 +20,46 @@ import {
 } from "@/components/ui/command";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import type { ConfigResponse, OptionsResponse, ServiceCode } from "@/hooks/useConfig";
-import { api } from "@/lib/api-client";
-import type { components } from "@/lib/api-types";
+import type { ConfigResponse } from "@/hooks/useConfig";
+import type { ProviderInfo } from "@/hooks/useProviders";
 import {
   isCurrent,
   modelGroups,
   pickerSummary,
-  servicesToList,
-  settingsTabFor,
-  type ServiceGroup,
+  settingsTargetFor,
+  type ModelGroup,
 } from "@/lib/model-choice";
-import type { LlmServiceCode } from "@/lib/service-settings";
 import { cn } from "@/lib/utils";
-
-type EndpointModels = components["schemas"]["EndpointModelsResponse"];
 
 interface ModelPickerProps {
   config: ConfigResponse;
-  options: OptionsResponse;
-  onSelect: (service: ServiceCode, model: string | null) => void;
-  /** Settings, on this service's tab. */
-  onOpenSettings: (service: LlmServiceCode) => void;
+  providers: ProviderInfo[];
+  onSelect: (provider: string, model: string) => void;
+  /** Settings → Models, at this provider's card. */
+  onOpenSettings: (provider: string) => void;
 }
 
 /**
- * The service and its model, picked in one place. Picking a
- * suggestion saves without the provider check Settings runs: a listed name
- * can't be mistyped. A name of one's own goes through Settings, which checks
- * it.
+ * The provider and its model, picked in one place. It offers the models
+ * switched on in Settings → Models (#86), so opening it asks no server
+ * anything; a name of one's own is added there, where it is checked.
  */
 export function ModelPicker({
   config,
-  options,
+  providers,
   onSelect,
   onOpenSettings,
 }: ModelPickerProps) {
   const [open, setOpen] = useState(false);
-  const summary = pickerSummary(config);
-
-  // Only once opened: a list the sidecar hasn't cached is a round-trip to a
-  // provider, or to a local server that may not be up.
-  const listed = servicesToList(config);
-  const lists = useQueries({
-    queries: listed.map((code) => ({
-      queryKey: ["config", "endpoint-models", code, config[code].base_url],
-      queryFn: () => api.get<EndpointModels>(`/config/models/${code}`),
-      enabled: open,
-      // A failed listing still arrives as a 200 carrying `error` (so the
-      // saved model stays pickable), which Query would cache like a good
-      // one. Keep it stale instead: the usual cure — starting the local
-      // server, fixing the key — happens outside this key, and the next
-      // open should see it.
-      staleTime: ({ state }: { state: { data?: EndpointModels } }) =>
-        state.data?.error ? 0 : 60_000,
-    })),
-  });
-  const endpointModels: Partial<Record<LlmServiceCode, string[]>> = {};
-  const endpointState: Partial<
-    Record<LlmServiceCode, { loading: boolean; error: string | null }>
-  > = {};
-  listed.forEach((code, i) => {
-    const query = lists[i];
-    endpointModels[code] = query.data?.models ?? [];
-    endpointState[code] = {
-      loading: query.isFetching && !query.data,
-      error: query.error?.message ?? query.data?.error ?? null,
-    };
-  });
-
-  const groups = modelGroups(config, options, endpointModels);
-  const pick = (code: ServiceCode, model: string | null) => {
-    onSelect(code, model);
+  const summary = pickerSummary(config, providers);
+  const groups = modelGroups(config, providers);
+  const pick = (provider: string, model: string) => {
+    onSelect(provider, model);
     setOpen(false);
   };
-  const toSettings = (code: LlmServiceCode) => {
+  const toSettings = (provider: string) => {
     setOpen(false);
-    onOpenSettings(code);
+    onOpenSettings(provider);
   };
 
   const trigger = (
@@ -139,7 +100,7 @@ export function ModelPicker({
           <TooltipTrigger asChild>{trigger}</TooltipTrigger>
           <TooltipContent className="max-w-xs">
             {summary.downgradedFrom} has no API key, so Argos translates offline
-            instead (English → Vietnamese only). Pick a model to add a key.
+            instead (English → Vietnamese only). Pick it to add a key.
           </TooltipContent>
         </Tooltip>
       ) : (
@@ -151,45 +112,38 @@ export function ModelPicker({
           <CommandList className="max-h-[420px]">
             <CommandEmpty>No model matches.</CommandEmpty>
             {groups.map((group) => (
-              <CommandGroup
-                key={group.code}
-                heading={
-                  <GroupHeading
-                    group={group}
-                    listing={endpointState[group.code as LlmServiceCode]}
-                  />
-                }
-              >
-                {group.code === "argos" ? (
+              <CommandGroup key={group.id} heading={<GroupHeading group={group} />}>
+                {group.needsKey ? (
                   <CommandItem
-                    value="argos offline argos translate"
-                    onSelect={() => pick("argos", null)}
-                  >
-                    <CurrentMark on={isCurrent(config, "argos", null)} />
-                    <span className="flex-1">Argos Translate</span>
-                    <span className="text-[10px] text-muted-foreground">
-                      free · EN → VI only
-                    </span>
-                  </CommandItem>
-                ) : !group.hasKey ? (
-                  <CommandItem
-                    value={`${group.code} ${group.label} add api key`}
-                    onSelect={() => toSettings(group.code as LlmServiceCode)}
+                    value={`${group.id} ${group.label} add api key`}
+                    onSelect={() => toSettings(group.id)}
                   >
                     <KeyRound className="text-muted-foreground" />
                     <span className="text-muted-foreground">
                       Add an API key to use {group.label}…
                     </span>
                   </CommandItem>
+                ) : group.fixed ? (
+                  group.models.map(({ model }) => (
+                    <CommandItem
+                      key={model}
+                      value={`${group.id} ${group.label} offline`}
+                      onSelect={() => pick(group.id, model)}
+                    >
+                      <CurrentMark on={isCurrent(config, group.id, model)} />
+                      <span className="flex-1">Offline, on this computer</span>
+                      <span className="text-[10px] text-muted-foreground">free</span>
+                    </CommandItem>
+                  ))
                 ) : (
                   group.models.map(({ model, isDefault }) => (
                     <CommandItem
                       key={model}
-                      value={`${group.code} ${model}`}
+                      value={`${group.id} ${model}`}
                       keywords={[group.label]}
-                      onSelect={() => pick(group.code, model)}
+                      onSelect={() => pick(group.id, model)}
                     >
-                      <CurrentMark on={isCurrent(config, group.code, model)} />
+                      <CurrentMark on={isCurrent(config, group.id, model)} />
                       <span className="flex-1 truncate font-mono text-xs">{model}</span>
                       {isDefault && (
                         <span className="text-[10px] text-muted-foreground">default</span>
@@ -203,10 +157,10 @@ export function ModelPicker({
             <CommandGroup>
               <CommandItem
                 value="custom model endpoint settings"
-                onSelect={() => toSettings(settingsTabFor(config))}
+                onSelect={() => toSettings(settingsTargetFor(config, providers))}
               >
                 <Settings2 className="text-muted-foreground" />
-                Custom model or endpoint…
+                More models, keys and endpoints…
               </CommandItem>
             </CommandGroup>
           </CommandList>
@@ -232,40 +186,25 @@ function CurrentMark({ on }: { on: boolean }) {
   return <Check className={cn("text-primary", on ? "opacity-100" : "opacity-0")} />;
 }
 
-function GroupHeading({
-  group,
-  listing,
-}: {
-  group: ServiceGroup;
-  listing?: { loading: boolean; error: string | null };
-}) {
-  const status =
-    group.code === "argos"
-      ? "no key needed"
-      : !group.hasKey
-        ? "no key"
-        : group.endpoint
-          ? hostOf(group.endpoint)
-          : "key saved";
+function GroupHeading({ group }: { group: ModelGroup }) {
+  const status = group.needsKey
+    ? "no key"
+    : group.endpoint
+      ? hostOf(group.endpoint)
+      : group.fixed
+        ? "no key needed"
+        : "ready";
   return (
-    <div>
-      <div className="flex items-center justify-between gap-2">
-        <span>{group.label}</span>
-        <span
-          className={cn(
-            "flex items-center gap-1 font-normal",
-            group.hasKey ? "text-primary" : "text-muted-foreground",
-          )}
-        >
-          {listing?.loading && <Loader2 className="h-3 w-3 animate-spin" />}
-          {status}
-        </span>
-      </div>
-      {listing?.error && (
-        <p className="mt-0.5 font-normal text-destructive" title={listing.error}>
-          Couldn't list models — {truncate(listing.error, 80)}
-        </p>
-      )}
+    <div className="flex items-center justify-between gap-2">
+      <span>{group.label}</span>
+      <span
+        className={cn(
+          "font-normal",
+          group.usable ? "text-primary" : "text-muted-foreground",
+        )}
+      >
+        {status}
+      </span>
     </div>
   );
 }
@@ -276,8 +215,4 @@ function hostOf(url: string): string {
   } catch {
     return url;
   }
-}
-
-function truncate(text: string, length: number): string {
-  return text.length > length ? `${text.slice(0, length - 1)}…` : text;
 }

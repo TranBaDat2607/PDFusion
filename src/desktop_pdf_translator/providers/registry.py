@@ -38,9 +38,11 @@ ModelLister = Callable[[str, Optional[str]], "Listing"]
 class ProviderSpec:
     id: str
     label: str
-    # For narrow places — a tab row, a toolbar button — where `label` is too
-    # wide. Read by the Settings page (#86); the frontend has its own copy until then.
+    # For narrow places — a toolbar button, a chat header — where `label` is
+    # too wide.
     short_label: str
+    # One line under the name on the Models page's card (#86).
+    description: str
     # The API it speaks. Nothing dispatches on it yet — each spec names its own
     # `translator` and `lister` — but it is what will let a provider that
     # speaks OpenAI's API share OpenAI's translator (#88).
@@ -60,8 +62,11 @@ class ProviderSpec:
     # LM Studio, a proxy (#32).
     takes_endpoint: bool = False
     # Where requests go with no endpoint of the user's own: the SDK's default,
-    # recorded for the Settings page's placeholder (#86), not passed to the SDK.
+    # recorded for the Models page's placeholder (#86), not passed to the SDK.
     default_base_url: Optional[str] = None
+    # Under the Models page's "Override base URL": what a local server's
+    # endpoint looks like. Required when `takes_endpoint`.
+    endpoint_hint: Optional[str] = None
     # Returns `list(api_key, base_url) -> Listing`: the models a key can use.
     # It is also how a key is verified — never by generating text (#84) — so
     # every keyed provider has one. Imports on call.
@@ -88,7 +93,7 @@ class ProviderSpec:
     retired_models: FrozenSet[str] = field(default_factory=frozenset)
     # The model is a fixed identifier, not a choice (Argos).
     model_is_fixed: bool = False
-    # Where to get a key, linked from the Settings page (#86).
+    # Where to get a key, linked from the Models page (#86).
     signup_url: Optional[str] = None
     # The highest `temperature` its API takes. OpenAI's scale runs to 2; the
     # others refuse anything above 1 with a 400 on every paragraph.
@@ -148,6 +153,7 @@ PROVIDERS: Tuple[ProviderSpec, ...] = (
         id="openai",
         label="OpenAI",
         short_label="OpenAI",
+        description="GPT models, or any server that speaks OpenAI's API.",
         protocol="openai",
         default_model="gpt-4.1",
         suggested_models=(
@@ -161,6 +167,11 @@ PROVIDERS: Tuple[ProviderSpec, ...] = (
         env_prefix="OPENAI",
         takes_endpoint=True,
         default_base_url="https://api.openai.com/v1",
+        endpoint_hint=(
+            "Leave blank for OpenAI. For a local model, use Ollama at "
+            "http://localhost:11434/v1 or LM Studio at http://localhost:1234/v1, "
+            "with any API key."
+        ),
         lister=_openai_lister,
         default_qps=5.0,
         priority=0,
@@ -171,6 +182,7 @@ PROVIDERS: Tuple[ProviderSpec, ...] = (
         id="gemini",
         label="Google Gemini",
         short_label="Gemini",
+        description="Google's Gemini models, through the Gemini API.",
         protocol="gemini",
         default_model="gemini-3.8-flash",
         suggested_models=(
@@ -200,6 +212,7 @@ PROVIDERS: Tuple[ProviderSpec, ...] = (
         id="anthropic",
         label="Anthropic Claude",
         short_label="Claude",
+        description="Anthropic's Claude models.",
         protocol="anthropic",
         default_model="claude-sonnet-4-6",
         suggested_models=(
@@ -212,6 +225,10 @@ PROVIDERS: Tuple[ProviderSpec, ...] = (
         env_prefix="ANTHROPIC",
         takes_endpoint=True,
         default_base_url="https://api.anthropic.com",
+        endpoint_hint=(
+            "Leave blank for Anthropic. For a local model, use Ollama at "
+            "http://localhost:11434, with any API key."
+        ),
         lister=_anthropic_lister,
         # Anthropic's entry tier is ~0.83 QPS.
         default_qps=1.0,
@@ -238,6 +255,10 @@ PROVIDERS: Tuple[ProviderSpec, ...] = (
         id="argos",
         label="Argos Translate (offline)",
         short_label="Argos",
+        description=(
+            "Runs on this computer: no key, no usage fees, and nothing leaves "
+            "it. Used when no other provider has a key."
+        ),
         protocol="argos",
         default_model="argostranslate",
         suggested_models=("argostranslate",),
