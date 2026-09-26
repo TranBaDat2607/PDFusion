@@ -146,8 +146,8 @@ export function servicesToList(config: Config): LlmServiceCode[] {
   );
 }
 
-// Order `rag_chain.py:_LLM_SERVICES` tries them in, which differs from the
-// Settings tab order.
+// Order `rag_chain.py:_LLM_SERVICES` tries them in (`ProviderSpec.priority` in
+// `providers/registry.py`), which differs from the Settings tab order.
 const CHAT_ORDER: readonly LlmServiceCode[] = ["openai", "anthropic", "gemini"];
 
 /**

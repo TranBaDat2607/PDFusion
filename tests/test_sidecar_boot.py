@@ -87,6 +87,9 @@ def _run_probe(code: str) -> str:
         # Also imported at module level by `api/routes/rag.py`, to tell an
         # ask's failures apart.
         "desktop_pdf_translator.rag.errors",
+        # Imported by `config.models` and `translators.rate_limiter`, and so by
+        # nearly everything. Its translators and listers import on call.
+        "desktop_pdf_translator.providers.registry",
     ],
 )
 def test_boot_path_does_not_import_the_heavy_stack(module: str) -> None:

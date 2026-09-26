@@ -20,6 +20,12 @@ from ...translators.capabilities import (
     SERVICE_LABELS,
     supported_pairs_for,
 )
+from ...providers.registry import (
+    endpoint_ids,
+    keyed_ids,
+    llm_ids_by_priority,
+    provider,
+)
 from ..auth import require_token
 from ..schemas import (
     APIKeyMaskedSettings,
@@ -48,7 +54,7 @@ _VALIDATE_PROBE_TIMEOUT_S = 20.0
 
 # The services whose settings carry a `base_url`: each can be pointed at another
 # server that speaks its API — Ollama, LM Studio, a proxy (#32).
-_ENDPOINT_SERVICES = (TranslationService.OPENAI, TranslationService.ANTHROPIC)
+_ENDPOINT_SERVICES = tuple(TranslationService(p) for p in endpoint_ids())
 
 
 def _probe_kwargs(service_config: dict) -> dict:
@@ -140,12 +146,8 @@ async def update_config(payload: ConfigUpdateRequest) -> ConfigResponse:
 
     # Track which LLM services received a non-empty key in *this* PUT, so we
     # can auto-promote the user's preferred_service from Argos to that LLM
-    # (priority: openai > anthropic > gemini if multiple keys arrive at once).
-    LLM_SERVICES = (
-        TranslationService.OPENAI,
-        TranslationService.GEMINI,
-        TranslationService.ANTHROPIC,
-    )
+    # (in `ProviderSpec.priority` order if several keys arrive at once).
+    LLM_SERVICES = tuple(TranslationService(p) for p in keyed_ids())
     newly_keyed: list[TranslationService] = []
 
     # Endpoint changes are all vetted before anything is applied. The check
@@ -205,11 +207,7 @@ async def update_config(payload: ConfigUpdateRequest) -> ConfigResponse:
         current["translation"].get("preferred_service") == TranslationService.ARGOS.value
         and newly_keyed
     ):
-        priority = (
-            TranslationService.OPENAI,
-            TranslationService.ANTHROPIC,
-            TranslationService.GEMINI,
-        )
+        priority = tuple(TranslationService(p) for p in llm_ids_by_priority())
         chosen = next((s for s in priority if s in newly_keyed), newly_keyed[0])
         # Promote only on a key that actually works. Moving the user off Argos
         # on a typo'd key used to hand them a translator that fails every
@@ -321,35 +319,6 @@ async def validate_credentials(payload: ValidateRequest) -> ValidateResponse:
 # Static option lists (helpful for select dropdowns in the frontend)
 # ---------------------------------------------------------------------------
 
-# Suggestions for the model field, each service's default first. Not a
-# whitelist: the field takes any name, which is what a local server's models
-# need (#32). `tests/test_config_api.py` fails when a default is missing from
-# its list, which is how `gemini-1.5-flash` stayed on offer after Google
-# retired it.
-_SERVICE_MODELS = {
-    TranslationService.ARGOS: ["argostranslate"],
-    TranslationService.OPENAI: [
-        "gpt-4.1",
-        "gpt-5.6-luna",
-        "gpt-5.6-terra",
-        "gpt-5.6-sol",
-        "gpt-6-astra",
-    ],
-    TranslationService.GEMINI: [
-        "gemini-3.8-flash",
-        "gemini-3.7-flash",
-        "gemini-3.6-flash",
-        "gemini-3.5-flash",
-        "gemini-3.5-flash-lite",
-    ],
-    TranslationService.ANTHROPIC: [
-        "claude-sonnet-4-6",
-        "claude-sonnet-5",
-        "claude-opus-5",
-        "claude-haiku-4-5-20251001",
-    ],
-}
-
 
 @router.get("/options", response_model=OptionsResponse)
 async def get_options() -> OptionsResponse:
@@ -362,7 +331,7 @@ async def get_options() -> OptionsResponse:
             ServiceOption(
                 code=s.value,
                 label=SERVICE_LABELS[s],
-                models=_SERVICE_MODELS[s],
+                models=list(provider(s.value).suggested_models),
                 supported_pairs=supported_pairs_for(s),
             )
             for s in TranslationService
@@ -373,20 +342,10 @@ async def get_options() -> OptionsResponse:
 def _fetch_endpoint_models(
     service: TranslationService, api_key: str, base_url: str | None
 ) -> list[str]:
-    """Ask the endpoint which models it serves. Blocking; imports the SDK."""
-    if service == TranslationService.OPENAI:
-        from openai import OpenAI
+    """Ask the endpoint which models it serves. Blocking; imports the SDK.
 
-        client = OpenAI(api_key=api_key, base_url=base_url, max_retries=0, timeout=10)
-        return [model.id for model in client.models.list()]
-
-    import anthropic
-
-    client_kwargs: dict = {"api_key": api_key, "max_retries": 0, "timeout": 10}
-    if base_url:
-        client_kwargs["base_url"] = base_url
-    client = anthropic.Anthropic(**client_kwargs)
-    return [model.id for model in client.models.list(limit=100)]
+    The seam the tests replace, so it keeps this signature."""
+    return provider(service.value).lister()(api_key, base_url)
 
 
 @router.get("/models/{service}", response_model=EndpointModelsResponse)

@@ -110,6 +110,7 @@ singleton with no job id, so it is polled via `GET /setup/status`.
 | `api/server.py`, `auth.py`, `jobs.py`, `routes/*`, `schemas.py`, `sse_schemas.py` | FastAPI app, bearer auth, job registry, routes, wire models |
 | `engine_assets.py` | Single source of truth for "the offline engine is installed" |
 | `config/` | `ConfigManager` + Pydantic `AppSettings` |
+| `providers/` | `registry.py` — one `ProviderSpec` per provider, the source of every per-provider rule (stdlib-only); `listing.py` — endpoint model listing |
 | `processors/` | `PDFProcessor` (BabelDOC), `page_selection.py`, `pdf_pages.py`, `pdf_cache.py`, `doc_layout_cache.py` |
 | `translators/` | `BaseTranslator` + OpenAI/Gemini/Anthropic/Argos, `factory.py`, `capabilities.py`, `rate_limiter.py`, `translation_cache.py`, `param_compat.py`, `usage_estimate.py` |
 | `rag/` | `EnhancedRAGChain`, `vector_store.py`, `index_spec.py`, `onnx_embeddings.py`, `keyword_search.py` |
@@ -204,6 +205,12 @@ a test. They are the things most easily undone by "simplifying".
   applied in exactly one place, `capabilities.resolve_languages` (#12).
   `capabilities.py` is the single source of truth for what can run and stays
   free of heavy imports.
+- **Every per-provider rule is a field of `providers/registry.py`'s
+  `ProviderSpec`** — never a new `if service == …` elsewhere. The registry is
+  stdlib-only (it builds `TranslationService`, on the boot path), its
+  translator/lister are callables with a function-local import (PyInstaller
+  can't see string imports), and provider ids are frozen (cache keys and
+  `config.toml` sections use them).
 - `max_pages` limits the **selected** pages, not the document; the output is
   always the whole document, with unselected pages copied from the original.
 - Two caches (whole-PDF, paragraph), both SQLite, content-addressed, versioned

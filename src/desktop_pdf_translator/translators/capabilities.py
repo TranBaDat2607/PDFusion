@@ -21,9 +21,10 @@ Both now live here.
 from __future__ import annotations
 
 import logging
-from typing import Dict, List, Optional, Set, Tuple, Union
+from typing import Dict, FrozenSet, List, Optional, Set, Tuple, Union
 
 from ..config import LanguageCode, TranslationService
+from ..providers.registry import PROVIDERS
 
 logger = logging.getLogger(__name__)
 
@@ -44,35 +45,26 @@ LANGUAGE_LABELS: Dict[LanguageCode, str] = {
 }
 
 SERVICE_LABELS: Dict[TranslationService, str] = {
-    TranslationService.ARGOS: "Argos Translate (offline)",
-    TranslationService.OPENAI: "OpenAI",
-    TranslationService.GEMINI: "Google Gemini",
-    TranslationService.ANTHROPIC: "Anthropic Claude",
+    TranslationService(spec.id): spec.label for spec in PROVIDERS
 }
 
 
-# Which (source, target) pairs each backend can actually produce.
+# Which (source, target) pairs each backend can actually produce
+# (`ProviderSpec.supported_pairs`):
 #
 #   None      → no restriction; the backend handles any pair we expose.
 #   set[...]  → exhaustive. Anything outside it fails.
-#
-# The LLMs prompt for an arbitrary target language (see LANGUAGE_DISPLAY_NAMES
-# in base.py), so they are unrestricted. Argos is an NMT model with one
-# installed language pack — this is the MVP limit noted in argos_translator.py,
-# and broadening it means shipping more packs, not editing this table alone.
-SUPPORTED_PAIRS: Dict[TranslationService, Optional[Set[Tuple[str, str]]]] = {
-    TranslationService.ARGOS: {("en", "vi")},
-    TranslationService.OPENAI: None,
-    TranslationService.GEMINI: None,
-    TranslationService.ANTHROPIC: None,
+SUPPORTED_PAIRS: Dict[TranslationService, Optional[FrozenSet[Tuple[str, str]]]] = {
+    TranslationService(spec.id): spec.supported_pairs for spec in PROVIDERS
 }
 
 # Backends with no language detection of their own need "auto" pinned to a
-# concrete source. Argos assumes English — the dominant case for the academic
-# PDFs this app targets. LLMs detect from content, so they are absent here and
-# "auto" stays "auto" for them.
+# concrete source (`ProviderSpec.auto_source`). LLMs detect from content, so
+# they are absent here and "auto" stays "auto" for them.
 _AUTO_SOURCE_SUBSTITUTE: Dict[TranslationService, str] = {
-    TranslationService.ARGOS: "en",
+    TranslationService(spec.id): spec.auto_source
+    for spec in PROVIDERS
+    if spec.auto_source
 }
 
 

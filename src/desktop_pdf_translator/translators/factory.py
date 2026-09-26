@@ -3,14 +3,11 @@ Translator factory for creating translator instances.
 """
 
 import logging
-from typing import Dict, Type, Optional, List
+from typing import Dict, Optional
 
 from ..config import TranslationService, get_settings
+from ..providers.registry import provider
 from .base import BaseTranslator
-from .openai_translator import OpenAITranslator
-from .gemini_translator import GeminiTranslator
-from .anthropic_translator import AnthropicTranslator
-from .argos_translator import ArgosTranslator
 
 
 logger = logging.getLogger(__name__)
@@ -19,138 +16,67 @@ logger = logging.getLogger(__name__)
 class TranslatorFactory:
     """Factory for creating translator instances based on configuration."""
 
-    _translators: Dict[TranslationService, Type[BaseTranslator]] = {
-        TranslationService.OPENAI: OpenAITranslator,
-        TranslationService.GEMINI: GeminiTranslator,
-        TranslationService.ANTHROPIC: AnthropicTranslator,
-        TranslationService.ARGOS: ArgosTranslator,
-    }
-    
     @classmethod
     def create_translator(
-        self, 
+        self,
         service: Optional[TranslationService] = None,
-        lang_in: Optional[str] = None, 
+        lang_in: Optional[str] = None,
         lang_out: Optional[str] = None,
         **kwargs
     ) -> BaseTranslator:
         """
         Create a translator instance based on configuration.
-        
+
         Args:
             service: Translation service to use (optional, uses config default)
             lang_in: Source language (optional, uses config default)
             lang_out: Target language (optional, uses config default)
             **kwargs: Additional translator-specific configuration
-            
+
         Returns:
             Configured translator instance
-            
+
         Raises:
             ValueError: If service is not supported or not available
             ImportError: If required dependencies are not installed
         """
         settings = get_settings()
-        
+
         # Use provided service or fallback to config
         if service is None:
             service = settings.translation.preferred_service
-        
+
         # Use provided languages or fallback to config
         if lang_in is None:
             lang_in = settings.translation.default_source_lang
         if lang_out is None:
             lang_out = settings.translation.default_target_lang
-        
-        # Check if service is supported
-        if service not in self._translators:
-            available_services = list(self._translators.keys())
-            raise ValueError(f"Unsupported service: {service}. Available: {available_services}")
+
+        # Raises ValueError for a service no provider has. The class is
+        # imported here, on first use, not at the top: each backend loads its
+        # SDK, and this module used to pay for all four the moment anything
+        # imported it.
+        translator_class = provider(TranslationService(service).value).translator()
 
         # Get service-specific configuration
         service_config = self._get_service_config(service, settings)
         service_config.update(kwargs)
-        
+
         # Create translator instance
-        translator_class = self._translators[service]
         translator = translator_class(
             lang_in=lang_in,
-            lang_out=lang_out, 
+            lang_out=lang_out,
             **service_config
         )
-        
+
         logger.info(f"Created translator: {translator}")
         return translator
-    
+
     @classmethod
     def _get_service_config(self, service: TranslationService, settings) -> Dict:
-        """Get configuration for specific service."""
-        if service == TranslationService.OPENAI:
-            return {
-                "api_key": settings.openai.api_key,
-                "model": settings.openai.model,
-                "temperature": settings.openai.temperature,
-                "max_tokens": settings.openai.max_tokens,
-                "base_url": settings.openai.base_url,
-                "max_qps": settings.openai.max_qps,
-            }
-        elif service == TranslationService.GEMINI:
-            return {
-                "api_key": settings.gemini.api_key,
-                "model": settings.gemini.model,
-                "temperature": settings.gemini.temperature,
-                "max_qps": settings.gemini.max_qps,
-            }
-        elif service == TranslationService.ANTHROPIC:
-            return {
-                "api_key": settings.anthropic.api_key,
-                "model": settings.anthropic.model,
-                "temperature": settings.anthropic.temperature,
-                "max_tokens": settings.anthropic.max_tokens,
-                "base_url": settings.anthropic.base_url,
-                "max_qps": settings.anthropic.max_qps,
-            }
-        elif service == TranslationService.ARGOS:
-            # Argos has no credentials and no per-call config.
-            return {"model": settings.argos.model}
-        else:
-            return {}
-    
-    @classmethod
-    def get_available_services(cls) -> List[TranslationService]:
-        """Get list of available translation services."""
-        # Return all registered services since dependencies are expected to be installed
-        return list(cls._translators.keys())
-    
-    @classmethod
-    def validate_service_availability(cls, service: TranslationService) -> tuple[bool, str]:
-        """Validate if a service is available and properly configured."""
-        try:
-            # Check configuration
-            settings = get_settings()
-            
-            if service == TranslationService.OPENAI:
-                if not settings.openai.api_key:
-                    return False, "OpenAI API key is not configured"
-            elif service == TranslationService.GEMINI:
-                if not settings.gemini.api_key:
-                    return False, "Gemini API key is not configured"
-            elif service == TranslationService.ANTHROPIC:
-                if not settings.anthropic.api_key:
-                    return False, "Anthropic API key is not configured"
-            # Argos has no credentials — always available.
+        """Get configuration for specific service.
 
-            # Create test translator to validate configuration
-            translator = cls.create_translator(
-                service=service,
-                lang_in="en",
-                lang_out="vi"
-            )
-            
-            # Validate configuration
-            is_valid, message = translator.validate_configuration()
-            return is_valid, message
-            
-        except Exception as e:
-            return False, f"Service validation failed: {str(e)}"
-    
+        A service's settings section is exactly the keyword arguments its
+        translator takes, so the whole section goes.
+        """
+        return getattr(settings, TranslationService(service).value).model_dump()

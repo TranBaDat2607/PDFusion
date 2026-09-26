@@ -12,6 +12,7 @@ from datetime import datetime
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from ..config import TranslationService, get_settings
+from ..providers.registry import llm_ids_by_priority
 from ..translators.base import (
     LANGUAGE_DISPLAY_NAMES,
     BaseTranslator,
@@ -28,11 +29,7 @@ logger = logging.getLogger(__name__)
 # The services that can write an answer, in the order they are tried. Answer
 # synthesis needs an instruction-following model, so Argos (the default
 # preferred_service) is never one of them.
-_LLM_SERVICES = (
-    TranslationService.OPENAI,
-    TranslationService.ANTHROPIC,
-    TranslationService.GEMINI,
-)
+_LLM_SERVICES = tuple(TranslationService(p) for p in llm_ids_by_priority())
 
 # The answer when retrieval finds nothing to answer from. No model is asked:
 # given no context, it would answer from its own knowledge, as if the document
