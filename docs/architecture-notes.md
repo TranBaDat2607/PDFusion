@@ -1025,6 +1025,15 @@ to keep (#31), each with a test in `test_rag_isolation.py`:
 - **Retrieval that finds nothing never reaches the model**
   (`NOTHING_FOUND_ANSWER`). Given an empty context, a model answers from its
   own knowledge, as if the document had said it.
+- **Each answer records the model that wrote it** (#87). `answer_question`
+  returns its `provider` and `model` (`None` for both when no model wrote it:
+  the template answer, or nothing found), `_run_ask` saves them in
+  `chat_messages`' own `provider` / `model` columns (records migration 3,
+  appended; older rows read `NULL`), and the chat panel prints them under the
+  answer (`model-choice.ts:answeredBy`), so a conversation that changed models
+  part-way stays readable. The model is chosen once, when the question
+  starts, and HyDE and the answer both use it: a question being answered keeps
+  its model when the choice changes meanwhile.
 - **The answer model is looked up for every question**
   (`EnhancedRAGChain._answer_model`), from `get_settings()` as it is at that
   moment, and rebuilt only when the service, key, model or endpoint changed —
@@ -1514,10 +1523,18 @@ things about it are deliberate:
   in `desktop/src` lists providers. The one id the frontend names is
   `OFFLINE_ENGINE` (`lib/translate-request.ts`), the sidecar's fallback.
 
-The chat panel's header names the answering model (`chatModel`, a copy of
-`rag_chain._answer_model`'s order). It isn't always the toolbar's model: chat
-falls back to any LLM with a key. The copy doesn't know `rag.answer_model`
-yet, which only `PUT /config` can set until the chat-panel picker (#87).
+**The chat header picks the answer model** (`components/chat/AnswerModelPicker.tsx`,
+#87). It used to be a read-only badge: changing it meant changing the
+translation model, and chat could still answer with another provider. Both
+pickers are one component, `components/translation/ModelSelect.tsx` — the same
+search, groups and "Add an API key" entries — and the chat one adds **Same as
+translation** first, which saves `rag.answer_model = null`. Its button names
+the model that will answer (`chatModel`, a copy of `rag_chain._answer_model`'s
+order: `answer_model`, then the translation model, then every LLM with a key
+by `priority`), so a pick whose provider has no key shows the model that
+answers instead. The choice is server state, written with `PUT /config` and
+never kept in Zustand. A model picked there is pinned: it stays when the
+translation model changes later, which "Same as translation" doesn't.
 
 ### Settings → Models
 
@@ -1785,6 +1802,7 @@ deliberately not implemented: the panes scroll and zoom independently.
 - **TanStack Query** owns all server state (`useConfig`, `useOptions`, `useChatHistory`, and Settings → Chat's document list). The chat panel keeps no copy of a conversation: it reads the saved one by document id.
 - **Zustand store** (`lib/store.ts`) owns ephemeral UI state: current PDF paths, the translated-artifact change log, active job ID, whether the chat panel is showing.
 - **Chat on/off is server state, not the panel's.** `config.rag.chat_enabled` (Settings → Chat, read through `useChatEnabled`) decides whether the toolbar has a Chat button and whether the panel can mount at all, and the panel only mounts to index. The toolbar button and the panel's X change `chatOpen` and nothing else. They used to be one switch that also wrote `rag.enabled`, which nothing read; `chat_enabled` is a new name so that stale `false` isn't taken for "chat off" (#32).
+- **So is the chat model.** `config.rag.answer_model`, picked in the chat header and saved with `PUT /config` (#87); nothing keeps a copy of it in Zustand.
 - **Job hooks** (`useTranslation`, `useRagIndex`, `useRagAsk`) own per-stream local state and update the global store on terminal events.
 
 ### UI conventions

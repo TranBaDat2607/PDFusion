@@ -842,3 +842,117 @@ def test_the_translation_model_answers_before_a_higher_priority_provider(
     assert model is not None
     assert model.service == TranslationService.ANTHROPIC
     assert built == [(TranslationService.ANTHROPIC, "claude-opus-5")]
+
+
+# ---------------------------------------------------------------------------
+# which model wrote the answer (#87)
+# ---------------------------------------------------------------------------
+
+
+def test_the_answer_carries_the_provider_and_model_that_wrote_it(
+    sidecar, two_papers, records: RecordsStore, chain: EnhancedRAGChain,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    index = _ready(records, run_index(two_papers[0]))
+    translator = _Translator("It measures thermal conductivity.")
+    monkeypatch.setattr(
+        chain, "_answer_model",
+        lambda: AnswerModel(TranslationService.ANTHROPIC, translator, model="claude-opus-5"),
+    )
+
+    answer = asyncio.run(
+        chain.answer_question(
+            question=QUESTION,
+            index_id=index.id,
+            document_id=index.document_id,
+            document_path="C:/papers/paper.pdf",
+        )
+    )
+
+    assert (answer.get("provider"), answer.get("model")) == ("anthropic", "claude-opus-5")
+
+    # No LLM wrote it (no key anywhere): nothing to credit.
+    monkeypatch.setattr(chain, "_answer_model", lambda: None)
+
+    template_answer = asyncio.run(
+        chain.answer_question(
+            question=QUESTION,
+            index_id=index.id,
+            document_id=index.document_id,
+            document_path="C:/papers/paper.pdf",
+        )
+    )
+
+    assert (template_answer.get("provider"), template_answer.get("model")) == (None, None)
+
+
+def test_an_answer_is_saved_and_reported_with_the_model_that_wrote_it(
+    asking: EnhancedRAGChain, two_papers, records: RecordsStore,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """End to end through `_run_ask`: the saved assistant row and the `done`
+    event both credit the model `rag.answer_model` chose, with a key for more
+    than one provider so the choice isn't the only candidate available."""
+    index = _ready(records, run_index(two_papers[0]))
+    settings = _v2_settings(
+        providers=_KEYED_OPENAI_AND_ANTHROPIC,
+        translation={"model": {"provider": "openai", "model": "gpt-4.1"}},
+        rag={"answer_model": {"provider": "anthropic", "model": "claude-opus-5"}},
+    )
+    monkeypatch.setattr(rag_chain_module, "get_settings", lambda: settings)
+    _record_builds(monkeypatch)
+
+    result = run_ask(index)
+
+    assert result["type"] == "done"
+    assert (result["data"].get("provider"), result["data"].get("model")) == (
+        "anthropic", "claude-opus-5",
+    )
+    _, assistant = records.messages(index.document_id)
+    assert (assistant.provider, assistant.model) == ("anthropic", "claude-opus-5")
+
+
+def test_a_question_keeps_the_model_it_started_with_if_the_answer_model_changes_mid_answer(
+    sidecar, two_papers, records: RecordsStore, chain: EnhancedRAGChain,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """The answer model is looked up once when the question starts. A
+    `rag.answer_model` saved while the LLM is still generating must not change
+    which model the saved answer is credited to."""
+    index = _ready(records, run_index(two_papers[0]))
+    current: Dict[str, Any] = {
+        "settings": _v2_settings(
+            providers=_KEYED_OPENAI_AND_ANTHROPIC,
+            translation={"model": {"provider": "openai", "model": "gpt-4.1"}},
+            rag={"answer_model": {"provider": "anthropic", "model": "claude-opus-5"}},
+        )
+    }
+    monkeypatch.setattr(rag_chain_module, "get_settings", lambda: current["settings"])
+
+    class _SwapsSettingsMidGenerate:
+        def generate(self, prompt: str, system: str = None, max_tokens: int = 1000):
+            # As if `PUT /config` landed while this question was being answered.
+            current["settings"] = _v2_settings(
+                providers=_KEYED_OPENAI_AND_ANTHROPIC,
+                translation={"model": {"provider": "openai", "model": "gpt-4.1"}},
+                rag={"answer_model": {"provider": "openai", "model": "gpt-4.1"}},
+            )
+            return "It measures thermal conductivity."
+
+    def create_translator(service=None, lang_in=None, lang_out=None, **kwargs):
+        return _SwapsSettingsMidGenerate()
+
+    monkeypatch.setattr(
+        rag_chain_module.TranslatorFactory, "create_translator", create_translator
+    )
+
+    answer = asyncio.run(
+        chain.answer_question(
+            question=QUESTION,
+            index_id=index.id,
+            document_id=index.document_id,
+            document_path="C:/papers/paper.pdf",
+        )
+    )
+
+    assert (answer.get("provider"), answer.get("model")) == ("anthropic", "claude-opus-5")

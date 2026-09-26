@@ -14,8 +14,7 @@ import { UserMessage } from "@/components/chat/UserMessage";
 import { useChatHistory, useClearChatHistory } from "@/hooks/useChatHistory";
 import { useRagAsk } from "@/hooks/useRagAsk";
 import { useRagIndex } from "@/hooks/useRagIndex";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { useConfig, type ConfigResponse } from "@/hooks/useConfig";
+import { useConfig } from "@/hooks/useConfig";
 import {
   CHAT_DOCUMENTS_KEY,
   appendExchange,
@@ -24,21 +23,25 @@ import {
   type ChatMessage,
 } from "@/lib/chat-history";
 import { answerForDocument, needsReindex } from "@/lib/rag-ask";
-import { chatModel } from "@/lib/model-choice";
-import { useProviders, type ProviderInfo } from "@/hooks/useProviders";
+import { AnswerModelPicker } from "@/components/chat/AnswerModelPicker";
+import { useProviders } from "@/hooks/useProviders";
+import { answeredBy } from "@/lib/model-choice";
 import { useAppStore } from "@/lib/store";
-import { cn } from "@/lib/utils";
 
 interface ChatPanelProps {
   documentPath: string | null;
   onJumpToPage?: (page: number) => void;
   showing?: boolean;
+  /** Settings → Models at this provider's card: the header picker's way to a
+   *  key. */
+  onOpenSettings?: (provider: string) => void;
 }
 
 export function ChatPanel({
   documentPath,
   onJumpToPage,
   showing = true,
+  onOpenSettings,
 }: ChatPanelProps) {
   const index = useRagIndex();
   const ask = useRagAsk();
@@ -173,14 +176,18 @@ export function ChatPanel({
       <header className="flex shrink-0 items-center justify-between border-b border-border px-4 py-2">
         <div className="flex items-center gap-2">
           <MessageSquare className="h-4 w-4 text-primary" />
-          <span className="text-sm font-semibold">AI Chat</span>
+          <span className="whitespace-nowrap text-sm font-semibold">AI Chat</span>
           {index.state.status === "ready" && index.state.chunks !== null && (
             <Badge variant="outline" className="font-mono text-[10px]">
               {index.state.chunks} chunks
             </Badge>
           )}
           {config && providers && (
-            <AnswerModelBadge config={config} providers={providers} />
+            <AnswerModelPicker
+              config={config}
+              providers={providers}
+              onOpenSettings={onOpenSettings}
+            />
           )}
         </div>
         <div className="flex items-center gap-1">
@@ -236,6 +243,11 @@ export function ChatPanel({
                 {m.role === "assistant" && m.answer && (
                   <AssistantMessage
                     answer={m.answer}
+                    byline={answeredBy(
+                      providers ?? [],
+                      m.provider ?? m.answer.provider,
+                      m.model ?? m.answer.model,
+                    )}
                     onJumpToPage={onJumpToPage}
                   />
                 )}
@@ -275,39 +287,6 @@ export function ChatPanel({
         </motion.div>
       )}
     </AnimatePresence>
-  );
-}
-
-/** Which model writes the answers. It follows the translation choice but
- *  falls back to any LLM with a key, so it isn't always the toolbar's. */
-function AnswerModelBadge({
-  config,
-  providers,
-}: {
-  config: ConfigResponse;
-  providers: ProviderInfo[];
-}) {
-  const answering = chatModel(config, providers);
-  return (
-    <Tooltip>
-      <TooltipTrigger asChild>
-        <Badge
-          variant="outline"
-          tabIndex={0}
-          className={cn(
-            "max-w-[160px] truncate font-mono text-[10px]",
-            !answering && "border-amber-500/60 text-amber-600 dark:text-amber-400",
-          )}
-        >
-          {answering ? answering.model : "no model"}
-        </Badge>
-      </TooltipTrigger>
-      <TooltipContent className="max-w-xs">
-        {answering
-          ? `${answering.label} writes the answers.`
-          : "No API key is saved, so answers are excerpts from the document. Add a key in Settings for written answers."}
-      </TooltipContent>
-    </Tooltip>
   );
 }
 

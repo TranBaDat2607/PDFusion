@@ -25,9 +25,11 @@ interface MainLayoutProps {
   /** Ctrl+O. The picker itself lives in `App.tsx` with the rest of the
    *  open-document flow. */
   onPickFile: () => void;
+  /** Settings → Models at a provider's card, from the chat header's picker. */
+  onOpenSettings: (provider: string) => void;
 }
 
-export function MainLayout({ onPickFile }: MainLayoutProps) {
+export function MainLayout({ onPickFile, onOpenSettings }: MainLayoutProps) {
   const originalPath = useAppStore((s) => s.originalPdfPath);
   const translatedPath = useAppStore((s) => s.translatedPdfPath);
   const translatedReloadKey = useAppStore((s) => s.translatedReloadKey);
@@ -238,6 +240,7 @@ export function MainLayout({ onPickFile }: MainLayoutProps) {
               documentPath={originalPath}
               onJumpToPage={(p) => setScrollToPage(p)}
               showing={showChat}
+              onOpenSettings={onOpenSettings}
             />
           </ResizablePanel>
         </>

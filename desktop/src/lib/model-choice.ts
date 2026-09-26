@@ -1,5 +1,6 @@
 /**
- * The toolbar's model picker: what it offers, what its button says, and what
+ * The model pickers — the toolbar's translation model and the chat header's
+ * answer model (#87): what they offer, what the toolbar button says, and what
  * picking an entry saves.
  *
  * The service used to be a toolbar Select and the model a field in Settings,
@@ -166,10 +167,11 @@ export interface AnsweringModel {
 
 /**
  * The LLM that writes chat answers, mirroring
- * `rag/rag_chain.py:EnhancedRAGChain._answer_model`: the translation model
- * when its provider is an LLM with a key, else every LLM by `priority` with
- * the model it runs. `null` with no key at all, when chat answers with
- * excerpts from the document instead.
+ * `rag/rag_chain.py:EnhancedRAGChain._answer_model`: the answer model picked
+ * in the chat header, then the translation model, then every LLM by
+ * `priority` with the model it runs — the first whose provider is an LLM with
+ * a key. `null` with no key at all, when chat answers with excerpts from the
+ * document instead.
  */
 export function chatModel(
   config: ChoiceConfig,
@@ -178,6 +180,7 @@ export function chatModel(
   const llms = providers.filter((p) => p.priority !== null && p.priority !== undefined);
   const byPriority = [...llms].sort((a, b) => (a.priority ?? 0) - (b.priority ?? 0));
   const candidates: ModelRef[] = [
+    ...(config.rag.answer_model ? [config.rag.answer_model] : []),
     config.translation.model,
     ...byPriority.map((p) => ({ provider: p.id, model: p.model }) as ModelRef),
   ];
@@ -188,4 +191,39 @@ export function chatModel(
     }
   }
   return null;
+}
+
+/** A chat header pick: a model, or `null` for "Same as translation". */
+export type AnswerChoice = { provider: string; model: string } | null;
+
+/** Whether this chat header entry is the saved choice. */
+export function isCurrentAnswer(config: ChoiceConfig, choice: AnswerChoice): boolean {
+  const saved = config.rag.answer_model;
+  if (!saved || !choice) return !saved && !choice;
+  return saved.provider === choice.provider && saved.model === choice.model;
+}
+
+/**
+ * The `PUT /config` body for a chat header pick. A model is pinned even when
+ * it is the translation model's, so it stays when translation changes;
+ * "Same as translation" is `null`, which follows it. The sidecar reads the
+ * choice afresh for every question, so it applies from the next one.
+ */
+export function answerModelUpdate(config: ChoiceConfig, choice: AnswerChoice): ConfigUpdate {
+  if (isCurrentAnswer(config, choice)) return {};
+  return {
+    answer_model: choice as ConfigUpdate["answer_model"],
+  };
+}
+
+/** The small print under an answer: which model wrote it, so a conversation
+ *  that changed models part-way stays readable. `null` when none did. */
+export function answeredBy(
+  providers: readonly Pick<PickerProvider, "id" | "short_label">[],
+  provider: string | null | undefined,
+  model: string | null | undefined,
+): string | null {
+  if (!provider || !model) return null;
+  const label = providers.find((p) => p.id === provider)?.short_label ?? provider;
+  return `${label} · ${model}`;
 }

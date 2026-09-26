@@ -107,9 +107,19 @@ def _v2_chat_messages(conn: sqlite3.Connection) -> None:
     )
 
 
+def _v3_answer_model(conn: sqlite3.Connection) -> None:
+    # Which provider and model wrote an answer (#87), so a conversation that
+    # changed models part-way stays readable. Nullable: rows saved before this
+    # have neither, and an answer no model wrote (no key: excerpts; nothing
+    # found) has neither either.
+    conn.execute("ALTER TABLE chat_messages ADD COLUMN provider TEXT")
+    conn.execute("ALTER TABLE chat_messages ADD COLUMN model TEXT")
+
+
 _MIGRATIONS = (
     Migration(1, "documents and chat indexes", _v1_documents_and_chat_indexes),
     Migration(2, "chat history", _v2_chat_messages),
+    Migration(3, "the model that wrote each answer", _v3_answer_model),
 )
 
 
@@ -135,6 +145,9 @@ class ChatMessageRecord:
     content: str
     answer: Optional[Dict[str, Any]]  # assistant only: the answer as it was sent
     created_at: int
+    # Assistant only: the provider and model that wrote the answer (#87).
+    provider: Optional[str] = None
+    model: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -260,7 +273,12 @@ class RecordsStore:
     # -- chat history --------------------------------------------------------
 
     def add_exchange(
-        self, document_id: str, question: str, answer: Dict[str, Any]
+        self,
+        document_id: str,
+        question: str,
+        answer: Dict[str, Any],
+        provider: Optional[str] = None,
+        model: Optional[str] = None,
     ) -> None:
         """Record a question and its answer, both or neither.
 
@@ -277,9 +295,16 @@ class RecordsStore:
             )
             conn.execute(
                 "INSERT INTO chat_messages "
-                "(document_id, role, content, answer_json, created_at) "
-                "VALUES (?, 'assistant', ?, ?, ?)",
-                (document_id, answer.get("answer", ""), json.dumps(answer, default=str), now),
+                "(document_id, role, content, answer_json, created_at, provider, model) "
+                "VALUES (?, 'assistant', ?, ?, ?, ?, ?)",
+                (
+                    document_id,
+                    answer.get("answer", ""),
+                    json.dumps(answer, default=str),
+                    now,
+                    provider,
+                    model,
+                ),
             )
 
     def messages(self, document_id: str) -> List[ChatMessageRecord]:
@@ -296,6 +321,8 @@ class RecordsStore:
                 content=row["content"],
                 answer=json.loads(row["answer_json"]) if row["answer_json"] else None,
                 created_at=row["created_at"],
+                provider=row["provider"],
+                model=row["model"],
             )
             for row in rows
         ]

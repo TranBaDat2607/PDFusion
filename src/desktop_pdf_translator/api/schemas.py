@@ -430,6 +430,10 @@ class ChatMessageResponse(BaseModel):
     # hash of its bytes; its `chunk_id`s name chunks of an index that may be gone.
     answer: Optional[AskResultPayload] = None
     created_at: str  # ISO-8601 with a UTC offset
+    # Assistant messages only: the provider and model that wrote the answer.
+    # `None` for an answer no model wrote, and for one saved before #87.
+    provider: Optional[str] = None
+    model: Optional[str] = None
 
 
 class ChatHistoryResponse(BaseModel):

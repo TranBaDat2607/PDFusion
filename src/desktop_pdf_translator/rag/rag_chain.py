@@ -92,6 +92,8 @@ class AnswerModel:
 
     service: TranslationService
     translator: BaseTranslator
+    # The model it runs. Optional only so a test can stand in a translator.
+    model: Optional[str] = None
 
 
 class EnhancedRAGChain:
@@ -158,7 +160,7 @@ class EnhancedRAGChain:
                 except Exception as e:
                     logger.error(f"Failed to initialize {service.value} for RAG: {e}")
                     continue
-                self._model, self._model_key = AnswerModel(service, translator), key
+                self._model, self._model_key = AnswerModel(service, translator, ref.model), key
                 logger.info(f"RAG answer LLM initialized: {service.value} {ref.model}")
                 return self._model
             self._model = self._model_key = None
@@ -200,8 +202,14 @@ class EnhancedRAGChain:
         processing_time = (datetime.now() - start_time).total_seconds()
 
         logger.info(f"Question answered successfully in {processing_time:.2f}s")
+        # Which model wrote it: the one chosen when the question started, even
+        # if the choice changed since. None when no model did — the template
+        # answer, or nothing found to answer from.
+        wrote = model is not None and bool(pdf_sources)
         return {
             'answer': answer,
+            'provider': model.service.value if wrote else None,
+            'model': model.model if wrote else None,
             'pdf_references': pdf_references,
             'quality_metrics': quality_metrics,
             'processing_time': processing_time,
