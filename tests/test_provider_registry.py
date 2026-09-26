@@ -87,6 +87,17 @@ def test_priorities_are_distinct():
     assert len(llm_ids_by_priority()) == len(ranked)
 
 
+@pytest.mark.parametrize("service", ["gemini", TranslationService.GEMINI])
+def test_has_api_key_takes_a_member_or_its_value(service):
+    """`TranslationSettings` doesn't validate assignment, so a plain string can
+    reach it; the old if/elif compared with `==` and took either."""
+    settings = AppSettings(gemini={"api_key": "k"})
+
+    assert settings.has_api_key(service)
+    assert AppSettings().has_api_key("argos")
+    assert not AppSettings().has_api_key("gemini")
+
+
 def test_an_unknown_id_is_a_value_error():
     with pytest.raises(ValueError, match="Unknown provider"):
         provider("nope")

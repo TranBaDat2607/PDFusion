@@ -35,10 +35,12 @@ ModelLister = Callable[[str, Optional[str]], List[str]]
 class ProviderSpec:
     id: str
     label: str
-    # For narrow places — a tab row, a toolbar button — where `label` is too wide.
+    # For narrow places — a tab row, a toolbar button — where `label` is too
+    # wide. Read by the Settings page (#86); the frontend has its own copy until then.
     short_label: str
-    # The API it speaks. Several providers can share one: a server that speaks
-    # OpenAI's API is reached with OpenAI's SDK and translator.
+    # The API it speaks. Nothing dispatches on it yet — each spec names its own
+    # `translator` and `lister` — but it is what will let a provider that
+    # speaks OpenAI's API share OpenAI's translator (#88).
     protocol: Protocol
     default_model: str
     # Offered in the model field, default first. Not a whitelist: the field takes
@@ -54,7 +56,8 @@ class ProviderSpec:
     # Whether it can be pointed at another server speaking its API: Ollama,
     # LM Studio, a proxy (#32).
     takes_endpoint: bool = False
-    # Where requests go with no endpoint of the user's own.
+    # Where requests go with no endpoint of the user's own: the SDK's default,
+    # recorded for the Settings page's placeholder (#86), not passed to the SDK.
     default_base_url: Optional[str] = None
     # Returns `list(api_key, base_url) -> model ids`, for a custom endpoint whose
     # models are in no list we could ship. Imports on call.
@@ -81,6 +84,7 @@ class ProviderSpec:
     retired_models: FrozenSet[str] = field(default_factory=frozenset)
     # The model is a fixed identifier, not a choice (Argos).
     model_is_fixed: bool = False
+    # Where to get a key, linked from the Settings page (#86).
     signup_url: Optional[str] = None
 
 

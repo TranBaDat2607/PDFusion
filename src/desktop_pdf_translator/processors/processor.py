@@ -526,6 +526,12 @@ class PDFProcessor:
             self._service_name = translation_service.value
             self._cancel_event.clear()
 
+            # The translator's module imports its SDK on first use (~1 s for
+            # google-genai or anthropic, more on a cold disk), and this is the
+            # event loop: imported here, it would freeze every SSE stream and
+            # /health meanwhile. Loaded in a thread, the factory below finds it
+            # in the import cache.
+            await asyncio.to_thread(provider(translation_service.value).translator)
             translator = TranslatorFactory.create_translator(
                 service=translation_service,
                 lang_in=source_lang,

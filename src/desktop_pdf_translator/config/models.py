@@ -238,7 +238,7 @@ class AppSettings(BaseModel):
 
         A provider that takes no key (Argos) always counts as having one.
         """
-        spec = provider(service.value)
+        spec = provider(TranslationService(service).value)
         if not spec.requires_key:
             return True
         return bool(getattr(self, spec.id).api_key)
