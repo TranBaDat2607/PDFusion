@@ -9,6 +9,8 @@ from urllib.parse import urlsplit
 
 from pydantic import BaseModel, Field, field_validator
 
+from ..providers.registry import PROVIDERS, provider
+
 class LanguageCode(str, Enum):
     """Supported language codes with Vietnamese priority."""
     
@@ -19,13 +21,17 @@ class LanguageCode(str, Enum):
     CHINESE_SIMPLIFIED = "zh-cn"
     CHINESE_TRADITIONAL = "zh-tw"
 
-class TranslationService(str, Enum):
-    """Supported translation services."""
-
-    OPENAI = "openai"
-    GEMINI = "gemini"
-    ANTHROPIC = "anthropic"
-    ARGOS = "argos"
+# Built from the provider registry, so a provider is added in one place. The
+# member names (`TranslationService.OPENAI`) are the ids upper-cased, and the
+# order is the registry's, which is the OpenAPI enum's.
+TranslationService = Enum(
+    "TranslationService",
+    [(spec.id.upper(), spec.id) for spec in PROVIDERS],
+    type=str,
+    module=__name__,
+)
+# Pydantic puts this in the OpenAPI schema as the enum's description.
+TranslationService.__doc__ = "Supported translation services."
 
 
 def normalize_base_url(value: Optional[str]) -> Optional[str]:
@@ -47,37 +53,10 @@ def normalize_base_url(value: Optional[str]) -> Optional[str]:
     return value
 
 
-# Model IDs their provider has shut down, per service. A request naming one
-# fails on every paragraph, so `ConfigManager.load_settings` swaps a saved one
-# for the service's default. The saved copy is the problem: `save_settings`
-# writes the defaults into `config.toml`, so every config ever saved still named
-# `gemini-1.5-flash` long after Google retired it, and changing the default
-# alone reached none of them (#32). The Claude IDs are from Anthropic's
-# deprecations page.
+# Model IDs their provider has shut down, per service; see
+# `ProviderSpec.retired_models`.
 RETIRED_MODELS: Dict[str, FrozenSet[str]] = {
-    "gemini": frozenset({
-        "gemini-pro",
-        "gemini-1.0-pro",
-        "gemini-1.5-pro",
-        "gemini-1.5-flash",
-        "gemini-1.5-flash-8b",
-        "gemini-2.0-flash",
-        "gemini-2.0-flash-lite",
-    }),
-    "anthropic": frozenset({
-        "claude-2.0",
-        "claude-2.1",
-        "claude-3-haiku-20240307",
-        "claude-3-sonnet-20240229",
-        "claude-3-opus-20240229",
-        "claude-3-5-haiku-20241022",
-        "claude-3-5-sonnet-20240620",
-        "claude-3-5-sonnet-20241022",
-        "claude-3-7-sonnet-20250219",
-        "claude-sonnet-4-20250514",
-        "claude-opus-4-20250514",
-        "claude-opus-4-1-20250805",
-    }),
+    spec.id: spec.retired_models for spec in PROVIDERS if spec.retired_models
 }
 
 
@@ -85,7 +64,7 @@ class OpenAISettings(BaseModel):
     """OpenAI translation service settings."""
     
     api_key: Optional[str] = Field(None, description="OpenAI API key")
-    model: str = Field("gpt-4.1", description="OpenAI model to use")
+    model: str = Field(provider("openai").default_model, description="OpenAI model to use")
     base_url: Optional[str] = Field(
         None, description="OpenAI-compatible API endpoint. None = api.openai.com"
     )
@@ -106,7 +85,7 @@ class GeminiSettings(BaseModel):
     """Google Gemini translation service settings."""
     
     api_key: Optional[str] = Field(None, description="Google AI API key")
-    model: str = Field("gemini-3.8-flash", description="Gemini model to use")
+    model: str = Field(provider("gemini").default_model, description="Gemini model to use")
     temperature: float = Field(0.3, ge=0.0, le=1.0, description="Translation creativity")
     max_qps: Optional[float] = Field(
         None, ge=0.1, le=200.0,
@@ -118,7 +97,7 @@ class AnthropicSettings(BaseModel):
     """Anthropic (Claude) translation service settings."""
 
     api_key: Optional[str] = Field(None, description="Anthropic API key")
-    model: str = Field("claude-sonnet-4-6", description="Anthropic model to use")
+    model: str = Field(provider("anthropic").default_model, description="Anthropic model to use")
     base_url: Optional[str] = Field(
         None, description="Anthropic-compatible API endpoint. None = api.anthropic.com"
     )
@@ -142,7 +121,7 @@ class ArgosSettings(BaseModel):
     frontend service-tab metadata stays uniform across all backends.
     """
 
-    model: str = Field("argostranslate", description="Argos identifier (fixed)")
+    model: str = Field(provider("argos").default_model, description="Argos identifier (fixed)")
 
 
 # Bounds shared with `PUT /config` (`api/schemas.py`), so the API answers 422
@@ -254,58 +233,15 @@ class AppSettings(BaseModel):
             v.default_target_lang = LanguageCode.VIETNAMESE
         return v
     
-    def get_active_service_config(self) -> dict:
-        """Get configuration for the active translation service."""
-        if self.translation.preferred_service == TranslationService.OPENAI:
-            return {
-                "service": "openai",
-                "config": self.openai.model_dump()
-            }
-        elif self.translation.preferred_service == TranslationService.GEMINI:
-            return {
-                "service": "gemini",
-                "config": self.gemini.model_dump()
-            }
-        elif self.translation.preferred_service == TranslationService.ANTHROPIC:
-            return {
-                "service": "anthropic",
-                "config": self.anthropic.model_dump()
-            }
-        elif self.translation.preferred_service == TranslationService.ARGOS:
-            return {
-                "service": "argos",
-                "config": self.argos.model_dump()
-            }
-        else:
-            raise ValueError(f"Unsupported service: {self.translation.preferred_service}")
-
-    def validate_service_credentials(self) -> tuple[bool, str]:
-        """Validate that required service credentials are available."""
-        active_service = self.get_active_service_config()
-        service_name = active_service["service"]
-        config = active_service["config"]
-
-        if service_name == "argos":
-            return True, "Argos is offline; no credentials required"
-
-        if not config.get("api_key"):
-            return False, f"Missing API key for {service_name}"
-
-        return True, "Credentials validated"
-
     def has_api_key(self, service: TranslationService) -> bool:
         """Whether the given service has an API key configured.
 
-        Argos has no key requirement and always returns True.
+        A provider that takes no key (Argos) always counts as having one.
         """
-        if service == TranslationService.ARGOS:
+        spec = provider(TranslationService(service).value)
+        if not spec.requires_key:
             return True
-        per_service = {
-            TranslationService.OPENAI: self.openai.api_key,
-            TranslationService.GEMINI: self.gemini.api_key,
-            TranslationService.ANTHROPIC: self.anthropic.api_key,
-        }
-        return bool(per_service.get(service))
+        return bool(getattr(self, spec.id).api_key)
 
 class FileMetadata(BaseModel):
     """Metadata for processed PDF files."""

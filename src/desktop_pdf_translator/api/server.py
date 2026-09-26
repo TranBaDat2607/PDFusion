@@ -38,6 +38,7 @@ from uvicorn.main import STARTUP_FAILURE
 
 from .. import __version__
 from ..config import TranslationService, get_settings
+from ..providers.registry import keyed_ids
 from ..utils import appdata_dir, configure_logging
 from .auth import init_token, require_token
 from .routes import config as config_routes
@@ -70,12 +71,7 @@ def _should_prewarm_argos(settings) -> bool:
     if settings.translation.preferred_service == TranslationService.ARGOS:
         return True
     any_llm_key = any(
-        settings.has_api_key(s)
-        for s in (
-            TranslationService.OPENAI,
-            TranslationService.GEMINI,
-            TranslationService.ANTHROPIC,
-        )
+        settings.has_api_key(TranslationService(s)) for s in keyed_ids()
     )
     return not any_llm_key
 

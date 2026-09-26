@@ -25,7 +25,7 @@ export const LLM_SERVICES: readonly LlmServiceCode[] = [
 ];
 
 /** The services that can be pointed at another server speaking their API:
- *  Ollama, LM Studio, a proxy. Mirrors `routes/config.py:_ENDPOINT_SERVICES`. */
+ *  Ollama, LM Studio, a proxy. Mirrors `ProviderSpec.takes_endpoint` in `providers/registry.py`. */
 const ENDPOINT_SERVICES: readonly LlmServiceCode[] = ["openai", "anthropic"];
 
 export interface ServiceDraft {

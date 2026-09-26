@@ -542,6 +542,8 @@ now a Windows + Linux matrix) is what settles the PyInstaller half.
 | `src/desktop_pdf_translator/api/export_openapi.py` | `python -m …export_openapi` — the sidecar's OpenAPI schema (SSE payloads stitched in), written to `desktop/src/lib/openapi.json` |
 | `src/desktop_pdf_translator/config/` | `ConfigManager` + Pydantic `AppSettings` (unchanged) |
 | `src/desktop_pdf_translator/processors/` | `PDFProcessor` async generator wrapping BabelDOC (unchanged) |
+| `src/desktop_pdf_translator/providers/registry.py` | The provider registry: one `ProviderSpec` per provider, which every per-provider rule is read from. Stdlib-only — see "Provider registry" |
+| `src/desktop_pdf_translator/providers/listing.py` | Asking an endpoint which models it serves, one function per protocol; imports its SDK on call |
 | `src/desktop_pdf_translator/translators/` | `BaseTranslator`, OpenAI/Gemini/Anthropic/Argos + `TranslatorFactory` |
 | `src/desktop_pdf_translator/translators/rate_limiter.py` | Process-wide token-bucket QPS limiter, one singleton per LLM service |
 | `src/desktop_pdf_translator/translators/usage_estimate.py` | The rough token count behind `POST /translate/estimate`: characters per token, the prompt each paragraph carries, how much longer a translation comes back. Stdlib-only, and held to the real prompts by `test_usage_estimate.py` |
@@ -1180,7 +1182,7 @@ BabelDOC drives chunking, layout, and PDF reassembly; it delegates the actual te
    - `restore_formular_placeholder(text, id, original)` — post-processing
    - attributes `lang_in`, `lang_out`
 
-   To add another backend (Google Translate, Helsinki opus-mt, NLLB, …), follow the same shape as `translators/openai_translator.py` and register it in `TranslatorFactory._translators` (`translators/factory.py:22`). The bundled BabelDOC ships only an OpenAI-compatible translator — no built-in Google/DeepL.
+   To add another backend (Google Translate, Helsinki opus-mt, NLLB, …), follow the same shape as `translators/openai_translator.py` and add a `ProviderSpec` for it (see "Provider registry" below). The bundled BabelDOC ships only an OpenAI-compatible translator — no built-in Google/DeepL.
 
 3. **Argos is the default offline backend.** `translators/argos_translator.py` is a free, no-API-key NMT translator used when no LLM key is configured. Important quirks:
    - **MVP supports en→vi only.** Other language pairs raise `ValueError` directing the user to switch source language or use an LLM. Update `_SUPPORTED_PAIRS` to broaden support.
@@ -1196,6 +1198,47 @@ BabelDOC drives chunking, layout, and PDF reassembly; it delegates the actual te
    A new backend must do the same three things every existing one does: check `self.is_cancelled()` at the very top of `translate()` (before the cache lookup — a cancelled job shouldn't even pay for a cache read); add `except TranslationCancelled: return text` **before** `except Exception` — reversed, a cancelled paragraph gets funnelled into `_handle_translation_error` and counted as a failure it wasn't; and set `_SERVICE_NAME` if it wants rate limiting at all — `None` genuinely opts out, handled by an explicit branch in `_call_with_backoff` rather than passed through, since `get_rate_limiter(None)` would otherwise build a real `None`-keyed bucket at the fallback rate and share it between every backend that never named a service. (That branch re-checks the cancel flag itself, so opting out of the limiter doesn't also opt out of the cancel check that rode on its `acquire()`.) `cancel_event` is threaded in by `PDFProcessor` (one `threading.Event` per job), so a Cancel click stops new LLM calls within one in-flight paragraph per worker thread — the asyncio-level `task.cancel()` alone never reached code already running synchronously on a BabelDOC worker thread. Argos gets the same top-of-`translate()` cancel check but no rate limiter or backoff (`_SERVICE_NAME` stays `None`) — it's local, and the existing "a late `event.set()` on an abandoned batch entry is harmless" behavior already covers it.
 
    The one deliberate exception to "[Translator failures are counted, not swallowed](#translator-failures-are-counted-not-swallowed)": a cancelled `translate()` call returns source text **without** touching `failed_translations` — it's an intentional stop, not a failure, and counting it would make a cancelled run look like a partial one if anything ever inspected the counters after cancellation. Total retry attempts (not distinct paragraphs) land in `retry_count`, which `CompletionEvent` and the `/translate` SSE `done` payload also carry as `retry_count` — issue #22 asked to "surface" it; nothing in the UI reads it today, so consider that half-done, not wired to a banner.
+
+### Provider registry
+
+`providers/registry.py` is the one place that says which providers exist and
+how each differs (#83). A frozen `ProviderSpec` per provider carries its
+label, default and suggested models, whether it takes a key or an endpoint,
+the environment variable prefix, the default QPS, its place in the "any LLM
+with a key" fallback order (`priority`), supported language pairs, retired
+model ids, and two lazy callables: the translator class and, for a provider
+that takes an endpoint, the model lister (`providers/listing.py`). Everything
+that used to branch per provider reads it: `TranslationService` itself is
+built from `PROVIDERS`, and `SERVICE_LABELS`, `SUPPORTED_PAIRS`,
+`RETIRED_MODELS`, `KEYED_SERVICES`, the rate limiter's defaults, the
+factory, chat's fallback order, the Argos → LLM promotion and
+`/config/options` are all derived from it.
+
+Four things about it are deliberate:
+
+- **Stdlib only.** `config.models` imports it to build the enum, and
+  `rate_limiter` (imported by `translators.base`) reads its defaults, so it is
+  on the boot path of nearly everything. It must not import `config` (a
+  cycle), pydantic or an SDK; `test_provider_registry.py` checks that in a
+  fresh interpreter, and `test_sidecar_boot.py` lists it.
+- **Callables, not "module:attr" strings.** Both keep the SDKs off the boot
+  path, but PyInstaller finds an import inside a function by static analysis
+  and cannot see one named in a string. The translator modules are imported
+  by nothing else, so strings would have left them out of the frozen sidecar.
+  `TranslatorFactory` no longer imports all four backends at the top either;
+  a backend's SDK loads the first time one is built.
+- **Ids are frozen.** Both translation caches key on the service id, and so do
+  `config.toml`'s sections. Renaming one drops every cached paragraph and
+  saved key.
+- **Order is the registry's.** `PROVIDERS` is in the order of the OpenAPI
+  enum and of `/config/options`; append new providers to keep both stable.
+  The fallback order is `priority`, not position.
+
+A settings section's fields are exactly the keyword arguments its translator
+takes, so `TranslatorFactory._get_service_config` passes the whole section.
+Until the config is reshaped (#85), a new provider still needs a settings
+class and an `AppSettings` field; `test_provider_registry.py` fails when a
+spec's default model and its settings default disagree.
 
 ### LLM endpoints and models
 

@@ -10,6 +10,7 @@ from typing import Optional, Dict, Any, Tuple
 import tomlkit
 from pydantic import ValidationError
 
+from ..providers.registry import keyed_ids, provider
 from .models import RETIRED_MODELS, AppSettings, normalize_base_url
 from ..utils import (
     SELF_DESCRIBING_PREFIXES,
@@ -26,9 +27,8 @@ from dotenv import load_dotenv
 
 logger = logging.getLogger(__name__)
 
-# The services whose settings carry an API key. Adding a backend that needs one
-# is a one-line edit here rather than in each of the loops below.
-KEYED_SERVICES = ("openai", "gemini", "anthropic")
+# The services whose settings carry an API key, from the provider registry.
+KEYED_SERVICES = keyed_ids()
 
 
 class ConfigManager:
@@ -284,9 +284,10 @@ class ConfigManager:
         # Per-service API key + model overrides, e.g. OPENAI_API_KEY /
         # OPENAI_MODEL.
         for service in KEYED_SERVICES:
-            if api_key := os.getenv(f"{service.upper()}_API_KEY"):
+            prefix = provider(service).env_prefix
+            if api_key := os.getenv(f"{prefix}_API_KEY"):
                 env_config.setdefault(service, {})["api_key"] = api_key
-            if model := os.getenv(f"{service.upper()}_MODEL"):
+            if model := os.getenv(f"{prefix}_MODEL"):
                 env_config.setdefault(service, {})["model"] = model
 
         # Application settings
@@ -336,7 +337,7 @@ class ConfigManager:
                 del env_section["api_key"]
                 logger.info(
                     "%s_API_KEY is not used: %s is set to its own endpoint",
-                    service.upper(),
+                    provider(service).env_prefix,
                     service,
                 )
 

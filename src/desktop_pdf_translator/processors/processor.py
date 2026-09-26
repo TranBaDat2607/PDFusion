@@ -18,6 +18,7 @@ from babeldoc.format.pdf.translation_config import TranslationConfig as BabelDOC
 from babeldoc.format.pdf.translation_config import WatermarkOutputMode as BabelDOCWatermarkMode
 
 from ..config import get_settings, FileMetadata, LanguageCode, TranslationService
+from ..providers.registry import provider
 from ..translators.factory import TranslatorFactory
 from ..translators.argos_translator import ArgosTranslator
 from ..translators.base import describe_fatal_error
@@ -525,6 +526,12 @@ class PDFProcessor:
             self._service_name = translation_service.value
             self._cancel_event.clear()
 
+            # The translator's module imports its SDK on first use (~1 s for
+            # google-genai or anthropic, more on a cold disk), and this is the
+            # event loop: imported here, it would freeze every SSE stream and
+            # /health meanwhile. Loaded in a thread, the factory below finds it
+            # in the import cache.
+            await asyncio.to_thread(provider(translation_service.value).translator)
             translator = TranslatorFactory.create_translator(
                 service=translation_service,
                 lang_in=source_lang,
@@ -692,15 +699,10 @@ class PDFProcessor:
         so changing model (e.g. gpt-4 → gpt-4o) invalidates cache entries
         without manual intervention. Argos has a fixed model.
         """
-        if service == TranslationService.ARGOS:
-            return "argostranslate"
-        if service == TranslationService.OPENAI:
-            return getattr(self.settings.openai, "model", None)
-        if service == TranslationService.GEMINI:
-            return getattr(self.settings.gemini, "model", None)
-        if service == TranslationService.ANTHROPIC:
-            return getattr(self.settings.anthropic, "model", None)
-        return None
+        spec = provider(TranslationService(service).value)
+        if spec.model_is_fixed:
+            return spec.default_model
+        return getattr(getattr(self.settings, spec.id, None), "model", None)
 
     def _resolve_effective_service(
         self, requested: TranslationService

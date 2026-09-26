@@ -1,23 +1,20 @@
 """Process-wide token-bucket rate limiter, shared per translation service.
 
 Kept stdlib-only (no heavy deps) since it's imported from `base.py`, which is
-on the sidecar boot path.
+on the sidecar boot path. The provider registry it reads is stdlib-only too.
 """
 
 import threading
 import time
 from typing import Dict, Optional
 
+from ..providers.registry import PROVIDERS
+
 # Requests/sec sustained per service, shared by every translator instance and
-# BabelDOC worker thread across every concurrent job. Provider limits vary by
-# roughly two orders of magnitude across accounts/tiers (e.g. Anthropic's
-# entry tier is ~0.83 QPS, OpenAI's higher tiers reach ~80+), so these are
-# conservative starting points, not measured ceilings — overridable per
-# service via `<service>.max_qps` in settings.
+# BabelDOC worker thread across every concurrent job: `ProviderSpec.default_qps`,
+# overridable per service via `<service>.max_qps` in settings.
 _DEFAULT_QPS_BY_SERVICE: Dict[str, float] = {
-    "openai": 5.0,
-    "gemini": 5.0,
-    "anthropic": 1.0,
+    spec.id: spec.default_qps for spec in PROVIDERS if spec.default_qps is not None
 }
 _FALLBACK_QPS = 4.0
 
