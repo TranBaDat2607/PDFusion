@@ -43,6 +43,7 @@ from ..utils import appdata_dir, configure_logging
 from .auth import init_token, require_token
 from .routes import config as config_routes
 from .routes import pdf as pdf_routes
+from .routes import providers as providers_routes
 from .routes import rag as rag_routes
 from .routes import setup as setup_routes
 from .routes import translation as translation_routes
@@ -333,6 +334,7 @@ def create_app() -> FastAPI:
 
     # Authenticated routes
     app.include_router(config_routes.router)
+    app.include_router(providers_routes.router)
     app.include_router(translation_routes.router)
     app.include_router(rag_routes.router)
     app.include_router(setup_routes.router)

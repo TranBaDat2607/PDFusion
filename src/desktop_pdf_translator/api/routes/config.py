@@ -20,8 +20,9 @@ from ...translators.capabilities import (
     SERVICE_LABELS,
     supported_pairs_for,
 )
+from ...providers import catalog
+from ...providers.listing import model_matches
 from ...providers.registry import (
-    endpoint_ids,
     keyed_ids,
     llm_ids_by_priority,
     provider,
@@ -42,72 +43,11 @@ from ..schemas import (
     ValidateRequest,
     ValidateResponse,
 )
+from .providers import catalog_call, catalog_for, verify
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/config", tags=["config"], dependencies=[Depends(require_token)])
-
-
-# Deadline for a credentials probe. Generous enough for a cold TLS handshake to
-# a provider, short enough that Settings → Save still feels like a save.
-_VALIDATE_PROBE_TIMEOUT_S = 20.0
-
-# The services whose settings carry a `base_url`: each can be pointed at another
-# server that speaks its API — Ollama, LM Studio, a proxy (#32).
-_ENDPOINT_SERVICES = tuple(TranslationService(p) for p in endpoint_ids())
-
-
-def _probe_kwargs(service_config: dict) -> dict:
-    """What a credentials probe hands `TranslatorFactory`.
-
-    `api_key` and `base_url` go whenever the config names them, `None`
-    included: the factory starts from the *saved* settings, so leaving
-    `base_url` out would probe the saved endpoint instead of the one being
-    checked. The model only when there is one, because `model=None` would
-    replace the backend's own default with None.
-    """
-    kwargs = {
-        name: service_config[name]
-        for name in ("api_key", "base_url")
-        if name in service_config
-    }
-    if service_config.get("model"):
-        kwargs["model"] = service_config["model"]
-    return kwargs
-
-
-async def _credentials_work(
-    service: TranslationService, service_config: dict
-) -> tuple[bool, str]:
-    """Probe credentials with the provider: `POST /config/validate`, and the
-    auto-promotion in `PUT /config`.
-
-    Runs off the event loop — `validate_configuration()` is a blocking HTTP
-    call to the provider — and under a deadline. OpenAI and Anthropic pass
-    their own `timeout=10`; Gemini passes none, so without this a probe on a
-    flaky connection would hang for the SDK's default, and on the loop it used
-    to freeze the whole sidecar meanwhile.
-
-    A timeout reports the same thing as a rejection.
-    """
-
-    def probe() -> tuple[bool, str]:
-        from ...translators.factory import TranslatorFactory
-
-        translator = TranslatorFactory.create_translator(
-            service=service, lang_in="en", lang_out="vi", **_probe_kwargs(service_config)
-        )
-        return translator.validate_configuration()
-
-    try:
-        return await asyncio.wait_for(
-            asyncio.to_thread(probe), timeout=_VALIDATE_PROBE_TIMEOUT_S
-        )
-    except (asyncio.TimeoutError, TimeoutError):
-        # The thread is left to finish on its own; nothing reads its result.
-        return False, f"timed out contacting {service.value}"
-    except Exception as exc:  # noqa: BLE001 — any failure is "not valid"
-        return False, str(exc)
 
 
 def _mask(service_settings) -> APIKeyMaskedSettings:
@@ -149,6 +89,10 @@ async def update_config(payload: ConfigUpdateRequest) -> ConfigResponse:
     # (in `ProviderSpec.priority` order if several keys arrive at once).
     LLM_SERVICES = tuple(TranslationService(p) for p in keyed_ids())
     newly_keyed: list[TranslationService] = []
+    # Providers whose catalog rows describe a key or endpoint this PUT
+    # replaces. Nothing in a row is derived from the key, so a change can't be
+    # told from the row itself; it has to be dropped here.
+    rekeyed: list[TranslationService] = []
 
     # Endpoint changes are all vetted before anything is applied. The check
     # reads only the saved section and this service's own update, so hoisting
@@ -192,6 +136,7 @@ async def update_config(payload: ConfigUpdateRequest) -> ConfigResponse:
             # earlier ciphertext the manager is preserving because it could not
             # read it must not come back on the save below.
             mgr.forget_unreadable_key(service.value)
+            rekeyed.append(service)
             if new_key:
                 newly_keyed.append(service)
         if update.model is not None:
@@ -199,7 +144,11 @@ async def update_config(payload: ConfigUpdateRequest) -> ConfigResponse:
         base_url = getattr(update, "base_url", None)
         if base_url is not None and (base_url or None) != section.get("base_url"):
             section["base_url"] = base_url or None
+            if service not in rekeyed:
+                rekeyed.append(service)
 
+    promotion_listing = None
+    promotion_refused = False
     if payload.preferred_service is not None:
         # An explicit choice is the user's to make — honoured unconditionally.
         current["translation"]["preferred_service"] = payload.preferred_service.value
@@ -209,12 +158,25 @@ async def update_config(payload: ConfigUpdateRequest) -> ConfigResponse:
     ):
         priority = tuple(TranslationService(p) for p in llm_ids_by_priority())
         chosen = next((s for s in priority if s in newly_keyed), newly_keyed[0])
-        # Promote only on a key that actually works. Moving the user off Argos
-        # on a typo'd key used to hand them a translator that fails every
-        # paragraph, silently, for every document from then on — while Argos
-        # would have kept working. One provider round-trip, and only on the
-        # rare "first key saved while still on Argos" path.
-        ok, message = await _credentials_work(chosen, current[chosen.value])
+        # Promote only on a key that actually works, with a model it can use.
+        # Moving the user off Argos on a typo'd key used to hand them a
+        # translator that fails every paragraph, silently, for every document
+        # from then on — while Argos would have kept working. One listing,
+        # never a completion (#84), and only on the rare "first key saved while
+        # still on Argos" path.
+        section = current[chosen.value]
+        ok = False
+        try:
+            promotion_listing = await catalog.list_models(
+                chosen.value, section["api_key"], section.get("base_url")
+            )
+        except (catalog.KeyRejected, catalog.ListingFailed) as exc:
+            promotion_refused = isinstance(exc, catalog.KeyRejected)
+            message = str(exc)
+        else:
+            listed = promotion_listing.models + promotion_listing.hidden
+            ok = model_matches(section["model"], (m.id for m in listed))
+            message = f"{section['model']} is not among the models it can use"
         if ok:
             current["translation"]["preferred_service"] = chosen.value
             logger.info(
@@ -256,17 +218,31 @@ async def update_config(payload: ConfigUpdateRequest) -> ConfigResponse:
         await asyncio.to_thread(mgr.load_settings)
         raise HTTPException(status_code=500, detail="Failed to save settings")
     mgr._settings = new_settings  # refresh cached singleton
+
+    # After the save, never before: a refused save must leave the catalog
+    # describing the key that is still in the file.
+    for service in rekeyed:
+        await catalog_call("invalidate", service.value)
+    if promotion_listing is not None:
+        # The promotion listed exactly the pair just saved — and after the
+        # invalidation above, which would otherwise drop it again. Keeping it
+        # spares the picker a second round-trip.
+        await catalog_call(
+            "put", chosen.value, current[chosen.value].get("base_url"), promotion_listing
+        )
+    elif promotion_refused:
+        await catalog_call("mark_invalid", chosen.value, current[chosen.value].get("base_url"))
     return await get_config()
 
 
 @router.post("/validate", response_model=ValidateResponse)
 async def validate_credentials(payload: ValidateRequest) -> ValidateResponse:
-    """Check credentials with the provider.
+    """Check credentials with the provider, by listing the key's models.
 
-    Whatever the request leaves out comes from the saved settings: the key,
-    the model, the endpoint. The saved key is only sent to the saved endpoint,
-    the rule `PUT /config` keeps; checking another endpoint needs the key typed
-    alongside it.
+    A wrapper over `POST /providers/{id}/verify`. Whatever the request leaves
+    out comes from the saved settings: the key, the model, the endpoint. The
+    saved key is only sent to the saved endpoint, the rule `PUT /config`
+    keeps; checking another endpoint needs the key typed alongside it.
     """
     if payload.service == TranslationService.ARGOS:
         # Argos has no API key — report the install state. Off the loop, but
@@ -289,30 +265,14 @@ async def validate_credentials(payload: ValidateRequest) -> ValidateResponse:
             return ValidateResponse(valid=False, message=str(exc))
         return ValidateResponse(valid=is_valid, message=message)
 
-    saved = getattr(get_settings(), payload.service.value)
-    service_config: dict = {"model": payload.model or saved.model}
-    endpoint_changed = False
-    if payload.service in _ENDPOINT_SERVICES:
-        base_url = (
-            saved.base_url if payload.base_url is None else payload.base_url or None
-        )
-        service_config["base_url"] = base_url
-        endpoint_changed = base_url != saved.base_url
-
-    if payload.api_key:
-        service_config["api_key"] = payload.api_key
-    elif endpoint_changed:
-        raise HTTPException(
-            status_code=422,
-            detail="Enter the API key to check a different endpoint.",
-        )
-    elif saved.api_key:
-        service_config["api_key"] = saved.api_key
-    else:
-        return ValidateResponse(valid=False, message="Enter an API key first")
-
-    is_valid, message = await _credentials_work(payload.service, service_config)
-    return ValidateResponse(valid=is_valid, message=message)
+    model = payload.model or getattr(get_settings(), payload.service.value).model
+    result = await verify(payload.service, payload.api_key, payload.base_url, model)
+    # Save's check: the key works *and* the model is one it can use, so a
+    # mistyped name turns up before a document fails on it paragraph by
+    # paragraph. Listing, never a completion (#84).
+    return ValidateResponse(
+        valid=result.valid and result.model_found is not False, message=result.message
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -339,46 +299,24 @@ async def get_options() -> OptionsResponse:
     )
 
 
-def _fetch_endpoint_models(
-    service: TranslationService, api_key: str, base_url: str | None
-) -> list[str]:
-    """Ask the endpoint which models it serves. Blocking; imports the SDK.
-
-    The seam the tests replace, so it keeps this signature."""
-    return provider(service.value).lister()(api_key, base_url)
-
-
 @router.get("/models/{service}", response_model=EndpointModelsResponse)
 async def list_endpoint_models(service: TranslationService) -> EndpointModelsResponse:
-    """The models the saved endpoint serves.
+    """The ids the saved key can use at the saved endpoint.
 
-    For the toolbar's model picker once a service points at Ollama, LM Studio
-    or a proxy: the suggestions in `/config/options` are the provider's own
-    models, which such a server doesn't have, and its models are in no list we
-    could ship. Always the saved key with the saved endpoint, the pair
-    `PUT /config` keeps together, so this can't send a key anywhere new.
+    A wrapper over the catalog (`GET /providers/{id}/models`) for the
+    toolbar's model picker: listed models only — the picker adds the saved
+    model and, without a list, the suggestions itself. Always the saved key
+    with the saved endpoint, the pair `PUT /config` keeps together, so this
+    can't send a key anywhere new.
     """
-    if service not in _ENDPOINT_SERVICES:
+    if not provider(service.value).requires_key:
         raise HTTPException(
             status_code=422,
-            detail=f"{SERVICE_LABELS[service]} has no endpoint to list models from.",
+            detail=f"{SERVICE_LABELS[service]} has no models to list.",
         )
-    saved = getattr(get_settings(), service.value)
-    if not saved.api_key:
-        return EndpointModelsResponse(error="No API key is saved.")
-    try:
-        models = await asyncio.wait_for(
-            asyncio.to_thread(
-                _fetch_endpoint_models, service, saved.api_key, saved.base_url
-            ),
-            timeout=_VALIDATE_PROBE_TIMEOUT_S,
-        )
-    except (asyncio.TimeoutError, TimeoutError):
-        return EndpointModelsResponse(error=f"Timed out contacting {saved.base_url or service.value}.")
-    except Exception as exc:  # noqa: BLE001 — a server that's down is ordinary
-        logger.info("Listing %s models failed: %s", service.value, exc)
-        return EndpointModelsResponse(error=str(exc))
-    return EndpointModelsResponse(models=sorted(set(models)))
+    result = await catalog_for(service, refresh=False)
+    listed = {model.id for model in result.models if model.source == "listed"}
+    return EndpointModelsResponse(models=sorted(listed), error=result.error)
 
 
 # ---------------------------------------------------------------------------

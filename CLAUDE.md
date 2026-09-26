@@ -110,7 +110,7 @@ singleton with no job id, so it is polled via `GET /setup/status`.
 | `api/server.py`, `auth.py`, `jobs.py`, `routes/*`, `schemas.py`, `sse_schemas.py` | FastAPI app, bearer auth, job registry, routes, wire models |
 | `engine_assets.py` | Single source of truth for "the offline engine is installed" |
 | `config/` | `ConfigManager` + Pydantic `AppSettings` |
-| `providers/` | `registry.py` — one `ProviderSpec` per provider, the source of every per-provider rule (stdlib-only); `listing.py` — endpoint model listing |
+| `providers/` | `registry.py` — one `ProviderSpec` per provider, the source of every per-provider rule (stdlib-only); `listing.py` — one model lister per protocol; `catalog.py` — the model catalog cache and `list_models` |
 | `processors/` | `PDFProcessor` (BabelDOC), `page_selection.py`, `pdf_pages.py`, `pdf_cache.py`, `doc_layout_cache.py` |
 | `translators/` | `BaseTranslator` + OpenAI/Gemini/Anthropic/Argos, `factory.py`, `capabilities.py`, `rate_limiter.py`, `translation_cache.py`, `param_compat.py`, `usage_estimate.py` |
 | `rag/` | `EnhancedRAGChain`, `vector_store.py`, `index_spec.py`, `onnx_embeddings.py`, `keyword_search.py` |
@@ -125,6 +125,7 @@ than re-deriving from the routes.
 
 `/health` · `/auth/ping` · `GET|PUT /config` · `POST /config/validate` ·
 `GET /config/options` · `GET /config/models/{service}` · `GET|DELETE /config/cache` ·
+`GET /providers` · `GET /providers/{id}/models` · `POST /providers/{id}/verify` ·
 `GET /setup/status` · `POST /setup/engine` ·
 `POST /translate` + `/translate/{id}/events` + `/cancel` + `POST /translate/estimate` ·
 `POST /rag/index` + `/events` · `POST /rag/ask` + `/events` ·
@@ -181,6 +182,12 @@ a test. They are the things most easily undone by "simplifying".
   so a locked keyring doesn't erase every provider key on the next save.
 - `config.toml` is written to a temp file and `os.replace`d; the `.bak` always
   has the keys stripped.
+- **Verifying a key and discovering models never generate text** (#84): Save,
+  `/config/validate`, `/providers/{id}/verify` and the Argos → LLM promotion
+  all *list* the key's models; none calls `validate_configuration`. A typo'd
+  model is caught by looking it up in the list (aliases allowed). Listings
+  live in a cache keyed by `(provider, base_url)` that stores nothing derived
+  from a key, so `PUT /config` invalidates it on every key or endpoint change.
 - A parameter a model refuses is dropped and recorded, not failed on
   (`param_compat.py`). Model suggestions are not a whitelist; retired ids are
   swapped on load (`RETIRED_MODELS`).
@@ -413,7 +420,8 @@ exe), and CSP (`pnpm tauri build`). Regenerated files (`openapi.json`,
 
 Covered: PDF export, the language contract, key storage, config read/write and
 the config API's key/endpoint rules, the job registry, both caches, Argos
-batching, failure/retry accounting, param adaptation, the records DB, chat
+batching, failure/retry accounting, param adaptation, model listing (recorded
+responses) and the model catalog, the records DB, chat
 isolation (real ChromaDB under `tmp_path`), chunking and rolling-PDF assembly,
 the data root per platform, packaging config agreement, and the viewer's pure
 half.

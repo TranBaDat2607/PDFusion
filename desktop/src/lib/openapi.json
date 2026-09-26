@@ -1356,6 +1356,127 @@
         "title": "LanguageOption",
         "type": "object"
       },
+      "ModelCatalogResponse": {
+        "description": "The models the saved key can use at the saved endpoint.\n\nA failure is `error` in a 200, as with `EndpointModelsResponse`: a local\nserver that isn't up yet is ordinary, and `models` still carries the saved\nmodel (and, on the provider's own endpoint, the suggestions).",
+        "properties": {
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "fetched_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fetched At"
+          },
+          "hidden": {
+            "items": {
+              "$ref": "#/components/schemas/ModelRecord"
+            },
+            "title": "Hidden",
+            "type": "array"
+          },
+          "key_state": {
+            "default": "unverified",
+            "enum": [
+              "unverified",
+              "valid",
+              "invalid",
+              "unreadable"
+            ],
+            "title": "Key State",
+            "type": "string"
+          },
+          "models": {
+            "items": {
+              "$ref": "#/components/schemas/ModelRecord"
+            },
+            "title": "Models",
+            "type": "array"
+          }
+        },
+        "title": "ModelCatalogResponse",
+        "type": "object"
+      },
+      "ModelRecord": {
+        "properties": {
+          "context_tokens": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Context Tokens"
+          },
+          "created_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created At"
+          },
+          "display_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Display Name"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "output_tokens": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Output Tokens"
+          },
+          "source": {
+            "enum": [
+              "listed",
+              "saved",
+              "suggested"
+            ],
+            "title": "Source",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "source"
+        ],
+        "title": "ModelRecord",
+        "type": "object"
+      },
       "OptionsResponse": {
         "properties": {
           "languages": {
@@ -1686,6 +1807,159 @@
           "progress_percent"
         ],
         "title": "ProgressEventPayload",
+        "type": "object"
+      },
+      "ProviderInfo": {
+        "properties": {
+          "base_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Base Url"
+          },
+          "catalog_fetched_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Catalog Fetched At"
+          },
+          "catalog_fresh": {
+            "default": false,
+            "title": "Catalog Fresh",
+            "type": "boolean"
+          },
+          "default_base_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Default Base Url"
+          },
+          "default_model": {
+            "title": "Default Model",
+            "type": "string"
+          },
+          "has_key": {
+            "title": "Has Key",
+            "type": "boolean"
+          },
+          "id": {
+            "$ref": "#/components/schemas/TranslationService"
+          },
+          "key_state": {
+            "enum": [
+              "unverified",
+              "valid",
+              "invalid",
+              "unreadable"
+            ],
+            "title": "Key State",
+            "type": "string"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "last_verified_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Verified At"
+          },
+          "model_is_fixed": {
+            "title": "Model Is Fixed",
+            "type": "boolean"
+          },
+          "protocol": {
+            "enum": [
+              "openai",
+              "anthropic",
+              "gemini",
+              "argos"
+            ],
+            "title": "Protocol",
+            "type": "string"
+          },
+          "requires_key": {
+            "title": "Requires Key",
+            "type": "boolean"
+          },
+          "short_label": {
+            "title": "Short Label",
+            "type": "string"
+          },
+          "signup_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Signup Url"
+          },
+          "suggested_models": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Suggested Models",
+            "type": "array"
+          },
+          "takes_endpoint": {
+            "title": "Takes Endpoint",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "id",
+          "label",
+          "short_label",
+          "protocol",
+          "requires_key",
+          "takes_endpoint",
+          "default_model",
+          "suggested_models",
+          "model_is_fixed",
+          "has_key",
+          "key_state"
+        ],
+        "title": "ProviderInfo",
+        "type": "object"
+      },
+      "ProvidersResponse": {
+        "properties": {
+          "providers": {
+            "items": {
+              "$ref": "#/components/schemas/ProviderInfo"
+            },
+            "title": "Providers",
+            "type": "array"
+          }
+        },
+        "required": [
+          "providers"
+        ],
+        "title": "ProvidersResponse",
         "type": "object"
       },
       "RAGSettings": {
@@ -2114,6 +2388,101 @@
         ],
         "title": "ValidationError",
         "type": "object"
+      },
+      "VerifyRequest": {
+        "description": "A key and endpoint to check by listing, saving nothing. Left out, each\ncomes from the saved settings \u2014 but the saved key is only ever sent to the\nsaved endpoint.",
+        "properties": {
+          "api_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Api Key"
+          },
+          "base_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Base Url"
+          },
+          "model": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model"
+          }
+        },
+        "title": "VerifyRequest",
+        "type": "object"
+      },
+      "VerifyResponse": {
+        "properties": {
+          "hidden": {
+            "items": {
+              "$ref": "#/components/schemas/ModelRecord"
+            },
+            "title": "Hidden",
+            "type": "array"
+          },
+          "key_state": {
+            "enum": [
+              "unverified",
+              "valid",
+              "invalid",
+              "unreadable"
+            ],
+            "title": "Key State",
+            "type": "string"
+          },
+          "message": {
+            "title": "Message",
+            "type": "string"
+          },
+          "model_found": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model Found"
+          },
+          "models": {
+            "items": {
+              "$ref": "#/components/schemas/ModelRecord"
+            },
+            "title": "Models",
+            "type": "array"
+          },
+          "valid": {
+            "title": "Valid",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "valid",
+          "key_state",
+          "message"
+        ],
+        "title": "VerifyResponse",
+        "type": "object"
       }
     }
   },
@@ -2405,7 +2774,7 @@
     },
     "/config/models/{service}": {
       "get": {
-        "description": "The models the saved endpoint serves.\n\nFor the toolbar's model picker once a service points at Ollama, LM Studio\nor a proxy: the suggestions in `/config/options` are the provider's own\nmodels, which such a server doesn't have, and its models are in no list we\ncould ship. Always the saved key with the saved endpoint, the pair\n`PUT /config` keeps together, so this can't send a key anywhere new.",
+        "description": "The ids the saved key can use at the saved endpoint.\n\nA wrapper over the catalog (`GET /providers/{id}/models`) for the\ntoolbar's model picker: listed models only \u2014 the picker adds the saved\nmodel and, without a list, the suggestions itself. Always the saved key\nwith the saved endpoint, the pair `PUT /config` keeps together, so this\ncan't send a key anywhere new.",
         "operationId": "list_endpoint_models_config_models__service__get",
         "parameters": [
           {
@@ -2512,7 +2881,7 @@
     },
     "/config/validate": {
       "post": {
-        "description": "Check credentials with the provider.\n\nWhatever the request leaves out comes from the saved settings: the key,\nthe model, the endpoint. The saved key is only sent to the saved endpoint,\nthe rule `PUT /config` keeps; checking another endpoint needs the key typed\nalongside it.",
+        "description": "Check credentials with the provider, by listing the key's models.\n\nA wrapper over `POST /providers/{id}/verify`. Whatever the request leaves\nout comes from the saved settings: the key, the model, the endpoint. The\nsaved key is only sent to the saved endpoint, the rule `PUT /config`\nkeeps; checking another endpoint needs the key typed alongside it.",
         "operationId": "validate_credentials_config_validate_post",
         "parameters": [
           {
@@ -2703,6 +3072,190 @@
         "summary": "Stream Pdf",
         "tags": [
           "pdf"
+        ]
+      }
+    },
+    "/providers": {
+      "get": {
+        "description": "Every provider, with where its key stands. Reads only; never lists.",
+        "operationId": "list_providers_providers_get",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProvidersResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Providers",
+        "tags": [
+          "providers"
+        ]
+      }
+    },
+    "/providers/{provider_id}/models": {
+      "get": {
+        "operationId": "provider_models_providers__provider_id__models_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "provider_id",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/TranslationService"
+            }
+          },
+          {
+            "in": "query",
+            "name": "refresh",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Refresh",
+              "type": "boolean"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ModelCatalogResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Provider Models",
+        "tags": [
+          "providers"
+        ]
+      }
+    },
+    "/providers/{provider_id}/verify": {
+      "post": {
+        "operationId": "verify_provider_providers__provider_id__verify_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "provider_id",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/TranslationService"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/VerifyRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VerifyResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Verify Provider",
+        "tags": [
+          "providers"
         ]
       }
     },

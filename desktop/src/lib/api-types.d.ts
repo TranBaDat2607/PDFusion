@@ -74,13 +74,13 @@ export interface paths {
         };
         /**
          * List Endpoint Models
-         * @description The models the saved endpoint serves.
+         * @description The ids the saved key can use at the saved endpoint.
          *
-         *     For the toolbar's model picker once a service points at Ollama, LM Studio
-         *     or a proxy: the suggestions in `/config/options` are the provider's own
-         *     models, which such a server doesn't have, and its models are in no list we
-         *     could ship. Always the saved key with the saved endpoint, the pair
-         *     `PUT /config` keeps together, so this can't send a key anywhere new.
+         *     A wrapper over the catalog (`GET /providers/{id}/models`) for the
+         *     toolbar's model picker: listed models only — the picker adds the saved
+         *     model and, without a list, the suggestions itself. Always the saved key
+         *     with the saved endpoint, the pair `PUT /config` keeps together, so this
+         *     can't send a key anywhere new.
          */
         get: operations["list_endpoint_models_config_models__service__get"];
         put?: never;
@@ -119,12 +119,12 @@ export interface paths {
         put?: never;
         /**
          * Validate Credentials
-         * @description Check credentials with the provider.
+         * @description Check credentials with the provider, by listing the key's models.
          *
-         *     Whatever the request leaves out comes from the saved settings: the key,
-         *     the model, the endpoint. The saved key is only sent to the saved endpoint,
-         *     the rule `PUT /config` keeps; checking another endpoint needs the key typed
-         *     alongside it.
+         *     A wrapper over `POST /providers/{id}/verify`. Whatever the request leaves
+         *     out comes from the saved settings: the key, the model, the endpoint. The
+         *     saved key is only sent to the saved endpoint, the rule `PUT /config`
+         *     keeps; checking another endpoint needs the key typed alongside it.
          */
         post: operations["validate_credentials_config_validate_post"];
         delete?: never;
@@ -189,6 +189,60 @@ export interface paths {
         get: operations["stream_pdf_pdf_file_get"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/providers": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Providers
+         * @description Every provider, with where its key stands. Reads only; never lists.
+         */
+        get: operations["list_providers_providers_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/providers/{provider_id}/models": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Provider Models */
+        get: operations["provider_models_providers__provider_id__models_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/providers/{provider_id}/verify": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Verify Provider */
+        post: operations["verify_provider_providers__provider_id__verify_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1130,6 +1184,48 @@ export interface components {
             /** Label */
             label: string;
         };
+        /**
+         * ModelCatalogResponse
+         * @description The models the saved key can use at the saved endpoint.
+         *
+         *     A failure is `error` in a 200, as with `EndpointModelsResponse`: a local
+         *     server that isn't up yet is ordinary, and `models` still carries the saved
+         *     model (and, on the provider's own endpoint, the suggestions).
+         */
+        ModelCatalogResponse: {
+            /** Error */
+            error?: string | null;
+            /** Fetched At */
+            fetched_at?: string | null;
+            /** Hidden */
+            hidden?: components["schemas"]["ModelRecord"][];
+            /**
+             * Key State
+             * @default unverified
+             * @enum {string}
+             */
+            key_state: "unverified" | "valid" | "invalid" | "unreadable";
+            /** Models */
+            models?: components["schemas"]["ModelRecord"][];
+        };
+        /** ModelRecord */
+        ModelRecord: {
+            /** Context Tokens */
+            context_tokens?: number | null;
+            /** Created At */
+            created_at?: string | null;
+            /** Display Name */
+            display_name?: string | null;
+            /** Id */
+            id: string;
+            /** Output Tokens */
+            output_tokens?: number | null;
+            /**
+             * Source
+             * @enum {string}
+             */
+            source: "listed" | "saved" | "suggested";
+        };
         /** OptionsResponse */
         OptionsResponse: {
             /** Languages */
@@ -1321,6 +1417,56 @@ export interface components {
             stage: string;
             /** Total Steps */
             total_steps: number;
+        };
+        /** ProviderInfo */
+        ProviderInfo: {
+            /** Base Url */
+            base_url?: string | null;
+            /** Catalog Fetched At */
+            catalog_fetched_at?: string | null;
+            /**
+             * Catalog Fresh
+             * @default false
+             */
+            catalog_fresh: boolean;
+            /** Default Base Url */
+            default_base_url?: string | null;
+            /** Default Model */
+            default_model: string;
+            /** Has Key */
+            has_key: boolean;
+            id: components["schemas"]["TranslationService"];
+            /**
+             * Key State
+             * @enum {string}
+             */
+            key_state: "unverified" | "valid" | "invalid" | "unreadable";
+            /** Label */
+            label: string;
+            /** Last Verified At */
+            last_verified_at?: string | null;
+            /** Model Is Fixed */
+            model_is_fixed: boolean;
+            /**
+             * Protocol
+             * @enum {string}
+             */
+            protocol: "openai" | "anthropic" | "gemini" | "argos";
+            /** Requires Key */
+            requires_key: boolean;
+            /** Short Label */
+            short_label: string;
+            /** Signup Url */
+            signup_url?: string | null;
+            /** Suggested Models */
+            suggested_models: string[];
+            /** Takes Endpoint */
+            takes_endpoint: boolean;
+        };
+        /** ProvidersResponse */
+        ProvidersResponse: {
+            /** Providers */
+            providers: components["schemas"]["ProviderInfo"][];
         };
         /**
          * RAGSettings
@@ -1528,6 +1674,38 @@ export interface components {
             msg: string;
             /** Error Type */
             type: string;
+        };
+        /**
+         * VerifyRequest
+         * @description A key and endpoint to check by listing, saving nothing. Left out, each
+         *     comes from the saved settings — but the saved key is only ever sent to the
+         *     saved endpoint.
+         */
+        VerifyRequest: {
+            /** Api Key */
+            api_key?: string | null;
+            /** Base Url */
+            base_url?: string | null;
+            /** Model */
+            model?: string | null;
+        };
+        /** VerifyResponse */
+        VerifyResponse: {
+            /** Hidden */
+            hidden?: components["schemas"]["ModelRecord"][];
+            /**
+             * Key State
+             * @enum {string}
+             */
+            key_state: "unverified" | "valid" | "invalid" | "unreadable";
+            /** Message */
+            message: string;
+            /** Model Found */
+            model_found?: boolean | null;
+            /** Models */
+            models?: components["schemas"]["ModelRecord"][];
+            /** Valid */
+            valid: boolean;
         };
     };
     responses: never;
@@ -1877,6 +2055,109 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_providers_providers_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProvidersResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    provider_models_providers__provider_id__models_get: {
+        parameters: {
+            query?: {
+                refresh?: boolean;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                provider_id: components["schemas"]["TranslationService"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ModelCatalogResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    verify_provider_providers__provider_id__verify_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                provider_id: components["schemas"]["TranslationService"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["VerifyRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["VerifyResponse"];
                 };
             };
             /** @description Validation Error */

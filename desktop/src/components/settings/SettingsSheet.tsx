@@ -183,7 +183,8 @@ export function SettingsSheet({ open, onOpenChange, initialTab }: SettingsSheetP
 
     // A changed key, model or endpoint is checked with the provider before it
     // is saved, so a mistyped model name turns up here and not as a document
-    // that fails one paragraph at a time.
+    // that fails one paragraph at a time. The check lists the key's models and
+    // looks the name up there; it never generates text (#84).
     if (!saveAnyway) {
       const probes = servicesToProbe(drafts, config);
       if (probes.length > 0) {

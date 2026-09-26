@@ -90,6 +90,38 @@ describe("modelGroups", () => {
     expect(group(c, "openai").models.map((m) => m.model)).toEqual(["llama3.2:3b"]);
   });
 
+  it("offers the provider's own list in place of its suggestions", () => {
+    const c = config("openai", { openai: { has_key: true } });
+
+    const openai = group(c, "openai", { openai: ["gpt-4.1", "gpt-5", "o3"] });
+
+    expect(openai.models).toEqual([
+      { model: "gpt-4.1", isDefault: true },
+      { model: "gpt-5", isDefault: false },
+      { model: "o3", isDefault: false },
+    ]);
+  });
+
+  it("falls back to the suggestions while the provider's list is empty", () => {
+    // A failed listing arrives as an empty list with an error beside it.
+    const c = config("openai", { openai: { has_key: true } });
+
+    expect(group(c, "openai", { openai: [] }).models.map((m) => m.model)).toEqual([
+      "gpt-4.1",
+      "gpt-5.6-sol",
+    ]);
+  });
+
+  it("keeps a saved model the provider's list doesn't have, first", () => {
+    const c = config("openai", { openai: { has_key: true, model: "gpt-custom" } });
+
+    expect(group(c, "openai", { openai: ["gpt-4.1", "o3"] }).models.map((m) => m.model)).toEqual([
+      "gpt-custom",
+      "gpt-4.1",
+      "o3",
+    ]);
+  });
+
   it("never gives Gemini an endpoint", () => {
     const c = config("gemini", { gemini: { base_url: OLLAMA } });
 
@@ -163,14 +195,16 @@ describe("settingsTabFor", () => {
 });
 
 describe("servicesToList", () => {
-  it("lists only keyed services pointed at another server", () => {
+  it("lists every LLM with a key, on its own endpoint or another", () => {
+    // Every provider lists its models for free (#84), so the picker shows what
+    // a key can use in place of the shipped suggestions.
     const c = config("openai", {
       openai: { has_key: true, base_url: OLLAMA },
       anthropic: { has_key: false, base_url: "http://localhost:11434" },
       gemini: { has_key: true },
     });
 
-    expect(servicesToList(c)).toEqual(["openai"]);
+    expect(servicesToList(c)).toEqual(["openai", "gemini"]);
   });
 });
 

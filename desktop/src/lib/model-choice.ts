@@ -50,10 +50,12 @@ export interface ServiceGroup {
 /**
  * Every service with the models it offers.
  *
- * A service pointed at another server offers what that server lists
- * (`endpointModels`, fetched by the picker) and not the provider's
- * suggestions, which such a server doesn't have. The saved model always
- * stays on offer, so a name typed in Settings never vanishes from the list.
+ * A keyed service offers what its key can use (`endpointModels`, listed by
+ * the sidecar, #84). Until that list arrives, or when it fails, the provider's
+ * own endpoint falls back to the shipped suggestions; another server offers
+ * nothing but the saved model, since it has none of the provider's models. The
+ * saved model always stays on offer, so a name typed in Settings never
+ * vanishes from the list.
  */
 export function modelGroups(
   config: Config,
@@ -67,7 +69,8 @@ export function modelGroups(
     }
     const saved = config[code];
     const endpoint = (takesEndpoint(code) && saved.base_url) || null;
-    const offered = endpoint ? (endpointModels[code] ?? []) : option.models;
+    const listed = endpointModels[code] ?? [];
+    const offered = listed.length > 0 || endpoint ? listed : option.models;
     const names = [saved.model, ...offered.filter((m) => m !== saved.model)];
     // Suggestion order is the server's (default first); the saved model goes
     // first only when it's a name the list doesn't have.
@@ -139,11 +142,10 @@ export function settingsTabFor(config: Config): LlmServiceCode {
   return preferred === "argos" ? "openai" : preferred;
 }
 
-/** Services whose endpoint the picker asks for its model list. */
+/** Services the picker asks for their model list: every one with a key,
+ *  since listing is free with any valid key (#84). */
 export function servicesToList(config: Config): LlmServiceCode[] {
-  return LLM_SERVICES.filter(
-    (code) => takesEndpoint(code) && !!config[code].base_url && config[code].has_key,
-  );
+  return LLM_SERVICES.filter((code) => config[code].has_key);
 }
 
 // Order `rag_chain.py:_LLM_SERVICES` tries them in (`ProviderSpec.priority` in

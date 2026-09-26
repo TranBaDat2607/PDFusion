@@ -1,0 +1,13 @@
+{
+  "data": [
+    {
+      "type": "model",
+      "id": "claude-3-haiku-20240307",
+      "display_name": "Claude Haiku 3",
+      "created_at": "2024-03-07T00:00:00Z"
+    }
+  ],
+  "has_more": false,
+  "first_id": "claude-3-haiku-20240307",
+  "last_id": "claude-3-haiku-20240307"
+}
