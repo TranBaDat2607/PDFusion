@@ -344,6 +344,71 @@ cannot walk the PyInstaller tree; see the notes), `dmg`/`app` on macOS
 (unverified). Releases are built by `.github/workflows/release.yml` on a `v*`
 tag into a draft release.
 
+## Test-driven development
+
+New behaviour and bug fixes are written test-first, following Kent Beck's
+*Canon TDD* (red → green → refactor, driven by a test list):
+
+1. **List the scenarios first** — the behaviours and edge cases the change must
+   handle, not how to implement them. Add to it whenever the work turns up a
+   case you missed.
+2. **Red.** Turn exactly *one* item into a runnable test and **run it to watch
+   it fail, for the reason you expect**. A test never seen failing may be
+   asserting nothing; one that fails on an import error or typo proves nothing.
+3. **Green.** Write the least production code that makes it pass, then run the
+   whole suite for that half (`pytest tests`, `pnpm test`, `cargo test`).
+4. **Refactor** with everything green — never while red, and never mixed into
+   step 3. Only as far as this change needs; duplication is a hint, not a
+   command.
+5. Back to 2 until the list is empty.
+
+What that rules out:
+
+- **A bug fix starts with a test that reproduces the bug** and fails on the
+  current code. That test is the regression guard the invariants above rely on.
+- **Never make a test pass by weakening it** — deleting or loosening an
+  assertion, or pasting the value the code currently returns into `expected`.
+  The expected value comes from the spec, the issue, or a hand calculation.
+- Don't write the whole list as tests up front, and don't write assertion-free
+  tests for coverage.
+- A pure refactor adds no behaviour, so it needs no new test — but the existing
+  ones must be green before you start and after you finish.
+
+Tests go where their neighbours are: `tests/test_<module>.py`,
+`desktop/src/lib/<name>.test.ts` beside the helper, and `#[cfg(test)] mod tests`
+at the foot of the Rust file. To get UI logic under test, pull it into a pure
+helper in `desktop/src/lib/` (the pattern the viewer's pure half already
+follows) rather than testing through the DOM.
+
+**Hand a step to a subagent when your own context would bias it.** Whoever
+wrote the implementation, or already holds a theory about the bug, tends to
+write tests that mirror the code rather than the spec, and to review their own
+work as correct. Spawn a *fresh* subagent — never a `fork`, which inherits the
+very context you are trying to keep out — for:
+
+- **Writing the red tests** for a non-trivial behaviour, or the reproduction
+  test for a bug. Give it the spec or issue, the test list and the public
+  signature; withhold the implementation, your draft, and your guess at the
+  cause. It returns tests that fail for the expected reason.
+- **Deriving expected values** — anything computed (page mappings, cost
+  estimates, chunk boundaries, encodings) that you would otherwise be tempted
+  to read off the code's output.
+- **Reviewing the finished cycle** before calling it done: does each test assert
+  something the spec requires, would it fail if that behaviour broke, and did
+  any assertion get loosened between red and green? Use a read-only agent type
+  (`Explore`) so the review cannot quietly "fix" what it finds.
+
+Pass the subagent only what the step needs, and take its output as it comes:
+if a test it wrote looks wrong, send it back with the reason rather than
+editing the test to fit the code. Trivial changes — a one-line fix with an
+obvious test — don't warrant the round trip.
+
+**Where no harness reaches**, TDD gives way to a manual check, and the PR says
+what was exercised: the "Not covered" list below, the Cancel path, packaging /
+the PyInstaller spec (the frozen smoke suite, then a real translate through the
+exe), and CSP (`pnpm tauri build`). Regenerated files (`openapi.json`,
+`api-types.d.ts`) are checked by CI's diff, not by a new test.
+
 ## Tests and CI
 
 Covered: PDF export, the language contract, key storage, config read/write and
