@@ -74,7 +74,9 @@ class OpenAITranslator(BaseTranslator):
             if not processed_text.strip():
                 return text
 
-            cached = _llm_cache_get(processed_text, self.lang_in, self.lang_out, "openai", self.model)
+            cached = _llm_cache_get(
+                processed_text, self.lang_in, self.lang_out, self._SERVICE_NAME, self.model
+            )
             if cached is not None:
                 self._fire_paragraph_callback(processed_text, cached)
                 return cached
@@ -101,7 +103,13 @@ class OpenAITranslator(BaseTranslator):
                     RuntimeError("OpenAI returned an empty translation"), text
                 )
             result = self._postprocess_text(translated_text)
-            _llm_cache_set(processed_text, result, self.lang_in, self.lang_out, "openai", self.model)
+            # The provider, not "openai": OpenRouter, DeepSeek and Ollama run
+            # this class too, and a model name alone doesn't say whose output a
+            # paragraph is — Ollama's `llama3.2` and one behind the OpenAI card
+            # pointed at LM Studio would serve each other's text.
+            _llm_cache_set(
+                processed_text, result, self.lang_in, self.lang_out, self._SERVICE_NAME, self.model
+            )
             self._fire_paragraph_callback(processed_text, result)
             return result
 
