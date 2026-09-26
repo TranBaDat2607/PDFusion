@@ -61,8 +61,11 @@ class ProviderSpec:
     # Whether it can be pointed at another server speaking its API: Ollama,
     # LM Studio, a proxy (#32).
     takes_endpoint: bool = False
-    # Where requests go with no endpoint of the user's own: the SDK's default,
-    # recorded for the Models page's placeholder (#86), not passed to the SDK.
+    # Where requests go with no endpoint of the user's own. Sent to the SDK
+    # (`endpoint_for`), not left to its default: that is what lets OpenRouter
+    # reach its own URL through OpenAI's SDK (#88), and it keeps an
+    # `OPENAI_BASE_URL` in the user's environment from redirecting a saved
+    # key. Also the Models page's placeholder (#86).
     default_base_url: Optional[str] = None
     # Under the Models page's "Override base URL": what a local server's
     # endpoint looks like. Required when `takes_endpoint`.
@@ -93,6 +96,10 @@ class ProviderSpec:
     retired_models: FrozenSet[str] = field(default_factory=frozenset)
     # The model is a fixed identifier, not a choice (Argos).
     model_is_fixed: bool = False
+    # What to send as the key to a server that takes none (`requires_key`
+    # False) but whose SDK won't build a client without one: OpenAI's refuses
+    # an empty key, and Ollama ignores whatever it is sent (#88).
+    placeholder_key: Optional[str] = None
     # Where to get a key, linked from the Models page (#86).
     signup_url: Optional[str] = None
     # The highest `temperature` its API takes. OpenAI's scale runs to 2; the
@@ -102,6 +109,12 @@ class ProviderSpec:
     # OpenAI's reasoning models refuse the parameter outright, while
     # Anthropic's API requires one on every request.
     default_max_tokens: Optional[int] = None
+
+    @property
+    def is_llm(self) -> bool:
+        """Writes text from a prompt: it translates by prompting, and it can
+        answer in chat. Argos is a translation model and does neither."""
+        return self.protocol != "argos"
 
 
 def _openai_translator() -> type:
@@ -275,6 +288,26 @@ PROVIDERS: Tuple[ProviderSpec, ...] = (
 _BY_ID = {spec.id: spec for spec in PROVIDERS}
 
 
+def endpoint_for(spec: ProviderSpec, base_url: Optional[str]) -> Optional[str]:
+    """Where a request goes: the saved endpoint, or the provider's own.
+
+    The two places that hand an SDK its endpoint — the translator factory and
+    `catalog.list_models` — call this; everything else, the key rules and the
+    catalog's rows included, keeps the *saved* `base_url`, `None` meaning the
+    provider's own.
+    """
+    return base_url if base_url is not None else spec.default_base_url
+
+
+def request_key(spec: ProviderSpec, api_key: Optional[str]) -> Optional[str]:
+    """The key a request carries: the saved one, or — for a server that takes
+    none — its placeholder. A keyed provider with no key gets `None`, never a
+    placeholder: that is how it falls back to Argos rather than failing."""
+    if api_key:
+        return api_key
+    return spec.placeholder_key if not spec.requires_key else None
+
+
 def provider(provider_id: str) -> ProviderSpec:
     """The spec for `provider_id`. `ValueError` for an id no provider has."""
     try:
@@ -297,5 +330,7 @@ def endpoint_ids() -> Tuple[str, ...]:
 
 def llm_ids_by_priority() -> Tuple[str, ...]:
     """The fallback order for "any LLM with a key"; see `ProviderSpec.priority`."""
-    ranked = [spec for spec in PROVIDERS if spec.priority is not None]
+    # `_BY_ID`, not `PROVIDERS`: the same entries, but the one table
+    # `provider()` reads, so every lookup sees the same spec.
+    ranked = [spec for spec in _BY_ID.values() if spec.priority is not None]
     return tuple(spec.id for spec in sorted(ranked, key=lambda spec: spec.priority))

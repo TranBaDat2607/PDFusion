@@ -13,17 +13,43 @@ is recorded and refused.
 
 from __future__ import annotations
 
+from dataclasses import replace
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 import pytest
 
 from desktop_pdf_translator.config import AppSettings, ModelRef
 from desktop_pdf_translator.config.manager import ConfigManager
-from desktop_pdf_translator.providers import catalog
+from desktop_pdf_translator.providers import catalog, registry
 from desktop_pdf_translator.providers.listing import ListedModel, Listing
 
 OLLAMA = "http://localhost:11434/v1"
 ATTACKER = "https://attacker.example/v1"
+
+
+def make_keyless(monkeypatch: pytest.MonkeyPatch, provider_id: str = "openai") -> None:
+    """Swap `provider_id`'s registry entry for a keyless local server, as one
+    would be registered for #88 (Ollama et al.): no key, never a chat
+    fallback (`priority`), and a placeholder key for an SDK that refuses to
+    build a client with none.
+
+    Only `registry._BY_ID` is patched — everything that matters looks a spec
+    up through `provider()` — so `PROVIDERS` iteration (`GET /providers`,
+    `test_provider_registry.py`'s parametrizations) still sees the original,
+    keyed entry.
+    """
+    spec = registry.provider(provider_id)
+    monkeypatch.setitem(
+        registry._BY_ID,
+        provider_id,
+        replace(
+            spec,
+            requires_key=False,
+            placeholder_key="unused",
+            env_prefix=None,
+            priority=None,
+        ),
+    )
 
 # What the fake answers with unless a test says otherwise: a chat model with
 # every field the record carries, two bare ones, and one the id filter hid.

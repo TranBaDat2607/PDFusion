@@ -12,7 +12,7 @@ from datetime import datetime
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from ..config import ModelRef, TranslationService, get_settings
-from ..providers.registry import llm_ids_by_priority
+from ..providers.registry import llm_ids_by_priority, provider
 from ..translators.base import (
     LANGUAGE_DISPLAY_NAMES,
     BaseTranslator,
@@ -26,10 +26,14 @@ from .vector_store import ChromaDBManager
 
 logger = logging.getLogger(__name__)
 
-# The services that can write an answer, in the order they are tried. Answer
-# synthesis needs an instruction-following model, so Argos (the default
-# translation provider) is never one of them.
-_LLM_SERVICES = tuple(TranslationService(p) for p in llm_ids_by_priority())
+def _fallback_services() -> Tuple[TranslationService, ...]:
+    """Chat's "any LLM with a key", in `ProviderSpec.priority` order. Answer
+    synthesis needs an instruction-following model, so Argos is never one of
+    them; nor is a keyless local server, which has no priority: chosen, it
+    answers, but unchosen it is never tried, since it may not be running (#88).
+    Read per question, from the registry as `provider()` sees it."""
+    return tuple(TranslationService(p) for p in llm_ids_by_priority())
+
 
 # The answer when retrieval finds nothing to answer from. No model is asked:
 # given no context, it would answer from its own knowledge, as if the document
@@ -126,10 +130,10 @@ class EnhancedRAGChain:
         """
         settings = get_settings()
         refs = [settings.rag.answer_model, settings.translation.model]
-        refs += [ModelRef(provider=s, model=settings.model_for(s)) for s in _LLM_SERVICES]
+        refs += [ModelRef(provider=s, model=settings.model_for(s)) for s in _fallback_services()]
         candidates: List[ModelRef] = []
         for ref in refs:
-            if ref is not None and ref.provider in _LLM_SERVICES and all(
+            if ref is not None and provider(ref.provider.value).is_llm and all(
                 ref.provider != c.provider for c in candidates
             ):
                 candidates.append(ref)

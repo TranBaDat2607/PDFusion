@@ -130,9 +130,11 @@ def resolve_probe_target(
     """Which key goes to which endpoint: `(api_key, base_url, is_saved_pair)`.
 
     A saved key is only ever sent to the endpoint it was saved for — the rule
-    `PUT /config` keeps (#32). `base_url` `None` is the saved endpoint and
-    `""` the provider's own; naming another one needs the key typed alongside
-    it, or this is a 422. `api_key` is `None` when there is nothing to send.
+    `PUT /providers/{id}` keeps (#32). `base_url` `None` is the saved endpoint
+    and `""` the provider's own; naming another one needs the key typed
+    alongside it, or this is a 422. `api_key` is `None` when there is nothing
+    to send. A keyless provider has no key to guard, so any endpoint may be
+    checked, and a key typed for it is a 422 (#88).
     """
     saved_base_url = getattr(saved, "base_url", None)
     if not spec.takes_endpoint:
@@ -143,6 +145,10 @@ def resolve_probe_target(
         base_url = typed_base_url or None
     same_endpoint = base_url == saved_base_url
 
+    if not spec.requires_key:
+        if typed_key:
+            raise HTTPException(status_code=422, detail=f"{spec.label} takes no API key.")
+        return None, base_url, same_endpoint
     if typed_key:
         return typed_key, base_url, same_endpoint and typed_key == saved.api_key
     if not same_endpoint:
@@ -205,7 +211,7 @@ async def verify(
     api_key, base_url, saved_pair = resolve_probe_target(
         spec, _saved(spec.id), typed_key, typed_base_url
     )
-    if api_key is None:
+    if api_key is None and spec.requires_key:
         if get_config_manager().has_unreadable_key(spec.id):
             return VerifyResponse(
                 valid=False,
@@ -258,7 +264,7 @@ async def catalog_for(service: TranslationService, refresh: bool) -> ModelCatalo
     local server that isn't up yet is ordinary.
     """
     spec = provider(service.value)
-    if not spec.requires_key:
+    if spec.lister is None:
         return ModelCatalogResponse(
             models=[ModelRecord(id=m, source="suggested") for m in spec.suggested_models]
         )
@@ -267,7 +273,9 @@ async def catalog_for(service: TranslationService, refresh: bool) -> ModelCatalo
     saved_model = get_settings().model_for(spec.id)
     base_url = saved.base_url
     fallback = _fallback_records(spec, saved_model, custom_endpoint=base_url is not None)
-    if not saved.api_key:
+    # A keyless server lists with no key (`catalog.list_models` hands its SDK
+    # the placeholder); a keyed provider needs its own.
+    if spec.requires_key and not saved.api_key:
         unreadable = get_config_manager().has_unreadable_key(spec.id)
         return ModelCatalogResponse(
             models=fallback,
@@ -420,7 +428,9 @@ async def save_settings(
 async def _provider_info(spec: ProviderSpec, settings: AppSettings) -> ProviderInfo:
     saved = settings.providers[spec.id]
     has_key = bool(saved.api_key) if spec.requires_key else False
-    entry = await catalog_call("get", spec.id, saved.base_url) if has_key else None
+    # A keyless server's row is filled by listing it, like a key's.
+    listable = has_key or (not spec.requires_key and spec.lister is not None)
+    entry = await catalog_call("get", spec.id, saved.base_url) if listable else None
     if spec.requires_key and get_config_manager().has_unreadable_key(spec.id):
         key_state: KeyState = "unreadable"
     elif entry is not None:
@@ -441,6 +451,7 @@ async def _provider_info(spec: ProviderSpec, settings: AppSettings) -> ProviderI
         suggested_models=list(spec.suggested_models),
         model_is_fixed=spec.model_is_fixed,
         signup_url=spec.signup_url,
+        is_llm=spec.is_llm,
         priority=spec.priority,
         has_key=has_key,
         base_url=saved.base_url,
@@ -461,7 +472,7 @@ async def list_providers() -> ProvidersResponse:
     """Every provider, with where its key stands. Reads only; never lists."""
     settings = get_settings()
     return ProvidersResponse(
-        providers=[await _provider_info(spec, settings) for spec in PROVIDERS]
+        providers=[await _provider_info(provider(spec.id), settings) for spec in PROVIDERS]
     )
 
 

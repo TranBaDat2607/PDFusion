@@ -43,6 +43,7 @@ from provider_fakes import (
     install_full_guard,
     install_lister,
     listed,
+    make_keyless,
     seed,
 )
 
@@ -814,6 +815,125 @@ def test_verifying_anything_else_leaves_the_catalog_alone(
 # ---------------------------------------------------------------------------
 # PUT /config's promotion, seen from here
 # ---------------------------------------------------------------------------
+
+
+# ---------------------------------------------------------------------------
+# a keyless local server (#88) — swap "openai" for one with `make_keyless`
+# ---------------------------------------------------------------------------
+
+
+def test_verify_lists_a_keyless_provider_even_with_no_key_saved(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch, lister: FakeLister
+):
+    make_keyless(monkeypatch, "openai")
+
+    response = verify(client, "openai", {})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert lister.calls == [("openai", None, None)]
+    assert body["valid"] is True
+
+
+def test_verify_keyless_at_a_new_endpoint_needs_no_key(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch, lister: FakeLister
+):
+    """Naming a different endpoint ordinarily needs the key typed alongside it
+    (#32) — but there is no key for a keyless provider to protect."""
+    make_keyless(monkeypatch, "openai")
+
+    response = verify(client, "openai", {"base_url": OLLAMA})
+
+    assert response.status_code == 200
+    assert lister.calls == [("openai", None, OLLAMA)]
+
+
+def test_verify_keyless_rejects_a_typed_key(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch, lister: FakeLister
+):
+    make_keyless(monkeypatch, "openai")
+
+    response = verify(client, "openai", {"api_key": "sk-anything"})
+
+    assert response.status_code == 422
+    assert lister.calls == []
+
+
+def test_models_lists_a_keyless_provider_with_no_key(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch, lister: FakeLister
+):
+    make_keyless(monkeypatch, "openai")
+
+    body = models(client, "openai").json()
+
+    assert lister.calls == [("openai", None, None)]
+    assert ids_and_sources(body["models"]) == listed(DEFAULT_LISTING.models)
+
+
+def test_models_of_a_keyless_provider_report_a_listing_failure_as_an_error(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch, lister: FakeLister
+):
+    make_keyless(monkeypatch, "openai")
+    lister.result = catalog.ListingFailed("Connection refused")
+
+    response = models(client, "openai")
+
+    assert response.status_code == 200
+    assert response.json()["error"] == "Connection refused"
+
+
+def test_providers_row_for_a_keyless_provider(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+):
+    make_keyless(monkeypatch, "openai")
+
+    entry = providers(client)["openai"]
+
+    assert entry["requires_key"] is False
+    assert entry["has_key"] is False
+    assert entry["key_state"] == "unverified"
+
+
+def test_a_keyless_provider_becomes_valid_after_listing_its_models(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+):
+    make_keyless(monkeypatch, "openai")
+
+    assert models(client, "openai").status_code == 200
+
+    assert providers(client)["openai"]["key_state"] == "valid"
+
+
+def test_put_keyless_provider_endpoint_needs_no_key(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+):
+    make_keyless(monkeypatch, "openai")
+
+    response = client.put("/providers/openai", json={"base_url": OLLAMA}, headers=AUTH)
+
+    assert response.status_code == 200
+
+
+def test_put_keyless_provider_refuses_a_typed_key(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+):
+    make_keyless(monkeypatch, "openai")
+
+    response = client.put("/providers/openai", json={"api_key": "x"}, headers=AUTH)
+
+    assert response.status_code == 422
+
+
+def test_verify_of_a_keyed_provider_with_no_key_saved_still_does_not_list(
+    client: TestClient, lister: FakeLister
+):
+    """The keyless path must not loosen what a keyed provider does."""
+    response = verify(client, "anthropic", {})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert lister.calls == []
+    assert body["valid"] is False
 
 
 # ---------------------------------------------------------------------------

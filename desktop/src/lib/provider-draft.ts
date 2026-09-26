@@ -120,6 +120,8 @@ export function providerUpdate(draft: ProviderDraft, provider: ProviderInfo): Pr
  *  switching them needs no check; and a cleared key leaves nothing to check
  *  with, nor any key to send to a new endpoint. */
 export function needsVerify(draft: ProviderDraft, provider: ProviderInfo): boolean {
+  // A keyless server has no key to type; only a new endpoint is news.
+  if (!provider.requires_key) return endpointChanged(draft, provider);
   if (draft.clearKey) return false;
   return typedKey(draft) !== "" || endpointChanged(draft, provider);
 }
@@ -127,18 +129,20 @@ export function needsVerify(draft: ProviderDraft, provider: ProviderInfo): boole
 /**
  * The `POST /providers/{id}/verify` body for a draft: the typed key when there
  * is one, otherwise none, and the sidecar uses the saved key. `null` when
- * there is no key to check with.
+ * there is no key to check with — never for a keyless server.
  */
 export function verifyRequest(
   draft: ProviderDraft,
   provider: ProviderInfo,
 ): VerifyRequest | null {
+  const endpoint = provider.takes_endpoint
+    ? { base_url: normalizeEndpoint(draft.baseUrl) }
+    : {};
+  // A keyless server is always checkable: listing it needs no key (#88).
+  if (!provider.requires_key) return endpoint;
   const apiKey = draft.apiKey.trim();
   if (draft.clearKey || (!apiKey && !hasSavedKey(provider))) return null;
-  return {
-    ...(apiKey ? { api_key: apiKey } : {}),
-    ...(provider.takes_endpoint ? { base_url: normalizeEndpoint(draft.baseUrl) } : {}),
-  };
+  return { ...(apiKey ? { api_key: apiKey } : {}), ...endpoint };
 }
 
 /** Switch a model on (last in the list) or off, keeping the others' order:
@@ -231,6 +235,11 @@ export function timeAgo(iso: string, now: number): string {
   return days === 1 ? "1 day ago" : `${days} days ago`;
 }
 
+function countModels(catalog: ModelCatalog): string {
+  const count = catalog.models.filter((record) => record.source === "listed").length;
+  return `${count} ${count === 1 ? "model" : "models"}`;
+}
+
 export interface StatusLine {
   tone: "ok" | "error" | "muted";
   text: string;
@@ -242,7 +251,12 @@ export function statusLine(
   catalog: ModelCatalog | undefined,
   now: number,
 ): StatusLine {
-  if (!provider.requires_key) return { tone: "ok", text: "No key needed" };
+  if (!provider.requires_key) {
+    // A keyless server's listing says whether it is up (#88).
+    if (catalog?.error) return { tone: "error", text: catalog.error };
+    if (catalog) return { tone: "ok", text: countModels(catalog) };
+    return { tone: "ok", text: "No key needed" };
+  }
   if (provider.key_state === "unreadable") {
     return {
       tone: "error",
@@ -259,8 +273,7 @@ export function statusLine(
       ? ` · checked ${timeAgo(provider.last_verified_at, now)}`
       : "";
     if (!catalog) return { tone: "ok", text: `Verified${checked}` };
-    const count = catalog.models.filter((record) => record.source === "listed").length;
-    return { tone: "ok", text: `${count} ${count === 1 ? "model" : "models"}${checked}` };
+    return { tone: "ok", text: `${countModels(catalog)}${checked}` };
   }
   return { tone: "muted", text: "Not verified" };
 }

@@ -1825,6 +1825,10 @@
             "title": "Id",
             "type": "string"
           },
+          "is_llm": {
+            "title": "Is Llm",
+            "type": "boolean"
+          },
           "key_state": {
             "enum": [
               "unverified",
@@ -1950,6 +1954,7 @@
           "suggested_models",
           "model_is_fixed",
           "signup_url",
+          "is_llm",
           "priority",
           "has_key",
           "base_url",

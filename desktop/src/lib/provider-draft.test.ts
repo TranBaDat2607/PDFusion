@@ -38,6 +38,7 @@ function provider(overrides: Partial<ProviderInfo> = {}): ProviderInfo {
     endpoint_hint: null,
     has_key: false,
     id: "openai",
+    is_llm: true,
     key_state: "unverified",
     label: "OpenAI",
     last_verified_at: null,
@@ -319,6 +320,16 @@ describe("needsVerify", () => {
     const p = provider({ base_url: OLLAMA, has_key: true });
     expect(needsVerify(draftFrom(p), p)).toBe(false);
   });
+
+  it("is true for a keyless provider when only the endpoint changed", () => {
+    const p = provider({ requires_key: false, base_url: null, takes_endpoint: true });
+    expect(needsVerify(draft({ baseUrl: OLLAMA }), p)).toBe(true);
+  });
+
+  it("is false for a keyless provider with the endpoint unchanged, even with something typed in the key field", () => {
+    const p = provider({ requires_key: false, base_url: OLLAMA, takes_endpoint: true });
+    expect(needsVerify(draft({ apiKey: "unused-value", baseUrl: OLLAMA }), p)).toBe(false);
+  });
 });
 
 describe("verifyRequest", () => {
@@ -372,6 +383,33 @@ describe("verifyRequest", () => {
       api_key: "sk-new",
       base_url: "",
     });
+  });
+
+  it("is never null for a keyless provider, even with nothing typed and no saved key", () => {
+    const p = provider({
+      requires_key: false,
+      has_key: false,
+      key_state: "unverified",
+      takes_endpoint: true,
+      base_url: null,
+    });
+    expect(verifyRequest(draft(), p)).toEqual({ base_url: "" });
+  });
+
+  it("omits base_url for a keyless provider that takes no endpoint of its own", () => {
+    const p = provider({
+      requires_key: false,
+      has_key: false,
+      key_state: "unverified",
+      takes_endpoint: false,
+    });
+    expect(verifyRequest(draft(), p)).toEqual({});
+  });
+
+  it("never carries api_key for a keyless provider, even with one typed", () => {
+    const p = provider({ requires_key: false, has_key: false, takes_endpoint: false });
+    const req = verifyRequest(draft({ apiKey: "unused-typed-key" }), p);
+    expect(req?.api_key).toBeUndefined();
   });
 });
 
@@ -573,6 +611,18 @@ describe("statusLine", () => {
   it("prefers 'no key needed' over an unreadable key state", () => {
     const p = provider({ requires_key: false, has_key: false, key_state: "unreadable" });
     expect(statusLine(p, undefined, now)).toEqual({ tone: "ok", text: "No key needed" });
+  });
+
+  it("surfaces a catalog error for a keyless provider instead of 'No key needed'", () => {
+    const p = provider({ requires_key: false, has_key: false, key_state: "unverified" });
+    const c = catalog({ error: "connection refused" });
+    expect(statusLine(p, c, now)).toEqual({ tone: "error", text: "connection refused" });
+  });
+
+  it("counts listed models for a keyless provider with a catalog and no error", () => {
+    const p = provider({ requires_key: false, has_key: false, key_state: "unverified" });
+    const c = catalog({ models: [{ id: "llama3.2", source: "listed" }] });
+    expect(statusLine(p, c, now)).toEqual({ tone: "ok", text: "1 model" });
   });
 
   it("flags an unreadable saved key as an error", () => {

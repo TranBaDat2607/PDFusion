@@ -420,6 +420,8 @@ class ProviderInfo(BaseModel):
     suggested_models: List[str]
     model_is_fixed: bool
     signup_url: Optional[str] = None
+    # It writes text from a prompt, so it can answer in chat (Argos can't).
+    is_llm: bool
     # Its place in chat's "any LLM with a key" fallback, lowest first; `None`
     # for one that never answers in chat. The frontend's copy of that order
     # (`lib/model-choice.ts:chatModel`) reads it here.

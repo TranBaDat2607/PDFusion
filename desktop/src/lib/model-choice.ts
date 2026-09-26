@@ -29,6 +29,7 @@ export type PickerProvider = Pick<
   | "model"
   | "enabled_models"
   | "model_is_fixed"
+  | "is_llm"
   | "priority"
 >;
 
@@ -54,6 +55,8 @@ export interface ModelGroup {
   needsKey: boolean;
   /** Its model is a fixed identifier (Argos): nothing to choose. */
   fixed: boolean;
+  /** Writes text from a prompt, so it can answer in chat. */
+  llm: boolean;
   /** The server it was pointed at in place of the provider's own. */
   endpoint: string | null;
   models: ModelEntry[];
@@ -87,6 +90,7 @@ export function modelGroups(
       usable: canRun(provider),
       needsKey: provider.requires_key && !provider.has_key,
       fixed: provider.model_is_fixed,
+      llm: provider.is_llm,
       endpoint,
       models: offeredModels(provider, config).map((model) => ({
         model,
@@ -177,8 +181,12 @@ export function chatModel(
   config: ChoiceConfig,
   providers: readonly PickerProvider[],
 ): AnsweringModel | null {
-  const llms = providers.filter((p) => p.priority !== null && p.priority !== undefined);
-  const byPriority = [...llms].sort((a, b) => (a.priority ?? 0) - (b.priority ?? 0));
+  // Any LLM answers when chosen; only one with a priority is a fallback, so a
+  // keyless local server that may not be running is never tried unasked (#88).
+  const llms = providers.filter((p) => p.is_llm);
+  const byPriority = llms
+    .filter((p) => p.priority !== null && p.priority !== undefined)
+    .sort((a, b) => (a.priority ?? 0) - (b.priority ?? 0));
   const candidates: ModelRef[] = [
     ...(config.rag.answer_model ? [config.rag.answer_model] : []),
     config.translation.model,

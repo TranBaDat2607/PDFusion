@@ -35,6 +35,7 @@ function providers(overrides: Partial<Record<string, Overrides>> = {}): PickerPr
       model: "gpt-4.1",
       enabled_models: [],
       model_is_fixed: false,
+      is_llm: true,
       priority: 0,
     },
     {
@@ -49,6 +50,7 @@ function providers(overrides: Partial<Record<string, Overrides>> = {}): PickerPr
       model: "gemini-3.8-flash",
       enabled_models: [],
       model_is_fixed: false,
+      is_llm: true,
       priority: 2,
     },
     {
@@ -63,6 +65,7 @@ function providers(overrides: Partial<Record<string, Overrides>> = {}): PickerPr
       model: "claude-sonnet-4-6",
       enabled_models: [],
       model_is_fixed: false,
+      is_llm: true,
       priority: 1,
     },
     {
@@ -77,6 +80,7 @@ function providers(overrides: Partial<Record<string, Overrides>> = {}): PickerPr
       model: "argostranslate",
       enabled_models: [],
       model_is_fixed: true,
+      is_llm: false,
       priority: null,
     },
   ];
@@ -321,6 +325,53 @@ describe("chatModel", () => {
 
   it("is null with no key anywhere", () => {
     expect(chatModel(config("openai", "gpt-4.1"), providers())).toBeNull();
+  });
+
+  it("answers with a keyless LLM when it is the chat answer model (#88)", () => {
+    const list = providers({
+      openai: { requires_key: false, has_key: false, priority: null },
+    });
+    const c = config("argos", "argostranslate", { provider: "openai", model: "llama3.2" });
+
+    expect(chatModel(c, list)).toEqual({
+      provider: "openai",
+      label: "OpenAI",
+      model: "llama3.2",
+    });
+  });
+
+  it("answers with a keyless LLM when it is the translation model (#88)", () => {
+    const list = providers({
+      openai: { requires_key: false, has_key: false, priority: null },
+    });
+
+    expect(chatModel(config("openai", "llama3.2"), list)).toEqual({
+      provider: "openai",
+      label: "OpenAI",
+      model: "llama3.2",
+    });
+  });
+
+  it("never falls back to a keyless LLM by priority (#88)", () => {
+    // Not chosen anywhere — translation stays on Argos, and no provider has a
+    // key. A keyless local server may not even be running, unlike a keyed
+    // provider's "any LLM with a key" fallback.
+    const list = providers({
+      openai: { requires_key: false, has_key: false, priority: null },
+    });
+
+    expect(chatModel(ARGOS, list)).toBeNull();
+  });
+
+  it("never answers with the offline engine even when chosen as the answer model", () => {
+    const c = config("openai", "gpt-4.1", { provider: "argos", model: "argostranslate" });
+    const list = providers({ openai: { has_key: true } });
+
+    expect(chatModel(c, list)).toEqual({
+      provider: "openai",
+      label: "OpenAI",
+      model: "gpt-4.1",
+    });
   });
 });
 

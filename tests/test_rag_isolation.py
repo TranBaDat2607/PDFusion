@@ -39,6 +39,7 @@ from desktop_pdf_translator.rag.vector_store import ChromaDBManager
 from desktop_pdf_translator.storage.records import IndexRecord, RecordsStore
 
 from conftest import MINIMAL_PDF
+from provider_fakes import make_keyless
 
 QUESTION = "What does the experiment measure?"
 ALPHA = "The experiment measures the thermal conductivity of alpha samples."
@@ -842,6 +843,43 @@ def test_the_translation_model_answers_before_a_higher_priority_provider(
     assert model is not None
     assert model.service == TranslationService.ANTHROPIC
     assert built == [(TranslationService.ANTHROPIC, "claude-opus-5")]
+
+
+def test_a_keyless_provider_answers_when_chosen_as_the_answer_model(
+    chain: EnhancedRAGChain, monkeypatch: pytest.MonkeyPatch
+):
+    """A local server (Ollama, #88) needs no key; chat's own choice must still
+    reach it even though nothing is saved for it."""
+    make_keyless(monkeypatch, "openai")
+    settings = _v2_settings(
+        rag={"answer_model": {"provider": "openai", "model": "llama3.2"}},
+    )
+    monkeypatch.setattr(rag_chain_module, "get_settings", lambda: settings)
+    built = _record_builds(monkeypatch)
+
+    model = chain._answer_model()
+
+    assert model is not None
+    assert model.service == TranslationService.OPENAI
+    assert built == [(TranslationService.OPENAI, "llama3.2")]
+
+
+def test_a_keyless_provider_is_never_the_any_llm_with_a_key_fallback(
+    chain: EnhancedRAGChain, monkeypatch: pytest.MonkeyPatch
+):
+    """Unlike a keyed provider, a keyless local server may not even be
+    running, so it must never be reached for by the "any LLM with a key"
+    fallback — only by naming it outright as `rag.answer_model` or the
+    translation model."""
+    make_keyless(monkeypatch, "openai")
+    settings = _v2_settings()  # translation on Argos, no answer model, no keys
+    monkeypatch.setattr(rag_chain_module, "get_settings", lambda: settings)
+    built = _record_builds(monkeypatch)
+
+    model = chain._answer_model()
+
+    assert model is None
+    assert built == []
 
 
 # ---------------------------------------------------------------------------

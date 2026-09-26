@@ -1426,6 +1426,8 @@ export interface components {
              * @description A provider's id, as GET /providers lists them
              */
             id: string;
+            /** Is Llm */
+            is_llm: boolean;
             /**
              * Key State
              * @enum {string}

@@ -11,11 +11,13 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
 
 from desktop_pdf_translator.config import AppSettings, TranslationService
+from desktop_pdf_translator.providers import registry
 from desktop_pdf_translator.providers.registry import (
     PROVIDERS,
     llm_ids_by_priority,
@@ -106,6 +108,83 @@ def test_has_api_key_takes_a_member_or_its_value(service):
 def test_an_unknown_id_is_a_value_error():
     with pytest.raises(ValueError, match="Unknown provider"):
         provider("nope")
+
+
+# ---------------------------------------------------------------------------
+# endpoint_for / request_key (#88)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "base_url, expected",
+    [
+        ("https://openrouter.ai/api/v1", "https://openrouter.ai/api/v1"),
+        (None, "https://api.openai.com/v1"),
+    ],
+    ids=["explicit_base_url_wins", "falls_back_to_the_specs_default"],
+)
+def test_endpoint_for(base_url, expected):
+    assert registry.endpoint_for(provider("openai"), base_url) == expected
+
+
+def test_endpoint_for_has_nothing_to_fall_back_to_for_gemini_or_argos():
+    """Gemini and Argos have no `default_base_url`: `endpoint_for` must not
+    invent one."""
+    assert registry.endpoint_for(provider("gemini"), None) is None
+    assert registry.endpoint_for(provider("argos"), None) is None
+
+
+@pytest.mark.parametrize("typed", ["sk-x", "  sk-with-surrounding-space  "])
+def test_request_key_returns_the_typed_key_when_present(typed):
+    assert registry.request_key(provider("openai"), typed) == typed
+
+
+@pytest.mark.parametrize("typed", [None, ""])
+def test_request_key_falls_back_to_the_placeholder_for_a_keyless_provider(typed):
+    keyless = replace(provider("openai"), requires_key=False, placeholder_key="unused")
+
+    assert registry.request_key(keyless, typed) == "unused"
+
+
+def test_request_key_never_gives_a_keyed_provider_a_placeholder():
+    """A keyless server's placeholder must never leak onto a keyed provider,
+    even if one somehow had `placeholder_key` set."""
+    keyed_with_a_placeholder = replace(provider("openai"), placeholder_key="unused")
+
+    assert registry.request_key(keyed_with_a_placeholder, None) is None
+    assert registry.request_key(keyed_with_a_placeholder, "") is None
+
+
+# ---------------------------------------------------------------------------
+# Registry contract for the two new kinds of provider (#88)
+#
+# No provider registered today is a keyless LLM or borrows another protocol,
+# so these parametrizations currently hold vacuously for every entry in
+# `PROVIDERS` — they exist to catch the day one of those two shapes is added
+# without the field its shape requires.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("spec", PROVIDERS, ids=lambda spec: spec.id)
+def test_every_llm_has_a_lister(spec):
+    if spec.is_llm:
+        assert spec.lister is not None
+
+
+@pytest.mark.parametrize("spec", PROVIDERS, ids=lambda spec: spec.id)
+def test_a_keyless_llm_is_never_a_chat_fallback_and_has_a_placeholder(spec):
+    """A local server may not be running, so it must never be chosen as "any
+    LLM with a key" (`priority`); and its SDK needs something to send as the
+    key even though the user typed none."""
+    if spec.is_llm and not spec.requires_key:
+        assert spec.priority is None
+        assert spec.placeholder_key is not None
+
+
+@pytest.mark.parametrize("spec", PROVIDERS, ids=lambda spec: spec.id)
+def test_a_provider_that_borrows_another_protocol_has_a_default_base_url(spec):
+    if spec.protocol != spec.id:
+        assert spec.default_base_url is not None
 
 
 def test_importing_the_registry_loads_no_sdk_and_no_pydantic():

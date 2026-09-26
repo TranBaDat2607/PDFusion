@@ -29,6 +29,8 @@ from desktop_pdf_translator.providers.catalog import (
 )
 from desktop_pdf_translator.providers.listing import ListedModel, Listing
 
+from provider_fakes import make_keyless
+
 # An arbitrary fixed instant (2026, Unix ms): tests never read the clock.
 T0 = 1_780_000_000_000
 
@@ -321,6 +323,33 @@ def test_list_models_asks_the_providers_lister(monkeypatch: pytest.MonkeyPatch):
 
     assert listing == OTHER_LISTING
     assert calls == [("ollama", LOCAL_BASE_URL)]
+
+
+def test_list_models_resolves_the_endpoint_through_the_registry(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """`list_models` must ask the lister at the registry's own endpoint when
+    none was saved — not `None`, which some SDKs read differently than their
+    documented default (#88)."""
+    calls = _patch_openai_lister(monkeypatch, lambda: OTHER_LISTING)
+
+    asyncio.run(catalog_module.list_models("openai", "sk-x", None))
+
+    assert calls == [("sk-x", "https://api.openai.com/v1")]
+
+
+def test_list_models_sends_a_keyless_providers_placeholder_key(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """A keyless local server (Ollama, #88) is asked with its placeholder key,
+    never `None` — the SDK a lister builds on may refuse to construct a client
+    with no key at all."""
+    make_keyless(monkeypatch, "openai")
+    calls = _patch_openai_lister(monkeypatch, lambda: OTHER_LISTING)
+
+    asyncio.run(catalog_module.list_models("openai", None, LOCAL_BASE_URL))
+
+    assert calls == [("unused", LOCAL_BASE_URL)]
 
 
 @pytest.mark.parametrize(

@@ -6,7 +6,7 @@ import logging
 from typing import Dict, Optional
 
 from ..config import TranslationService, get_settings
-from ..providers.registry import provider
+from ..providers.registry import endpoint_for, provider, request_key
 from .base import BaseTranslator
 
 
@@ -79,6 +79,11 @@ class TranslatorFactory:
         (`AppSettings.model_for`). A caller naming a model of its own — chat's
         `answer_model` — passes `model=`, which wins."""
         provider_id = TranslationService(service).value
+        spec = provider(provider_id)
         config = settings.providers[provider_id].model_dump(exclude={"enabled_models"})
         config["model"] = settings.model_for(provider_id)
+        # What the SDK is handed: the provider's own endpoint when none is
+        # saved, and a keyless server's placeholder key (#88).
+        config["base_url"] = endpoint_for(spec, config.get("base_url"))
+        config["api_key"] = request_key(spec, config.get("api_key"))
         return config

@@ -129,7 +129,7 @@ function CardHeader({ provider }: { provider: ProviderInfo }) {
           rel="noopener noreferrer"
           className="flex shrink-0 items-center gap-1 text-xs text-primary hover:underline"
         >
-          Get a key
+          {provider.requires_key ? "Get a key" : "Get it"}
           <ExternalLink className="h-3 w-3" />
         </a>
       )}
@@ -163,7 +163,9 @@ function ProviderCard({ provider, focused, focusProvider }: ProviderCardProps) {
   const [modelsOpen, setModelsOpen] = useState(false);
   const [endpointOpen, setEndpointOpen] = useState(!!provider.base_url);
 
-  const catalog = useProviderModels(provider, modelsOpen && hasSavedKey(provider));
+  // A keyless server lists with no key (#88); a keyed provider needs its own.
+  const listable = !provider.requires_key || hasSavedKey(provider);
+  const catalog = useProviderModels(provider, modelsOpen && listable);
   // A listing of the saved key moves its state on the sidecar (`valid`,
   // `invalid`); refetch the providers so the status line follows.
   useEffect(() => {
@@ -399,7 +401,7 @@ function ProviderCard({ provider, focused, focusProvider }: ProviderCardProps) {
           <ModelList
             listing={listing}
             loading={catalog.isFetching && !listing}
-            canRefresh={savedKey && !typedListing}
+            canRefresh={listable && !typedListing}
             refreshing={catalog.isFetching}
             onRefresh={refresh}
             draft={draft}
