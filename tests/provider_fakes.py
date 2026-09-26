@@ -17,7 +17,7 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 
 import pytest
 
-from desktop_pdf_translator.config import AppSettings
+from desktop_pdf_translator.config import AppSettings, ModelRef
 from desktop_pdf_translator.config.manager import ConfigManager
 from desktop_pdf_translator.providers import catalog
 from desktop_pdf_translator.providers.listing import ListedModel, Listing
@@ -128,13 +128,29 @@ def seed(
 ) -> None:
     """Save settings straight through the manager, as a previous session would
     have left them — without `PUT /config`, whose promotion lists and whose
-    save invalidates the catalog."""
+    save invalidates the catalog.
+
+    Each section is a provider's settings, plus `model`: the model that
+    provider runs (`AppSettings.model_for`). `preferred_service` makes that
+    provider's model the translation model."""
     data = manager.settings.model_dump()
+    models = {}
     for service, fields in sections.items():
-        data[service].update(fields)
-    if preferred_service is not None:
-        data["translation"]["preferred_service"] = preferred_service
+        fields = dict(fields)
+        if "model" in fields:
+            models[service] = fields.pop("model")
+        data["providers"][service].update(fields)
     settings = AppSettings(**data)
+    for service, model in models.items():
+        if settings.translation.model.provider.value == service:
+            settings.translate_with(ModelRef(provider=service, model=model))
+        else:
+            settings.remember_model(service, model)
+    if preferred_service is not None:
+        settings.translate_with(
+            ModelRef(provider=preferred_service, model=settings.model_for(preferred_service))
+        )
+    settings = AppSettings(**settings.model_dump())
     assert manager.save_settings(settings)
     manager._settings = settings
 

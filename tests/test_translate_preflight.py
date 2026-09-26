@@ -23,7 +23,8 @@ from fastapi.testclient import TestClient
 
 from desktop_pdf_translator.api import auth
 from desktop_pdf_translator.api.routes import translation as translation_routes
-from desktop_pdf_translator.config import LanguageCode, TranslationService
+from desktop_pdf_translator.config import LanguageCode, ModelRef, TranslationService
+from desktop_pdf_translator.providers.registry import provider
 from desktop_pdf_translator.engine_assets import MISSING_ASSETS_MESSAGE
 
 from conftest import MINIMAL_PDF
@@ -35,7 +36,7 @@ class _FakeTranslationSettings:
     def __init__(self, preferred: TranslationService):
         self.default_source_lang = LanguageCode.ENGLISH
         self.default_target_lang = LanguageCode.VIETNAMESE
-        self.preferred_service = preferred
+        self.model = ModelRef(provider=preferred, model=provider(preferred.value).default_model)
         self.max_pages = 50
         self.max_file_size_mb = 50.0
 

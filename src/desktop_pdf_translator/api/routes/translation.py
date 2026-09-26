@@ -196,7 +196,7 @@ async def start_translation(payload: TranslateRequest) -> JobAccepted:
         settings, payload.source_lang, payload.target_lang
     )
     effective_service = resolve_effective_service(
-        settings, payload.service or settings.translation.preferred_service
+        settings, payload.service or settings.translation.model.provider
     )
     reason = unsupported_reason(effective_service, source_lang, target_lang)
     if reason:
@@ -372,7 +372,7 @@ def _warm_translator(
 async def prewarm(payload: PrewarmRequest) -> PrewarmResponse:
     settings = get_settings()
     service = resolve_effective_service(
-        settings, payload.service or settings.translation.preferred_service
+        settings, payload.service or settings.translation.model.provider
     )
     # Unspecified languages mean "whatever is configured" — warming auto→vi
     # while the toolbar says Japanese warms the wrong backend.

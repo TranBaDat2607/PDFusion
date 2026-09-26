@@ -116,7 +116,7 @@ def unreadable_key(manager: ConfigManager) -> str:
     stored = KEYSTORE_PREFIX + "c3RvcmVkLWNpcGhlcnRleHQ="
     manager.config_file.write_text(f'[openai]\napi_key = "{stored}"\n', encoding="utf-8")
     manager._settings = None
-    assert manager.settings.openai.api_key is None
+    assert manager.settings.providers["openai"].api_key is None
     assert manager.has_unreadable_key("openai")
     return stored
 

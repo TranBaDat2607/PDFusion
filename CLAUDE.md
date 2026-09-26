@@ -109,7 +109,7 @@ singleton with no job id, so it is polled via `GET /setup/status`.
 | `desktop/src/hooks/` | `useSidecar`, `useConfig`, `useTranslation`, `useRagIndex`, `useRagAsk`, `useChatHistory`, `useExportTranslated`, `useTranslationEstimate` |
 | `api/server.py`, `auth.py`, `jobs.py`, `routes/*`, `schemas.py`, `sse_schemas.py` | FastAPI app, bearer auth, job registry, routes, wire models |
 | `engine_assets.py` | Single source of truth for "the offline engine is installed" |
-| `config/` | `ConfigManager` + Pydantic `AppSettings` |
+| `config/` | `ConfigManager` + Pydantic `AppSettings` (`providers` map, `ModelRef`s) |
 | `providers/` | `registry.py` — one `ProviderSpec` per provider, the source of every per-provider rule (stdlib-only); `listing.py` — one model lister per protocol; `catalog.py` — the model catalog cache and `list_models` |
 | `processors/` | `PDFProcessor` (BabelDOC), `page_selection.py`, `pdf_pages.py`, `pdf_cache.py`, `doc_layout_cache.py` |
 | `translators/` | `BaseTranslator` + OpenAI/Gemini/Anthropic/Argos, `factory.py`, `capabilities.py`, `rate_limiter.py`, `translation_cache.py`, `param_compat.py`, `usage_estimate.py` |
@@ -125,7 +125,8 @@ than re-deriving from the routes.
 
 `/health` · `/auth/ping` · `GET|PUT /config` · `POST /config/validate` ·
 `GET /config/options` · `GET /config/models/{service}` · `GET|DELETE /config/cache` ·
-`GET /providers` · `GET /providers/{id}/models` · `POST /providers/{id}/verify` ·
+`GET /providers` · `PUT /providers/{id}` · `DELETE /providers/{id}/key` ·
+`GET /providers/{id}/models` · `POST /providers/{id}/verify` ·
 `GET /setup/status` · `POST /setup/engine` ·
 `POST /translate` + `/translate/{id}/events` + `/cancel` + `POST /translate/estimate` ·
 `POST /rag/index` + `/events` · `POST /rag/ask` + `/events` ·
@@ -175,13 +176,22 @@ a test. They are the things most easily undone by "simplifying".
   equivalent off Windows** — a `SIGKILL` of the shell orphans the sidecar.
 
 **Config and keys**
+- **Config v2** (#85): keys and parameters under `[providers.<id>]`, one
+  `ProviderSettings` class for all; the models chosen are
+  `translation.model` / `rag.answer_model` (`ModelRef`). A provider's own
+  model is `AppSettings.model_for` — `enabled_models[0]` unless it translates.
+  A pre-#85 file converts as it loads (`ConfigManager._convert_v1`) and is
+  rewritten by the next save. Per-provider rules are field validators, so a
+  bad value drops one field, never a provider's table or the whole map.
 - A saved API key is only ever sent to the endpoint it was saved for: `PUT
-  /config` 422s an endpoint change without `api_key` in the same body.
+  /config` and `PUT /providers/{id}` 422 an endpoint change without `api_key`
+  in the same body.
 - The keystore holds **one master key**, and the decrypt path never mints a
   replacement. Keys it could not read are remembered and written back verbatim,
   so a locked keyring doesn't erase every provider key on the next save.
 - `config.toml` is written to a temp file and `os.replace`d; the `.bak` always
-  has the keys stripped.
+  has the keys stripped — from both shapes, since the first save after a
+  conversion backs up a pre-#85 file.
 - **Verifying a key and discovering models never generate text** (#84): Save,
   `/config/validate`, `/providers/{id}/verify` and the Argos → LLM promotion
   all *list* the key's models; none calls `validate_configuration`. A typo'd

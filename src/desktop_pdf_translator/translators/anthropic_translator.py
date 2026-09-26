@@ -12,7 +12,7 @@ from typing import Any, Dict, FrozenSet, Optional
 
 import anthropic
 
-from ..config import AnthropicSettings
+from ..providers.registry import provider
 from .base import BaseTranslator, LANGUAGE_DISPLAY_NAMES, TranslationCancelled
 from .translation_cache import llm_cache_get as _llm_cache_get, llm_cache_set as _llm_cache_set
 
@@ -43,7 +43,7 @@ class AnthropicTranslator(BaseTranslator):
         if not self.api_key:
             raise ValueError("Anthropic API key is required")
 
-        self.model = kwargs.get("model") or AnthropicSettings.model_fields["model"].default
+        self.model = kwargs.get("model") or provider("anthropic").default_model
         self.temperature = kwargs.get("temperature", 0.3)
         self.max_tokens = kwargs.get("max_tokens", 4000)
         self.base_url = kwargs.get("base_url")

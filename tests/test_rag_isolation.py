@@ -17,7 +17,6 @@ import asyncio
 import hashlib
 import re
 from pathlib import Path
-from types import SimpleNamespace
 from typing import Any, Dict, List, Tuple
 
 import pytest
@@ -27,7 +26,7 @@ from fastapi import HTTPException
 from desktop_pdf_translator.api.jobs import Job
 from desktop_pdf_translator.api.routes import rag as rag_routes
 from desktop_pdf_translator.api.schemas import AskRequest, IndexRequest
-from desktop_pdf_translator.config import TranslationService
+from desktop_pdf_translator.config import AppSettings, TranslationService
 from desktop_pdf_translator.processors.pdf_cache import compute_file_hash
 from desktop_pdf_translator.rag import rag_chain as rag_chain_module
 from desktop_pdf_translator.rag.index_spec import (
@@ -87,15 +86,10 @@ class HashingEmbeddingFunction(EmbeddingFunction):
         return vectors
 
 
-class _NoKeySettings:
-    """No LLM key anywhere: the chain builds no translator and skips HyDE."""
-
-    class translation:
-        preferred_service = None
-
-    @staticmethod
-    def has_api_key(service) -> bool:
-        return False
+def _NoKeySettings() -> AppSettings:
+    """No LLM key anywhere: the chain builds no translator and skips HyDE.
+    Built directly, so no environment key reaches it."""
+    return AppSettings()
 
 
 class _FakeProcessor:
@@ -397,15 +391,12 @@ class _Translator:
         return self.reply
 
 
-class _KeyedSettings:
+def _KeyedSettings(api_key: str, base_url: str | None = None) -> AppSettings:
     """An OpenAI key, model and endpoint, as a `PUT /config` leaves them."""
-
-    def __init__(self, api_key: str, base_url: str | None = None):
-        self.translation = SimpleNamespace(preferred_service=TranslationService.OPENAI)
-        self.openai = SimpleNamespace(api_key=api_key, model="gpt-test", base_url=base_url)
-
-    def has_api_key(self, service) -> bool:
-        return service == TranslationService.OPENAI
+    return AppSettings(
+        providers={"openai": {"api_key": api_key, "base_url": base_url}},
+        translation={"model": {"provider": "openai", "model": "gpt-test"}},
+    )
 
 
 def _answer_with(chain: EnhancedRAGChain, monkeypatch: pytest.MonkeyPatch, translator) -> None:
@@ -536,7 +527,7 @@ def test_a_key_saved_after_chat_started_is_used_without_rebuilding_the_chain(
     built: List[str] = []
 
     def create_translator(service=None, lang_in=None, lang_out=None, **kwargs):
-        built.append(current["settings"].openai.api_key)
+        built.append(current["settings"].providers["openai"].api_key)
         return _Translator("answer")
 
     monkeypatch.setattr(
@@ -574,7 +565,7 @@ def test_a_new_endpoint_builds_the_answer_model_again(
     built: List[Any] = []
 
     def create_translator(service=None, lang_in=None, lang_out=None, **kwargs):
-        built.append(current["settings"].openai.base_url)
+        built.append(current["settings"].providers["openai"].base_url)
         return _Translator("answer")
 
     monkeypatch.setattr(
@@ -721,3 +712,133 @@ def test_reset_deletes_every_index_but_one_being_built_and_keeps_conversations(
     assert result.removed == 2
     assert records.index_ids() == store.index_ids() == {building.id}
     assert len(records.messages(index_first.document_id)) == 2
+
+
+# ---------------------------------------------------------------------------
+# which model answers: `rag.answer_model`, then `translation.model` (#85)
+# ---------------------------------------------------------------------------
+
+
+def _v2_settings(**fields):
+    """Real settings, as `PUT /config` leaves them — not a stub, so the chain
+    reads the same fields the sidecar does."""
+    from desktop_pdf_translator.config.models import AppSettings
+
+    return AppSettings(**fields)
+
+
+_KEYED_OPENAI_AND_ANTHROPIC = {
+    "openai": {"api_key": "sk-openai", "enabled_models": ["gpt-4.1"]},
+    "anthropic": {"api_key": "sk-anthropic", "enabled_models": ["claude-sonnet-4-6"]},
+}
+
+
+def _record_builds(monkeypatch: pytest.MonkeyPatch) -> List[Tuple[Any, Any]]:
+    """Replace the factory with one that notes `(service, model)` per build."""
+    built: List[Tuple[Any, Any]] = []
+
+    def create_translator(service=None, lang_in=None, lang_out=None, **kwargs):
+        built.append((TranslationService(service), kwargs.get("model")))
+        return _Translator("answer")
+
+    monkeypatch.setattr(
+        rag_chain_module.TranslatorFactory, "create_translator", create_translator
+    )
+    return built
+
+
+def test_the_answer_model_answers(
+    chain: EnhancedRAGChain, monkeypatch: pytest.MonkeyPatch
+):
+    """Chat's own choice beats the translation model."""
+    settings = _v2_settings(
+        providers=_KEYED_OPENAI_AND_ANTHROPIC,
+        translation={"model": {"provider": "openai", "model": "gpt-4.1"}},
+        rag={"answer_model": {"provider": "anthropic", "model": "claude-opus-5"}},
+    )
+    monkeypatch.setattr(rag_chain_module, "get_settings", lambda: settings)
+    built = _record_builds(monkeypatch)
+
+    model = chain._answer_model()
+
+    assert model is not None
+    assert model.service == TranslationService.ANTHROPIC
+    assert built == [(TranslationService.ANTHROPIC, "claude-opus-5")]
+
+
+def test_an_answer_model_without_a_key_gives_way_to_the_translation_model(
+    chain: EnhancedRAGChain, monkeypatch: pytest.MonkeyPatch
+):
+    settings = _v2_settings(
+        providers=_KEYED_OPENAI_AND_ANTHROPIC,
+        translation={"model": {"provider": "openai", "model": "gpt-5.6-sol"}},
+        rag={"answer_model": {"provider": "gemini", "model": "gemini-3.8-flash"}},
+    )
+    monkeypatch.setattr(rag_chain_module, "get_settings", lambda: settings)
+    built = _record_builds(monkeypatch)
+
+    model = chain._answer_model()
+
+    assert model is not None
+    assert model.service == TranslationService.OPENAI
+    assert built == [(TranslationService.OPENAI, "gpt-5.6-sol")]
+
+
+def test_a_new_answer_model_is_used_on_the_next_question_without_rebuilding_the_chain(
+    store: ChromaDBManager, chain: EnhancedRAGChain, monkeypatch: pytest.MonkeyPatch
+):
+    """Only the translator is built again — never the chain, never `_recover`,
+    which would fail and drop an index being built at that moment."""
+    current: Dict[str, Any] = {}
+    monkeypatch.setattr(rag_chain_module, "get_settings", lambda: current["settings"])
+    monkeypatch.setattr(rag_routes, "_rag_chain", chain)
+    monkeypatch.setattr(rag_routes, "_vector_store", store)
+    monkeypatch.setattr(
+        rag_routes, "_recover", lambda *args: pytest.fail("recovery ran again")
+    )
+    built = _record_builds(monkeypatch)
+
+    def answer_with(provider_id: str, model: str) -> None:
+        current["settings"] = _v2_settings(
+            providers=_KEYED_OPENAI_AND_ANTHROPIC,
+            translation={"model": {"provider": "openai", "model": "gpt-4.1"}},
+            rag={"answer_model": {"provider": provider_id, "model": model}},
+        )
+
+    answer_with("openai", "gpt-4.1")
+    first = chain._answer_model()
+    assert chain._answer_model() is first, "unchanged settings reuse the translator"
+
+    answer_with("openai", "gpt-5.6-sol")
+    second = chain._answer_model()
+
+    answer_with("anthropic", "claude-opus-5")
+    third = chain._answer_model()
+
+    assert asyncio.run(rag_routes._get_chain()) is chain
+    assert second is not first and third is not second
+    assert third.service == TranslationService.ANTHROPIC
+    assert built == [
+        (TranslationService.OPENAI, "gpt-4.1"),
+        (TranslationService.OPENAI, "gpt-5.6-sol"),
+        (TranslationService.ANTHROPIC, "claude-opus-5"),
+    ]
+
+
+def test_the_translation_model_answers_before_a_higher_priority_provider(
+    chain: EnhancedRAGChain, monkeypatch: pytest.MonkeyPatch
+):
+    """With no answer model of its own, chat answers with the translation
+    model even when a provider earlier in the fallback order has a key."""
+    settings = _v2_settings(
+        providers=_KEYED_OPENAI_AND_ANTHROPIC,
+        translation={"model": {"provider": "anthropic", "model": "claude-opus-5"}},
+    )
+    monkeypatch.setattr(rag_chain_module, "get_settings", lambda: settings)
+    built = _record_builds(monkeypatch)
+
+    model = chain._answer_model()
+
+    assert model is not None
+    assert model.service == TranslationService.ANTHROPIC
+    assert built == [(TranslationService.ANTHROPIC, "claude-opus-5")]

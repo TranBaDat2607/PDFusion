@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
-from ..config import TranslationService, get_settings
+from ..config import ModelRef, TranslationService, get_settings
 from ..providers.registry import llm_ids_by_priority
 from ..translators.base import (
     LANGUAGE_DISPLAY_NAMES,
@@ -28,7 +28,7 @@ logger = logging.getLogger(__name__)
 
 # The services that can write an answer, in the order they are tried. Answer
 # synthesis needs an instruction-following model, so Argos (the default
-# preferred_service) is never one of them.
+# translation provider) is never one of them.
 _LLM_SERVICES = tuple(TranslationService(p) for p in llm_ids_by_priority())
 
 # The answer when retrieval finds nothing to answer from. No model is asked:
@@ -113,26 +113,36 @@ class EnhancedRAGChain:
         than updating the one the chain held (#31). Building the chain again
         instead is not an option; see `api/routes/rag.py:_recover`.
 
-        The preferred service when it's an LLM with a key, otherwise the first
-        LLM service that has one; `None` with no key at all, which is the
-        template-answer path. The translator is built again only when the chosen
-        service, its key, its model or its endpoint changed.
+        Candidates, in order: `rag.answer_model`, the translation model, then
+        every LLM by `ProviderSpec.priority` with the model it runs
+        (`AppSettings.model_for`). Only an LLM counts, one candidate per
+        provider, and the first whose provider has a key answers; `None` with
+        no key at all, which is the template-answer path. The translator is
+        built again only when the chosen service, its key, its model or its
+        endpoint changed — so a new `answer_model` applies from the next
+        question, like a new key.
         """
         settings = get_settings()
-        preferred = settings.translation.preferred_service
-        candidates = [preferred] if preferred in _LLM_SERVICES else []
-        candidates += [s for s in _LLM_SERVICES if s not in candidates]
+        refs = [settings.rag.answer_model, settings.translation.model]
+        refs += [ModelRef(provider=s, model=settings.model_for(s)) for s in _LLM_SERVICES]
+        candidates: List[ModelRef] = []
+        for ref in refs:
+            if ref is not None and ref.provider in _LLM_SERVICES and all(
+                ref.provider != c.provider for c in candidates
+            ):
+                candidates.append(ref)
 
         with self._model_lock:
-            for service in candidates:
+            for ref in candidates:
+                service = ref.provider
                 if not settings.has_api_key(service):
                     continue
-                service_settings = getattr(settings, service.value)
+                provider_settings = settings.providers[service.value]
                 key = (
                     service,
-                    service_settings.api_key,
-                    service_settings.model,
-                    getattr(service_settings, "base_url", None),
+                    provider_settings.api_key,
+                    ref.model,
+                    provider_settings.base_url,
                 )
                 if self._model is not None and key == self._model_key:
                     return self._model
@@ -143,12 +153,13 @@ class EnhancedRAGChain:
                         service=service,
                         lang_in="auto",
                         lang_out="vi",
+                        model=ref.model,
                     )
                 except Exception as e:
                     logger.error(f"Failed to initialize {service.value} for RAG: {e}")
                     continue
                 self._model, self._model_key = AnswerModel(service, translator), key
-                logger.info(f"RAG answer LLM initialized: {service.value}")
+                logger.info(f"RAG answer LLM initialized: {service.value} {ref.model}")
                 return self._model
             self._model = self._model_key = None
             return None

@@ -57,7 +57,7 @@ def write_config(manager: ConfigManager, document: dict) -> None:
 def test_a_missing_config_file_loads_defaults(manager: ConfigManager):
     settings = manager.load_settings()
     assert settings.translation.default_target_lang == LanguageCode.VIETNAMESE
-    assert settings.openai.api_key is None
+    assert settings.providers["openai"].api_key is None
 
 
 def test_the_config_directory_is_created_on_construction(
@@ -79,20 +79,23 @@ def test_file_values_override_the_model_defaults(manager: ConfigManager):
     write_config(
         manager,
         {
-            "openai": {"model": "gpt-4o-mini", "temperature": 0.9},
+            "providers": {
+                "openai": {"enabled_models": ["gpt-4o-mini"], "temperature": 0.9}
+            },
             "translation": {"default_target_lang": "ja"},
         },
     )
     settings = manager.load_settings()
-    assert settings.openai.model == "gpt-4o-mini"
-    assert settings.openai.temperature == 0.9
+    assert settings.model_for("openai") == "gpt-4o-mini"
+    assert settings.providers["openai"].temperature == 0.9
     assert settings.translation.default_target_lang == LanguageCode.JAPANESE
 
 
 def test_sections_absent_from_the_file_keep_their_defaults(manager: ConfigManager):
-    write_config(manager, {"openai": {"model": "gpt-4o-mini"}})
+    write_config(manager, {"providers": {"openai": {"enabled_models": ["gpt-4o-mini"]}}})
     settings = manager.load_settings()
-    assert settings.gemini.model == "gemini-3.8-flash"
+    assert settings.model_for("gemini") == "gemini-3.8-flash"
+    assert settings.providers["gemini"].enabled_models == []
     assert settings.translation.cache_translations is True
 
 
@@ -101,7 +104,8 @@ def test_a_saved_model_its_provider_shut_down_loads_as_the_default(
 ):
     """`save_settings` writes the defaults into the file, so every config ever
     saved still named `gemini-1.5-flash` after Google retired it. A new default
-    alone reached none of them (#32)."""
+    alone reached none of them (#32). The file here is from before #85, which
+    is where those models are."""
     write_config(
         manager,
         {
@@ -110,19 +114,24 @@ def test_a_saved_model_its_provider_shut_down_loads_as_the_default(
         },
     )
     settings = manager.load_settings()
-    assert settings.gemini.model == "gemini-3.8-flash"
-    assert settings.anthropic.model == AppSettings().anthropic.model
+    assert settings.model_for("gemini") == "gemini-3.8-flash"
+    assert settings.model_for("anthropic") == AppSettings().model_for("anthropic")
 
 
 def test_a_model_the_app_has_never_heard_of_is_left_alone(manager: ConfigManager):
     """A local server's model, or one newer than this build."""
     write_config(
         manager,
-        {"openai": {"model": "llama3.2:3b"}, "gemini": {"model": "gemini-9-flash"}},
+        {
+            "providers": {
+                "openai": {"enabled_models": ["llama3.2:3b"]},
+                "gemini": {"enabled_models": ["gemini-9-flash"]},
+            }
+        },
     )
     settings = manager.load_settings()
-    assert settings.openai.model == "llama3.2:3b"
-    assert settings.gemini.model == "gemini-9-flash"
+    assert settings.model_for("openai") == "llama3.2:3b"
+    assert settings.model_for("gemini") == "gemini-9-flash"
 
 
 def test_the_old_chat_switch_does_not_turn_chat_off(manager: ConfigManager):
@@ -134,17 +143,24 @@ def test_the_old_chat_switch_does_not_turn_chat_off(manager: ConfigManager):
 
 
 def test_an_endpoint_is_stored_without_its_trailing_slash(manager: ConfigManager):
-    write_config(manager, {"openai": {"base_url": " http://localhost:11434/v1/ "}})
-    assert manager.load_settings().openai.base_url == "http://localhost:11434/v1"
+    write_config(
+        manager, {"providers": {"openai": {"base_url": " http://localhost:11434/v1/ "}}}
+    )
+    assert manager.load_settings().providers["openai"].base_url == "http://localhost:11434/v1"
 
 
 def test_an_endpoint_that_is_not_a_web_url_is_dropped(manager: ConfigManager):
     write_config(
-        manager, {"openai": {"model": "gpt-4o-mini", "base_url": "localhost:11434"}}
+        manager,
+        {
+            "providers": {
+                "openai": {"enabled_models": ["gpt-4o-mini"], "base_url": "localhost:11434"}
+            }
+        },
     )
     settings = manager.load_settings()
-    assert settings.openai.base_url is None
-    assert settings.openai.model == "gpt-4o-mini"
+    assert settings.providers["openai"].base_url is None
+    assert settings.model_for("openai") == "gpt-4o-mini"
 
 
 def test_a_corrupt_file_does_not_stop_the_sidecar(manager: ConfigManager):
@@ -152,7 +168,7 @@ def test_a_corrupt_file_does_not_stop_the_sidecar(manager: ConfigManager):
     not raise out of the lifespan — which exits the process after READY has
     already been printed."""
     manager.config_file.write_text("this is not [ toml", encoding="utf-8")
-    assert manager.load_settings().openai.model == "gpt-4.1"
+    assert manager.load_settings().model_for("openai") == "gpt-4.1"
 
 
 # ---------------------------------------------------------------------------
@@ -163,9 +179,9 @@ def test_a_corrupt_file_does_not_stop_the_sidecar(manager: ConfigManager):
 def test_the_environment_wins_over_the_file(
     manager: ConfigManager, monkeypatch: pytest.MonkeyPatch
 ):
-    write_config(manager, {"openai": {"model": "gpt-4o-mini"}})
+    write_config(manager, {"providers": {"openai": {"enabled_models": ["gpt-4o-mini"]}}})
     monkeypatch.setenv("OPENAI_MODEL", "gpt-4.1")
-    assert manager.load_settings().openai.model == "gpt-4.1"
+    assert manager.load_settings().model_for("openai") == "gpt-4.1"
 
 
 def test_an_environment_key_is_read_for_every_keyed_service(
@@ -175,9 +191,9 @@ def test_an_environment_key_is_read_for_every_keyed_service(
     monkeypatch.setenv("GEMINI_API_KEY", "sk-gemini")
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-anthropic")
     settings = manager.load_settings()
-    assert settings.openai.api_key == "sk-openai"
-    assert settings.gemini.api_key == "sk-gemini"
-    assert settings.anthropic.api_key == "sk-anthropic"
+    assert settings.providers["openai"].api_key == "sk-openai"
+    assert settings.providers["gemini"].api_key == "sk-gemini"
+    assert settings.providers["anthropic"].api_key == "sk-anthropic"
 
 
 def test_an_environment_override_merges_rather_than_replaces_its_section(
@@ -185,11 +201,11 @@ def test_an_environment_override_merges_rather_than_replaces_its_section(
 ):
     """`_deep_merge`, not `dict.update` — an `OPENAI_API_KEY` in the
     environment must not wipe the model chosen in Settings."""
-    write_config(manager, {"openai": {"model": "gpt-4o-mini"}})
+    write_config(manager, {"providers": {"openai": {"enabled_models": ["gpt-4o-mini"]}}})
     monkeypatch.setenv("OPENAI_API_KEY", "sk-from-env")
     settings = manager.load_settings()
-    assert settings.openai.api_key == "sk-from-env"
-    assert settings.openai.model == "gpt-4o-mini"
+    assert settings.providers["openai"].api_key == "sk-from-env"
+    assert settings.model_for("openai") == "gpt-4o-mini"
 
 
 def test_an_environment_key_is_not_used_with_a_saved_endpoint(
@@ -200,8 +216,10 @@ def test_an_environment_key_is_not_used_with_a_saved_endpoint(
     write_config(
         manager,
         {
-            "openai": {"api_key": "ollama", "base_url": "http://localhost:11434/v1"},
-            "anthropic": {"base_url": "http://localhost:11434"},
+            "providers": {
+                "openai": {"api_key": "ollama", "base_url": "http://localhost:11434/v1"},
+                "anthropic": {"base_url": "http://localhost:11434"},
+            }
         },
     )
     monkeypatch.setenv("OPENAI_API_KEY", "sk-from-env")
@@ -209,11 +227,11 @@ def test_an_environment_key_is_not_used_with_a_saved_endpoint(
     monkeypatch.setenv("OPENAI_MODEL", "llama3.2:3b")
     settings = manager.load_settings()
 
-    assert settings.openai.api_key == "ollama"
-    assert settings.openai.base_url == "http://localhost:11434/v1"
-    assert settings.openai.model == "llama3.2:3b"
-    assert settings.anthropic.api_key is None
-    assert settings.anthropic.base_url == "http://localhost:11434"
+    assert settings.providers["openai"].api_key == "ollama"
+    assert settings.providers["openai"].base_url == "http://localhost:11434/v1"
+    assert settings.model_for("openai") == "llama3.2:3b"
+    assert settings.providers["anthropic"].api_key is None
+    assert settings.providers["anthropic"].base_url == "http://localhost:11434"
 
 
 def test_an_environment_key_is_used_when_the_saved_endpoint_is_dropped(
@@ -221,12 +239,12 @@ def test_an_environment_key_is_used_when_the_saved_endpoint_is_dropped(
 ):
     """An endpoint that fails validation is dropped, so requests go to the
     provider, and the provider's key goes with them."""
-    write_config(manager, {"openai": {"base_url": "localhost:11434"}})
+    write_config(manager, {"providers": {"openai": {"base_url": "localhost:11434"}}})
     monkeypatch.setenv("OPENAI_API_KEY", "sk-from-env")
     settings = manager.load_settings()
 
-    assert settings.openai.base_url is None
-    assert settings.openai.api_key == "sk-from-env"
+    assert settings.providers["openai"].base_url is None
+    assert settings.providers["openai"].api_key == "sk-from-env"
 
 
 def test_numeric_environment_overrides_are_parsed(
@@ -260,13 +278,14 @@ def test_one_bad_field_does_not_cost_the_whole_config(manager: ConfigManager):
     write_config(
         manager,
         {
-            "openai": {"api_key": "${OPENAI_API_KEY}", "temperature": 9.0},
+            "providers": {"openai": {"api_key": "${OPENAI_API_KEY}", "temperature": 9.0}},
             "translation": {"default_target_lang": "ja"},
         },
     )
     settings = manager.load_settings()
 
-    assert settings.openai.temperature == 0.3  # the offending field reverted
+    assert settings.providers["openai"].temperature == 0.3  # the offending field reverted
+    assert settings.providers["openai"].api_key == "${OPENAI_API_KEY}"
     assert settings.translation.default_target_lang == LanguageCode.JAPANESE
 
 
@@ -277,11 +296,13 @@ def test_a_key_loaded_from_the_environment_survives_an_invalid_file(
     environment *before* validation, so discarding the whole payload takes it
     with the invalid field."""
     monkeypatch.setenv("OPENAI_API_KEY", "sk-from-env")
-    write_config(manager, {"openai": {"temperature": 9.0}})
-    assert manager.load_settings().openai.api_key == "sk-from-env"
+    write_config(manager, {"providers": {"openai": {"temperature": 9.0}}})
+    assert manager.load_settings().providers["openai"].api_key == "sk-from-env"
 
 
 def test_an_unknown_enum_value_drops_only_that_field(manager: ConfigManager):
+    """From before #85, whose `preferred_service` becomes the translation
+    model's provider."""
     write_config(
         manager,
         {
@@ -293,30 +314,40 @@ def test_an_unknown_enum_value_drops_only_that_field(manager: ConfigManager):
     )
     settings = manager.load_settings()
     assert settings.translation.default_target_lang == LanguageCode.VIETNAMESE
-    assert settings.translation.preferred_service == TranslationService.GEMINI
+    assert settings.translation.model.provider == TranslationService.GEMINI
 
 
 def test_several_bad_fields_across_sections_are_all_dropped(manager: ConfigManager):
     write_config(
         manager,
         {
-            "openai": {"temperature": 9.0, "model": "gpt-4o-mini"},
-            "anthropic": {"max_tokens": -5, "model": "claude-haiku-4-5"},
+            "providers": {
+                "openai": {"temperature": 9.0, "enabled_models": ["gpt-4o-mini"]},
+                "anthropic": {"max_tokens": -5, "enabled_models": ["claude-haiku-4-5"]},
+            }
         },
     )
     settings = manager.load_settings()
-    assert settings.openai.temperature == 0.3
-    assert settings.openai.model == "gpt-4o-mini"
-    assert settings.anthropic.max_tokens == 4000
-    assert settings.anthropic.model == "claude-haiku-4-5"
+    assert settings.providers["openai"].temperature == 0.3
+    assert settings.model_for("openai") == "gpt-4o-mini"
+    assert settings.providers["anthropic"].max_tokens == 4000
+    assert settings.model_for("anthropic") == "claude-haiku-4-5"
 
 
 def test_a_section_of_the_wrong_shape_is_dropped_whole(manager: ConfigManager):
     """A scalar where a table belongs can't be pinpointed to a field, so the
-    second pass drops the top-level section — and only that section."""
-    write_config(manager, {"openai": "gpt-4o", "translation": {"max_pages": 7}})
+    section goes — and only that section: one provider's, never the map, which
+    would take every key with it."""
+    write_config(
+        manager,
+        {
+            "providers": {"openai": "gpt-4o", "gemini": {"api_key": "${GEMINI_API_KEY}"}},
+            "translation": {"max_pages": 7},
+        },
+    )
     settings = manager.load_settings()
-    assert settings.openai.model == "gpt-4.1"
+    assert settings.model_for("openai") == "gpt-4.1"
+    assert settings.providers["gemini"].api_key == "${GEMINI_API_KEY}"
     assert settings.translation.max_pages == 7
 
 
@@ -325,7 +356,7 @@ def test_defaults_are_the_last_resort_not_the_first(
 ):
     """If pruning can't produce a valid model, defaults are still returned —
     the sidecar must start."""
-    write_config(manager, {"openai": {"temperature": 9.0}})
+    write_config(manager, {"providers": {"openai": {"temperature": 9.0}}})
     settings = manager.load_settings()
     assert isinstance(settings, AppSettings)
 
@@ -353,26 +384,26 @@ def test_pop_path_ignores_a_path_that_does_not_resolve():
 
 def test_a_saved_config_reloads_with_the_same_values(manager: ConfigManager):
     settings = manager.load_settings()
-    settings.openai.model = "gpt-4o-mini"
+    settings.remember_model("openai", "gpt-4o-mini")
     settings.translation.default_target_lang = LanguageCode.JAPANESE
     settings.translation.pdf_cache_max_size_mb = 250.0
     assert manager.save_settings(settings) is True
 
     reloaded = ConfigManager(config_dir=manager.config_dir).load_settings()
-    assert reloaded.openai.model == "gpt-4o-mini"
+    assert reloaded.model_for("openai") == "gpt-4o-mini"
     assert reloaded.translation.default_target_lang == LanguageCode.JAPANESE
     assert reloaded.translation.pdf_cache_max_size_mb == 250.0
 
 
 def test_a_stored_key_is_decrypted_on_the_way_back_in(manager: ConfigManager):
     settings = manager.load_settings()
-    settings.openai.api_key = "sk-round-trip"
+    settings.providers["openai"].api_key = "sk-round-trip"
     manager.save_settings(settings)
 
     on_disk = tomlkit.parse(manager.config_file.read_text(encoding="utf-8"))
-    assert on_disk["openai"]["api_key"] != "sk-round-trip"
+    assert on_disk["providers"]["openai"]["api_key"] != "sk-round-trip"
     assert ConfigManager(config_dir=manager.config_dir).load_settings(
-    ).openai.api_key == "sk-round-trip"
+    ).providers["openai"].api_key == "sk-round-trip"
 
 
 def test_the_salt_never_reaches_the_settings_model(manager: ConfigManager):
@@ -380,24 +411,24 @@ def test_the_salt_never_reaches_the_settings_model(manager: ConfigManager):
     has no such field, so leaving it in the payload would fail validation and
     send the whole config through the recovery path."""
     settings = manager.load_settings()
-    settings.openai.api_key = "sk-round-trip"
+    settings.providers["openai"].api_key = "sk-round-trip"
     manager.save_settings(settings)
 
     data = tomlkit.parse(manager.config_file.read_text(encoding="utf-8"))
-    config_data = {k: dict(v) if isinstance(v, dict) else v for k, v in data.items()}
+    config_data = data.unwrap()
     manager._decrypt_sensitive_data(config_data)
-    assert "api_key_salt" not in config_data["openai"]
+    assert "api_key_salt" not in config_data["providers"]["openai"]
 
 
 def test_an_env_placeholder_is_stored_verbatim(manager: ConfigManager):
     """`${OPENAI_API_KEY}` is an indirection, not a secret — encrypting it
     would break the substitution it exists for."""
     settings = manager.load_settings()
-    settings.openai.api_key = "${OPENAI_API_KEY}"
+    settings.providers["openai"].api_key = "${OPENAI_API_KEY}"
     manager.save_settings(settings)
 
     on_disk = tomlkit.parse(manager.config_file.read_text(encoding="utf-8"))
-    assert on_disk["openai"]["api_key"] == "${OPENAI_API_KEY}"
+    assert on_disk["providers"]["openai"]["api_key"] == "${OPENAI_API_KEY}"
 
 
 # ---------------------------------------------------------------------------
@@ -406,24 +437,24 @@ def test_an_env_placeholder_is_stored_verbatim(manager: ConfigManager):
 
 
 def test_update_settings_merges_and_persists(manager: ConfigManager):
-    assert manager.update_settings(openai={"model": "gpt-4o-mini"}) is True
-    assert manager.settings.openai.model == "gpt-4o-mini"
+    assert manager.update_settings(providers={"openai": {"enabled_models": ["gpt-4o-mini"]}}) is True
+    assert manager.settings.model_for("openai") == "gpt-4o-mini"
     assert ConfigManager(
         config_dir=manager.config_dir
-    ).load_settings().openai.model == "gpt-4o-mini"
+    ).load_settings().model_for("openai") == "gpt-4o-mini"
 
 
 def test_update_settings_leaves_untouched_fields_alone(manager: ConfigManager):
-    manager.update_settings(openai={"model": "gpt-4o-mini"})
+    manager.update_settings(providers={"openai": {"enabled_models": ["gpt-4o-mini"]}})
     manager.update_settings(translation={"max_pages": 7})
-    assert manager.settings.openai.model == "gpt-4o-mini"
+    assert manager.settings.model_for("openai") == "gpt-4o-mini"
     assert manager.settings.translation.max_pages == 7
 
 
 def test_an_invalid_update_is_refused_and_changes_nothing(manager: ConfigManager):
-    before = manager.settings.openai.temperature
-    assert manager.update_settings(openai={"temperature": 9.0}) is False
-    assert manager.settings.openai.temperature == before
+    before = manager.settings.providers["openai"].temperature
+    assert manager.update_settings(providers={"openai": {"temperature": 9.0}}) is False
+    assert manager.settings.providers["openai"].temperature == before
 
 
 def test_a_failed_write_leaves_the_in_memory_settings_untouched(
@@ -432,16 +463,16 @@ def test_a_failed_write_leaves_the_in_memory_settings_untouched(
     """`update_settings` only adopts the new model once the file is on disk —
     otherwise the running process and `config.toml` disagree until restart."""
     monkeypatch.setattr(ConfigManager, "save_settings", lambda self, s: False)
-    assert manager.update_settings(openai={"model": "gpt-4o-mini"}) is False
-    assert manager.settings.openai.model == "gpt-4.1"
+    assert manager.update_settings(providers={"openai": {"enabled_models": ["gpt-4o-mini"]}}) is False
+    assert manager.settings.model_for("openai") == "gpt-4.1"
 
 
 def test_reset_to_defaults_writes_the_file_too(manager: ConfigManager):
-    manager.update_settings(openai={"model": "gpt-4o-mini"})
+    manager.update_settings(providers={"openai": {"enabled_models": ["gpt-4o-mini"]}})
     manager.reset_to_defaults()
     assert ConfigManager(
         config_dir=manager.config_dir
-    ).load_settings().openai.model == "gpt-4.1"
+    ).load_settings().model_for("openai") == "gpt-4.1"
 
 
 # ---------------------------------------------------------------------------
@@ -453,7 +484,7 @@ def test_an_exported_config_carries_no_readable_key(
     manager: ConfigManager, tmp_path: Path
 ):
     settings = manager.load_settings()
-    settings.openai.api_key = "sk-secret-value"
+    settings.providers["openai"].api_key = "sk-secret-value"
     manager._settings = settings
 
     target = tmp_path / "exported.toml"
@@ -483,8 +514,8 @@ def test_none_values_are_stripped_before_serialization(manager: ConfigManager):
 
 def test_an_unset_optional_field_does_not_break_the_save(manager: ConfigManager):
     settings = manager.load_settings()
-    assert settings.openai.max_tokens is None
+    assert settings.providers["openai"].max_tokens is None
     assert manager.save_settings(settings) is True
     assert "max_tokens" not in tomlkit.parse(
         manager.config_file.read_text(encoding="utf-8")
-    )["openai"]
+    )["providers"]["openai"]

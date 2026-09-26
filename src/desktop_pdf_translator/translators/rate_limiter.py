@@ -12,7 +12,7 @@ from ..providers.registry import PROVIDERS
 
 # Requests/sec sustained per service, shared by every translator instance and
 # BabelDOC worker thread across every concurrent job: `ProviderSpec.default_qps`,
-# overridable per service via `<service>.max_qps` in settings.
+# overridable per provider via `providers.<id>.max_qps` in settings.
 _DEFAULT_QPS_BY_SERVICE: Dict[str, float] = {
     spec.id: spec.default_qps for spec in PROVIDERS if spec.default_qps is not None
 }
@@ -74,7 +74,7 @@ _LIMITERS_LOCK = threading.Lock()
 
 def default_qps_for(service: str) -> float:
     """The built-in rate for `service` — what its limiter runs at when no
-    `<service>.max_qps` override is configured."""
+    `providers.<id>.max_qps` override is configured."""
     return _DEFAULT_QPS_BY_SERVICE.get(service, _FALLBACK_QPS)
 
 

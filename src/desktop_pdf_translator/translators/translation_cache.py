@@ -8,7 +8,7 @@ much more than we write.
 Cache key is a SHA-256 of `lang_in|lang_out|service|model|source_text`, which
 means: changing the model invalidates everything for that model; identical
 inputs across services/models stay independent. Argos has no model variance so
-its `model` field is the fixed "argostranslate" string from ArgosSettings.
+its `model` field is the fixed "argostranslate", its spec's `default_model`.
 
 The cache is a process-wide singleton (`get_translation_cache()`); construction
 is lazy so importing the module is cheap.
