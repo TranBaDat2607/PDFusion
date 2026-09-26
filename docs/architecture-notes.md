@@ -122,13 +122,14 @@ the time `_remove_sensitive_data` sees it, from a key the user cleared — so an
 the ciphertext, and since `_write_backup` strips keys, it went from both files
 at once. A locked keyring cost the user every provider key they had. So
 `ConfigManager` remembers what it could not read (`_unreadable_keys`) and
-writes it back **verbatim**, and `PUT /config` calls `forget_unreadable_key`
-whenever the body carries that service's `api_key` — which is the only way a
-key is set or cleared, so clearing one still clears it. Two consequences.
+writes it back **verbatim**, and `PUT /providers/{id}` (`PUT /config` until
+#88) calls `forget_unreadable_key` whenever the body carries that provider's
+`api_key` — which, with `DELETE /providers/{id}/key`, is the only way a key is
+set or cleared, so clearing one still clears it. Two consequences.
 `reset_to_defaults` drops the records first, being an explicit wipe. And a
 preserved key counts as saved for the endpoint rule below (#32): it decrypts
 again once the keystore is reachable, and would otherwise go to whatever
-endpoint was set meanwhile — `has_unreadable_key` is what `PUT /config` asks.
+endpoint was set meanwhile — `has_unreadable_key` is what `PUT /providers/{id}` asks.
 
 Relatedly, **a failed decrypt is `pop`ped, never assigned**. `config_data`
 holds tomlkit tables and those refuse a `None` value; assigning one raised out
@@ -546,7 +547,7 @@ now a Windows + Linux matrix) is what settles the PyInstaller half.
 | `src/desktop_pdf_translator/providers/registry.py` | The provider registry: one `ProviderSpec` per provider, which every per-provider rule is read from. Stdlib-only — see "Provider registry" |
 | `src/desktop_pdf_translator/providers/listing.py` | Asking an endpoint which models a key can use, one function per protocol, and the non-chat filter; imports its SDK on call |
 | `src/desktop_pdf_translator/providers/catalog.py` | The model catalog (a cache, keyed by provider and endpoint) and `list_models`, which sorts a failed listing into a refused key or anything else — see "Verifying keys and discovering models" |
-| `src/desktop_pdf_translator/api/routes/providers.py` | `/providers`: key state, the catalog, `verify`; `/config/validate` and `/config/models` wrap it |
+| `src/desktop_pdf_translator/api/routes/providers.py` | `/providers`: key state, the catalog, `verify`, and the only place a key or endpoint changes |
 | `src/desktop_pdf_translator/translators/` | `BaseTranslator`, OpenAI/Gemini/Anthropic/Argos + `TranslatorFactory` |
 | `src/desktop_pdf_translator/translators/rate_limiter.py` | Process-wide token-bucket QPS limiter, one singleton per LLM service |
 | `src/desktop_pdf_translator/translators/usage_estimate.py` | The rough token count behind `POST /translate/estimate`: characters per token, the prompt each paragraph carries, how much longer a translation comes back. Stdlib-only, and held to the real prompts by `test_usage_estimate.py` |
@@ -571,16 +572,14 @@ All routes (except `GET /health`) require `Authorization: Bearer <token>`.
 |---|---|---|
 | GET | `/health` | Liveness probe (no auth) |
 | GET | `/auth/ping` | Auth probe — used by the Rust shell after startup |
-| GET | `/config` | Current settings (API keys masked). `translation.model` and `rag.answer_model` are `{provider, model}`. Until #88 it also carries the pre-#85 view: a block per provider whose `model` is `model_for` its id, and `translation.preferred_service` (= `translation.model.provider`). OpenAI and Anthropic report their endpoint as `base_url`, `null` for the provider's own |
-| PUT | `/config` | Update the translation and answer models (`translation_model`, `answer_model` as `{provider, model}`; `answer_model: null` sent explicitly clears it), language defaults and limits. The pre-#85 per-provider blocks and `preferred_service` still work: a block's `model` becomes the model that provider runs, and `translation_model` wins over both. `openai` and `anthropic` take `base_url` (`""` = the provider's own); changing it while a key is saved needs `api_key` in the same body, or **422** — see "LLM endpoints and models" |
-| POST | `/config/validate` | Check credentials by **listing** the key's models (never a completion), off the event loop and under a deadline; `valid` also needs the model among them, aliases allowed. `api_key` / `model` / `base_url` left out come from the saved settings, and the saved key is only checked against the saved endpoint (**422** otherwise). A wrapper over `POST /providers/{id}/verify` |
+| GET | `/config` | Current settings: `translation` (its `model` a `{provider, model}`), `rag` (its `answer_model` too, `null` = the translation model), `gui`, `processing`. No keys and no endpoints: those are `GET /providers`' |
+| PUT | `/config` | Update the translation and answer models (`translation_model`, `answer_model` as `{provider, model}`; `answer_model: null` sent explicitly clears it), language defaults, limits and switches. Unknown fields are **422** — among them the per-provider blocks and `preferred_service` retired in #88, so an older client can't get a 200 for a key that was never saved |
 | GET | `/config/options` | Static dropdown data (languages, services, model *suggestions* with each service's default first) + `supported_pairs` per service (`null` = unrestricted) |
-| GET | `/config/models/{service}` | The ids the saved key can use at the saved endpoint, sorted (any LLM; **422** for Argos). A wrapper over the catalog, so a fresh listing is served without a round-trip. A server that's down is `{models: [], error}`, not an HTTP error |
 | GET | `/providers` | Every registry entry plus `has_key`, `base_url`, `key_state` (`unverified` \| `valid` \| `invalid` \| `unreadable`), `last_verified_at` and the catalog's freshness, and its saved `model` (`model_for`), `enabled_models`, `temperature`, `max_tokens` and `max_qps`. Reads only; never lists |
 | PUT | `/providers/{id}` | Save one provider's `api_key` (`""` clears), `base_url` (`""` = the provider's own), `enabled_models` and parameters (`max_tokens` / `max_qps` sent as `null` go back to the default); left out, each is unchanged. Answers with its `/providers` row. The #32 endpoint rule gives **422**, and so does a value its spec refuses (a temperature over its ceiling, an endpoint for Gemini). Saves without checking the key, and never moves translation off Argos |
 | DELETE | `/providers/{id}/key` | Forget the saved key, an unreadable one included, and drop its catalog rows; the endpoint stays. **422** for Argos |
 | GET | `/providers/{id}/models?refresh=false` | The catalog for the saved key and endpoint: `models` / `hidden` as records (`source`: `listed` \| `saved` \| `suggested`), listed again when older than 24 h or on `refresh`. A failure is `error` in a 200 |
-| POST | `/providers/{id}/verify` | List with a typed key and/or endpoint, saving nothing: `{valid, key_state, message, model_found, models, hidden}`. The #32 rule as `/config/validate` has it — a different endpoint needs the key typed (**422**) |
+| POST | `/providers/{id}/verify` | List with a typed key and/or endpoint, saving nothing: `{valid, key_state, message, model_found, models, hidden}`. The #32 rule: a different endpoint needs the key typed (**422**). A keyless provider lists with no key; Argos, which has nothing to list, has its install checked |
 | GET | `/config/cache` | Both caches' stats: `paragraph` (entries, expired, hit rate, size, TTL) and `pdf` (entries, hit rate, size, LRU cap) |
 | DELETE | `/config/cache?scope=all\|expired&target=paragraph\|pdf\|all` | Clear the cache `target` names (`paragraph` by default); `scope=expired` reaps expired paragraphs and never touches the PDF cache. Any other value is **422**, not a clear |
 | GET | `/setup/status` | Which engine assets are installed, plus the running install's phase and the last one's error. Stat calls only — polled twice a second during an install |
@@ -1172,15 +1171,13 @@ Three things close that gap:
   key, so the LLM wording would send the user to check a credential they never
   set and to "switch to Argos" while already on it.
 
-Relatedly, `PUT /config` **only auto-promotes the translation model off Argos
-when listing with the new key succeeds and the provider's model
-(`AppSettings.model_for`) is on the list** (one provider round-trip, only on
-that path, and never a completion — see "Verifying keys and discovering
-models"). An explicit `translation_model` or `preferred_service` in the payload
-is always honoured — that's the user's own choice. `PUT /providers/{id}` never
-promotes; it only saves. Promoting on a
-typo'd key used to move the user from a working offline translator onto one
-that fails every paragraph silently.
+Relatedly, **translation only moves off Argos onto a key that listed its
+models**. `PUT /config` did this itself until #88, when a key arrived in one
+of its blocks; now keys arrive only through `PUT /providers/{id}`, which never
+promotes, and the Models page makes the choice (`provider-draft.ts:
+selectsProvider`): only after Verify & save succeeded, never on "Save anyway".
+Promoting on a typo'd key used to move the user from a working offline
+translator onto one that fails every paragraph silently.
 
 Two things that listing has to keep: it runs under `catalog.PROBE_TIMEOUT_S`
 (Gemini's client honours its own timeout loosely, and this is the *save* path,
@@ -1234,8 +1231,9 @@ its key is verified (#84). Everything
 that used to branch per provider reads it: `TranslationService` itself is
 built from `PROVIDERS`, and `SERVICE_LABELS`, `SUPPORTED_PAIRS`,
 `RETIRED_MODELS`, `KEYED_SERVICES`, the rate limiter's defaults, the
-factory, chat's fallback order, the Argos → LLM promotion and
-`/config/options` are all derived from it.
+factory, chat's fallback order and `/config/options` are all derived from it,
+and `GET /providers` hands it to the frontend, which lists no provider of its
+own (#86).
 
 Four things about it are deliberate:
 
@@ -1253,9 +1251,12 @@ Four things about it are deliberate:
 - **Ids are frozen.** Both translation caches key on the service id, and so do
   `config.toml`'s sections. Renaming one drops every cached paragraph and
   saved key.
-- **Order is the registry's.** `PROVIDERS` is in the order of the OpenAPI
-  enum and of `/config/options`; append new providers to keep both stable.
-  The fallback order is `priority`, not position.
+- **Order is the registry's.** `PROVIDERS` is the order of `GET /providers`
+  (so of the Models page and the pickers) and of `/config/options`; append new
+  providers to keep it stable. The fallback order is `priority`, not position.
+  Since #88 the OpenAPI schema lists no provider at all: an id is a plain
+  string on the wire (`config/models.py:ProviderId`), so a new provider
+  changes neither `openapi.json` nor the generated types.
 
 A provider's settings are exactly the keyword arguments its translator
 takes, less `enabled_models` and plus the model it runs, so
@@ -1265,6 +1266,42 @@ provider's settings are the one `ProviderSettings` class, keyed by id under
 `AppSettings` field — only its spec. The two per-provider bounds that used to
 live on separate classes are spec fields too: `max_temperature` (OpenAI's scale
 runs to 2, the others' to 1) and `default_max_tokens` (Anthropic requires one).
+
+### Adding a provider
+
+Phases 1–5 of the provider work (#83–#87) were meant to make a new provider a
+small, predictable change; #88 proved it with OpenRouter, DeepSeek and Ollama,
+each added in a commit touching only the registry and one test fixture. For a
+provider speaking an API PDFusion already speaks (OpenAI's, Anthropic's,
+Gemini's):
+
+1. **The registry entry**, appended to `PROVIDERS` in `providers/registry.py`
+   (never inserted: ids are frozen, and order is the Models page's). Reuse the
+   protocol's `translator` and `lister`. Set `default_base_url` — it is *sent*
+   when no endpoint is saved (`endpoint_for`), which is how OpenRouter reaches
+   its own URL through OpenAI's SDK. A keyed provider takes `env_prefix`,
+   `signup_url` and a `priority` (its place in chat's fallback); a keyless
+   local server takes `requires_key=False`, a `placeholder_key` if its SDK
+   insists on one, `priority=None`, and usually `takes_endpoint` with an
+   `endpoint_hint`. Only a **new protocol** needs code: a `BaseTranslator`
+   subclass and a lister in `providers/listing.py`.
+2. **A recorded list response**, `tests/fixtures/model_lists/<id>.json`, in the
+   provider's documented shape. `tests/test_provider_listings.py` lists every
+   provider that borrows OpenAI's API from its fixture and checks the request
+   went to its own endpoint and nothing was hidden; the registry contract tests
+   (`test_provider_registry.py`) check the entry itself.
+3. **`retired_models`** on the entry whenever the provider shuts a model down.
+4. **Nothing in the frontend, nothing in `schemas.py`.** `GET /providers`
+   carries every fact the UI shows, and a provider id is a plain string on the
+   wire (`config/models.py:ProviderId`), so `openapi.json` doesn't change
+   either.
+
+If a provider needs more than that, fix the design, not the checklist.
+
+What listing can and can't tell, per provider: OpenRouter serves its model list
+without a key, so Verify can't tell a bad OpenRouter key from a good one — the
+first paragraph's 401 aborts the job instead. DeepSeek answers a bad key with
+401, like OpenAI. Ollama has no key; listing tells only whether it is running.
 
 ### Providers and model choices in config.toml (#85)
 
@@ -1336,9 +1373,9 @@ ported one-for-one (`test_config_security.py`, `test_config_manager_load.py`,
   `providers.<id>`.
 - A key that can't be decrypted is remembered by provider id
   (`_unreadable_keys`) and written back verbatim, never blanked. Only setting
-  or clearing that provider's key — `PUT /config`'s block, `PUT
-  /providers/{id}`'s `api_key`, `DELETE /providers/{id}/key` — forgets it, and
-  only once the new settings have validated.
+  or clearing that provider's key — `PUT /providers/{id}`'s `api_key`,
+  `DELETE /providers/{id}/key` (and until #88 `PUT /config`'s block) — forgets
+  it, and only once the new settings have validated.
 - `_write_backup` strips `api_key` and `api_key_salt` from **both** shapes: the
   first save after a conversion backs up the old file, whose keys sit in
   top-level tables.
@@ -1346,9 +1383,10 @@ ported one-for-one (`test_config_security.py`, `test_config_manager_load.py`,
 - Environment keys come from each spec's `env_prefix` and are ignored for a
   provider with a custom `base_url` (`_keep_environment_keys_off_endpoints`).
 - An endpoint change without `api_key` in the same body is a **422** whenever a
-  key is saved, unreadable ones included, on `PUT /config` and `PUT
-  /providers/{id}` alike. Both go through `routes/providers.py`'s
-  `endpoint_change_refusal`, `apply_key_and_endpoint` and `save_settings`.
+  key is saved, unreadable ones included (`routes/providers.py:
+  endpoint_change_refusal`). Since #88 `PUT /providers/{id}` is the only
+  route that changes one; the `PUT /config` tests of this rule were ported to
+  `test_provider_config_api.py` one-for-one.
 
 ### Verifying keys and discovering models
 
@@ -1357,11 +1395,11 @@ translator's `validate_configuration` used to send a "Hello" completion, and
 Settings → Save, `POST /config/validate` and the Argos → LLM promotion all went
 through it. Every provider serves the list of models a key can use for free,
 so listing does both jobs at once: a 401/403 means the key is wrong, and the
-list is what the model picker offers. Nothing in the verify, save, promotion or
-picker paths may call `validate_configuration` or build a translator;
-`tests/test_config_api.py` and `tests/test_providers_api.py` fail if one does.
-(Argos keeps its `validate_configuration`: it checks the installed pack and
-sends nothing anywhere.)
+list is what the model picker offers. Nothing in the verify, save or model-list
+paths may call `validate_configuration` or build a translator;
+`tests/test_providers_api.py` fails if one does. (Argos keeps its
+`validate_configuration`, which `POST /providers/argos/verify` runs: it checks
+the installed pack and sends nothing anywhere.)
 
 The old rule said a check must send what `translate` sends, "since a check that
 sent less would pass a model that fails every paragraph". Two things have since
@@ -1447,13 +1485,13 @@ provider (#32). README has the recipe. Four rules hold that together:
 
 - **A saved key is only ever sent to the endpoint it was saved for.** `GET
   /config` never reveals a key, but `base_url` decides where the next request
-  goes, and with it the key in its auth header. So `PUT /config` refuses (422)
-  an endpoint change, clearing one included, unless the same body carries
-  `api_key`, and `POST /config/validate` and `POST /providers/{id}/verify`
-  use the saved key only against the saved endpoint
-  (`routes/providers.py:resolve_probe_target`). Together they keep anything holding the bearer token from
-  reading a key off the wire; don't loosen either for convenience. The Settings
-  Models page mirrors the rule (`lib/provider-draft.ts:endpointNeedsKey`) so the
+  goes, and with it the key in its auth header. So `PUT /providers/{id}`
+  refuses (422) an endpoint change, clearing one included, unless the same body
+  carries `api_key` (so did `PUT /config` while it took keys, until #88), and
+  `POST /providers/{id}/verify` uses the saved key only against the saved
+  endpoint (`routes/providers.py:resolve_probe_target`). Together they keep
+  anything holding the bearer token from reading a key off the wire; don't
+  loosen either for convenience. The Settings Models page mirrors the rule (`lib/provider-draft.ts:endpointNeedsKey`) so the
   user meets it before the 422. Endpoints are normalized in one place,
   `config/models.py:normalize_base_url` (trimmed, no trailing slash), so a URL
   typed again is not a change. The environment is held to the same rule:
@@ -1493,9 +1531,19 @@ Two smaller consequences. The chat answer model is rebuilt when the endpoint
 changes (`rag_chain._answer_model` keys on it). And every listing names its
 endpoint explicitly, `None` (the provider's own) included
 (`routes/providers.py:resolve_probe_target`), so a check of a typed endpoint
-can never fall through to the saved one. A keyless local
-server still needs some key typed: without one, OpenAI or Anthropic falls back
-to Argos (`capabilities.resolve_effective_service`), a rule #32 left as it was.
+can never fall through to the saved one.
+
+**A keyless local server is a provider of its own** (#88). Pointed at Ollama,
+the OpenAI card still needs *some* key typed: it is a keyed provider, and
+without one it falls back to Argos (`capabilities.resolve_effective_service`),
+the rule #32 left as it was. The Ollama entry instead has `requires_key=False`:
+`has_api_key` counts it as usable with none, verify and the model list work
+with no key, and its SDK is handed `placeholder_key` (OpenAI's refuses to
+build a client without one; Ollama ignores it). There is no key, so the
+endpoint rule has nothing to guard, and the registry refuses a key for it.
+It is never a chat fallback (`priority` is `None`): a local server may not be
+running, and "any LLM with a key" should mean one that answers. Chosen as the
+answer or translation model, it answers like any other (`ProviderSpec.is_llm`).
 
 **Picking a model happens in the toolbar** (`components/translation/ModelPicker.tsx`,
 rules in `lib/model-choice.ts`). The service used to be a toolbar Select and the

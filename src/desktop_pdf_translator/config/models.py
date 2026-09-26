@@ -31,7 +31,8 @@ class LanguageCode(str, Enum):
 
 # Built from the provider registry, so a provider is added in one place. The
 # member names (`TranslationService.OPENAI`) are the ids upper-cased, and the
-# order is the registry's, which is the OpenAPI enum's.
+# order is the registry's. Internal only: on the wire a provider is a
+# `ProviderId` string (below), so the enum never reaches the OpenAPI schema.
 TranslationService = Enum(
     "TranslationService",
     [(spec.id.upper(), spec.id) for spec in PROVIDERS],

@@ -159,8 +159,9 @@ def _gemini_lister() -> ModelLister:
     return list_gemini_models
 
 
-# In the order `TranslationService` lists them, which is the order of the
-# OpenAPI enum and of `/config/options`. Appending keeps both stable.
+# In the order `TranslationService` lists them, which is the order of
+# `GET /providers` — the Models page and the pickers — and of
+# `/config/options`. Append: see "Adding a provider" in the architecture notes.
 PROVIDERS: Tuple[ProviderSpec, ...] = (
     ProviderSpec(
         id="openai",
