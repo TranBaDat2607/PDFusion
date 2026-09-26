@@ -193,6 +193,19 @@ export function chatModel(
   return null;
 }
 
+/**
+ * The model that would answer after "Same as translation", shown beside it in
+ * the chat header. Not simply the translation model: the offline engine can't
+ * answer and a provider with no key is skipped, and naming either there put
+ * the menu at odds with the header, which shows the model really answering.
+ */
+export function followingModel(
+  config: ChoiceConfig,
+  providers: readonly PickerProvider[],
+): AnsweringModel | null {
+  return chatModel({ ...config, rag: { ...config.rag, answer_model: null } }, providers);
+}
+
 /** A chat header pick: a model, or `null` for "Same as translation". */
 export type AnswerChoice = { provider: string; model: string } | null;
 

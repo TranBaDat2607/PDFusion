@@ -4,6 +4,7 @@ import {
   answerModelUpdate,
   answeredBy,
   chatModel,
+  followingModel,
   isCurrent,
   isCurrentAnswer,
   modelGroups,
@@ -320,6 +321,54 @@ describe("chatModel", () => {
 
   it("is null with no key anywhere", () => {
     expect(chatModel(config("openai", "gpt-4.1"), providers())).toBeNull();
+  });
+});
+
+describe("followingModel", () => {
+  it("answers with the translation model when its provider has a key, even over a higher-priority key", () => {
+    const list = providers({ gemini: { has_key: true }, openai: { has_key: true } });
+
+    expect(followingModel(config("gemini", "gemini-3.7-flash"), list)).toEqual({
+      provider: "gemini",
+      label: "Gemini",
+      model: "gemini-3.7-flash",
+    });
+  });
+
+  it("ignores a saved answer model — it shows what following translation would do", () => {
+    const list = providers({ openai: { has_key: true }, anthropic: { has_key: true } });
+    const c = config("openai", "gpt-4.1", { provider: "anthropic", model: "claude-opus-5" });
+
+    expect(followingModel(c, list)).toEqual({
+      provider: "openai",
+      label: "OpenAI",
+      model: "gpt-4.1",
+    });
+  });
+
+  it("falls back by priority, with the model the provider runs, when translation is offline", () => {
+    const list = providers({ anthropic: { has_key: true, model: "claude-opus-5" } });
+
+    expect(followingModel(ARGOS, list)).toEqual({
+      provider: "anthropic",
+      label: "Claude",
+      model: "claude-opus-5",
+    });
+  });
+
+  it("falls back past a keyless translation provider, by priority", () => {
+    const list = providers({ openai: { has_key: true }, gemini: { has_key: true } });
+    const c = config("anthropic", "claude-sonnet-4-6");
+
+    expect(followingModel(c, list)).toEqual({
+      provider: "openai",
+      label: "OpenAI",
+      model: "gpt-4.1",
+    });
+  });
+
+  it("is null with no key anywhere", () => {
+    expect(followingModel(config("openai", "gpt-4.1"), providers())).toBeNull();
   });
 });
 

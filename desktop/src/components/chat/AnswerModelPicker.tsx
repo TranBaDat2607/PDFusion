@@ -11,6 +11,7 @@ import type { ProviderInfo } from "@/hooks/useProviders";
 import {
   answerModelUpdate,
   chatModel,
+  followingModel,
   isCurrentAnswer,
   modelGroups,
   settingsTargetFor,
@@ -38,7 +39,7 @@ export function AnswerModelPicker({ config, providers, onOpenSettings }: AnswerM
   const [open, setOpen] = useState(false);
   const update = useUpdateConfig();
   const answering = chatModel(config, providers);
-  const translating = config.translation.model;
+  const following = followingModel(config, providers);
 
   const choose = (choice: AnswerChoice) => {
     const body = answerModelUpdate(config, choice);
@@ -93,7 +94,7 @@ export function AnswerModelPicker({ config, providers, onOpenSettings }: AnswerM
             <CurrentMark on={isCurrentAnswer(config, null)} />
             <span className="flex-1">Same as translation</span>
             <span className="truncate font-mono text-[10px] text-muted-foreground">
-              {translating.model}
+              {following?.model ?? "no model"}
             </span>
           </CommandItem>
         </CommandGroup>
