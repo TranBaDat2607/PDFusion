@@ -305,6 +305,23 @@ PROVIDERS: Tuple[ProviderSpec, ...] = (
         signup_url="https://openrouter.ai/settings/keys",
         max_temperature=2.0,
     ),
+    ProviderSpec(
+        id="deepseek",
+        label="DeepSeek",
+        short_label="DeepSeek",
+        description="DeepSeek's chat and reasoning models, through OpenAI's API.",
+        protocol="openai",
+        default_model="deepseek-chat",
+        suggested_models=("deepseek-chat", "deepseek-reasoner"),
+        translator=_openai_translator,
+        env_prefix="DEEPSEEK",
+        default_base_url="https://api.deepseek.com/v1",
+        lister=_openai_lister,
+        default_qps=5.0,
+        priority=4,
+        signup_url="https://platform.deepseek.com/api_keys",
+        max_temperature=2.0,
+    ),
 )
 
 _BY_ID = {spec.id: spec for spec in PROVIDERS}
