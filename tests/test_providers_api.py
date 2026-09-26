@@ -160,7 +160,7 @@ def test_every_provider_is_listed_in_registry_order_with_its_spec(client: TestCl
 
     assert response.status_code == 200
     entries = response.json()["providers"]
-    assert [entry["id"] for entry in entries] == ["openai", "gemini", "anthropic", "argos"]
+    assert [entry["id"] for entry in entries] == [spec.id for spec in PROVIDERS]
     for entry, spec in zip(entries, PROVIDERS):
         assert entry["label"] == spec.label
         assert entry["short_label"] == spec.short_label

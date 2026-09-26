@@ -29,12 +29,14 @@ from pydantic import ValidationError
 
 from desktop_pdf_translator.config import models as config_models
 from desktop_pdf_translator.config.manager import ConfigManager
-from desktop_pdf_translator.providers.registry import provider
+from desktop_pdf_translator.providers.registry import PROVIDERS, provider
 from desktop_pdf_translator.utils import encryption
 from desktop_pdf_translator.utils.encryption import KEYSTORE_PREFIX, encrypt_api_key
 
 OLLAMA = "http://localhost:11434/v1"
-PROVIDER_IDS = {"openai", "gemini", "anthropic", "argos"}
+# Every registry entry, not a list of its own: a provider added to the
+# registry must need no test edited (#88).
+PROVIDER_IDS = {spec.id for spec in PROVIDERS}
 
 
 def ModelRef(**fields):
