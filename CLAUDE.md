@@ -430,6 +430,23 @@ if a test it wrote looks wrong, send it back with the reason rather than
 editing the test to fit the code. Trivial changes — a one-line fix with an
 obvious test — don't warrant the round trip.
 
+**Match the model to the step, not to the session.** A spawn with no `model`
+inherits the session's, which is usually more than the step needs. Pass the
+cheapest one that does the step well:
+
+| Step | `model` | Why |
+|---|---|---|
+| Locating files, call sites, uses of a name | `haiku` | finding, not judging |
+| Writing the red tests; deriving expected values by hand calculation | `sonnet` | bounded reasoning from a spec handed over in full |
+| Reviewing the finished cycle; reproducing a bug whose cause is unknown; any step whose spec is an Invariant above | `opus` | the judgement *is* the output — a defect it misses costs more than the tokens saved |
+
+A `fork` ignores `model` — one more reason these steps never use one. Effort
+can't be passed per spawn: it comes from an agent definition's frontmatter in
+`.claude/agents/`, and without one the subagent runs at the session's effort.
+Claude can't change the session's own model or effort either; when a task is
+plainly lighter than the session (a typo, a regenerated file, a one-line fix)
+or plainly heavier, say so in one line before starting, then carry on.
+
 **Where no harness reaches**, TDD gives way to a manual check, and the PR says
 what was exercised: the "Not covered" list below, the Cancel path, packaging /
 the PyInstaller spec (the frozen smoke suite, then a real translate through the
