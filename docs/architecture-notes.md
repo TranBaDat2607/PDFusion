@@ -1046,6 +1046,10 @@ to keep (#31), each with a test in `test_rag_isolation.py`:
   question from the list `get_chunks` returned, so it only ever scores that
   document. It runs off the event loop, and so does the surrounding-context
   step. It folds case, diacritics and `đ` the way the viewer's find does.
+- **The answer model reads every retrieved source, whole.** The chat lists
+  each source as a reference, and `_add_surrounding_context` puts a hit's
+  neighbours *before* it, so the 300-character cut each source used to get
+  kept the neighbour and dropped the passage that matched.
 - **The answer language goes in the answer prompt only.**
   `AskRequest.target_lang` is `None`-defaulted to `default_target_lang` and
   resolved when the question is accepted, as `/translate` does. The HyDE prompt
@@ -1197,9 +1201,11 @@ BabelDOC drives chunking, layout, and PDF reassembly; it delegates the actual te
 
    - `translate(text: str) -> str` — main entrypoint
    - `get_formular_placeholder(id) -> (placeholder, regex)` — formula preservation
-   - `get_rich_text_left_placeholder(id)` / `get_rich_text_right_placeholder(id)` — rich-text span tags
+   - `get_rich_text_left_placeholder(id)` / `get_rich_text_right_placeholder(id)` — rich-text span tags, each a `(placeholder, regex)` tuple. BabelDOC compiles `[1]` as the shape of placeholders an LLM may have invented and deletes every match a paragraph doesn't own; while these returned bare strings, `[1]` of `"<b\d+>"` was `"b"`, and every `b`, `B` and `/` left those paragraphs' translations
    - `restore_formular_placeholder(text, id, original)` — post-processing
    - attributes `lang_in`, `lang_out`
+
+   None of them implements `do_llm_translate`, so BabelDOC never sends its own LLM prompt — the one that explains `{v1}` and `<b0>` — and hands `translate()` paragraphs with those placeholders already in them. `BaseTranslator._translation_instructions` is therefore the one prompt every LLM backend sends, and it names the placeholders; `tests/test_translation_prompts.py` holds it to what `get_formular_placeholder` and the rich-text pair actually produce.
 
    To add another backend (Google Translate, Helsinki opus-mt, NLLB, …), follow the same shape as `translators/openai_translator.py` and add a `ProviderSpec` for it (see "Provider registry" below). The bundled BabelDOC ships only an OpenAI-compatible translator — no built-in Google/DeepL.
 
@@ -1212,7 +1218,7 @@ BabelDOC drives chunking, layout, and PDF reassembly; it delegates the actual te
 
    Transport failures carry no status code, so `is_retryable_translation_error` matches them by class **name along the MRO** (`_RETRYABLE_ERROR_NAMES`) — never `isinstance`, because `base.py` has to import with none of the provider SDKs or httpx installed. Two names cover everything, which is the whole reason it walks the MRO instead of testing the concrete class: `APIConnectionError`, because openai and anthropic funnel every transport failure into it via their `except Exception` fallback and both SDKs' `APITimeoutError` subclasses it; and `TransportError`, because google-genai does *not* wrap, so raw httpx exceptions arrive here and all of them derive from it. Listing leaf names instead (`ReadTimeout`, `ConnectError`, …) is the version that shipped first, and it silently missed `ReadError`, `WriteError`, `NetworkError`, `ProxyError` and `CloseError` — on Gemini, a socket-level read failure stayed an immediately-lost paragraph.
 
-   `max_qps` (an `Optional[float]` on each service's settings, `None` = the built-in per-service default in `_DEFAULT_QPS_BY_SERVICE`) is popped in `BaseTranslator.__init__` like the other cross-cutting kwargs and applied to the shared limiter **once, at construction** — not per-call, since a translator's `max_qps` never changes over its lifetime and re-applying it on every paragraph would take the limiter's lock to write back the same value. It *is* applied unconditionally, resolving `None` through `default_qps_for()`, because the limiter outlives the translator: skipping the call when no override is set would let a cleared one survive — raise the rate once, delete the line from `config.toml`, and the sidecar keeps running at the raised rate until it restarts. There's no Settings-sheet control or `PUT /config` field for it yet; the only way to change it today is `<service>.max_qps` in `config.toml` (see the commented examples in `default_config.toml`), most relevant for Anthropic's default of 1.0 QPS (sized for its ~50 RPM entry tier — a higher tier gets nowhere near its real limit without overriding this).
+   `max_qps` (an `Optional[float]` on each service's settings, `None` = the built-in per-service default in `_DEFAULT_QPS_BY_SERVICE`) is popped in `BaseTranslator.__init__` like the other cross-cutting kwargs and applied to the shared limiter **once, at construction** — not per-call, since a translator's `max_qps` never changes over its lifetime and re-applying it on every paragraph would take the limiter's lock to write back the same value. It *is* applied unconditionally, resolving `None` through `default_qps_for()`, because the limiter outlives the translator: skipping the call when no override is set would let a cleared one survive — raise the rate once, delete the line from `config.toml`, and the sidecar keeps running at the raised rate until it restarts. There's no Settings-sheet control for it; it's set per provider by `PUT /providers/{id}` or as `max_qps` under `[providers.<id>]` in `config.toml`, most relevant for Anthropic's default of 1.0 QPS (sized for its ~50 RPM entry tier — a higher tier gets nowhere near its real limit without overriding this).
 
    A new backend must do the same three things every existing one does: check `self.is_cancelled()` at the very top of `translate()` (before the cache lookup — a cancelled job shouldn't even pay for a cache read); add `except TranslationCancelled: return text` **before** `except Exception` — reversed, a cancelled paragraph gets funnelled into `_handle_translation_error` and counted as a failure it wasn't; and set `_SERVICE_NAME` if it wants rate limiting at all — `None` genuinely opts out, handled by an explicit branch in `_call_with_backoff` rather than passed through, since `get_rate_limiter(None)` would otherwise build a real `None`-keyed bucket at the fallback rate and share it between every backend that never named a service. (That branch re-checks the cancel flag itself, so opting out of the limiter doesn't also opt out of the cancel check that rode on its `acquire()`.) `cancel_event` is threaded in by `PDFProcessor` (one `threading.Event` per job), so a Cancel click stops new LLM calls within one in-flight paragraph per worker thread — the asyncio-level `task.cancel()` alone never reached code already running synchronously on a BabelDOC worker thread. Argos gets the same top-of-`translate()` cancel check but no rate limiter or backoff (`_SERVICE_NAME` stays `None`) — it's local, and the existing "a late `event.set()` on an abandoned batch entry is harmless" behavior already covers it.
 
@@ -1527,6 +1533,24 @@ provider (#32). README has the recipe. Four rules hold that together:
   keys and discovering models"); a refused parameter is adapted to on the
   first paragraph instead. The wording matched is OpenAI's documented one; Anthropic's has not been captured, so if a Claude model still fails on
   `temperature`, compare its message with the markers first.
+- **A Claude paragraph is asked for at low effort, a chat answer is not.**
+  `AnthropicTranslator._effort_kwargs` sends `output_config={"effort": "low"}`
+  from `translate` and `validate_configuration`: a model that thinks by default
+  (Claude Opus 5, Claude Sonnet 5) would otherwise spend its default effort on
+  every paragraph of a document. `effort` is in `_ADAPTABLE_PARAMS` because
+  Claude Haiku 4.5 answers 400 to it, and `param_compat._ALSO_NAMED` lets a
+  refusal that names only `output_config` count for it. Haiku 4.5's message is
+  not captured either, so a Haiku 4.5 run that fails every paragraph points
+  here first. `generate`
+  sends none, so chat keeps the model's default.
+- **A reply that stopped early is a failure, not a translation.** Thinking
+  counts toward the token cap, so on a model that thinks by default a cap
+  sized for the reply can end it mid-sentence. Claude's `max_tokens`,
+  `refusal` and `model_context_window_exceeded` stop reasons, OpenAI's
+  `finish_reason == "length"` and Gemini's `MAX_TOKENS` go through
+  `_handle_translation_error` in `translate` (counted, never cached) and raise
+  in `generate` (the chat's `error` event). The same reason sized the RAG caps:
+  1024 for HyDE, 4000 for the answer.
 - **Model suggestions are not a whitelist.** `/config/options` lists each
   service's default first, and `tests/test_config_api.py` fails when a default
   is missing from its list — how `gemini-1.5-flash` stayed on offer after
@@ -1885,7 +1909,7 @@ deliberately not implemented: the panes scroll and zoom independently.
 ## Configuration
 
 - Runtime config: `config.toml` under the data root (encrypted API keys) — `%LOCALAPPDATA%\PDFusion` on Windows, `~/.local/share/PDFusion` on Linux, `~/Library/Application Support/PDFusion` on macOS. Every store resolves that root through `utils/paths.appdata_dir()`, the same way the shell's `sidecar.rs:appdata_dir` does, and the shell exports its answer as `PDFUSION_DATA_DIR` so the two cannot disagree (see "Cross-platform"). Python used to hardcode `~/AppData/Local/PDFusion`, which is a different folder wherever Local AppData has been relocated and nobody's convention off Windows; `ConfigManager` copies a `config.toml` left at the old root, once (`adopt_legacy_config`), so settings and keys survive the move.
-- Defaults / reference: `config/default_config.toml`.
+- Defaults: the field defaults of the Pydantic models in `config/models.py`.
 - `.env` is auto-loaded via `python-dotenv` and overrides the TOML, except an API key for a service set to its own endpoint (see "LLM endpoints and models"). It's searched at the **repo root** (resolved from `__file__`, not `cwd` — `cwd` is non-writable `C:\Program Files\…` on an installed launch) and in the AppData config dir. See `config/manager.py:_load_dotenv`.
 - Singleton: `get_config_manager()` / `get_settings()` from `desktop_pdf_translator.config`.
 - Keys and parameters are under `[providers.<id>]`; the model that translates is `translation.model` and the one that answers chat is `rag.answer_model`. A config from before #85 converts as it loads; see "Providers and model choices in config.toml".

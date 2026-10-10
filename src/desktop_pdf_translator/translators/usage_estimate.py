@@ -24,13 +24,13 @@ _CJK = re.compile(
     "[぀-ヿ㐀-䶿一-鿿豈-﫿가-힯ｦ-ﾟ]"
 )
 
-# The instructions every paragraph is sent with: the system prompt in
-# `_create_translation_prompt` (OpenAI, Anthropic and Gemini are within a few
-# characters of each other) plus the "Translate this text:" lead-in, at
-# CHARS_PER_TOKEN. The Vietnamese prompt is the longer one.
+# The instructions every paragraph is sent with: the text
+# `BaseTranslator._translation_instructions` gives OpenAI, Anthropic and Gemini
+# alike, plus the "Translate this text:" lead-in, at CHARS_PER_TOKEN. The
+# Vietnamese prompt is the longer one.
 # `tests/test_usage_estimate.py` holds these to the real prompts.
-PROMPT_TOKENS_VIETNAMESE = 178
-PROMPT_TOKENS_OTHER = 113
+PROMPT_TOKENS_VIETNAMESE = 197
+PROMPT_TOKENS_OTHER = 179
 
 # A translation takes more tokens than its source: o200k counts 1.3x for an
 # English paragraph in Vietnamese, 1.4x in Japanese.

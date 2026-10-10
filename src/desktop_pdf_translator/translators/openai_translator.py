@@ -8,7 +8,7 @@ from typing import Any, Dict, FrozenSet, List, Optional
 from openai import OpenAI
 
 from ..providers.registry import provider
-from .base import BaseTranslator, LANGUAGE_DISPLAY_NAMES, TranslationCancelled
+from .base import BaseTranslator, TranslationCancelled
 from .translation_cache import llm_cache_get as _llm_cache_get, llm_cache_set as _llm_cache_set
 
 
@@ -93,6 +93,13 @@ class OpenAITranslator(BaseTranslator):
                 ),
                 self._ADAPTABLE_PARAMS,
             )
+            if getattr(response.choices[0], "finish_reason", None) == "length":
+                # A reasoning model's reasoning counts toward the token cap, so
+                # the reply can end mid-sentence; taken as whole, it would be
+                # cached and printed into the PDF.
+                return self._handle_translation_error(
+                    RuntimeError("The model stopped at its token limit"), text
+                )
             content = response.choices[0].message.content
             translated_text = (content or "").strip()
             if not translated_text:
@@ -143,45 +150,18 @@ class OpenAITranslator(BaseTranslator):
             ),
             self._ADAPTABLE_PARAMS,
         )
+        if getattr(response.choices[0], "finish_reason", None) == "length":
+            # Raised, so the chat shows an error rather than a cut-off answer.
+            raise RuntimeError("The model stopped at its token limit")
         content = response.choices[0].message.content
         return content.strip() if content else None
 
     def _create_translation_prompt(self, text: str) -> List[Dict[str, str]]:
-        """Create optimized translation prompt for Vietnamese."""
-        source_lang = LANGUAGE_DISPLAY_NAMES.get(self.lang_in, self.lang_in)
-        target_lang = LANGUAGE_DISPLAY_NAMES.get(self.lang_out, self.lang_out)
-        
-        # Create system prompt with Vietnamese optimization
-        if self.lang_out == "vi":
-            system_prompt = f"""You are a professional translator specializing in Vietnamese language.
-Translate the given text from {source_lang} to {target_lang} with the following guidelines:
-
-1. Maintain natural Vietnamese syntax and grammar
-2. Use appropriate Vietnamese honorifics and formality levels
-3. Preserve technical terms when appropriate, but provide Vietnamese equivalents when possible
-4. Keep mathematical formulas, code, and special formatting intact
-5. Maintain the original meaning and tone
-6. Use proper Vietnamese punctuation and spacing rules
-7. For academic or technical content, prioritize clarity and accuracy
-
-Translate ONLY the text content. Do not add explanations, notes, or commentary."""
-        else:
-            system_prompt = f"""You are a professional translator.
-Translate the given text from {source_lang} to {target_lang} while:
-
-1. Maintaining the original meaning and context
-2. Preserving mathematical formulas, code, and special formatting
-3. Using natural, fluent language in the target language
-4. Keeping technical terms accurate
-5. Maintaining appropriate formality level
-
-Translate ONLY the text content. Do not add explanations, notes, or commentary."""
-        
         return [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": f"Translate this text:\n\n{text}"}
+            {"role": "system", "content": self._translation_instructions()},
+            {"role": "user", "content": f"Translate this text:\n\n{text}"},
         ]
-    
+
     def validate_configuration(self) -> tuple[bool, str]:
         """Validate OpenAI configuration."""
         try:

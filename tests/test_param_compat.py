@@ -254,3 +254,100 @@ def test_anthropic_reaches_a_model_that_refuses_temperature():
     assert ["temperature" in call for call in messages.calls] == [True, False]
     assert translator.generate("What does it say?") == "Xin chào"
     assert "temperature" not in messages.calls[-1]
+
+
+class _EffortMessages:
+    """Records every request; refuses `output_config` when `refuses_effort`."""
+
+    def __init__(self, refuses_effort: bool = False, message: str | None = None) -> None:
+        self.calls: List[dict] = []
+        self.refuses_effort = refuses_effort
+        self.message = message or (
+            "Error code: 400 - output_config.effort: This model does not "
+            "support the effort parameter."
+        )
+
+    def create(self, **kwargs):
+        self.calls.append(kwargs)
+        if self.refuses_effort and "output_config" in kwargs:
+            raise _SdkError(self.message, 400)
+        return SimpleNamespace(
+            content=[SimpleNamespace(type="text", text="Xin chào")],
+            stop_reason="end_turn",
+        )
+
+
+def _anthropic_with(messages, model: str = "claude-haiku-4-5") -> AnthropicTranslator:
+    # Anthropic's built-in 1 QPS would hold each repeat request back a second.
+    translator = AnthropicTranslator(
+        lang_in="en", lang_out="vi", api_key="sk-ant-test", model=model, max_qps=100
+    )
+    translator.client = SimpleNamespace(messages=messages)
+    return translator
+
+
+def test_anthropic_translation_asks_for_low_effort():
+    """A paragraph needs no deep reasoning; on models that think by default,
+    effort is what keeps every paragraph from paying for it."""
+    messages = _EffortMessages()
+
+    assert _anthropic_with(messages).translate("Hello") == "Xin chào"
+
+    assert messages.calls[0]["output_config"] == {"effort": "low"}
+
+
+def test_anthropic_reaches_a_model_that_refuses_effort():
+    messages = _EffortMessages(refuses_effort=True)
+    translator = _anthropic_with(messages)
+
+    assert translator.translate("Hello") == "Xin chào"
+    assert translator.failed_translations == 0
+    assert ["output_config" in call for call in messages.calls] == [True, False]
+
+    assert translator.translate("Hello again") == "Xin chào"
+    assert "output_config" not in messages.calls[-1]
+    assert len(messages.calls) == 3
+
+
+def test_anthropic_validation_sends_what_translation_sends():
+    messages = _EffortMessages()
+
+    assert _anthropic_with(messages).validate_configuration() == (
+        True,
+        "Configuration is valid",
+    )
+
+    assert messages.calls[0]["output_config"] == {"effort": "low"}
+
+
+def test_anthropic_chat_answers_keep_the_models_default_effort():
+    messages = _EffortMessages()
+
+    assert _anthropic_with(messages).generate("question") == "Xin chào"
+
+    assert "output_config" not in messages.calls[0]
+
+
+_CONTAINER_REFUSED = "Error code: 400 - output_config: Extra inputs are not permitted"
+
+
+def test_anthropic_reaches_an_endpoint_that_refuses_effort_by_its_container():
+    """A proxy behind a custom base_url may name `output_config`, not `effort`."""
+    messages = _EffortMessages(refuses_effort=True, message=_CONTAINER_REFUSED)
+    translator = _anthropic_with(messages)
+
+    assert translator.translate("Hello") == "Xin chào"
+    assert translator.failed_translations == 0
+    assert ["output_config" in call for call in messages.calls] == [True, False]
+
+    translator.translate("Hello again")
+    assert "output_config" not in messages.calls[-1]
+
+
+def test_anthropic_validation_adapts_to_a_refused_effort():
+    messages = _EffortMessages(refuses_effort=True)
+
+    assert _anthropic_with(messages).validate_configuration() == (
+        True,
+        "Configuration is valid",
+    )

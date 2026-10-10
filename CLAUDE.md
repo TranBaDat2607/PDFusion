@@ -327,9 +327,9 @@ either — only a real translate through the frozen exe catches them.
 - Frontend code imports the **generated** wire types
   (`import type { components } from "@/lib/api-types"`), never hand-written
   mirrors — three had already drifted before this existed (#13, #14, #27).
-- Runtime config is `config.toml` under the data root; defaults and reference
-  live in `config/default_config.toml`; `.env` overrides the TOML. Access via
-  `get_config_manager()` / `get_settings()`.
+- Runtime config is `config.toml` under the data root; the defaults are the
+  field defaults of the Pydantic models in `config/models.py`; `.env`
+  overrides the TOML. Access via `get_config_manager()` / `get_settings()`.
 - Logs: `logs/app.log` (sidecar) and `logs/shell.log` (Rust) under the data
   root, rotating at 5 MB × 5.
 - `ruff` is the only Python gate and runs its default rule set; black/isort/
@@ -422,8 +422,10 @@ very context you are trying to keep out — for:
   to read off the code's output.
 - **Reviewing the finished cycle** before calling it done: does each test assert
   something the spec requires, would it fail if that behaviour broke, and did
-  any assertion get loosened between red and green? Use a read-only agent type
-  (`Explore`) so the review cannot quietly "fix" what it finds.
+  any assertion get loosened between red and green? Use an agent type without
+  Edit/Write (`Plan`) so the review cannot quietly "fix" what it finds.
+  `Explore` reads excerpts rather than whole files: enough to locate code, not
+  to review it.
 
 Pass the subagent only what the step needs, and take its output as it comes:
 if a test it wrote looks wrong, send it back with the reason rather than
@@ -440,9 +442,9 @@ cheapest one that does the step well:
 | Writing the red tests; deriving expected values by hand calculation | `sonnet` | bounded reasoning from a spec handed over in full |
 | Reviewing the finished cycle; reproducing a bug whose cause is unknown; any step whose spec is an Invariant above | `opus` | the judgement *is* the output — a defect it misses costs more than the tokens saved |
 
-A `fork` ignores `model` — one more reason these steps never use one. Effort
-can't be passed per spawn: it comes from an agent definition's frontmatter in
-`.claude/agents/`, and without one the subagent runs at the session's effort.
+A `fork` ignores `model` — one more reason these steps never use one. A spawn
+also takes `effort`; this file asks for none, so subagents run at the
+session's effort (a `fork` ignores `effort` too).
 Claude can't change the session's own model or effort either; when a task is
 plainly lighter than the session (a typo, a regenerated file, a one-line fix)
 or plainly heavier, say so in one line before starting, then carry on.
