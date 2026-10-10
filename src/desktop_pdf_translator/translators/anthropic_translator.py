@@ -13,27 +13,29 @@ from typing import Any, Dict, FrozenSet, Optional
 import anthropic
 
 from ..providers.registry import provider
-from .base import BaseTranslator, LANGUAGE_DISPLAY_NAMES, TranslationCancelled
+from .base import BaseTranslator, TranslationCancelled
 from .translation_cache import llm_cache_get as _llm_cache_get, llm_cache_set as _llm_cache_set
 
 
 logger = logging.getLogger(__name__)
 
 
+_CUT_SHORT = frozenset({"max_tokens", "refusal", "model_context_window_exceeded"})
+
+
 class AnthropicTranslator(BaseTranslator):
     """
     Anthropic Claude-based translator with Vietnamese language optimization.
 
-    Uses the official `anthropic` Python SDK (Messages API). Compatible with
-    Claude Opus / Sonnet / Haiku 4.x model families.
+    Uses the official `anthropic` Python SDK (Messages API).
     """
 
     _SERVICE_NAME = "anthropic"
 
-    # Claude Opus 4.7 and later answer 400 to a non-default `temperature`.
-    # `max_tokens` is required by the Messages API, so it is never left out.
-    # See `BaseTranslator._call_adapting`.
-    _ADAPTABLE_PARAMS = ("temperature",)
+    # Claude Opus 4.7 and later answer 400 to a non-default `temperature`, and
+    # Claude Haiku 4.5 to any `effort`. `max_tokens` is required by the
+    # Messages API, so it is never left out. See `BaseTranslator._call_adapting`.
+    _ADAPTABLE_PARAMS = ("temperature", "effort")
 
     def __init__(self, lang_in: str, lang_out: str, **kwargs):
         super().__init__(lang_in, lang_out, **kwargs)
@@ -66,6 +68,30 @@ class AnthropicTranslator(BaseTranslator):
             return {}
         return {"temperature": temperature}
 
+    @staticmethod
+    def _effort_kwargs(rejected: FrozenSet[str]) -> Dict[str, Any]:
+        """Low effort for a paragraph, unless this model refused effort.
+
+        A paragraph needs no deep reasoning, and a model that thinks by
+        default (Claude Opus 5, Claude Sonnet 5) would otherwise spend its
+        default effort on every one of a document's paragraphs. Chat answers
+        don't send this: they keep the model's own default.
+        """
+        if "effort" in rejected:
+            return {}
+        return {"output_config": {"effort": "low"}}
+
+    @staticmethod
+    def _stopped_early(response: Any) -> Optional[str]:
+        """The stop reason, when the reply can't be taken as whole.
+
+        Thinking counts toward `max_tokens` on a model that thinks by default,
+        so a cap sized for the reply can end it mid-sentence, and a refusal
+        can carry part of one; a full context window ends it the same way.
+        """
+        stop = getattr(response, "stop_reason", None)
+        return stop if stop in _CUT_SHORT else None
+
     def translate(self, text: str, **kwargs) -> str:
         self._note_translate_call()
         if self.is_cancelled():
@@ -91,9 +117,17 @@ class AnthropicTranslator(BaseTranslator):
                     messages=[{"role": "user", "content": user_prompt}],
                     timeout=30,
                     **self._sampling_kwargs(rejected, self.temperature),
+                    **self._effort_kwargs(rejected),
                 ),
                 self._ADAPTABLE_PARAMS,
             )
+
+            stop = self._stopped_early(response)
+            if stop:
+                # Taken as whole, it would be cached and printed into the PDF.
+                return self._handle_translation_error(
+                    RuntimeError(f"Anthropic stopped early ({stop})"), text
+                )
 
             translated_text = "".join(
                 block.text for block in response.content if getattr(block, "type", None) == "text"
@@ -143,6 +177,10 @@ class AnthropicTranslator(BaseTranslator):
             ),
             self._ADAPTABLE_PARAMS,
         )
+        stop = self._stopped_early(response)
+        if stop:
+            # Raised, so the chat shows an error rather than a cut-off answer.
+            raise RuntimeError(f"Claude stopped early ({stop})")
         text = "".join(
             block.text
             for block in response.content
@@ -151,36 +189,7 @@ class AnthropicTranslator(BaseTranslator):
         return text or None
 
     def _create_translation_prompt(self, text: str) -> tuple[str, str]:
-        source_lang = LANGUAGE_DISPLAY_NAMES.get(self.lang_in, self.lang_in)
-        target_lang = LANGUAGE_DISPLAY_NAMES.get(self.lang_out, self.lang_out)
-
-        if self.lang_out == "vi":
-            system_prompt = f"""You are a professional translator specializing in Vietnamese language.
-Translate the given text from {source_lang} to {target_lang} with the following guidelines:
-
-1. Maintain natural Vietnamese syntax and grammar
-2. Use appropriate Vietnamese honorifics and formality levels
-3. Preserve technical terms when appropriate, but provide Vietnamese equivalents when possible
-4. Keep mathematical formulas, code, and special formatting intact
-5. Maintain the original meaning and tone
-6. Use proper Vietnamese punctuation and spacing rules
-7. For academic or technical content, prioritize clarity and accuracy
-
-Translate ONLY the text content. Do not add explanations, notes, or commentary."""
-        else:
-            system_prompt = f"""You are a professional translator.
-Translate the given text from {source_lang} to {target_lang} while:
-
-1. Maintaining the original meaning and context
-2. Preserving mathematical formulas, code, and special formatting
-3. Using natural, fluent language in the target language
-4. Keeping technical terms accurate
-5. Maintaining appropriate formality level
-
-Translate ONLY the text content. Do not add explanations, notes, or commentary."""
-
-        user_prompt = f"Translate this text:\n\n{text}"
-        return system_prompt, user_prompt
+        return self._translation_instructions(), f"Translate this text:\n\n{text}"
 
     def validate_configuration(self) -> tuple[bool, str]:
         try:
@@ -196,6 +205,7 @@ Translate ONLY the text content. Do not add explanations, notes, or commentary."
                     messages=[{"role": "user", "content": "Hello"}],
                     timeout=10,
                     **self._sampling_kwargs(rejected, self.temperature),
+                    **self._effort_kwargs(rejected),
                 ),
                 self._ADAPTABLE_PARAMS,
                 backoff=False,

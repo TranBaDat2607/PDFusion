@@ -300,18 +300,19 @@ class EnhancedRAGChain:
             return question
 
         # No language instruction; see `answer_language_instruction`.
-        hyde_prompt = f"""Generate a brief hypothetical answer to this question. The answer should be written as if it came from a technical document or research paper. Keep it under 100 words.
+        hyde_prompt = f"""Write a brief hypothetical answer to this question, worded as a technical document or research paper would word it. Keep it under 100 words: it is embedded as a search query.
 
-Question: {question}
-
-Hypothetical answer:"""
+Question: {question}"""
 
         try:
             answer = await asyncio.to_thread(
                 model.translator.generate,
                 hyde_prompt,
                 "You generate hypothetical answers for document retrieval.",
-                150,
+                # A ceiling, not a length: the prompt's word limit sets that.
+                # A model that thinks by default counts thinking toward it, and
+                # at 150 could spend it all and silently skip HyDE.
+                1024,
             )
         except Exception as e:
             logger.warning(f"HyDE generation failed: {e}")
@@ -473,38 +474,34 @@ Hypothetical answer:"""
         if model is None:
             return self._generate_template_answer(question, pdf_sources)
 
-        context_parts = ["=== INFORMATION FROM PDF DOCUMENTS ==="]
-        for i, source in enumerate(pdf_sources[:3]):
+        # Every source, whole. The chat lists each one as a reference, so the
+        # answer must have read them all; and `_add_surrounding_context` puts
+        # a hit's neighbours *before* it, so cutting each to 300 characters
+        # kept the neighbour and dropped the passage that matched.
+        context_parts = []
+        for i, source in enumerate(pdf_sources):
             text = source.get('text', '')
             page = _page_label(source.get('metadata', {}))
-            context_parts.append(f"[PDF Source {i+1}, Page {page}]: {text[:300]}...")
+            context_parts.append(f"[Excerpt {i+1}, page {page}]\n{text}")
 
-        prompt = self._create_answer_prompt(question, '\n'.join(context_parts), answer_lang)
+        prompt = self._create_answer_prompt(question, '\n\n'.join(context_parts), answer_lang)
         return await self._generate_with_llm(model, prompt, answer_lang)
 
     def _create_answer_prompt(self, question: str, context: str, answer_lang: str = "auto") -> str:
-        """Create a comprehensive prompt for answer generation."""
+        """The prompt for one answer.
 
-        prompt = f"""
-You are an intelligent AI assistant specialized in answering questions based on PDF documents.
+        Excerpts first and the question after them, so the instruction the
+        model reads last is about this question. The math delimiters are named
+        because the chat's remark-math reads only `$…$` and `$$…$$`; a model's
+        `\\(…\\)` would show as raw text.
+        """
+        return f"""Excerpts from the document:
 
-TASK:
-- Answer questions comprehensively and accurately
-- Base your answer on the PDF context provided
-- {answer_language_instruction(answer_lang)}
-
-QUESTION: {question}
-
-AVAILABLE INFORMATION:
 {context}
 
-ANSWER REQUIREMENTS:
-Answer the question concisely, accurately, and completely. Provide only the final answer without dividing into multiple sections or detailed explanations.
+Question: {question}
 
-ANSWER:
-"""
-
-        return prompt
+Answer from the excerpts above, directly and concisely, without headed sections. The chat renders Markdown, and math written as $...$ or $$...$$, so use a list, table or formula where it makes the answer clearer. {answer_language_instruction(answer_lang)}"""
 
     async def _generate_with_llm(self, model: AnswerModel, prompt: str, answer_lang: str) -> str:
         """Generate an answer with the configured LLM.
@@ -513,11 +510,12 @@ ANSWER:
         model fails or returns nothing.
         """
         system = (
-            "You are an intelligent AI assistant that answers questions based on "
-            "documents. " + answer_language_instruction(answer_lang)
+            "You answer questions about one PDF document from excerpts of it. "
+            + answer_language_instruction(answer_lang)
         )
         try:
-            answer = await asyncio.to_thread(model.translator.generate, prompt, system, 1000)
+            # Thinking counts toward this on a model that thinks by default.
+            answer = await asyncio.to_thread(model.translator.generate, prompt, system, 4000)
         except Exception as e:
             logger.error(f"Answer generation failed: {e}")
             raise AnswerGenerationError(describe_answer_error(model.service, e)) from e

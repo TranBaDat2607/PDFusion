@@ -384,9 +384,11 @@ class _Translator:
     def __init__(self, reply):
         self.reply = reply
         self.calls: List[Tuple[str, str]] = []
+        self.max_tokens: List[int] = []
 
     def generate(self, prompt: str, system: str = None, max_tokens: int = 1000):
         self.calls.append((prompt, system))
+        self.max_tokens.append(max_tokens)
         if isinstance(self.reply, BaseException):
             raise self.reply
         return self.reply
@@ -1014,3 +1016,76 @@ def test_the_real_ollama_entry_answers_when_chosen_and_is_never_a_fallback(
     monkeypatch.setattr(rag_chain_module, "get_settings", lambda: unchosen)
 
     assert chain._answer_model() is None
+
+
+def _enriched_source(index: int, neighbour_chars: int = 1000) -> Dict[str, Any]:
+    """A source as retrieval hands it over: a long neighbour before the match."""
+    matched = f"MATCHED-{index} " + "m" * 60 + f" END-{index}"
+    return {
+        "text": "...\n" + "n" * neighbour_chars + "\n" + matched,
+        "original_text": matched,
+        "metadata": {"page": index, "chunk_index": index},
+    }
+
+
+def test_the_answer_model_reads_the_whole_matched_chunk_behind_a_long_neighbour(
+    chain: EnhancedRAGChain,
+):
+    """The neighbours are context around the match. A long one in front must
+    not push the chunk that was actually retrieved out of the prompt."""
+    source = _enriched_source(0)
+    translator = _Translator("ok")
+
+    asyncio.run(
+        chain._generate_answer(
+            QUESTION, [source], AnswerModel(TranslationService.OPENAI, translator), "en"
+        )
+    )
+
+    (prompt, _system), = translator.calls
+    assert source["original_text"] in prompt
+    assert source["text"] in prompt
+
+
+def test_every_source_reaches_the_answer_model(chain: EnhancedRAGChain):
+    """The chat lists each source as a reference the user can click, so the
+    answer must have read every one of them."""
+    sources = [_enriched_source(i) for i in range(5)]
+    translator = _Translator("ok")
+
+    asyncio.run(
+        chain._generate_answer(
+            QUESTION, sources, AnswerModel(TranslationService.OPENAI, translator), "en"
+        )
+    )
+
+    (prompt, _system), = translator.calls
+    for source in sources:
+        assert source["original_text"] in prompt
+        assert source["text"] in prompt
+
+
+def test_the_models_are_given_room_to_think(
+    sidecar, two_papers, records: RecordsStore, chain: EnhancedRAGChain,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """A model that thinks by default counts thinking toward `max_tokens`; at
+    1000 for the answer and 150 for the HyDE text it could spend all of it
+    thinking and reply with nothing."""
+    index = _ready(records, run_index(two_papers[0]))
+    translator = _Translator("ok")
+    _answer_with(chain, monkeypatch, translator)
+
+    asyncio.run(
+        chain.answer_question(
+            question=QUESTION,
+            index_id=index.id,
+            document_id=index.document_id,
+            document_path="C:/papers/paper.pdf",
+            answer_lang="en",
+        )
+    )
+
+    hyde_tokens, answer_tokens = translator.max_tokens
+    assert hyde_tokens >= 1024
+    assert answer_tokens >= 4000

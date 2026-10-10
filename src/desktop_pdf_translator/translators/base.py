@@ -447,6 +447,45 @@ class BaseTranslator(ABC):
         """
         return None
 
+    def _translation_instructions(self) -> str:
+        """What every LLM backend tells its model, once per paragraph.
+
+        One text for all of them: three copies had already started to differ.
+        The placeholders are named because these backends implement no
+        `do_llm_translate`, so BabelDOC hands `translate()` paragraphs with
+        `{v1}` and `<b0>` already in them and never sends its own prompt, the
+        one that explains them.
+        """
+        source_lang = LANGUAGE_DISPLAY_NAMES.get(self.lang_in, self.lang_in)
+        target_lang = LANGUAGE_DISPLAY_NAMES.get(self.lang_out, self.lang_out)
+        formula, _pattern = self.get_formular_placeholder(1)
+        left, _left_pattern = self.get_rich_text_left_placeholder(0)
+        right, _right_pattern = self.get_rich_text_right_placeholder(0)
+        styled = f"{left}...{right}"
+        if self.lang_out == "vi":
+            rules = (
+                "- Write natural Vietnamese, with Vietnamese punctuation and spacing.\n"
+                "- Use the honorifics and formality level the source's register calls for.\n"
+                "- Translate a technical term into its established Vietnamese "
+                "equivalent; where there is none, keep the original term."
+            )
+        else:
+            rules = (
+                f"- Write natural, fluent {target_lang}, at the source's level of formality.\n"
+                f"- Translate a technical term into its established {target_lang} "
+                "equivalent; where there is none, keep the original term."
+            )
+        return (
+            f"You are translating a PDF from {source_lang} to {target_lang}, one "
+            "paragraph at a time. Each reply replaces the source paragraph in the "
+            "document's layout, so reply with the translation alone: a preface, "
+            "note or comment would be printed into the PDF.\n\n"
+            f"{rules}\n"
+            "- Keep formulas and code exactly as written.\n"
+            f"- The text may contain placeholders: {formula} stands for a formula, "
+            f"and {styled} marks styled text. Copy every placeholder through "
+            f"unchanged, keeping the words a {styled} pair wraps inside that pair."
+        )
 
     def get_formular_placeholder(self, placeholder_id: int) -> tuple[str, str]:
         """
@@ -464,11 +503,15 @@ class BaseTranslator(ABC):
         regex_pattern = f"{{\\s*v\\s*{placeholder_id}\\s*}}"
         return placeholder, regex_pattern
     
-    def get_rich_text_left_placeholder(self, placeholder_id: int | str):
-        return f"<b{placeholder_id}>"
+    # `(placeholder, regex)`, like `get_formular_placeholder`. BabelDOC
+    # compiles `[1]` of these as the shape of placeholders an LLM may have
+    # invented and deletes every match the paragraph doesn't own; given a bare
+    # "<b\d+>", `[1]` was "b", and every b, B and / left the translation.
+    def get_rich_text_left_placeholder(self, placeholder_id: int | str) -> tuple[str, str]:
+        return f"<b{placeholder_id}>", f"<\\s*b\\s*{placeholder_id}\\s*>"
 
-    def get_rich_text_right_placeholder(self, placeholder_id: int | str):
-        return f"</b{placeholder_id}>"
+    def get_rich_text_right_placeholder(self, placeholder_id: int | str) -> tuple[str, str]:
+        return f"</b{placeholder_id}>", f"<\\s*/\\s*b\\s*{placeholder_id}\\s*>"
     
     def restore_formular_placeholder(self, text: str, placeholder_id: int, original_formula: str) -> str:
         """

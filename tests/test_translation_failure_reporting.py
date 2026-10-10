@@ -18,6 +18,7 @@ document.
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
 
 import threading
 import urllib.error
@@ -299,3 +300,147 @@ def test_an_artifact_outside_the_job_dir_is_refused(tmp_path: Path, temp_transla
 
 def test_a_missing_artifact_is_refused(temp_translate_dir: Path):
     assert not is_cacheable_artifact(None, temp_translate_dir, "paper", 0)
+
+
+# ---------------------------------------------------------------------------
+# A reply cut short
+# ---------------------------------------------------------------------------
+
+
+class _Messages:
+    """An Anthropic client's `messages`, answering with one fixed response."""
+
+    def __init__(self, text: str, stop_reason: str):
+        self.response = SimpleNamespace(
+            content=[SimpleNamespace(type="text", text=text)], stop_reason=stop_reason
+        )
+
+    def create(self, **kwargs):
+        return self.response
+
+
+def _anthropic(messages: _Messages, monkeypatch: pytest.MonkeyPatch, cached: list):
+    from desktop_pdf_translator.translators import anthropic_translator
+
+    _stub_cache(anthropic_translator, monkeypatch, cached)
+    translator = anthropic_translator.AnthropicTranslator(
+        lang_in="en", lang_out="vi", api_key="sk-ant-test", model="claude-opus-5"
+    )
+    translator.client = SimpleNamespace(messages=messages)
+    return translator
+
+
+@pytest.mark.parametrize(
+    "stop_reason", ["max_tokens", "refusal", "model_context_window_exceeded"]
+)
+def test_a_paragraph_cut_short_is_a_failure_and_never_cached(
+    stop_reason: str, monkeypatch: pytest.MonkeyPatch
+):
+    """A model that thinks by default counts thinking toward `max_tokens`, so a
+    cap sized for the reply can end it mid-sentence; a refusal can carry part
+    of one. Taken as whole, it was cached and printed into the PDF."""
+    cached: list = []
+    translator = _anthropic(_Messages("Xin chào, đây là", stop_reason), monkeypatch, cached)
+
+    out = translator.translate("Hello, this is a long paragraph.")
+
+    assert out == "Hello, this is a long paragraph."
+    assert translator.failed_translations == 1
+    assert cached == []
+
+
+@pytest.mark.parametrize("stop_reason", ["max_tokens", "refusal"])
+def test_a_chat_answer_cut_short_raises(stop_reason: str, monkeypatch: pytest.MonkeyPatch):
+    """`generate`'s failures become the chat's `error` event; a cut-off answer
+    shown as the answer is the failure #31 removed."""
+    translator = _anthropic(_Messages("The paper says", stop_reason), monkeypatch, [])
+
+    with pytest.raises(RuntimeError, match=stop_reason):
+        translator.generate("What does the paper say?")
+
+
+def _stub_cache(module, monkeypatch: pytest.MonkeyPatch, cached: list) -> None:
+    from desktop_pdf_translator.translators import rate_limiter
+
+    rate_limiter._LIMITERS.clear()
+    monkeypatch.setattr(module, "_llm_cache_get", lambda *a, **k: None)
+    monkeypatch.setattr(module, "_llm_cache_set", lambda *a, **k: cached.append(a))
+
+
+def _openai_cut_short(monkeypatch: pytest.MonkeyPatch, cached: list):
+    from desktop_pdf_translator.translators import openai_translator
+
+    _stub_cache(openai_translator, monkeypatch, cached)
+    translator = openai_translator.OpenAITranslator(
+        lang_in="en", lang_out="vi", api_key="sk-test", model="gpt-test"
+    )
+    response = SimpleNamespace(
+        choices=[
+            SimpleNamespace(
+                message=SimpleNamespace(content="Xin chào, đây là"), finish_reason="length"
+            )
+        ]
+    )
+    translator.client = SimpleNamespace(
+        chat=SimpleNamespace(completions=SimpleNamespace(create=lambda **kw: response))
+    )
+    return translator
+
+
+def test_an_openai_paragraph_cut_short_is_a_failure_and_never_cached(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    cached: list = []
+    translator = _openai_cut_short(monkeypatch, cached)
+
+    out = translator.translate("Hello, this is a long paragraph.")
+
+    assert out == "Hello, this is a long paragraph."
+    assert translator.failed_translations == 1
+    assert cached == []
+
+
+def test_an_openai_chat_answer_cut_short_raises(monkeypatch: pytest.MonkeyPatch):
+    translator = _openai_cut_short(monkeypatch, [])
+
+    with pytest.raises(RuntimeError):
+        translator.generate("What does the paper say?")
+
+
+def _gemini_cut_short(monkeypatch: pytest.MonkeyPatch, cached: list):
+    from desktop_pdf_translator.translators import gemini_translator
+
+    _stub_cache(gemini_translator, monkeypatch, cached)
+    translator = gemini_translator.GeminiTranslator(
+        lang_in="en", lang_out="vi", api_key="test-key"
+    )
+    response = SimpleNamespace(
+        text="Xin chào, đây là",
+        candidates=[
+            SimpleNamespace(content=object(), finish_reason=SimpleNamespace(name="MAX_TOKENS"))
+        ],
+    )
+    translator.client = SimpleNamespace(
+        models=SimpleNamespace(generate_content=lambda **kw: response)
+    )
+    return translator
+
+
+def test_a_gemini_paragraph_cut_short_is_a_failure_and_never_cached(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    cached: list = []
+    translator = _gemini_cut_short(monkeypatch, cached)
+
+    out = translator.translate("Hello, this is a long paragraph.")
+
+    assert out == "Hello, this is a long paragraph."
+    assert translator.failed_translations == 1
+    assert cached == []
+
+
+def test_a_gemini_chat_answer_cut_short_raises(monkeypatch: pytest.MonkeyPatch):
+    translator = _gemini_cut_short(monkeypatch, [])
+
+    with pytest.raises(RuntimeError):
+        translator.generate("What does the paper say?")

@@ -3,17 +3,35 @@ Google Gemini translator implementation with Vietnamese optimization.
 """
 
 import logging
+import re
 from typing import Optional
 
 from google import genai
 from google.genai import types as genai_types
 
 from ..providers.registry import provider
-from .base import BaseTranslator, LANGUAGE_DISPLAY_NAMES, TranslationCancelled
+from .base import BaseTranslator, TranslationCancelled
 from .translation_cache import llm_cache_get as _llm_cache_get, llm_cache_set as _llm_cache_set
 
 
 logger = logging.getLogger(__name__)
+
+# `**word**` and `*word*`: the marker hugs the words inside it and has a
+# space or punctuation outside it. Without the outer guards, `x**2 + y**2`
+# read as bold and `{v1}*{v2}*{v3}` (formula placeholders) as italic; a
+# lone `*` (`2 * 3`, a footnote's `nghĩa*`) never pairs at all.
+_BOLD = re.compile(r"(?<![\w*{}])\*\*(?=\S)(.+?)(?<=\S)\*\*(?![\w*{}])")
+_ITALIC = re.compile(
+    r"(?<![\w*{}])\*(?=[^\s*])([^*\n]+?)(?<=[^\s*])\*(?![\w*{}])"
+)
+
+
+def _cut_short(response) -> bool:
+    """Whether the reply hit `max_output_tokens`, which a thinking model's
+    thinking counts toward, so what came back can end mid-sentence."""
+    candidates = getattr(response, "candidates", None) or []
+    reason = getattr(candidates[0], "finish_reason", None) if candidates else None
+    return getattr(reason, "name", reason) == "MAX_TOKENS"
 
 
 class GeminiTranslator(BaseTranslator):
@@ -94,6 +112,12 @@ class GeminiTranslator(BaseTranslator):
                     text,
                 )
 
+            if _cut_short(response):
+                # Taken as whole, it would be cached and printed into the PDF.
+                return self._handle_translation_error(
+                    RuntimeError("Gemini stopped at its token limit"), text
+                )
+
             translated_text = response.text.strip()
             if not translated_text:
                 return self._handle_translation_error(
@@ -133,55 +157,22 @@ class GeminiTranslator(BaseTranslator):
                 config=config,
             )
         )
+        if _cut_short(response):
+            # Raised, so the chat shows an error rather than a cut-off answer.
+            raise RuntimeError("Gemini stopped at its token limit")
         text = response.text
         return text.strip() if text else None
 
     def _create_translation_prompt(self, text: str) -> str:
-        """Create optimized translation prompt for Vietnamese."""
-        source_lang = LANGUAGE_DISPLAY_NAMES.get(self.lang_in, self.lang_in)
-        target_lang = LANGUAGE_DISPLAY_NAMES.get(self.lang_out, self.lang_out)
-        
-        # Create prompt with Vietnamese optimization
-        if self.lang_out == "vi":
-            prompt = f"""You are an expert Vietnamese translator. Translate the following text from {source_lang} to {target_lang}.
+        return f"{self._translation_instructions()}\n\nTranslate this text:\n\n{text}"
 
-Guidelines for Vietnamese translation:
-1. Use natural, fluent Vietnamese that sounds native
-2. Apply appropriate Vietnamese grammar and sentence structure
-3. Use proper Vietnamese honorifics (anh/chị/em) when contextually appropriate
-4. Maintain technical accuracy for specialized terms
-5. Preserve mathematical formulas, equations, and code exactly as written
-6. Keep the original tone and formality level
-7. Use correct Vietnamese punctuation and spacing
-8. For academic content, prioritize clarity and precision
-
-Text to translate:
-{text}
-
-Provide only the Vietnamese translation without any explanations or notes:"""
-        else:
-            prompt = f"""You are a professional translator. Translate the following text from {source_lang} to {target_lang}.
-
-Requirements:
-1. Maintain the original meaning and context exactly
-2. Use natural, fluent language in {target_lang}
-3. Preserve all mathematical formulas, equations, and code exactly
-4. Keep technical terms accurate
-5. Maintain the same formality level as the source
-6. Do not add explanations or commentary
-
-Text to translate:
-{text}
-
-Provide only the translation:"""
-        
-        return prompt
-    
     def _postprocess_text(self, text: str) -> str:
         if self.lang_out == "vi":
-            # Strip Gemini's markdown decorations before delegating to the shared
-            # punctuation/quote cleanup.
-            text = text.replace("**", "").replace("*", "")
+            # Strip Gemini's markdown emphasis before delegating to the shared
+            # punctuation/quote cleanup. Only asterisks that wrap words: removing
+            # every `*` also took footnote markers and `2 * 3` out of the PDF.
+            text = _BOLD.sub(r"\1", text)
+            text = _ITALIC.sub(r"\1", text)
         return super()._postprocess_text(text)
 
     def validate_configuration(self) -> tuple[bool, str]:

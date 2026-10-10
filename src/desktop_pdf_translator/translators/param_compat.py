@@ -42,6 +42,11 @@ _REFUSAL_MARKERS = (
     "not allowed",
 )
 
+# Names a refusal may use for a parameter besides its own. Anthropic's `effort`
+# travels inside `output_config`, and an endpoint that doesn't take it can
+# refuse the container ("output_config: Extra inputs are not permitted").
+_ALSO_NAMED = {"effort": ("output_config",)}
+
 _REJECTED: Dict[EndpointKey, Set[str]] = {}
 _LOCK = threading.Lock()
 
@@ -72,6 +77,6 @@ def rejected_param(
     if not any(marker in text for marker in _REFUSAL_MARKERS):
         return None
     for param in candidates:
-        if param in text:
+        if any(name in text for name in (param, *_ALSO_NAMED.get(param, ()))):
             return param
     return None
