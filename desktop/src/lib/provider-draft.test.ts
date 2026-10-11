@@ -4,6 +4,9 @@ import {
   rebaseDraft,
   selectsAnswerModel,
   addCustomModel,
+  autoVerifyKey,
+  autoVerifyRequest,
+  currentCheck,
   draftFrom,
   draftProblem,
   endpointNeedsKey,
@@ -19,6 +22,7 @@ import {
   timeAgo,
   toggleModel,
   verifyRequest,
+  type KeyCheck,
   type ModelCatalog,
   type ProviderDraft,
   type ProviderInfo,
@@ -412,6 +416,121 @@ describe("verifyRequest", () => {
     const p = provider({ requires_key: false, has_key: false, takes_endpoint: false });
     const req = verifyRequest(draft({ apiKey: "unused-typed-key" }), p);
     expect(req?.api_key).toBeUndefined();
+  });
+});
+
+describe("autoVerifyRequest", () => {
+  it("checks a typed key as soon as there is one", () => {
+    const p = provider({ has_key: false, takes_endpoint: false });
+    expect(autoVerifyRequest(draft({ apiKey: " sk-new " }), p)).toEqual({ api_key: "sk-new" });
+  });
+
+  it("checks a typed key against the draft endpoint", () => {
+    const p = provider({ has_key: false, takes_endpoint: true });
+    expect(autoVerifyRequest(draft({ apiKey: "sk-new", baseUrl: `${OLLAMA}/` }), p)).toEqual({
+      api_key: "sk-new",
+      base_url: OLLAMA,
+    });
+  });
+
+  it("checks nothing for an untouched draft with a saved key: the catalog lists that one", () => {
+    const p = provider({ has_key: true, key_state: "valid" });
+    expect(autoVerifyRequest(draftFrom(p), p)).toBeNull();
+  });
+
+  it("checks nothing when only the models were switched", () => {
+    const p = provider({ has_key: true, enabled_models: [] });
+    expect(autoVerifyRequest(draft({ enabled: ["gpt-4.1"] }), p)).toBeNull();
+  });
+
+  it("checks nothing when the key is being cleared", () => {
+    const p = provider({ has_key: true });
+    expect(autoVerifyRequest(draft({ clearKey: true }), p)).toBeNull();
+  });
+
+  it("checks nothing while the endpoint isn't a URL the sidecar would accept", () => {
+    const p = provider({ has_key: false, takes_endpoint: true });
+    expect(autoVerifyRequest(draft({ apiKey: "sk-new", baseUrl: "localhost:11434" }), p)).toBeNull();
+  });
+
+  it("checks nothing for a new endpoint until the saved key is typed again for it", () => {
+    // Verifying would send the saved key to an endpoint it wasn't saved for.
+    const p = provider({ has_key: true, base_url: null, takes_endpoint: true });
+    expect(autoVerifyRequest(draft({ baseUrl: OLLAMA }), p)).toBeNull();
+  });
+
+  it("checks nothing for a new endpoint over an unreadable saved key not typed again", () => {
+    const p = provider({ has_key: false, key_state: "unreadable", takes_endpoint: true });
+    expect(autoVerifyRequest(draft({ baseUrl: OLLAMA }), p)).toBeNull();
+  });
+
+  it("checks a key typed again for a new endpoint", () => {
+    const p = provider({ has_key: true, base_url: null, takes_endpoint: true });
+    expect(autoVerifyRequest(draft({ apiKey: "sk-new", baseUrl: OLLAMA }), p)).toEqual({
+      api_key: "sk-new",
+      base_url: OLLAMA,
+    });
+  });
+
+  it("checks nothing for a keyless server whose endpoint is unchanged", () => {
+    const p = provider({ requires_key: false, base_url: OLLAMA, takes_endpoint: true });
+    expect(autoVerifyRequest(draftFrom(p), p)).toBeNull();
+  });
+
+  it("checks a keyless server's new endpoint", () => {
+    const p = provider({ requires_key: false, base_url: null, takes_endpoint: true });
+    expect(autoVerifyRequest(draft({ baseUrl: OLLAMA }), p)).toEqual({ base_url: OLLAMA });
+  });
+});
+
+describe("currentCheck", () => {
+  const p = provider({ has_key: false, takes_endpoint: true });
+  const checkFor = (d: ProviderDraft): KeyCheck => ({
+    request: autoVerifyKey(d, p)!,
+    message: "Found 2 models",
+    models: ["gpt-4.1", "gpt-4.1-mini"],
+    listed: ["gpt-4.1", "gpt-4.1-mini"],
+    listing: null,
+  });
+
+  it("is the check made for this very draft", () => {
+    const d = draft({ apiKey: "sk-a", baseUrl: OLLAMA });
+    const check = checkFor(d);
+    expect(currentCheck(check, d, p)).toBe(check);
+  });
+
+  it("survives a space typed after the key: the same key is sent", () => {
+    const check = checkFor(draft({ apiKey: "sk-a", baseUrl: OLLAMA }));
+    expect(currentCheck(check, draft({ apiKey: "sk-a ", baseUrl: OLLAMA }), p)).toBe(check);
+  });
+
+  it("survives a trailing slash on the endpoint: the same endpoint is sent", () => {
+    const check = checkFor(draft({ apiKey: "sk-a", baseUrl: OLLAMA }));
+    expect(currentCheck(check, draft({ apiKey: "sk-a", baseUrl: `${OLLAMA}/` }), p)).toBe(check);
+  });
+
+  it("survives switching models", () => {
+    const check = checkFor(draft({ apiKey: "sk-a" }));
+    expect(currentCheck(check, draft({ apiKey: "sk-a", enabled: ["gpt-4.1"] }), p)).toBe(check);
+  });
+
+  it("is none once a different key is typed", () => {
+    const check = checkFor(draft({ apiKey: "sk-a" }));
+    expect(currentCheck(check, draft({ apiKey: "sk-b" }), p)).toBeNull();
+  });
+
+  it("is none once the endpoint changes", () => {
+    const check = checkFor(draft({ apiKey: "sk-a", baseUrl: OLLAMA }));
+    expect(currentCheck(check, draft({ apiKey: "sk-a", baseUrl: "" }), p)).toBeNull();
+  });
+
+  it("is none when the draft has nothing left to check", () => {
+    const check = checkFor(draft({ apiKey: "sk-a" }));
+    expect(currentCheck(check, draft({ apiKey: "" }), p)).toBeNull();
+  });
+
+  it("is none when nothing was checked", () => {
+    expect(currentCheck(null, draft({ apiKey: "sk-a" }), p)).toBeNull();
   });
 });
 

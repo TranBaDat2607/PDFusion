@@ -1179,7 +1179,7 @@ Relatedly, **translation only moves off Argos onto a key that listed its
 models**. `PUT /config` did this itself until #88, when a key arrived in one
 of its blocks; now keys arrive only through `PUT /providers/{id}`, which never
 promotes, and the Models page makes the choice (`provider-draft.ts:
-selectsProvider`): only after Verify & save succeeded, never on "Save anyway".
+selectsProvider`): only after the key's check succeeded, never on "Save anyway".
 Promoting on a typo'd key used to move the user from a working offline
 translator onto one that fails every paragraph silently.
 
@@ -1631,18 +1631,31 @@ provider needs nothing here. The rules are `lib/provider-draft.ts`, pure and
 under vitest; `components/settings/ModelsTab.tsx` only draws them.
 
 - **Each card saves on its own.** A new key, or a key going to a new endpoint,
-  is checked first: *Verify & save* lists the key's models
-  (`POST /providers/{id}/verify`, never a completion), then `PUT
-  /providers/{id}`. When the check fails the button becomes **Save anyway**,
-  since a local server may simply not be running. Switching models on and off
-  needs no check — they come from the provider's own list — so the button is
-  a plain *Save*. Cache and Chat keep their own immediate switches.
+  is checked as it is typed — there is no Verify button. Once typing pauses
+  (`AUTO_VERIFY_DELAY_MS`) the card lists the key's models
+  (`POST /providers/{id}/verify`, never a completion) and opens the list to
+  choose from; Save waits for that check and reuses its result rather than
+  listing again, then `PUT /providers/{id}`. `autoVerifyRequest` decides what
+  is checked: only what Save would check, and never a draft the sidecar would
+  refuse (a half-typed URL, or a new endpoint whose saved key hasn't been
+  typed again — checking that would send the key where it wasn't saved for).
+  Nothing is checked while the base URL field has focus, or each pause would
+  send the typed key to a half-typed host; leaving the field starts the
+  check. A check answered after the field changed is discarded, and one is
+  matched to the draft by the request it sent (`currentCheck`), not cleared
+  per keystroke: a trailing space or slash sends the same request, starts no
+  new check, and a cleared one left Save on "Checking…" for good. When the check fails
+  the button becomes **Save anyway** straight away, since a local server may
+  simply not be running. Switching models on and off needs no check — they come from the
+  provider's own list. Cache and Chat keep their own immediate switches.
 - **The endpoint rule is met before the 422.** `endpointNeedsKey` warns under
   the base URL when a saved key — an unreadable one included
   (`hasSavedKey`) — would go to a new endpoint without being typed again.
 - **The model list** is the saved key's listing (`GET /providers/{id}/models`,
-  fetched when the list is opened), or, after *Verify* with a typed key, that
-  listing, since the catalog only describes the saved key. A switch per model;
+  fetched when the list is opened), or, once a typed key's check has run, that
+  check's listing (`currentCheck`), since the catalog only describes the saved
+  key. A saved key is re-checked by opening the list or Refresh, which moves
+  its `key_state`; with the Verify button gone there is no other way. A switch per model;
   what is on becomes `enabled_models`. Search matches every word; the models
   the non-chat filter hid come back with "Show all"; Refresh lists past the
   catalog; *Add* takes a name no list has. Switched-on names no list has come

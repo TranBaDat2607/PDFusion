@@ -42,6 +42,9 @@ import {
 } from "@/hooks/useProviders";
 import {
   addCustomModel,
+  autoVerifyKey,
+  autoVerifyRequest,
+  currentCheck,
   draftFrom,
   draftProblem,
   endpointNeedsKey,
@@ -56,7 +59,7 @@ import {
   selectsProvider,
   statusLine,
   toggleModel,
-  verifyRequest,
+  type KeyCheck,
   type OpenedFrom,
   type ProviderDraft,
 } from "@/lib/provider-draft";
@@ -65,6 +68,11 @@ import { cn } from "@/lib/utils";
 /** The DOM id of a provider's card, which the pickers' "Add an API key"
  *  scrolls to. */
 export const providerCardId = (id: string) => `provider-card-${id}`;
+
+/** How long typing has to pause before a key is checked: long enough that a
+ *  key typed by hand isn't sent to the provider one character at a time, short
+ *  enough that a pasted one lists its models straight away. */
+const AUTO_VERIFY_DELAY_MS = 600;
 
 interface ModelsTabProps {
   /** Opened from a picker for this provider: scroll to its card, and start
@@ -169,15 +177,19 @@ function ProviderCard({ provider, focused, focusProvider, openedFrom }: Provider
     baseline.current = provider;
   }, [provider]);
   const [showKey, setShowKey] = useState(false);
-  // Why the last Verify or Save stopped, or what Verify found.
+  // Why the last check or Save stopped, or what the check found.
   const [notice, setNotice] = useState<{ ok: boolean; text: string } | null>(null);
   // The provider turned the draft down. Saving again skips the check: a local
   // server may just not be running yet.
   const [saveAnyway, setSaveAnyway] = useState(false);
-  const [busy, setBusy] = useState<"verifying" | "saving" | null>(null);
-  // What a typed key's listing found. The catalog only describes the saved
-  // key, so until this key is saved its models come from here.
-  const [typedListing, setTypedListing] = useState<ModelCatalog | null>(null);
+  const [saving, setSaving] = useState(false);
+  // The last key and endpoint checked, so Save reuses the check that ran as
+  // they were typed instead of listing the models a second time.
+  const [check, setCheck] = useState<KeyCheck | null>(null);
+  // While the base URL is being typed nothing is checked: each pause would
+  // send the typed key to whatever host the field held at that moment
+  // (`https://api.groq.co`, `192.168.1.1` on the way to `.10`).
+  const [editingEndpoint, setEditingEndpoint] = useState(false);
   const [modelsOpen, setModelsOpen] = useState(false);
   const [endpointOpen, setEndpointOpen] = useState(!!provider.base_url);
 
@@ -193,62 +205,75 @@ function ProviderCard({ provider, focused, focusProvider, openedFrom }: Provider
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [catalog.data]);
 
-  const edit = (next: ProviderDraft, keepListing = true) => {
+  const edit = (next: ProviderDraft) => {
     setDraft(next);
     setNotice(null);
     setSaveAnyway(false);
-    if (!keepListing) setTypedListing(null);
   };
 
+  const checked = currentCheck(check, draft, provider);
+  // The catalog only describes the saved key, so until a typed key is saved
+  // its models come from its check.
+  const typedListing = checked?.listing ?? null;
   const listing = typedListing ?? catalog.data;
   const update = providerUpdate(draft, provider);
   const dirty = Object.keys(update).length > 0;
   const toVerify = needsVerify(draft, provider);
   const status = statusLine(provider, catalog.data, Date.now());
 
-  /** List with the draft's key and endpoint. The listing is kept for the
-   *  model list, and seeds the enabled models when none are yet. */
-  const runVerify = async (): Promise<{ draft: ProviderDraft; listed: string[] } | null> => {
-    const request = verifyRequest(draft, provider);
-    if (!request) {
-      setNotice({ ok: false, text: "Enter an API key first." });
-      return null;
-    }
-    setBusy("verifying");
-    try {
-      const result = await verifyProvider(provider.id, request);
-      if (!result.valid) {
-        setNotice({ ok: false, text: result.message });
-        return null;
+  // A new key or endpoint is checked as it is typed, which lists its models
+  // for the user to pick from; there is no Verify button to press first.
+  const autoRequest = editingEndpoint ? null : autoVerifyRequest(draft, provider);
+  const autoKey = autoRequest ? autoVerifyKey(draft, provider) : null;
+  const checking = autoKey !== null && !checked;
+  // The provider turned this key down, or couldn't be reached: a local server
+  // may just not be running yet, so saving it anyway is offered straight away.
+  const refused = checked !== null && checked.models === null;
+  useEffect(() => {
+    if (!autoRequest || !autoKey || checked) return;
+    // Typed over before the provider answered: the answer is for a key that
+    // is no longer in the field, and must not fill its model list.
+    let stale = false;
+    const run = async () => {
+      let outcome: KeyCheck;
+      try {
+        const result = await verifyProvider(provider.id, autoRequest);
+        outcome = {
+          request: autoKey,
+          message: result.message,
+          models: result.valid ? result.models.map((m) => m.id) : null,
+          listed: [...result.models, ...result.hidden].map((m) => m.id),
+          listing: result.valid
+            ? {
+                models: result.models,
+                hidden: result.hidden,
+                key_state: result.key_state,
+                fetched_at: null,
+                error: null,
+              }
+            : null,
+        };
+      } catch (e) {
+        // Remembered like a refusal, so Save offers "Save anyway" rather
+        // than waiting on a check that will never come back.
+        const message = e instanceof Error ? e.message : String(e);
+        outcome = { request: autoKey, message, models: null, listed: [], listing: null };
       }
-      const seeded = seedEnabled(draft, provider, result.models.map((m) => m.id));
-      setDraft(seeded);
-      setTypedListing({
-        models: result.models,
-        hidden: result.hidden,
-        key_state: result.key_state,
-        fetched_at: null,
-        error: null,
-      });
+      if (stale) return;
+      setCheck(outcome);
+      setNotice({ ok: outcome.models !== null, text: outcome.message });
+      if (!outcome.models) return;
+      const models = outcome.models;
+      setDraft((current) => seedEnabled(current, provider, models));
       setModelsOpen(true);
-      setNotice({ ok: true, text: result.message });
-      return { draft: seeded, listed: [...result.models, ...result.hidden].map((m) => m.id) };
-    } catch (e) {
-      setNotice({ ok: false, text: (e as Error).message });
-      return null;
-    } finally {
-      setBusy(null);
-    }
-  };
-
-  const handleVerify = async () => {
-    const problem = draftProblem(draft, provider);
-    if (problem) {
-      setNotice({ ok: false, text: problem });
-      return;
-    }
-    await runVerify();
-  };
+    };
+    const timer = setTimeout(() => void run(), AUTO_VERIFY_DELAY_MS);
+    return () => {
+      stale = true;
+      clearTimeout(timer);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autoKey]);
 
   const handleSave = async () => {
     const problem = draftProblem(draft, provider);
@@ -256,23 +281,27 @@ function ProviderCard({ provider, focused, focusProvider, openedFrom }: Provider
       setNotice({ ok: false, text: problem });
       return;
     }
-    let toSave = draft;
     // What a new key's check listed: selecting its provider needs the
     // model among them. Nothing, when nothing was checked.
     let listed: string[] = [];
-    const anyway = saveAnyway;
+    const anyway = saveAnyway || refused;
     if (toVerify && !anyway) {
-      const verified = await runVerify();
-      if (!verified) {
+      if (!checked) {
+        // Its check is still to come: Save pressed straight from the URL
+        // field, whose blur starts it.
+        if (autoVerifyKey(draft, provider) !== null) return;
+        // A new endpoint with no key to send it.
+        setNotice({ ok: false, text: "Enter an API key first." });
         setSaveAnyway(true);
         return;
       }
-      toSave = verified.draft;
-      listed = verified.listed;
+      // The check already seeded the draft; seeding again would switch back
+      // on a model the user has since switched off.
+      listed = checked.listed;
     }
-    const body = providerUpdate(toSave, provider);
+    const body = providerUpdate(draft, provider);
     if (Object.keys(body).length === 0) return;
-    setBusy("saving");
+    setSaving(true);
     try {
       const saved = await save.mutateAsync({ id: provider.id, update: body });
       // Opened to add this provider's key, or still on the offline engine:
@@ -302,14 +331,14 @@ function ProviderCard({ provider, focused, focusProvider, openedFrom }: Provider
       }
       baseline.current = saved;
       setDraft(draftFrom(saved));
-      setTypedListing(null);
+      setCheck(null);
       setSaveAnyway(false);
       setNotice(null);
       toast.success(`${provider.label} saved`);
     } catch (e) {
       setNotice({ ok: false, text: (e as Error).message });
     } finally {
-      setBusy(null);
+      setSaving(false);
     }
   };
 
@@ -354,7 +383,7 @@ function ProviderCard({ provider, focused, focusProvider, openedFrom }: Provider
                 value={draft.apiKey}
                 placeholder={keyPlaceholder}
                 onChange={(e) =>
-                  edit({ ...draft, apiKey: e.target.value, clearKey: false }, false)
+                  edit({ ...draft, apiKey: e.target.value, clearKey: false })
                 }
               />
               <button
@@ -368,7 +397,7 @@ function ProviderCard({ provider, focused, focusProvider, openedFrom }: Provider
             </div>
             <Button
               variant="outline"
-              onClick={() => edit({ ...draft, apiKey: "", clearKey: true }, false)}
+              onClick={() => edit({ ...draft, apiKey: "", clearKey: true })}
               disabled={!draft.apiKey && (!savedKey || draft.clearKey)}
             >
               Clear
@@ -402,7 +431,9 @@ function ProviderCard({ provider, focused, focusProvider, openedFrom }: Provider
               spellCheck={false}
               aria-invalid={!isValidEndpoint(draft.baseUrl) || undefined}
               className="font-mono"
-              onChange={(e) => edit({ ...draft, baseUrl: e.target.value }, false)}
+              onChange={(e) => edit({ ...draft, baseUrl: e.target.value })}
+              onFocus={() => setEditingEndpoint(true)}
+              onBlur={() => setEditingEndpoint(false)}
             />
             {provider.endpoint_hint && (
               <p className="text-xs text-muted-foreground">{provider.endpoint_hint}</p>
@@ -430,12 +461,15 @@ function ProviderCard({ provider, focused, focusProvider, openedFrom }: Provider
         <CollapsibleContent className="mt-2">
           <ModelList
             listing={listing}
-            loading={catalog.isFetching && !listing}
+            loading={checking || (catalog.isFetching && !listing)}
             canRefresh={listable && !typedListing}
             refreshing={catalog.isFetching}
             onRefresh={refresh}
             draft={draft}
             onChange={(next) => edit(next)}
+            emptyText={
+              provider.requires_key ? "Enter an API key to see its models." : "No models listed."
+            }
           />
         </CollapsibleContent>
       </Collapsible>
@@ -443,20 +477,9 @@ function ProviderCard({ provider, focused, focusProvider, openedFrom }: Provider
       {notice && <StatusText tone={notice.ok ? "ok" : "error"} text={notice.text} />}
 
       <div className="flex flex-wrap justify-end gap-2">
-        <Button
-          variant="outline"
-          size="sm"
-          disabled={busy !== null || !verifyRequest(draft, provider)}
-          onClick={handleVerify}
-        >
-          {busy === "verifying" && !dirty ? (
-            <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-          ) : null}
-          Verify →
-        </Button>
-        <Button size="sm" disabled={busy !== null || !dirty} onClick={handleSave}>
-          {busy !== null && dirty && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-          {saveAnyway ? "Save anyway" : toVerify ? "Verify & save" : "Save"}
+        <Button size="sm" disabled={saving || checking || !dirty} onClick={handleSave}>
+          {(saving || checking) && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+          {checking ? "Checking…" : saveAnyway || refused ? "Save anyway" : "Save"}
         </Button>
       </div>
     </section>
@@ -471,6 +494,8 @@ interface ModelListProps {
   onRefresh: () => void;
   draft: ProviderDraft;
   onChange: (draft: ProviderDraft) => void;
+  /** Shown when there is nothing to list yet. */
+  emptyText: string;
 }
 
 /** The models a key can use, a switch each: what is on is what the pickers
@@ -483,6 +508,7 @@ function ModelList({
   onRefresh,
   draft,
   onChange,
+  emptyText,
 }: ModelListProps) {
   const [search, setSearch] = useState("");
   const [showAll, setShowAll] = useState(false);
@@ -536,7 +562,7 @@ function ModelList({
           <p className="px-3 py-2 text-xs text-muted-foreground">Listing models…</p>
         ) : rows.length === 0 ? (
           <p className="px-3 py-2 text-xs text-muted-foreground">
-            {search ? "No model matches." : "Verify a key to see its models."}
+            {search ? "No model matches." : emptyText}
           </p>
         ) : (
           rows.map((row) => (

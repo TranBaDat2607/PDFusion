@@ -130,8 +130,8 @@ export function providerUpdate(draft: ProviderDraft, provider: ProviderInfo): Pr
   return update;
 }
 
-/** Whether saving checks with the provider first: a new key, or a key going
- *  to a new endpoint. Models are picked from the provider's own list, so
+/** Whether a save needs the draft checked with the provider first — which
+ *  the card does as it is typed: a new key, or a key going to a new endpoint. Models are picked from the provider's own list, so
  *  switching them needs no check; and a cleared key leaves nothing to check
  *  with, nor any key to send to a new endpoint. */
 export function needsVerify(draft: ProviderDraft, provider: ProviderInfo): boolean {
@@ -158,6 +158,56 @@ export function verifyRequest(
   const apiKey = draft.apiKey.trim();
   if (draft.clearKey || (!apiKey && !hasSavedKey(provider))) return null;
   return { ...(apiKey ? { api_key: apiKey } : {}), ...endpoint };
+}
+
+/**
+ * What the card checks on its own as the key or endpoint is typed, or null:
+ * only what Save would check (`needsVerify`), and only a draft the sidecar
+ * would accept — a half-typed URL is a 422, and a new endpoint without its
+ * key typed again would send the saved key somewhere it wasn't saved for.
+ */
+export function autoVerifyRequest(
+  draft: ProviderDraft,
+  provider: ProviderInfo,
+): VerifyRequest | null {
+  if (!needsVerify(draft, provider) || draftProblem(draft, provider)) return null;
+  return verifyRequest(draft, provider);
+}
+
+/** What checking one key and endpoint found. `models` is null when the
+ *  provider turned them down, or couldn't be reached. */
+export interface KeyCheck {
+  /** The verify request it answered, serialized. */
+  request: string;
+  message: string;
+  /** Seeds the enabled models. */
+  models: string[] | null;
+  /** Hidden models too: what selecting the provider looks among. */
+  listed: string[];
+  /** The model list to show for the typed key until it is saved. */
+  listing: ModelCatalog | null;
+}
+
+/** The auto-check this draft wants, serialized: two drafts that would send
+ *  the same request share one check. */
+export function autoVerifyKey(draft: ProviderDraft, provider: ProviderInfo): string | null {
+  const request = autoVerifyRequest(draft, provider);
+  return request ? JSON.stringify(request) : null;
+}
+
+/**
+ * The check that answers this draft, or null. Matched by the request it
+ * sent, not cleared on every keystroke: a space after the key or a slash
+ * after the URL sends the same request, so no new check would start, and a
+ * cleared one left Save waiting on "Checking…" for good.
+ */
+export function currentCheck(
+  check: KeyCheck | null,
+  draft: ProviderDraft,
+  provider: ProviderInfo,
+): KeyCheck | null {
+  const key = autoVerifyKey(draft, provider);
+  return check && key !== null && check.request === key ? check : null;
 }
 
 /** Switch a model on (last in the list) or off, keeping the others' order:
