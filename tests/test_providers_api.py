@@ -947,7 +947,7 @@ def test_no_flow_that_checks_a_key_generates_text(
     lister: FakeLister,
     monkeypatch: pytest.MonkeyPatch,
 ):
-    """The Models page's Verify & save, its model list and its Refresh each
+    """The Models page's key check and save, its model list and its Refresh each
     check a key by listing, and none of them builds a translator or asks one
     to validate — which sent a "Hello" completion. (`/config/validate` and the
     Argos → LLM promotion in `PUT /config`, which this also covered, were
@@ -956,7 +956,7 @@ def test_no_flow_that_checks_a_key_generates_text(
     guard = install_full_guard(monkeypatch)
     lister.result = ANTHROPIC_LISTING
 
-    # Verify & save: the typed key's check, then the save.
+    # The typed key's check, then the save.
     assert verify(client, "anthropic", {"api_key": KEY}).status_code == 200
     assert client.put("/providers/anthropic", json={"api_key": KEY}, headers=AUTH).status_code == 200
     # Selecting the provider that key belongs to.

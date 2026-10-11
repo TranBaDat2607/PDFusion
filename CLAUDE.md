@@ -198,7 +198,7 @@ a test. They are the things most easily undone by "simplifying".
   has the keys stripped — from both shapes, since the first save after a
   conversion backs up a pre-#85 file.
 - **Verifying a key and discovering models never generate text** (#84): the
-  Models page's Verify & save, `/providers/{id}/verify` and the model lists
+  Models page's check-as-you-type, `/providers/{id}/verify` and the model lists
   all *list* the key's models; none calls `validate_configuration` (Argos's
   verify checks its install instead). Listings live in a cache keyed by
   `(provider, base_url)` that stores nothing derived from a key, so `PUT
