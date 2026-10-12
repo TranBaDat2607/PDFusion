@@ -139,4 +139,10 @@
     @apply bg-background text-foreground antialiased;
     font-family: var(--font-sans);
   }
+  /* WebView2 (Edge) adds its own reveal button to password inputs, which sat
+     beside the API key field's show/hide toggle as a second eye. */
+  input::-ms-reveal,
+  input::-ms-clear {
+    display: none;
+  }
 }
