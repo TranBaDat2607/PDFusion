@@ -16,7 +16,6 @@ import {
   needsVerify,
   normalizeEndpoint,
   providerUpdate,
-  seedEnabled,
   selectsProvider,
   statusLine,
   timeAgo,
@@ -587,30 +586,6 @@ describe("addCustomModel", () => {
     const d = draft({ enabled: ["gpt-4.1"] });
     addCustomModel(d, "my-model");
     expect(d.enabled).toEqual(["gpt-4.1"]);
-  });
-});
-
-describe("seedEnabled", () => {
-  it("leaves a non-empty draft unchanged", () => {
-    const p = provider({ suggested_models: ["gpt-4.1"] });
-    const d = draft({ enabled: ["gpt-4.1-mini"] });
-    expect(seedEnabled(d, p, ["gpt-4.1", "gpt-4.1-mini"]).enabled).toEqual(["gpt-4.1-mini"]);
-  });
-
-  it("seeds the suggested models that were listed, in suggestion order", () => {
-    const p = provider({ suggested_models: ["gpt-4.1", "gpt-4.1-mini", "gpt-4.1-nano"] });
-    const listed = ["gpt-4.1-nano", "gpt-4.1", "o3"];
-    expect(seedEnabled(draft(), p, listed).enabled).toEqual(["gpt-4.1", "gpt-4.1-nano"]);
-  });
-
-  it("falls back to the first listed id when none of the suggestions were listed", () => {
-    const p = provider({ suggested_models: ["gpt-4.1"] });
-    expect(seedEnabled(draft(), p, ["o3", "o3-mini"]).enabled).toEqual(["o3"]);
-  });
-
-  it("leaves the draft unchanged when nothing was listed", () => {
-    const p = provider({ suggested_models: ["gpt-4.1"] });
-    expect(seedEnabled(draft(), p, []).enabled).toEqual([]);
   });
 });
 

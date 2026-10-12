@@ -54,7 +54,6 @@ import {
   needsVerify,
   providerUpdate,
   rebaseDraft,
-  seedEnabled,
   selectsAnswerModel,
   selectsProvider,
   statusLine,
@@ -262,10 +261,9 @@ function ProviderCard({ provider, focused, focusProvider, openedFrom }: Provider
       if (stale) return;
       setCheck(outcome);
       setNotice({ ok: outcome.models !== null, text: outcome.message });
-      if (!outcome.models) return;
-      const models = outcome.models;
-      setDraft((current) => seedEnabled(current, provider, models));
-      setModelsOpen(true);
+      // Nothing is switched on for the user: a key lists dozens of models,
+      // and which ones to offer in the pickers is theirs to choose.
+      if (outcome.models) setModelsOpen(true);
     };
     const timer = setTimeout(() => void run(), AUTO_VERIFY_DELAY_MS);
     return () => {
@@ -295,8 +293,6 @@ function ProviderCard({ provider, focused, focusProvider, openedFrom }: Provider
         setSaveAnyway(true);
         return;
       }
-      // The check already seeded the draft; seeding again would switch back
-      // on a model the user has since switched off.
       listed = checked.listed;
     }
     const body = providerUpdate(draft, provider);
@@ -382,6 +378,9 @@ function ProviderCard({ provider, focused, focusProvider, openedFrom }: Provider
                 autoFocus={focused && !provider.has_key}
                 value={draft.apiKey}
                 placeholder={keyPlaceholder}
+                // Keeps the text clear of the show/hide button laid over the
+                // input's right edge (right-2 + a 16px icon + a gap).
+                className="pr-9"
                 onChange={(e) =>
                   edit({ ...draft, apiKey: e.target.value, clearKey: false })
                 }
@@ -477,9 +476,19 @@ function ProviderCard({ provider, focused, focusProvider, openedFrom }: Provider
       {notice && <StatusText tone={notice.ok ? "ok" : "error"} text={notice.text} />}
 
       <div className="flex flex-wrap justify-end gap-2">
-        <Button size="sm" disabled={saving || checking || !dirty} onClick={handleSave}>
-          {(saving || checking) && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-          {checking ? "Checking…" : saveAnyway || refused ? "Save anyway" : "Save"}
+        <Button
+          size="sm"
+          className="relative"
+          disabled={saving || checking || !dirty}
+          onClick={handleSave}
+        >
+          {checking && !saving && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+          {/* Hidden, not removed, while saving: the label keeps the button's
+              width so the centred spinner doesn't shrink it. */}
+          <span className={saving ? "invisible" : undefined}>
+            {checking ? "Checking…" : saveAnyway || refused ? "Save anyway" : "Save"}
+          </span>
+          {saving && <Loader2 className="absolute inset-0 m-auto h-4 w-4 animate-spin" />}
         </Button>
       </div>
     </section>

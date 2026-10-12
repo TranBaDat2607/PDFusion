@@ -49,7 +49,6 @@ def test_every_spec_is_complete(spec):
     # The Models page's card copy comes from here, not the frontend (#86).
     assert spec.description
     assert spec.protocol in ("openai", "anthropic", "gemini", "argos")
-    assert spec.suggested_models, "offer at least the default"
     if spec.requires_key:
         assert spec.env_prefix, "a keyed provider reads its key from the environment"
         assert spec.priority is not None, "a keyed provider is a chat fallback"
@@ -62,9 +61,17 @@ def test_every_spec_is_complete(spec):
 
 
 @pytest.mark.parametrize("spec", PROVIDERS, ids=lambda spec: spec.id)
-def test_the_default_model_is_the_first_suggestion_and_the_settings_default(spec):
-    assert spec.suggested_models[0] == spec.default_model
+def test_the_default_model_is_the_settings_default(spec):
     assert AppSettings().model_for(spec.id) == spec.default_model
+
+
+@pytest.mark.parametrize("spec", PROVIDERS, ids=lambda spec: spec.id)
+def test_only_a_fixed_model_is_suggested(spec):
+    """A key's own listing is what the pickers offer. Suggestions were switched
+    on wholesale when a key was pasted, five models nobody chose; only a
+    provider with no choice to make (Argos) still names its model."""
+    expected = (spec.default_model,) if spec.model_is_fixed else ()
+    assert spec.suggested_models == expected
 
 
 @pytest.mark.parametrize("spec", PROVIDERS, ids=lambda spec: spec.id)

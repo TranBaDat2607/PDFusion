@@ -1,7 +1,7 @@
 """The one place that says which providers exist and how each one differs (#83).
 
 Every per-provider rule the backend used to spell out in its own `if/elif`
-chain — labels, default and suggested models, rate limits, retired models,
+chain — labels, default models, rate limits, retired models,
 which providers take a key or an endpoint, the order chat falls back in — is a
 field of a `ProviderSpec` here, and the rest of the code reads it from here.
 
@@ -48,13 +48,12 @@ class ProviderSpec:
     # speaks OpenAI's API share OpenAI's translator (#88).
     protocol: Protocol
     default_model: str
-    # Offered in the model field, default first. Not a whitelist: the field takes
-    # any name, which a local server's models need (#32). A default missing
-    # from here is how `gemini-1.5-flash` stayed on offer after Google retired
-    # it; `tests/test_provider_registry.py` holds the two together.
-    suggested_models: Tuple[str, ...]
     # Returns the `BaseTranslator` subclass. Imports on call; see the module doc.
     translator: Callable[[], type]
+    # Models offered without a listing. Only Argos, whose one model is fixed,
+    # has any: a key's own listing is what the pickers offer, and a fixed list
+    # here was switched on wholesale whenever a key was pasted.
+    suggested_models: Tuple[str, ...] = ()
     requires_key: bool = True
     # `OPENAI` → `OPENAI_API_KEY` / `OPENAI_MODEL` in the environment or `.env`.
     env_prefix: Optional[str] = None
@@ -170,13 +169,6 @@ PROVIDERS: Tuple[ProviderSpec, ...] = (
         description="GPT models, or any server that speaks OpenAI's API.",
         protocol="openai",
         default_model="gpt-4.1",
-        suggested_models=(
-            "gpt-4.1",
-            "gpt-5.6-luna",
-            "gpt-5.6-terra",
-            "gpt-5.6-sol",
-            "gpt-6-astra",
-        ),
         translator=_openai_translator,
         env_prefix="OPENAI",
         takes_endpoint=True,
@@ -199,13 +191,6 @@ PROVIDERS: Tuple[ProviderSpec, ...] = (
         description="Google's Gemini models, through the Gemini API.",
         protocol="gemini",
         default_model="gemini-3.8-flash",
-        suggested_models=(
-            "gemini-3.8-flash",
-            "gemini-3.7-flash",
-            "gemini-3.6-flash",
-            "gemini-3.5-flash",
-            "gemini-3.5-flash-lite",
-        ),
         translator=_gemini_translator,
         env_prefix="GEMINI",
         lister=_gemini_lister,
@@ -229,12 +214,6 @@ PROVIDERS: Tuple[ProviderSpec, ...] = (
         description="Anthropic's Claude models.",
         protocol="anthropic",
         default_model="claude-sonnet-4-6",
-        suggested_models=(
-            "claude-sonnet-4-6",
-            "claude-sonnet-5",
-            "claude-opus-5",
-            "claude-haiku-4-5-20251001",
-        ),
         translator=_anthropic_translator,
         env_prefix="ANTHROPIC",
         takes_endpoint=True,
@@ -292,11 +271,6 @@ PROVIDERS: Tuple[ProviderSpec, ...] = (
         # OpenAI's API at its own URL, so OpenAI's translator and lister.
         protocol="openai",
         default_model="openai/gpt-4.1",
-        suggested_models=(
-            "openai/gpt-4.1",
-            "anthropic/claude-sonnet-4.6",
-            "google/gemini-3.8-flash",
-        ),
         translator=_openai_translator,
         env_prefix="OPENROUTER",
         default_base_url="https://openrouter.ai/api/v1",
@@ -313,7 +287,6 @@ PROVIDERS: Tuple[ProviderSpec, ...] = (
         description="DeepSeek's chat and reasoning models, through OpenAI's API.",
         protocol="openai",
         default_model="deepseek-chat",
-        suggested_models=("deepseek-chat", "deepseek-reasoner"),
         translator=_openai_translator,
         env_prefix="DEEPSEEK",
         default_base_url="https://api.deepseek.com/v1",
@@ -330,7 +303,6 @@ PROVIDERS: Tuple[ProviderSpec, ...] = (
         description="Models running on this computer, or another on your network. No key.",
         protocol="openai",
         default_model="llama3.2",
-        suggested_models=("llama3.2", "qwen2.5", "gemma3"),
         translator=_openai_translator,
         requires_key=False,
         # OpenAI's SDK won't build a client without a key; Ollama ignores it.

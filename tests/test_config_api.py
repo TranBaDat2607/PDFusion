@@ -28,6 +28,7 @@ from desktop_pdf_translator.config.manager import ConfigManager
 from desktop_pdf_translator.processors.pdf_cache import PDFTranslationCache
 from desktop_pdf_translator.providers.catalog import ModelCatalog
 from desktop_pdf_translator.providers.listing import ListedModel, Listing
+from desktop_pdf_translator.providers.registry import provider
 from desktop_pdf_translator.translators.translation_cache import TranslationCache
 from desktop_pdf_translator.utils.encryption import KEYSTORE_PREFIX
 
@@ -145,14 +146,16 @@ def test_an_unrelated_save_keeps_a_key_it_could_not_read(
 # ---------------------------------------------------------------------------
 
 
-def test_every_default_model_is_the_first_suggestion(client: TestClient):
-    """A default missing from the suggestions is how `gemini-1.5-flash` stayed
-    on offer after Google retired it."""
+def test_only_a_fixed_model_is_offered_without_a_listing(client: TestClient):
+    """A key's listing is what the pickers offer; only Argos, which has no
+    choice to make, names its model here."""
     services = client.get("/config/options", headers=AUTH).json()["services"]
     defaults = AppSettings()
 
     for service in services:
-        assert service["models"][0] == defaults.model_for(service["code"])
+        fixed = provider(service["code"]).model_is_fixed
+        expected = [defaults.model_for(service["code"])] if fixed else []
+        assert service["models"] == expected
 
 
 # ---------------------------------------------------------------------------
