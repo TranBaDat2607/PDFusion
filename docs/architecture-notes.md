@@ -574,7 +574,7 @@ All routes (except `GET /health`) require `Authorization: Bearer <token>`.
 | GET | `/auth/ping` | Auth probe — used by the Rust shell after startup |
 | GET | `/config` | Current settings: `translation` (its `model` a `{provider, model}`), `rag` (its `answer_model` too, `null` = the translation model), `gui`, `processing`. No keys and no endpoints: those are `GET /providers`' |
 | PUT | `/config` | Update the translation and answer models (`translation_model`, `answer_model` as `{provider, model}`; `answer_model: null` sent explicitly clears it), language defaults, limits and switches. Unknown fields are **422** — among them the per-provider blocks and `preferred_service` retired in #88, so an older client can't get a 200 for a key that was never saved |
-| GET | `/config/options` | Static dropdown data (languages, services, model *suggestions* with each service's default first) + `supported_pairs` per service (`null` = unrestricted) |
+| GET | `/config/options` | Static dropdown data (languages, services, a model list only for Argos, whose model is fixed) + `supported_pairs` per service (`null` = unrestricted) |
 | GET | `/providers` | Every registry entry plus `has_key`, `base_url`, `key_state` (`unverified` \| `valid` \| `invalid` \| `unreadable`), `last_verified_at` and the catalog's freshness, and its saved `model` (`model_for`), `enabled_models`, `temperature`, `max_tokens` and `max_qps`. Reads only; never lists |
 | PUT | `/providers/{id}` | Save one provider's `api_key` (`""` clears), `base_url` (`""` = the provider's own), `enabled_models` and parameters (`max_tokens` / `max_qps` sent as `null` go back to the default); left out, each is unchanged. Answers with its `/providers` row. The #32 endpoint rule gives **422**, and so does a value its spec refuses (a temperature over its ceiling, an endpoint for Gemini). Saves without checking the key, and never moves translation off Argos |
 | DELETE | `/providers/{id}/key` | Forget the saved key, an unreadable one included, and drop its catalog rows; the endpoint stays. **422** for Argos |
@@ -1551,10 +1551,12 @@ provider (#32). README has the recipe. Four rules hold that together:
   `_handle_translation_error` in `translate` (counted, never cached) and raise
   in `generate` (the chat's `error` event). The same reason sized the RAG caps:
   1024 for HyDE, 4000 for the answer.
-- **Model suggestions are not a whitelist.** `/config/options` lists each
-  service's default first, and `tests/test_config_api.py` fails when a default
-  is missing from its list — how `gemini-1.5-flash` stayed on offer after
-  Google retired it.
+- **There are no model suggestions but Argos's.** A key's own listing is what
+  the pickers offer, and the model field takes any name. Only Argos, whose one
+  model is fixed, keeps `suggested_models`; with no listing, a provider offers
+  just the model it would run, as `saved`. A retired default is caught by
+  `test_the_default_model_is_not_retired`, which is how `gemini-1.5-flash`
+  once stayed on offer after Google retired it.
 - **A retired model in a saved config is replaced as it loads.**
   `save_settings` writes the defaults into `config.toml`, so a default that
   later went away is in every file ever saved.
@@ -1660,9 +1662,10 @@ under vitest; `components/settings/ModelsTab.tsx` only draws them.
   the non-chat filter hid come back with "Show all"; Refresh lists past the
   catalog; *Add* takes a name no list has. Switched-on names no list has come
   first, so a name added by hand can't get lost below a hundred others.
-- **A first key switches some models on** (`seedEnabled`): its suggestions the
-  key can use, or else the first model listed, so a fresh key offers
-  something in the pickers straight away. A list already made is kept.
+- **A first key switches nothing on.** Its check opens the model list and
+  leaves the switches to the user. `seedEnabled` used to switch on every
+  suggestion the key could use — five of OpenAI's at once, on paste, once the
+  check ran as the key was typed (#96) — so it and the suggestions went.
 - **Saving a key can select its provider** (`selectsProvider`): only a new
   key that listed its models (never *Save anyway*), only onto a model that
   listing has — a saved `enabled_models` the new key can't run would fail

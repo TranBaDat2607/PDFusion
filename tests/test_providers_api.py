@@ -315,13 +315,14 @@ def test_without_a_key_the_saved_model_leads_the_suggestions(
     assert lister.calls == []
 
 
-def test_a_saved_model_among_the_suggestions_is_not_repeated(
+def test_with_no_key_the_default_model_is_still_offered(
     client: TestClient, lister: FakeLister
 ):
-    """The default is the first suggestion (`test_provider_registry.py`)."""
+    """No suggestions stand in for a listing (`test_provider_registry.py`), so
+    the model it would run is all there is to show."""
     body = models(client, "anthropic").json()
 
-    assert ids_and_sources(body["models"]) == suggested("anthropic")
+    assert ids_and_sources(body["models"]) == [("claude-sonnet-4-6", "saved")]
     assert lister.calls == []
 
 
@@ -505,7 +506,7 @@ def test_a_server_that_is_down_is_an_error_not_a_failure(
     assert ids_and_sources(response.json()["models"]) == [("qwen3", "saved")]
 
 
-def test_a_down_server_on_the_providers_own_endpoint_offers_the_suggestions(
+def test_a_down_server_on_the_providers_own_endpoint_offers_the_saved_model(
     client: TestClient, manager: ConfigManager, lister: FakeLister
 ):
     seed(manager, gemini={"api_key": KEY})
@@ -514,7 +515,7 @@ def test_a_down_server_on_the_providers_own_endpoint_offers_the_suggestions(
     body = models(client, "gemini").json()
 
     assert body["error"] == "Connection refused"
-    assert ids_and_sources(body["models"]) == suggested("gemini")
+    assert ids_and_sources(body["models"]) == [("gemini-3.8-flash", "saved")]
 
 
 def test_a_stale_listing_beats_none_when_the_server_is_down(

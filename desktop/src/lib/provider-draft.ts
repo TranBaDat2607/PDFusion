@@ -226,21 +226,6 @@ export function addCustomModel(draft: ProviderDraft, name: string): ProviderDraf
   return { ...draft, enabled: [...draft.enabled, model] };
 }
 
-/**
- * The models switched on after a key's first listing: its suggestions that the
- * key can use, so a fresh key offers something in the pickers straight away,
- * or else the first model listed. A list the user already made is kept.
- */
-export function seedEnabled(
-  draft: ProviderDraft,
-  provider: ProviderInfo,
-  listed: string[],
-): ProviderDraft {
-  if (draft.enabled.length > 0 || listed.length === 0) return draft;
-  const suggested = provider.suggested_models.filter((model) => listed.includes(model));
-  return { ...draft, enabled: suggested.length > 0 ? suggested : [listed[0]] };
-}
-
 export interface ModelRow {
   id: string;
   enabled: boolean;

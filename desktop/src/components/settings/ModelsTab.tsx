@@ -54,7 +54,6 @@ import {
   needsVerify,
   providerUpdate,
   rebaseDraft,
-  seedEnabled,
   selectsAnswerModel,
   selectsProvider,
   statusLine,
@@ -262,10 +261,9 @@ function ProviderCard({ provider, focused, focusProvider, openedFrom }: Provider
       if (stale) return;
       setCheck(outcome);
       setNotice({ ok: outcome.models !== null, text: outcome.message });
-      if (!outcome.models) return;
-      const models = outcome.models;
-      setDraft((current) => seedEnabled(current, provider, models));
-      setModelsOpen(true);
+      // Nothing is switched on for the user: a key lists dozens of models,
+      // and which ones to offer in the pickers is theirs to choose.
+      if (outcome.models) setModelsOpen(true);
     };
     const timer = setTimeout(() => void run(), AUTO_VERIFY_DELAY_MS);
     return () => {
@@ -295,8 +293,6 @@ function ProviderCard({ provider, focused, focusProvider, openedFrom }: Provider
         setSaveAnyway(true);
         return;
       }
-      // The check already seeded the draft; seeding again would switch back
-      // on a model the user has since switched off.
       listed = checked.listed;
     }
     const body = providerUpdate(draft, provider);
