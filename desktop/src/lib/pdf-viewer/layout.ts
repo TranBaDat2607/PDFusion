@@ -262,6 +262,27 @@ export function zoomOut(zoom: number): number {
   return clampZoom(zoom / ZOOM_STEP);
 }
 
+/** One notch of a mouse wheel, per `WheelEvent.deltaMode`: Chromium reports
+ *  100 px, a wheel that counts lines reports 3, and a page is one notch. */
+const WHEEL_NOTCH = [100, 3, 1];
+
+/**
+ * The zoom after a Ctrl+wheel event.
+ *
+ * Proportional to the delta rather than a fixed step per event: a touchpad
+ * pinch arrives as a stream of Ctrl+wheel events a few px each, and a step per
+ * event would race through the whole zoom range in one gesture. Scaled so a
+ * mouse notch is exactly one toolbar step.
+ */
+export function wheelZoom(
+  zoom: number,
+  deltaY: number,
+  deltaMode: number,
+): number {
+  const notches = deltaY / (WHEEL_NOTCH[deltaMode] ?? WHEEL_NOTCH[0]);
+  return clampZoom(zoom * ZOOM_STEP ** -notches);
+}
+
 /** The zoom at which a page `pageWidth` points wide fills a scroller
  *  `containerWidth` px wide, less the column's padding. */
 export function fitWidthZoom(pageWidth: number, containerWidth: number): number {

@@ -18,9 +18,14 @@ import {
   scrollAnchor,
   slotSize,
   visibleRange,
+  wheelZoom,
   zoomIn,
   zoomOut,
 } from "./layout";
+
+// WheelEvent.deltaMode values; node has no WheelEvent to read them from.
+const WheelEvent_DOM_DELTA_PIXEL = 0;
+const WheelEvent_DOM_DELTA_LINE = 1;
 
 const PAGE = { width: 100, height: 200 };
 const THREE_PAGES = [PAGE, PAGE, PAGE];
@@ -186,6 +191,29 @@ describe("zoom steps", () => {
   it("stops at the limits", () => {
     expect(zoomIn(4.5)).toBe(ZOOM_MAX);
     expect(zoomOut(0.21)).toBe(ZOOM_MIN);
+  });
+
+  it("zooms one step per mouse-wheel notch, in by scrolling up", () => {
+    expect(wheelZoom(1, -100, WheelEvent_DOM_DELTA_PIXEL)).toBeCloseTo(1.2);
+    expect(wheelZoom(1.2, 100, WheelEvent_DOM_DELTA_PIXEL)).toBeCloseTo(1);
+  });
+
+  it("counts a wheel that reports lines, 3 to the notch, the same way", () => {
+    expect(wheelZoom(1, -3, WheelEvent_DOM_DELTA_LINE)).toBeCloseTo(1.2);
+  });
+
+  it("zooms a touchpad's few-px deltas a fraction of a step each", () => {
+    let zoom = 1;
+    for (let i = 0; i < 10; i++) {
+      zoom = wheelZoom(zoom, -10, WheelEvent_DOM_DELTA_PIXEL);
+    }
+    expect(zoom).toBeCloseTo(1.2);
+    expect(wheelZoom(1, -10, WheelEvent_DOM_DELTA_PIXEL)).toBeLessThan(1.05);
+  });
+
+  it("stops the wheel at the limits", () => {
+    expect(wheelZoom(4.5, -1000, WheelEvent_DOM_DELTA_PIXEL)).toBe(ZOOM_MAX);
+    expect(wheelZoom(0.21, 1000, WheelEvent_DOM_DELTA_PIXEL)).toBe(ZOOM_MIN);
   });
 
   it("fits a page to the scroller less the column padding", () => {

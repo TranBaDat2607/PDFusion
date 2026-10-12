@@ -30,6 +30,7 @@ import {
   scrollAnchor,
   slotSize,
   visibleRange,
+  wheelZoom,
   zoomIn,
   zoomOut,
   type PageSize,
@@ -87,6 +88,12 @@ interface PdfViewerProps {
 }
 
 const NO_CHANGES: readonly ArtifactChange[] = [];
+
+/** CSS px from the scroller's top-left corner. */
+interface ViewportPoint {
+  x: number;
+  y: number;
+}
 
 function* pageNumbers(first: number, last: number): Generator<number> {
   for (let page = first; page <= last; page++) yield page;
@@ -265,29 +272,41 @@ export function PdfViewer({
     };
   }, [loaded]);
 
-  // Where the reader was when a zoom was asked for. Restored once the new
-  // layout exists, before paint, so the page doesn't visibly jump.
+  // The document point under `focus` when a zoom was asked for. Put back
+  // under `focus` once the new layout exists, before paint, so the page doesn't
+  // visibly jump.
   const zoomAnchorRef = useRef<{
     anchor: ScrollAnchor | null;
-    centerX: number;
+    fractionX: number;
+    focus: ViewportPoint;
   } | null>(null);
 
-  const changeZoom = useCallback((compute: (zoom: number) => number) => {
-    const target = compute(zoomRef.current);
-    if (target === zoomRef.current) return;
-    const scroller = scrollerRef.current;
-    // Several steps before one render share the anchor of the first.
-    if (scroller && !zoomAnchorRef.current) {
-      zoomAnchorRef.current = {
-        anchor: scrollAnchor(geometryRef.current, scroller.scrollTop),
-        centerX:
-          (scroller.scrollLeft + scroller.clientWidth / 2) /
-          Math.max(1, scroller.scrollWidth),
-      };
-    }
-    zoomRef.current = target;
-    setZoom(target);
-  }, []);
+  /** `focus` is the point that holds still, relative to the scroller's
+   *  viewport. The buttons and shortcuts hold the top centre; the wheel holds
+   *  the cursor. */
+  const changeZoom = useCallback(
+    (compute: (zoom: number) => number, focus?: ViewportPoint) => {
+      const target = compute(zoomRef.current);
+      if (target === zoomRef.current) return;
+      const scroller = scrollerRef.current;
+      // Several steps before one render share the anchor of the first.
+      if (scroller && !zoomAnchorRef.current) {
+        const point = focus ?? { x: scroller.clientWidth / 2, y: 0 };
+        zoomAnchorRef.current = {
+          anchor: scrollAnchor(
+            geometryRef.current,
+            scroller.scrollTop + point.y,
+          ),
+          fractionX:
+            (scroller.scrollLeft + point.x) / Math.max(1, scroller.scrollWidth),
+          focus: point,
+        };
+      }
+      zoomRef.current = target;
+      setZoom(target);
+    },
+    [],
+  );
 
   useLayoutEffect(() => {
     const pending = zoomAnchorRef.current;
@@ -295,10 +314,11 @@ export function PdfViewer({
     const scroller = scrollerRef.current;
     if (pending && scroller) {
       if (pending.anchor) {
-        scroller.scrollTop = offsetForAnchor(geometryRef.current, pending.anchor);
+        scroller.scrollTop =
+          offsetForAnchor(geometryRef.current, pending.anchor) - pending.focus.y;
       }
       scroller.scrollLeft =
-        pending.centerX * scroller.scrollWidth - scroller.clientWidth / 2;
+        pending.fractionX * scroller.scrollWidth - pending.focus.x;
     }
     renderer.setZoom(zoom);
     updateViewport();
@@ -307,6 +327,27 @@ export function PdfViewer({
   useLayoutEffect(() => {
     scheduleViewportUpdate();
   }, [geometry, scheduleViewportUpdate]);
+
+  // Ctrl+wheel zooms the pane under the cursor, and only that one. A native
+  // listener because React's `onWheel` is passive and can't preventDefault,
+  // which would let the wheel scroll the pane as well as zoom it. A touchpad
+  // pinch arrives as the same event, so it zooms too.
+  useEffect(() => {
+    const scroller = scrollerRef.current;
+    if (!scroller) return;
+    const onWheel = (event: WheelEvent) => {
+      if (!event.ctrlKey) return;
+      event.preventDefault();
+      if (sizesRef.current.length === 0) return;
+      const view = scroller.getBoundingClientRect();
+      changeZoom(
+        (zoom) => wheelZoom(zoom, event.deltaY, event.deltaMode),
+        { x: event.clientX - view.left, y: event.clientY - view.top },
+      );
+    };
+    scroller.addEventListener("wheel", onWheel, { passive: false });
+    return () => scroller.removeEventListener("wheel", onWheel);
+  }, [changeZoom]);
 
   useEffect(() => {
     const scroller = scrollerRef.current;
