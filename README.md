@@ -131,12 +131,37 @@ Then pick that service in the toolbar. Worth knowing:
 
 ## Chat with your document
 
-Open the chat panel and ask about the PDF you have loaded. Retrieval combines
-keyword and semantic search, and every answer lists the pages it drew on, so you
-can check it. Each document keeps its own conversation, which you can clear.
+Open the chat panel and ask about the PDF you have loaded. Every answer cites
+the pages it came from as `[p. 7]` links; click one to jump there. Each
+document keeps its own conversation, which you can clear.
 
 Chat answers from exactly one document — the one you have open — so it never
 blends two papers together.
+
+**How it works: retrieve by text, read by vision.**
+
+- **Indexing is local and free.** Text is split into paragraph chunks under
+  their section headings, tables are read as tables, and scanned pages are
+  OCRed on your machine.
+- **Finding the pages is local and free too.** Keyword and semantic search are
+  fused, and the results are grouped into pages.
+- **The answer is one model call.** It reads those pages, and is shown *images*
+  of up to three of them (charts, tables, scans), so it can read what the text
+  layer can't.
+- **Citations are checked.** A page the model wasn't shown never becomes a link.
+
+On the [chat benchmark](benchmarks/rag/README.md) (43 questions over text,
+tables, charts, figures, scanned and Vietnamese pages; Gemini 2.5 Flash-Lite):
+
+| | Correct answers | Citation precision | Right page ranked first | Model calls / tokens per question | Time per question |
+|---|---|---|---|---|---|
+| Previous version | 0.47 | 0.20 | 0.62 | 2.4 / 1,003 | 2.6 s |
+| [DocPixie](https://github.com/qnguyen3/docpixie) | 0.70 | 0.75 | 0.74 | 5.5 / 7,834 | 6.6 s |
+| **PDFusion** | **0.93** | **0.97** | **0.85** | **1 / 2,925** | **2.2 s** |
+
+Charts went from 0.00 to 1.00 and scanned pages from unindexable to 0.91 ranked
+first. The cost per question doesn't grow with the document: about 2,400 tokens
+on a 57-page PDF, where DocPixie, which looks at every page, used 18,000.
 
 **First use downloads about 470 MB** — a multilingual embedding model, fetched
 once into `~/.cache/huggingface`. Everything after that is local. This is the
