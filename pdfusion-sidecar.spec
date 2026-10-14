@@ -142,6 +142,9 @@ datas += collect_data_files("tokenizers")
 # plugin .py files at import time, which collect_submodules handles, but bundle
 # any package data too for safety.
 datas += collect_data_files("tiktoken_ext")
+# RapidOCR's ONNX models (~16 MB) and the config.yaml naming them live in the
+# package directory, and it opens them by path relative to its own __file__.
+datas += collect_data_files("rapidocr_onnxruntime")
 
 # Some libraries query package metadata at runtime (PEP 566). PyInstaller
 # strips dist-info by default unless asked; copy the ones we know look it up.
@@ -353,8 +356,8 @@ excludes = [
     "uvloop",
     "hf_xet",
 
-    # --- OCR libraries (not used by current pipeline) ---
-    "rapidocr_onnxruntime",
+    # --- OCR libraries the pipeline doesn't use ---
+    # (`rapidocr_onnxruntime` is used: chat OCRs scanned pages, rag/ocr.py.)
     "pytesseract",
 
     # --- Docs / dev / lint / test tooling ---
@@ -437,8 +440,9 @@ a = Analysis(
 # `excludes` can only drop a whole importable package, and the packages that
 # dominate this bundle are all reachable: babeldoc's layout parser imports cv2
 # (`document_il/midend/layout_parser.py`), its char extractor imports
-# `sklearn.cluster` (`document_il/utils/extract_char.py`), and RAG indexing
-# imports camelot, which brings pandas. What follows drops payload *inside*
+# `sklearn.cluster` (`document_il/utils/extract_char.py`). (RAG indexing
+# used to import camelot as well, which brought pandas; rag/ingest.py reads
+# tables with PyMuPDF now.) What follows drops payload *inside*
 # packages we have to keep.
 #
 # Bytes are what matter, and it is worth knowing why, because "fewer files"
@@ -451,7 +455,7 @@ a = Analysis(
 # they make an install faster.
 #
 # What goes stale here is the *reachability* claim, not the paths: a babeldoc
-# or camelot upgrade can start using something dropped below. Each rule
+# upgrade can start using something dropped below. Each rule
 # therefore names what would have reached it. `tests/test_sidecar_smoke.py`
 # against the frozen exe is what catches a bad one.
 import sys as _sys

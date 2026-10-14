@@ -81,7 +81,7 @@ dev = [
     "pyinstaller>=6.10",
 ]
 
-# RAG and advanced features
+# RAG features
 rag = [
     # Vector database, and the ONNX embedding stack rag/onnx_embeddings.py runs
     # on. langchain, faiss-cpu and rank-bm25 were listed here for a hybrid
@@ -90,17 +90,13 @@ rag = [
     "onnxruntime>=1.17.0,<2.0.0",
     "tokenizers>=0.15.0,<1.0.0",
     "huggingface-hub>=0.20.0,<1.0.0",
-]
-
-# Advanced PDF processing
-advanced = [
-    "camelot-py>=0.11.0,<1.0.0",
-    "pdfplumber>=0.10.0,<1.0.0",
+    # OCR of scanned pages (rag/ocr.py).
+    "rapidocr-onnxruntime>=1.4.0,<2.0.0",
 ]
 
 # All optional features
 all = [
-    "pdfusion[rag,advanced]"
+    "pdfusion[rag]"
 ]
 
 [project.scripts]
