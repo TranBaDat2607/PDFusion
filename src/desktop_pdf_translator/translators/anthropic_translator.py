@@ -8,12 +8,12 @@ placeholders), so this class plugs in the same way OpenAITranslator/GeminiTransl
 """
 
 import logging
-from typing import Any, Dict, FrozenSet, Optional
+from typing import Any, Dict, FrozenSet, Optional, Sequence
 
 import anthropic
 
 from ..providers.registry import provider
-from .base import BaseTranslator, TranslationCancelled
+from .base import BaseTranslator, PageImage, TranslationCancelled
 from .translation_cache import llm_cache_get as _llm_cache_get, llm_cache_set as _llm_cache_set
 
 
@@ -157,6 +157,7 @@ class AnthropicTranslator(BaseTranslator):
         prompt: str,
         system: str | None = None,
         max_tokens: int = 1000,
+        images: Optional[Sequence[PageImage]] = None,
     ) -> str | None:
         """Freeform generation used by the RAG chain.
 

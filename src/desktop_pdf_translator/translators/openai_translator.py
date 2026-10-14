@@ -3,12 +3,12 @@ OpenAI translator implementation with Vietnamese optimization.
 """
 
 import logging
-from typing import Any, Dict, FrozenSet, List, Optional
+from typing import Any, Dict, FrozenSet, List, Optional, Sequence
 
 from openai import OpenAI
 
 from ..providers.registry import provider
-from .base import BaseTranslator, TranslationCancelled
+from .base import BaseTranslator, PageImage, TranslationCancelled
 from .translation_cache import llm_cache_get as _llm_cache_get, llm_cache_set as _llm_cache_set
 
 
@@ -130,6 +130,7 @@ class OpenAITranslator(BaseTranslator):
         prompt: str,
         system: Optional[str] = None,
         max_tokens: int = 1000,
+        images: Optional[Sequence[PageImage]] = None,
     ) -> Optional[str]:
         """Freeform generation used by the RAG chain.
 
