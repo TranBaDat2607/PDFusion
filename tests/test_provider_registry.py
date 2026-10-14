@@ -214,3 +214,12 @@ def test_importing_the_registry_loads_no_sdk_and_no_pydantic():
 
     assert result.returncode == 0, result.stderr
     assert result.stdout.split() == []
+
+
+def test_only_deepseek_is_known_to_refuse_images():
+    """Chat shows the answer model pictures of charts and scans
+    (`rag_chain`). DeepSeek's API takes text only and 400s on an image part;
+    every other LLM provider takes images on its current models, and a model
+    that doesn't is found out when it refuses, then sent text only."""
+    refusing = {spec.id for spec in registry.PROVIDERS if spec.is_llm and not spec.accepts_images}
+    assert refusing == {"deepseek"}
