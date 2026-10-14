@@ -219,3 +219,13 @@ def test_chunk_map_indexes_chunks_by_id():
     mapped = chunk_map(chunks)
     assert set(mapped) == {f"c{i}" for i in range(7)}
     assert mapped["c4"] == chunks[4]
+
+
+def test_a_pages_best_chunk_is_its_highest_scoring_hit_not_its_first():
+    """The reference the chat shows for a page quotes this chunk, so it must
+    be the one that matched best, wherever it sits on the page."""
+    fused = [("c2", 0.9), ("c0", 0.5)]
+
+    (page,) = group_by_page(fused, doc(), max_pages=1, neighbours=0)
+
+    assert page.best_chunk_id == "c2"

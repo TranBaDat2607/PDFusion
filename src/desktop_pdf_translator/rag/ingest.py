@@ -1,6 +1,6 @@
 """PDF → chat chunks, page by page, with what each page needs to be read.
 
-Replaces `document_processor.ScientificPDFProcessor` (#31 redesign). What that
+Replaces `document_processor.ScientificPDFProcessor`, the old chunker. What that
 one did, and why each part changed:
 
 - It chunked spans, ~1000 characters at a time. The embedding model reads 128
@@ -243,9 +243,13 @@ def _markdown_rows(rows: List[List[Optional[str]]]) -> Tuple[str, List[str]]:
 class PdfIngestor:
     """Turns one PDF into chat chunks. One instance per document."""
 
-    def __init__(self, ocr: Optional[OcrEngine] = None, max_chunk_chars: int = MAX_CHUNK_CHARS) -> None:
+    def __init__(self, ocr: Optional[OcrEngine] = None, max_chunk_chars: int = MAX_CHUNK_CHARS,
+                 on_page: Optional[Callable[[int, int], None]] = None) -> None:
         self.ocr = ocr
         self.max_chunk_chars = max_chunk_chars
+        # Called with (pages done, page count) after each page: OCR takes
+        # seconds a page, and the chat panel shows how far indexing has got.
+        self.on_page = on_page
         # One entry per page, chunks or not: `api/routes/rag.py:_page_count`
         # records the document's page count from its length.
         self.page_layouts: Dict[int, Dict[str, Any]] = {}
@@ -276,6 +280,8 @@ class PdfIngestor:
                     "page_kind": kind,
                 }
                 chunks.extend(page_chunks)
+                if self.on_page is not None:
+                    self.on_page(page.number + 1, doc.page_count)
         counts["chunks"] = len(chunks)
         self._stats = counts
         logger.info("Ingested %s: %s", Path(path).name, counts)

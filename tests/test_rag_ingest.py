@@ -574,3 +574,13 @@ def test_a_ruled_grid_whose_cells_are_mostly_empty_is_not_a_table(tmp_path: Path
     assert not any(c["metadata"]["kind"] == "table" for c in chunks)
     assert ingestor.stats()["tables"] == 0
     assert "Law" in _all_text(chunks)
+
+
+def test_progress_is_reported_after_every_page(tmp_path: Path) -> None:
+    """OCR takes seconds a page; the chat panel shows how far indexing is."""
+    path = _mixed_document(tmp_path)
+    seen: List[tuple] = []
+
+    PdfIngestor(ocr=FakeOcr(["text"]), on_page=lambda done, total: seen.append((done, total))).process_pdf(path)
+
+    assert seen == [(1, 4), (2, 4), (3, 4), (4, 4)]

@@ -1,27 +1,59 @@
 """
-RAG chain that answers a question from one indexed PDF document.
+The chat's answer chain: one question, one document's index, one answer that
+cites its pages.
+
+Retrieve by text, read by vision. Retrieval is local and costs nothing: a
+semantic and a BM25 search over the document's chunks, fused by rank
+(`retrieval.reciprocal_rank_fusion`) and grouped into pages
+(`retrieval.group_by_page`). The answer model then reads those pages — their
+text, under their page numbers, and, for the best-ranked pages whose content
+the text layer loses (charts, figures, tables, scans), a rendered image of the
+page (`retrieval.select_image_pages`, `page_images.render_pages`). It cites
+pages as `[p. N]`, and `citations.link_citations` keeps only citations of pages
+it was shown, as links the chat jumps from.
+
+What this replaced, and why (measured in `benchmarks/rag/`): a score blend
+that let one rare keyword outrank every semantic hit; a re-rank that scored
+pages by how early in the document they were; HyDE on every question, a model
+round trip before retrieval could start (`hyde=True` keeps it — see the
+benchmark for what it bought); answers that cited nothing, with every
+retrieved chunk listed as a reference whether the answer used it or not; and
+no way to read a chart or a scan. DocPixie (github.com/qnguyen3/docpixie)
+answers by showing the model every page of the document for every question;
+this shows it at most `max_images` pages, chosen by retrieval, so a question
+costs about the same on a 300-page document as on a 3-page one.
 """
 
 import asyncio
 import json
 import logging
 import threading
-from collections import defaultdict
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from pathlib import Path
+from typing import Any, Callable, Dict, List, Optional, Sequence, Set, Tuple
 
 from ..config import ModelRef, TranslationService, get_settings
 from ..providers.registry import llm_ids_by_priority, provider
 from ..translators.base import (
     LANGUAGE_DISPLAY_NAMES,
     BaseTranslator,
+    PageImage,
     is_fatal_translation_error,
 )
 from ..translators.capabilities import SERVICE_LABELS
 from ..translators.factory import TranslatorFactory
+from .citations import link_citations, page_link
 from .errors import AnswerGenerationError, IndexUnavailableError
 from .keyword_search import Bm25Index
+from .page_images import render_pages
+from .retrieval import (
+    PageEvidence,
+    contextual_text,
+    group_by_page,
+    reciprocal_rank_fusion,
+    select_image_pages,
+)
 from .vector_store import ChromaDBManager
 
 logger = logging.getLogger(__name__)
@@ -45,9 +77,8 @@ def _display_page(metadata: Dict[str, Any]) -> Optional[int]:
     """Page number as a human (and `PdfViewer.scrollToPage`) counts them.
 
     Chunk metadata stores `page` 0-indexed — it comes straight from
-    `document_processor.process_pdf`'s `range(len(doc))` and is used that way
-    internally (`_add_surrounding_context`'s page window, the re-rank
-    page score). Everything that *leaves* this module is read by a person or
+    `ingest.PdfIngestor`, which numbers pages as PyMuPDF does, and is used that
+    way internally (`retrieval.PageEvidence.page`). Everything that *leaves* this module is read by a person or
     scrolled to by the viewer, so it converts here, at the single boundary.
 
     `None` when the chunk carries no usable page — missing, or unparseable.
@@ -100,14 +131,50 @@ class AnswerModel:
     model: Optional[str] = None
 
 
-class EnhancedRAGChain:
-    """RAG chain that retrieves PDF context from ChromaDB and synthesizes an answer via an LLM translator."""
+# Pages retrieval may show the answer model as images. Each costs about a
+# page of text in tokens (`page_images.MAX_SIDE`), and past the best-ranked
+# few, a page is unlikely to be where the answer is.
+DEFAULT_MAX_IMAGES = 3
+# Chunks each search contributes to the fusion: deep enough that a page found
+# by only one of the two searches still gets in.
+CANDIDATES = 20
+# Chunks shown either side of a hit, on its page.
+NEIGHBOURS = 1
+# Thinking counts toward this on a model that thinks by default.
+ANSWER_MAX_TOKENS = 4000
 
-    def __init__(self, vector_store: ChromaDBManager):
+# A status that, with "image" in the message, is a model saying it takes no
+# images — a text-only model behind OpenRouter or Ollama, say — rather than a
+# broken request: 400 (OpenAI, Anthropic, Gemini), 415 and 422 (some proxies).
+_IMAGE_REFUSAL_STATUSES = frozenset({400, 415, 422})
+
+
+def is_image_refusal(error: BaseException) -> bool:
+    status = getattr(error, "status_code", None) or getattr(error, "status", None)
+    return status in _IMAGE_REFUSAL_STATUSES and "image" in str(error).lower()
+
+
+class _ImagesRefused(Exception):
+    pass
+
+
+class EnhancedRAGChain:
+    """Answers a question from one document's index; see the module doc."""
+
+    def __init__(self, vector_store: ChromaDBManager, *, hyde: bool = False,
+                 max_images: int = DEFAULT_MAX_IMAGES, candidates: int = CANDIDATES,
+                 neighbours: int = NEIGHBOURS):
         self.vector_store = vector_store
+        self.hyde = hyde
+        self.max_images = max_images
+        self.candidates = candidates
+        self.neighbours = neighbours
         self._model: Optional[AnswerModel] = None
         self._model_key: Optional[Tuple[Any, ...]] = None
         self._model_lock = threading.Lock()
+        # (provider, model) pairs that refused an image: sent text only from
+        # then on, rather than failing and retrying on every question.
+        self._text_only: Set[Tuple[str, Optional[str]]] = set()
         logger.info("RAG chain initialized")
 
     def _answer_model(self) -> Optional[AnswerModel]:
@@ -179,7 +246,10 @@ class EnhancedRAGChain:
 
         `index_id` names the only ChromaDB collection searched; no other
         document's chunks are within reach (#59). `answer_lang` is a language
-        code, or `auto` for the question's own language.
+        code, or `auto` for the question's own language. `max_pdf_sources` is
+        how many pages of evidence the answer is written from. `document_path`
+        is where pages shown as images are rendered from; a file gone since it
+        was indexed costs the images, not the answer.
 
         Raises when the question can't be answered: `IndexUnavailableError` when
         the index's chunks can't be read, `AnswerGenerationError` when the model
@@ -188,109 +258,96 @@ class EnhancedRAGChain:
         put it in the chat as if the document had said it (#31).
         """
         logger.info(f"Processing question: {question[:100]}...")
-
         start_time = datetime.now()
 
         model = await asyncio.to_thread(self._answer_model)
-
-        pdf_sources = await self._retrieve_pdf_knowledge(
-            question, index_id, max_pdf_sources, model
+        evidence = await self.retrieve(question, index_id, max_pdf_sources, model)
+        answer, images_sent = await self._generate_answer(
+            question, evidence, model, answer_lang, document_path
         )
 
-        answer = await self._generate_answer(question, pdf_sources, model, answer_lang)
-
-        pdf_references = self._create_pdf_references(pdf_sources, document_id, document_path)
-
-        quality_metrics = self._calculate_quality_metrics(pdf_sources)
+        citations = link_citations(answer, {page.page + 1 for page in evidence})
+        if citations.invalid_pages:
+            logger.info("Dropped citations of pages not in the evidence: %s", citations.invalid_pages)
+        pdf_references = self._create_pdf_references(
+            evidence, citations.cited_pages, document_id, document_path
+        )
 
         processing_time = (datetime.now() - start_time).total_seconds()
-
         logger.info(f"Question answered successfully in {processing_time:.2f}s")
         # Which model wrote it: the one chosen when the question started, even
-        # if the choice changed since. None when no model did — the template
+        # if the choice changed since. None when no model did — the extractive
         # answer, or nothing found to answer from.
-        wrote = model is not None and bool(pdf_sources)
+        wrote = model is not None and bool(evidence)
         return {
-            'answer': answer,
+            'answer': citations.text,
             'provider': model.service.value if wrote else None,
             'model': model.model if wrote else None,
             'pdf_references': pdf_references,
-            'quality_metrics': quality_metrics,
+            'quality_metrics': {
+                'total_sources': len(evidence),
+                'images_sent': images_sent,
+                'pages_cited': len(citations.cited_pages),
+                'invalid_citations': len(citations.invalid_pages),
+            },
             'processing_time': processing_time,
             'sources_used': {
-                'pdf_sources': len(pdf_sources),
+                'pdf_sources': len(evidence),
             },
             'timestamp': datetime.now().isoformat()
         }
 
-    async def _retrieve_pdf_knowledge(self, question: str, index_id: str,
-                                      max_sources: int,
-                                      model: Optional[AnswerModel] = None) -> List[Dict[str, Any]]:
-        """Retrieve relevant knowledge from one document's index. Raises on failure."""
+    # ------------------------------------------------------------------
+    # retrieval
+    # ------------------------------------------------------------------
 
-        # The index's chunks, read once. Both keyword passes and the
-        # surrounding-context step work from this list; they used to re-read
-        # all of the document's chunks, up to 12 times a question (#59).
+    async def retrieve(self, question: str, index_id: str, max_pages: int,
+                       model: Optional[AnswerModel] = None) -> List[PageEvidence]:
+        """The `max_pages` pages most likely to answer `question`, best first.
+
+        Raises `IndexUnavailableError` when the index has no chunks to read.
+        """
+        # The index's chunks, read once. The keyword search and the page
+        # grouping both work from this list; reading them again per search
+        # used to cost up to 12 reads a question (#59).
         chunks = await self.vector_store.get_chunks(index_id)
         if not chunks:
             # `_run_index` never marks an index with no chunks ready, so this
             # one is damaged.
             raise IndexUnavailableError(index_id)
 
-        # BM25 statistics for those chunks, built once for both passes.
+        # BM25 over what is embedded: each chunk under its section heading.
         # Tokenizing a whole document is CPU work: off the event loop.
-        keywords = await asyncio.to_thread(Bm25Index, [chunk['text'] for chunk in chunks])
+        keywords = await asyncio.to_thread(Bm25Index, [contextual_text(c) for c in chunks])
 
-        # Stage 0: HyDE - Generate hypothetical answer
-        hypothetical_answer = await self._generate_hypothetical_answer(question, model)
+        queries = [question]
+        if self.hyde:
+            hypothetical = await self._generate_hypothetical_answer(question, model)
+            if hypothetical != question:
+                queries.append(hypothetical)
 
-        # Stage 1: Dual retrieval — original question + HyDE answer
-        results_original = await self.vector_store.hybrid_search(
-            index_id,
-            query=question,
-            chunks=chunks,
-            keywords=keywords,
-            n_results=max_sources * 2,
-            alpha=0.5,
+        rankings: List[List[str]] = []
+        for query in queries:
+            semantic = await self.vector_store.search_similar(index_id, query, self.candidates)
+            rankings.append([hit['chunk_id'] for hit in semantic])
+            scores = await asyncio.to_thread(keywords.scores, query)
+            best = sorted(
+                (i for i, score in enumerate(scores) if score > 0),
+                key=lambda i: scores[i],
+                reverse=True,
+            )[:self.candidates]
+            rankings.append([chunks[i]['chunk_id'] for i in best])
+
+        fused = reciprocal_rank_fusion(rankings)
+        evidence = await asyncio.to_thread(
+            group_by_page, fused, chunks, max_pages, self.neighbours
         )
-
-        # With no hypothetical answer, the second pass would search for the
-        # question again.
-        results_hyde: List[Dict[str, Any]] = []
-        if hypothetical_answer != question:
-            results_hyde = await self.vector_store.hybrid_search(
-                index_id,
-                query=hypothetical_answer,
-                chunks=chunks,
-                keywords=keywords,
-                n_results=max_sources * 2,
-                alpha=0.7,  # higher semantic weight for HyDE
-            )
-
-        candidate_results = self._merge_search_results(results_original, results_hyde, max_sources * 3)
-
-        # Stage 2: Add surrounding context to top candidates. It groups every
-        # chunk by page, so it runs off the event loop too.
-        enriched_results = await asyncio.to_thread(
-            self._add_surrounding_context,
-            candidate_results[:max_sources * 2],
-            chunks,
-            1,
-        )
-
-        # Stage 3: Re-rank
-        results = await self._rerank_results(
-            question,
-            enriched_results,
-            top_k=max_sources
-        )
-
-        logger.info(f"Retrieved {len(results)} PDF sources")
-        return results
+        logger.info("Retrieved pages %s", [page.page + 1 for page in evidence])
+        return evidence
 
     async def _generate_hypothetical_answer(self, question: str,
                                             model: Optional[AnswerModel]) -> str:
-        """HyDE: a hypothetical answer to search with.
+        """HyDE, with `hyde=True`: a hypothetical answer to search with.
 
         The question itself when there is no model, or when the model fails:
         HyDE only improves the search, and a failing model is reported by the
@@ -319,204 +376,115 @@ Question: {question}"""
             return question
         return answer or question
 
-    def _merge_search_results(self, results1: List[Dict[str, Any]],
-                              results2: List[Dict[str, Any]],
-                              max_results: int) -> List[Dict[str, Any]]:
-        """Merge and deduplicate results from multiple searches."""
-        seen_ids = set()
-        merged = []
+    # ------------------------------------------------------------------
+    # the answer
+    # ------------------------------------------------------------------
 
-        for result in results1 + results2:
-            chunk_id = result.get('chunk_id')
-            if chunk_id and chunk_id not in seen_ids:
-                seen_ids.add(chunk_id)
-                merged.append(result)
-
-        merged.sort(key=lambda x: x.get('final_score', x.get('similarity_score', 0)), reverse=True)
-
-        return merged[:max_results]
-
-    def _add_surrounding_context(self, candidates: List[Dict[str, Any]],
-                                 chunks: List[Dict[str, Any]],
-                                 context_window: int = 1) -> List[Dict[str, Any]]:
-        """Add each candidate's neighbouring chunks on the same page.
-
-        Works from the index's chunks, already read, instead of reading them
-        again for every candidate.
-        """
-        if not candidates:
-            return candidates
-
-        chunks_by_page = defaultdict(list)
-        for surr_chunk in chunks:
-            chunks_by_page[surr_chunk.get('metadata', {}).get('page', 0)].append(surr_chunk)
-
-        enriched_chunks = []
-
-        for chunk in candidates:
-            metadata = chunk.get('metadata', {})
-            page = metadata.get('page', 0)
-            chunk_index = metadata.get('chunk_index', 0)
-
-            context_before = []
-            context_after = []
-
-            for surr_chunk in chunks_by_page.get(page, []):
-                surr_index = surr_chunk.get('metadata', {}).get('chunk_index', 0)
-
-                if surr_index < chunk_index and chunk_index - surr_index <= context_window:
-                    context_before.append(surr_chunk['text'])
-
-                if surr_index > chunk_index and surr_index - chunk_index <= context_window:
-                    context_after.append(surr_chunk['text'])
-
-            enriched_text_parts = []
-            if context_before:
-                enriched_text_parts.append("...\n" + "\n".join(context_before) + "\n")
-            enriched_text_parts.append(chunk['text'])
-            if context_after:
-                enriched_text_parts.append("\n" + "\n".join(context_after) + "\n...")
-
-            enriched_chunk = chunk.copy()
-            enriched_chunk['text'] = "".join(enriched_text_parts)
-            enriched_chunk['original_text'] = chunk['text']
-            enriched_chunks.append(enriched_chunk)
-
-        return enriched_chunks
-
-    async def _rerank_results(self, question: str, chunks: List[Dict[str, Any]],
-                             top_k: int = 5) -> List[Dict[str, Any]]:
-        """Re-rank results using multiple signals for better relevance."""
-        if not chunks:
-            return []
-
-        question_lower = question.lower()
-        question_words = set(question_lower.split())
-
-        metadata_keywords = {
-            'en': ['title', 'author', 'abstract', 'summary', 'introduction', 'conclusion'],
-            'vi': ['tiêu đề', 'tác giả', 'tóm tắt', 'giới thiệu', 'kết luận']
-        }
-        is_metadata_query = any(
-            kw in question_lower
-            for keywords in metadata_keywords.values()
-            for kw in keywords
+    def _sends_images(self, model: AnswerModel) -> bool:
+        return (
+            self.max_images > 0
+            and provider(model.service.value).accepts_images
+            and (model.service.value, model.model) not in self._text_only
         )
 
-        for chunk in chunks:
-            text_lower = chunk.get('original_text', chunk.get('text', '')).lower()
-            metadata = chunk.get('metadata', {})
-            page = metadata.get('page', 100)
-            section_type = metadata.get('chunk_type', metadata.get('section_type', 'content'))
-            chunk_index = metadata.get('chunk_index', 100)
-
-            base_score = chunk.get('final_score', chunk.get('similarity_score', 0))
-
-            words_in_text = set(text_lower.split())
-            keyword_matches = len(question_words & words_in_text)
-            keyword_density = keyword_matches / max(len(question_words), 1)
-
-            page_score = 1.0 / (1.0 + page * 0.1)
-            index_score = 1.0 / (1.0 + chunk_index * 0.05)
-
-            text_length = len(chunk.get('text', ''))
-            length_score = min(text_length / 500, 1.0)
-
-            section_score = 0.0
-            if is_metadata_query:
-                if section_type == 'title':
-                    section_score = 1.0
-                elif section_type == 'header':
-                    section_score = 0.8
-                elif section_type == 'abstract':
-                    section_score = 0.9
-            else:
-                if section_type == 'content':
-                    section_score = 0.3
-
-            if is_metadata_query:
-                rerank_score = (
-                    0.15 * base_score +
-                    0.05 * keyword_density +
-                    0.2 * page_score +
-                    0.2 * index_score +
-                    0.1 * length_score +
-                    0.3 * section_score
-                )
-            else:
-                rerank_score = (
-                    0.4 * base_score +
-                    0.3 * keyword_density +
-                    0.15 * page_score +
-                    0.05 * index_score +
-                    0.05 * length_score +
-                    0.05 * section_score
-                )
-
-            chunk['rerank_score'] = rerank_score
-            chunk['final_score'] = rerank_score
-            chunk['is_metadata_query'] = is_metadata_query
-
-        chunks.sort(key=lambda x: x.get('rerank_score', 0), reverse=True)
-
-        return chunks[:top_k]
-
-    async def _generate_answer(self, question: str, pdf_sources: List[Dict[str, Any]],
-                               model: Optional[AnswerModel], answer_lang: str) -> str:
-        """Write the answer from the retrieved sources.
+    async def _generate_answer(self, question: str, evidence: Sequence[PageEvidence],
+                               model: Optional[AnswerModel], answer_lang: str,
+                               document_path: Optional[str] = None) -> Tuple[str, int]:
+        """The answer, before its citations are checked, and how many page
+        images the model was shown to write it.
 
         A model that fails raises `AnswerGenerationError`. It used to fall back
         to the template answer, which hid a rejected key behind excerpts that
         looked like an answer.
         """
-        if not pdf_sources:
-            return NOTHING_FOUND_ANSWER
+        if not evidence:
+            return NOTHING_FOUND_ANSWER, 0
         if model is None:
-            return self._generate_template_answer(question, pdf_sources)
+            return self._extractive_answer(evidence), 0
 
-        # Every source, whole. The chat lists each one as a reference, so the
-        # answer must have read them all; and `_add_surrounding_context` puts
-        # a hit's neighbours *before* it, so cutting each to 300 characters
-        # kept the neighbour and dropped the passage that matched.
-        context_parts = []
-        for i, source in enumerate(pdf_sources):
-            text = source.get('text', '')
-            page = _page_label(source.get('metadata', {}))
-            context_parts.append(f"[Excerpt {i+1}, page {page}]\n{text}")
+        images: List[PageImage] = []
+        if self._sends_images(model) and document_path:
+            picked = select_image_pages(evidence, self.max_images)
+            if picked:
+                images = await asyncio.to_thread(
+                    render_pages, Path(document_path), [page.page for page in picked]
+                )
 
-        prompt = self._create_answer_prompt(question, '\n\n'.join(context_parts), answer_lang)
-        return await self._generate_with_llm(model, prompt, answer_lang)
+        prompt = self._create_answer_prompt(question, evidence, answer_lang, images)
+        try:
+            answer = await self._generate_with_llm(model, prompt, answer_lang, images)
+        except _ImagesRefused:
+            logger.warning(
+                "%s %s refused page images; it is sent text only from now on",
+                model.service.value, model.model,
+            )
+            self._text_only.add((model.service.value, model.model))
+            images = []
+            prompt = self._create_answer_prompt(question, evidence, answer_lang, images)
+            answer = await self._generate_with_llm(model, prompt, answer_lang, images)
+        return answer, len(images)
 
-    def _create_answer_prompt(self, question: str, context: str, answer_lang: str = "auto") -> str:
+    def _create_answer_prompt(self, question: str, evidence: Sequence[PageEvidence],
+                              answer_lang: str = "auto",
+                              images: Sequence[PageImage] = ()) -> str:
         """The prompt for one answer.
 
-        Excerpts first and the question after them, so the instruction the
-        model reads last is about this question. The math delimiters are named
-        because the chat's remark-math reads only `$…$` and `$$…$$`; a model's
-        `\\(…\\)` would show as raw text.
+        Every evidence page, whole, under its page number: the chat lists each
+        as a reference, so the answer must have read them all, and the number
+        is what it cites. Pages first and the question after them, so the
+        instruction the model reads last is about this question. The math
+        delimiters are named because the chat's remark-math reads only `$…$`
+        and `$$…$$`; a model's `\\(…\\)` would show as raw text.
         """
-        return f"""Excerpts from the document:
+        blocks = []
+        for page in evidence:
+            heading = next(
+                (c['metadata'].get('heading') for c in page.chunks if c['metadata'].get('heading')),
+                "",
+            )
+            title = f"--- page {page.page + 1}" + (f" (section: {heading})" if heading else "") + " ---"
+            body = "\n\n".join(chunk['text'] for chunk in page.chunks)
+            blocks.append(f"{title}\n{body}")
+        attached = ""
+        if images:
+            labels = ", ".join(image.label or "" for image in images)
+            attached = (
+                f"\n\nImages of some of these pages are attached: {labels}. Read charts, "
+                "figures, tables and scanned text from the images; for those pages the "
+                "text above may be incomplete or garbled."
+            )
+        pages = "\n\n".join(blocks)
 
-{context}
+        return f"""Pages of the document, with the text found on each:
+
+{pages}{attached}
 
 Question: {question}
 
-Answer from the excerpts above, directly and concisely, without headed sections. The chat renders Markdown, and math written as $...$ or $$...$$, so use a list, table or formula where it makes the answer clearer. {answer_language_instruction(answer_lang)}"""
+Answer from these pages only, directly and concisely, without headed sections. After each statement, cite the page it comes from as [p. N], or [p. N, M] for several; cite only pages listed above. If these pages don't contain the answer, say so plainly rather than answering from general knowledge. The chat renders Markdown, and math written as $...$ or $$...$$, so use a list, table or formula where it makes the answer clearer. {answer_language_instruction(answer_lang)}"""
 
-    async def _generate_with_llm(self, model: AnswerModel, prompt: str, answer_lang: str) -> str:
+    async def _generate_with_llm(self, model: AnswerModel, prompt: str, answer_lang: str,
+                                 images: Sequence[PageImage] = ()) -> str:
         """Generate an answer with the configured LLM.
 
         Raises `AnswerGenerationError`, carrying the sentence to show, when the
-        model fails or returns nothing.
+        model fails or returns nothing; `_ImagesRefused` when it failed because
+        it takes no images. `images` is passed only when there are some, so a
+        backend written before images existed is called as it always was.
         """
         system = (
-            "You answer questions about one PDF document from excerpts of it. "
+            "You answer questions about one PDF document from pages of it, and cite "
+            "the page each statement comes from as [p. N]. "
             + answer_language_instruction(answer_lang)
         )
+        kwargs = {"images": list(images)} if images else {}
         try:
-            # Thinking counts toward this on a model that thinks by default.
-            answer = await asyncio.to_thread(model.translator.generate, prompt, system, 4000)
+            answer = await asyncio.to_thread(
+                model.translator.generate, prompt, system, ANSWER_MAX_TOKENS, **kwargs
+            )
         except Exception as e:
+            if images and is_image_refusal(e):
+                raise _ImagesRefused() from e
             logger.error(f"Answer generation failed: {e}")
             raise AnswerGenerationError(describe_answer_error(model.service, e)) from e
         if not answer:
@@ -524,63 +492,69 @@ Answer from the excerpts above, directly and concisely, without headed sections.
             raise AnswerGenerationError(f"{label} returned an empty answer. Try asking again.")
         return answer
 
-    def _generate_template_answer(self, question: str, pdf_sources: List[Dict[str, Any]]) -> str:
-        """The answer with no LLM key: the question and excerpts of the best sources."""
+    def _extractive_answer(self, evidence: Sequence[PageEvidence]) -> str:
+        """The answer with no LLM key: the passages that matched best, each
+        with its page. No model, so no synthesis, and nothing worded as one."""
+        parts = ["No answer model is set up, so here are the passages that match best:"]
+        for page in evidence[:3]:
+            excerpt = _best_chunk(page)['text']
+            if len(excerpt) > 300:
+                excerpt = excerpt[:300].rsplit(" ", 1)[0] + "…"
+            parts.append(f"- {excerpt} {page_link(page.page + 1)}")
+        parts.append("\nAdd an API key in Settings → Models for written answers.")
+        return "\n".join(parts)
 
-        answer_parts = [f"Based on available information, I will answer the question: '{question}'"]
-        answer_parts.append("\n**Information from PDF documents:**")
-        for source in pdf_sources[:2]:
-            text = source.get('text', '')
-            page = _page_label(source.get('metadata', {}))
-            answer_parts.append(f"- Page {page}: {text[:200]}...")
-        answer_parts.append("\n**Conclusion:** The above information provides an overview of your question. For more details, please refer to the cited sources.")
-
-        return '\n'.join(answer_parts)
-
-    def _create_pdf_references(self, pdf_sources: List[Dict[str, Any]],
+    def _create_pdf_references(self, evidence: Sequence[PageEvidence], cited_pages: Sequence[int],
                                document_id: str, document_path: str) -> List[Dict[str, Any]]:
-        """Create PDF references with navigation information.
+        """One reference per evidence page: the cited ones first, in the order
+        the answer cites them, then the rest in retrieval order.
 
         This list is the `pdf_references` field of the `answer`/`done` SSE
         payload, and the chat panel feeds `page` straight to
         `PdfViewer.scrollToPage` — so it is 1-indexed, or `None`. See
-        `_display_page`.
-
-        Every source comes from one document's index, so its id and path come
-        from the caller; chunks no longer carry them.
+        `_display_page`. Every source comes from one document's index, so its
+        id and path come from the caller; chunks don't carry them.
         """
-
+        order = {page: i for i, page in enumerate(cited_pages)}
+        ranked = sorted(
+            enumerate(evidence),
+            key=lambda item: (
+                0 if item[1].page + 1 in order else 1,
+                order.get(item[1].page + 1, item[0]),
+            ),
+        )
         references = []
-
-        for source in pdf_sources:
-            metadata = source.get('metadata', {})
-
+        for _, page in ranked:
+            best = _best_chunk(page)
+            metadata = best.get('metadata', {})
+            text = best.get('text', '')
             reference = {
                 'type': 'pdf',
                 'page': _display_page(metadata),
-                'text': source.get('text', '')[:150] + "...",
-                'confidence': source.get('similarity_score', 0.0),
+                'text': text[:150] + ("..." if len(text) > 150 else ""),
+                'confidence': page.score,
                 'document_id': document_id,
                 'document_path': document_path,
-                'chunk_id': source.get('chunk_id', ''),
-                'has_equations': metadata.get('has_equations', False),
-                'has_tables': metadata.get('has_tables', False),
-                'has_figures': metadata.get('has_figures', False)
+                'chunk_id': best.get('chunk_id', ''),
+                'cited': page.page + 1 in order,
+                'page_kind': page.page_kind,
+                'shown_as_image': page.wants_image,
+                'has_equations': any(c['metadata'].get('has_equations') for c in page.chunks),
+                'has_tables': any(c['metadata'].get('has_tables') for c in page.chunks),
+                'has_figures': any(c['metadata'].get('has_figures') for c in page.chunks),
             }
-
             if 'bbox' in metadata:
                 try:
                     reference['bbox'] = json.loads(metadata['bbox'])
                 except (TypeError, ValueError):
                     pass
-
             references.append(reference)
-
         return references
 
-    def _calculate_quality_metrics(self, pdf_sources: List[Dict[str, Any]]) -> Dict[str, float]:
-        """Calculate quality metrics for the answer."""
 
-        return {
-            'total_sources': len(pdf_sources)
-        }
+def _best_chunk(page: PageEvidence) -> Dict[str, Any]:
+    """The page's best-matching chunk."""
+    for chunk in page.chunks:
+        if chunk['chunk_id'] == page.best_chunk_id:
+            return chunk
+    return page.chunks[0]

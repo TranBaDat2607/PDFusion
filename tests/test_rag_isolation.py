@@ -35,6 +35,7 @@ from desktop_pdf_translator.rag.index_spec import (
     EMBEDDING_MODEL,
 )
 from desktop_pdf_translator.rag.rag_chain import AnswerModel, EnhancedRAGChain
+from desktop_pdf_translator.rag.retrieval import PageEvidence
 from desktop_pdf_translator.rag.vector_store import ChromaDBManager
 from desktop_pdf_translator.storage.records import IndexRecord, RecordsStore
 
@@ -94,10 +95,10 @@ def _NoKeySettings() -> AppSettings:
 
 
 class _FakeProcessor:
-    """Stands in for `ScientificPDFProcessor` (fitz + camelot + pdfplumber):
+    """Stands in for `ingest.PdfIngestor` (PyMuPDF and OCR):
     one chunk on one page, whose text says which paper it was read from."""
 
-    def __init__(self) -> None:
+    def __init__(self, **_options) -> None:
         self.page_layouts = {0: {}}
 
     def process_pdf(self, path: Path) -> List[Dict[str, Any]]:
@@ -301,10 +302,10 @@ def test_retrieval_reaches_only_the_named_index(
     run_index(two_papers[0])
     index_second = _ready(records, run_index(second))
 
-    results = asyncio.run(chain._retrieve_pdf_knowledge(QUESTION, index_second.id, 5))
+    evidence = asyncio.run(chain.retrieve(QUESTION, index_second.id, 5))
 
-    assert results, "the named document's own chunk should be found"
-    assert {r.get("original_text", r["text"]) for r in results} == {BETA}
+    assert evidence, "the named document's own chunk should be found"
+    assert {chunk["text"] for page in evidence for chunk in page.chunks} == {BETA}
 
 
 def test_a_question_reads_its_index_once_and_cites_its_document(
@@ -409,16 +410,22 @@ def _answer_with(chain: EnhancedRAGChain, monkeypatch: pytest.MonkeyPatch, trans
 
 
 def _index_of(
-    records: RecordsStore, store: ChromaDBManager, tmp_path: Path, *texts: str
+    records: RecordsStore, store: ChromaDBManager, tmp_path: Path, *texts: str,
+    one_page_each: bool = False,
 ) -> IndexRecord:
-    """A document with one ready index holding `texts`, a chunk each."""
+    """A document with one ready index holding `texts`, a chunk each — all on
+    one page, or with `one_page_each`, a page each."""
     paper = _write_paper(tmp_path / "paper.pdf", "".join(texts).encode())
     document_id = compute_file_hash(paper)
     records.upsert_document(document_id, paper.name, paper.stat().st_size, str(paper))
     index = records.begin_index(
         document_id, EMBEDDING_MODEL, EMBEDDING_DIMENSIONS, CHUNKER_VERSION
     )
-    asyncio.run(store.add_chunks(index.id, _chunks(*texts)))
+    chunks = _chunks(*texts)
+    if one_page_each:
+        for page, chunk in enumerate(chunks):
+            chunk["page"] = page
+    asyncio.run(store.add_chunks(index.id, chunks))
     records.complete_index(index.id, len(texts))
     return records.get_index(index.id)
 
@@ -446,19 +453,20 @@ def test_the_chunk_with_the_questions_rare_word_comes_first(
     store: ChromaDBManager, records: RecordsStore, chain: EnhancedRAGChain, tmp_path: Path
 ):
     """Keyword scores are BM25 now: "samples" is in every chunk and says
-    little, "graphene" is in one."""
+    little, "graphene" is in one. One chunk a page, so the first page of
+    evidence is the best chunk's."""
     index = _index_of(
         records, store, tmp_path,
         "The samples were heated slowly.",
         "The graphene samples were heated slowly.",
         "The samples were cooled slowly.",
+        one_page_each=True,
     )
 
-    results = asyncio.run(
-        chain._retrieve_pdf_knowledge("Which samples contain graphene?", index.id, 3)
-    )
+    evidence = asyncio.run(chain.retrieve("Which samples contain graphene?", index.id, 3))
 
-    assert results[0]["original_text"] == "The graphene samples were heated slowly."
+    best = next(c for c in evidence[0].chunks if c["chunk_id"] == evidence[0].best_chunk_id)
+    assert best["text"] == "The graphene samples were heated slowly."
 
 
 def test_a_rejected_key_ends_in_an_error_rather_than_an_answer(
@@ -483,13 +491,14 @@ def test_with_nothing_retrieved_no_model_is_asked(chain: EnhancedRAGChain):
     document had said it."""
     translator = _Translator(AssertionError("the model must not be asked"))
 
-    answer = asyncio.run(
+    answer, images_sent = asyncio.run(
         chain._generate_answer(
             QUESTION, [], AnswerModel(TranslationService.OPENAI, translator), "en"
         )
     )
 
     assert answer == rag_chain_module.NOTHING_FOUND_ANSWER
+    assert images_sent == 0
     assert translator.calls == []
 
 
@@ -498,7 +507,9 @@ def test_the_answer_is_asked_for_in_the_requested_language_and_the_search_is_not
     monkeypatch: pytest.MonkeyPatch,
 ):
     """Answers were Vietnamese whatever was chosen. The HyDE text is a search
-    query: in the answer's language, it would miss an English document's words."""
+    query: in the answer's language, it would miss an English document's words.
+    HyDE is off by default, so this chain turns it on."""
+    chain = EnhancedRAGChain(chain.vector_store, hyde=True)
     index = _ready(records, run_index(two_papers[0]))
     translator = _Translator("答え")
     _answer_with(chain, monkeypatch, translator)
@@ -1018,14 +1029,17 @@ def test_the_real_ollama_entry_answers_when_chosen_and_is_never_a_fallback(
     assert chain._answer_model() is None
 
 
-def _enriched_source(index: int, neighbour_chars: int = 1000) -> Dict[str, Any]:
-    """A source as retrieval hands it over: a long neighbour before the match."""
+def _page_evidence(index: int, neighbour_chars: int = 1000) -> PageEvidence:
+    """A page as retrieval hands it over: a long neighbour before the match."""
     matched = f"MATCHED-{index} " + "m" * 60 + f" END-{index}"
-    return {
-        "text": "...\n" + "n" * neighbour_chars + "\n" + matched,
-        "original_text": matched,
-        "metadata": {"page": index, "chunk_index": index},
-    }
+    chunks = [
+        {"chunk_id": f"n{index}", "text": "n" * neighbour_chars,
+         "metadata": {"page": index, "chunk_index": 2 * index}},
+        {"chunk_id": f"m{index}", "text": matched,
+         "metadata": {"page": index, "chunk_index": 2 * index + 1}},
+    ]
+    return PageEvidence(page=index, score=1.0, chunks=chunks, matched_ids={f"m{index}"},
+                        best_chunk_id=f"m{index}")
 
 
 def test_the_answer_model_reads_the_whole_matched_chunk_behind_a_long_neighbour(
@@ -1033,36 +1047,36 @@ def test_the_answer_model_reads_the_whole_matched_chunk_behind_a_long_neighbour(
 ):
     """The neighbours are context around the match. A long one in front must
     not push the chunk that was actually retrieved out of the prompt."""
-    source = _enriched_source(0)
+    page = _page_evidence(0)
     translator = _Translator("ok")
 
     asyncio.run(
         chain._generate_answer(
-            QUESTION, [source], AnswerModel(TranslationService.OPENAI, translator), "en"
+            QUESTION, [page], AnswerModel(TranslationService.OPENAI, translator), "en"
         )
     )
 
     (prompt, _system), = translator.calls
-    assert source["original_text"] in prompt
-    assert source["text"] in prompt
+    for chunk in page.chunks:
+        assert chunk["text"] in prompt
 
 
 def test_every_source_reaches_the_answer_model(chain: EnhancedRAGChain):
-    """The chat lists each source as a reference the user can click, so the
+    """The chat lists each page as a reference the user can click, so the
     answer must have read every one of them."""
-    sources = [_enriched_source(i) for i in range(5)]
+    pages = [_page_evidence(i) for i in range(5)]
     translator = _Translator("ok")
 
     asyncio.run(
         chain._generate_answer(
-            QUESTION, sources, AnswerModel(TranslationService.OPENAI, translator), "en"
+            QUESTION, pages, AnswerModel(TranslationService.OPENAI, translator), "en"
         )
     )
 
     (prompt, _system), = translator.calls
-    for source in sources:
-        assert source["original_text"] in prompt
-        assert source["text"] in prompt
+    for page in pages:
+        for chunk in page.chunks:
+            assert chunk["text"] in prompt
 
 
 def test_the_models_are_given_room_to_think(
@@ -1071,7 +1085,8 @@ def test_the_models_are_given_room_to_think(
 ):
     """A model that thinks by default counts thinking toward `max_tokens`; at
     1000 for the answer and 150 for the HyDE text it could spend all of it
-    thinking and reply with nothing."""
+    thinking and reply with nothing. HyDE is off by default; on here."""
+    chain = EnhancedRAGChain(chain.vector_store, hyde=True)
     index = _ready(records, run_index(two_papers[0]))
     translator = _Translator("ok")
     _answer_with(chain, monkeypatch, translator)

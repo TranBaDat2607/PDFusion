@@ -1,9 +1,9 @@
 """RAG endpoints — index a PDF, ask a question, stream events.
 
-The `rag` package loads torch, chromadb, sentence-transformers and camelot
-(~10 s). RAG is off by default, so most users never need any of it — every
-import of it below lives inside the handler that needs it, and the sidecar
-boots without paying for it.
+The `rag` package loads chromadb, onnxruntime, PyMuPDF and RapidOCR (seconds).
+Chat may be off, and most sessions never ask a question — every import of it
+below lives inside the handler that needs it, and the sidecar boots without
+paying for it.
 
 What exists is recorded in `pdfusion.db` (`storage/records.py`): a document is
 the SHA-256 of its bytes, and each chat index over it is a row whose chunks live
@@ -17,12 +17,13 @@ too, and `/rag/documents`, Remove and Reset manage what is stored.
 from __future__ import annotations
 
 import asyncio
+import functools
 import logging
 import shutil
 import sys
 import time
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sse_starlette.sse import EventSourceResponse
@@ -125,15 +126,17 @@ def _recover(records: RecordsStore, store: ChromaDBManager) -> None:
         records.delete_index(index_id)
 
 
-def _load_document_processor() -> type:
-    """Import the scientific-PDF processor (fitz + camelot + pdfplumber, ~4 s).
+def _load_document_processor() -> Callable[..., Any]:
+    """Import the PDF ingestor, and the OCR engine for scanned pages; return
+    what builds an ingestor (`make_processor(on_page=...)`).
 
     Blocking, for the same reason `_build_chain` is, and reached the same way —
     only ever through `asyncio.to_thread`.
     """
-    from ...rag.document_processor import ScientificPDFProcessor
+    from ...rag.ingest import PdfIngestor
+    from ...rag.ocr import load_ocr_engine
 
-    return ScientificPDFProcessor
+    return functools.partial(PdfIngestor, ocr=load_ocr_engine())
 
 
 async def _get_chain() -> EnhancedRAGChain:
@@ -252,9 +255,21 @@ async def _run_index(job: Job, payload: IndexRequest) -> None:
             # the event loop for the same reason the extraction below is, and
             # inside the try so a failure still reaches the job's error event —
             # without a terminal SSE event the chat panel waits forever.
-            ScientificPDFProcessor = await asyncio.to_thread(_load_document_processor)
-            processor = ScientificPDFProcessor()
-            # Blocking fitz/camelot/pdfplumber work — keep it off the event loop.
+            make_processor = await asyncio.to_thread(_load_document_processor)
+            loop = asyncio.get_running_loop()
+
+            def on_page(done: int, total: int) -> None:
+                # Extraction is 20 → 65%; OCR of a scanned page takes seconds.
+                asyncio.run_coroutine_threadsafe(
+                    job.emit("progress", {
+                        "stage": f"Reading page {done} of {total}",
+                        "progress": 20 + int(45 * done / max(total, 1)),
+                    }),
+                    loop,
+                )
+
+            processor = make_processor(on_page=on_page)
+            # Blocking PyMuPDF and OCR work — keep it off the event loop.
             chunks = await asyncio.to_thread(processor.process_pdf, file_path)
 
             if job.cancelled:

@@ -20,7 +20,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Sequence, Set, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
 
 # The usual RRF constant (Cormack et al., 2009). Larger flattens the
 # difference between a first and a tenth place.
@@ -68,6 +68,8 @@ class PageEvidence:
     chunks: List[Dict[str, Any]] = field(default_factory=list)
     matched_ids: Set[str] = field(default_factory=set)
     page_kind: str = "text"
+    # Its highest-scoring hit: the chunk its reference quotes.
+    best_chunk_id: Optional[str] = None
     # Set by `select_image_pages`: the answer model is shown this page.
     wants_image: bool = False
 
@@ -138,6 +140,7 @@ def group_by_page(
                 chunks=[members[i] for i in sorted(shown)],
                 matched_ids={chunk_id for chunk_id, _ in page_hits},
                 page_kind=members[0].get("metadata", {}).get("page_kind", "text"),
+                best_chunk_id=max(page_hits, key=lambda hit: hit[1])[0],
             )
         )
     return evidence
