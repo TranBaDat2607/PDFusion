@@ -148,13 +148,16 @@ an LLM call: ~3.8k tokens per document to summarise it from its page images.
   from 1.00 to 0.33, the hypothetical answer pulling the search away from the
   document's language — and every question waited ~1.1 s more for an extra
   paid call before retrieval could start. `hyde=True` keeps it available.
-- **Visual retrievers (ColPali, ColQwen2) were not built.** They are the
-  state of the art on visually rich retrieval (ViDoRe), but need torch and a
-  ~3B-parameter model (~6 GB) — the installer ships without torch on purpose —
-  and store ~1,000 128-d vectors per page (~0.5 MB a page). On a CPU-only
-  desktop that is minutes per document to index. Text retrieval over OCR plus
-  visual reading of the top pages got scans to 0.91 hit@1 and charts to 1.00
-  answer accuracy without them.
+- **Visual retrievers (ColPali, ColQwen2) were not built** — a judgement,
+  not a measurement. They lead visually rich retrieval benchmarks (ViDoRe),
+  but run on torch, which the installer leaves out on purpose (466 MB), with
+  2-3B-parameter backbones (PaliGemma-3B, Qwen2-VL-2B; the smaller ColSmol
+  variants still need torch), and store ~1,000 128-d vectors per page
+  (~0.5 MB a page in fp32). Our estimate is seconds per page to index on a
+  CPU-only desktop, against v2's ~0.4 s per text page. Text retrieval over
+  OCR plus visual reading of the top pages got scans to 0.91 hit@1 and charts
+  to 1.00 answer accuracy without them; a visual retriever is the next thing
+  to try for charts with no caption (see Limitations).
 
 ## Verified outside the benchmark
 
