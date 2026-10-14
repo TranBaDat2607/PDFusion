@@ -115,3 +115,43 @@ def test_an_answer_without_markers_is_returned_unchanged():
     assert result.text == "Nothing to cite here."
     assert result.cited_pages == []
     assert result.invalid_pages == []
+
+
+def test_an_already_linked_citation_of_a_page_not_shown_is_removed():
+    """A link the model wrote itself is still a claim about a page: one it was
+    not shown must not reach the chat as a jump."""
+    result = link_citations("Fact [p. 99](#page=99).", {3, 5})
+
+    assert result.text == "Fact."
+    assert result.cited_pages == []
+    assert result.invalid_pages == [99]
+
+
+def test_a_linked_citation_jumps_to_the_page_it_names():
+    """`[p. 3](#page=7)` said page 3 and jumped to page 7."""
+    result = link_citations("Fact [p. 3](#page=7).", {3, 7})
+
+    assert result.text == f"Fact {link(3)}."
+    assert result.cited_pages == [3]
+
+
+@pytest.mark.parametrize("marker", ["[p. 3, p. 5]", "[p. 3; 5]", "[pp. 3, 5]", "[p. 3; p. 5]"])
+def test_a_page_word_repeated_or_a_semicolon_still_cites_both_pages(marker):
+    """Models write lists of pages in all of these ways; any left raw made
+    every reference look uncited."""
+    result = link_citations(f"Fact {marker}.", {3, 5})
+
+    assert result.text == f"Fact {link(3)}, {link(5)}."
+    assert result.cited_pages == [3, 5]
+
+
+def test_a_parenthesised_page_citation_is_a_citation_too():
+    result = link_citations("Fact (p. 3).", {3})
+
+    assert result.text == f"Fact {link(3)}."
+    assert result.cited_pages == [3]
+
+
+def test_parentheses_that_are_not_a_page_citation_are_untouched():
+    text = "The loss (see below) falls (p < 0.05) by 3 (pp) points."
+    assert link_citations(text, {3, 5}).text == text

@@ -7,8 +7,10 @@ checked against the pages of the evidence, the ones that pass become
 `[p. 7](#page=7)` links the chat panel turns into a jump to that page
 (`desktop/src/lib/citation-links.ts`), and the rest are dropped and counted.
 
-Only brackets that start with a page word are markers. A bare `[1]` is left
-alone: it is how papers cite their bibliography, and `[0, 1]` is an interval.
+Only brackets or parentheses that start with a page word and a number are
+markers — including ones already written as links, which are checked like the
+rest. A bare `[1]` is left alone: it is how papers cite their bibliography,
+and `[0, 1]` is an interval.
 
 Stdlib-only, and pure: `rag_chain` calls it on every answer.
 """
@@ -19,12 +21,22 @@ import re
 from dataclasses import dataclass, field
 from typing import Collection, List
 
-# `[p. 7]`, `[pp. 3-5]`, `[page 2, 4]`, `[trang 7]` (Vietnamese). The prefix
-# must be a whole word: `[pages]` alone, or `[part 2]`, is not a citation.
+# `[p. 7]`, `[pp. 3-5]`, `[page 2, 4]`, `[p. 3; p. 5]`, `[trang 7]`
+# (Vietnamese), or the same in parentheses, `(p. 7)`. A page word must lead,
+# followed by a number: `[pages]`, `[part 2]` and `(p < 0.05)` are not
+# citations. A marker already written as a link is matched with its link, and
+# checked and rebuilt like any other: `[p. 3](#page=7)` named one page and
+# jumped to another.
+_PAGE_WORD = r"(?:pp?\.?|pages?|trang)"
+_ITEMS = (
+    r"\d+(?:\s*[-–]\s*\d+)?"
+    r"(?:\s*[,;]?\s*(?:" + _PAGE_WORD + r"\s*)?\d+(?:\s*[-–]\s*\d+)?)*"
+)
 _MARKER = re.compile(
-    r"(?P<space> ?)\[(?P<prefix>pp?\.?|pages?|trang)\s*"
-    r"(?P<body>\d+(?:\s*[-–]\s*\d+)?(?:\s*,?\s*\d+(?:\s*[-–]\s*\d+)?)*)\]"
-    r"(?P<linked>\(#page=\d+\))?",
+    r"(?P<space> ?)(?:"
+    r"\[" + _PAGE_WORD + r"\s*(?P<body>" + _ITEMS + r")\](?:\(#page=\d+\))?"
+    r"|\(" + _PAGE_WORD + r"\s*(?P<parenthesised>" + _ITEMS + r")\)"
+    r")",
     re.IGNORECASE,
 )
 _ITEM = re.compile(r"(\d+)(?:\s*[-–]\s*(\d+))?")
@@ -57,16 +69,9 @@ def link_citations(answer: str, allowed_pages: Collection[int]) -> CitationResul
             into.append(page)
 
     def replace(match: re.Match) -> str:
-        if match.group("linked"):
-            # Already a link: `link_citations` ran on this text before, or the
-            # model copied the format. Counted, never linked twice.
-            for page in _pages(match.group("body")):
-                if page in allowed:
-                    note(page, cited)
-            return match.group(0)
-
         kept: List[int] = []
-        for item in _ITEM.finditer(match.group("body")):
+        body = match.group("body") or match.group("parenthesised")
+        for item in _ITEM.finditer(body):
             start = int(item.group(1))
             end = int(item.group(2)) if item.group(2) else start
             if end < start or end - start > _MAX_RANGE:
@@ -90,11 +95,3 @@ def link_citations(answer: str, allowed_pages: Collection[int]) -> CitationResul
 
     return CitationResult(_MARKER.sub(replace, answer), cited, invalid)
 
-
-def _pages(body: str) -> List[int]:
-    pages: List[int] = []
-    for item in _ITEM.finditer(body):
-        start = int(item.group(1))
-        end = int(item.group(2)) if item.group(2) else start
-        pages.extend(range(start, min(end, start + _MAX_RANGE) + 1))
-    return pages
