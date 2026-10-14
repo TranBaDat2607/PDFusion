@@ -150,18 +150,39 @@ blends two papers together.
   layer can't.
 - **Citations are checked.** A page the model wasn't shown never becomes a link.
 
-On the [chat benchmark](benchmarks/rag/README.md) (43 questions over text,
-tables, charts, figures, scanned and Vietnamese pages; Gemini 2.5 Flash-Lite):
+**Experiment design.** The [chat benchmark](benchmarks/rag/README.md) compares
+this version with the previous one, run from the commit before the redesign.
+Both use the same answer model, Gemini 2.5 Flash-Lite.
+
+- **Documents:**
+  - A synthetic 14-page annual report, with known answers on every page: prose,
+    ruled tables, charts whose numbers exist only in the image, scanned pages, a
+    Vietnamese page, and distractor pages that share a question's words but not
+    its answer.
+  - The paper *Attention Is All You Need*, plus a scanned copy of it with no
+    text layer.
+  - A 57-page document combining these with two more papers, to measure how cost
+    grows with length.
+- **Questions:** 43 on the first three documents, plus 6 on the long one. They
+  are tagged text, table, chart, figure, scan, multilingual or unanswerable, and
+  each lists every page that states its answer.
+- **Scoring:**
+  - **Retrieval:** whether a correct page is ranked first.
+  - **Answers:** whether the expected values appear, with citations stripped
+    first so a page number can't pass for a value. An unanswerable question
+    counts as correct when the answer says so.
+  - **Citation precision:** the share of cited pages that state the answer.
+  - **Cost:** model calls and tokens per question.
+  - **Time:** seconds per question, on a CPU-only machine.
 
 | | Correct answers | Citation precision | Right page ranked first | Model calls / tokens per question | Time per question |
 |---|---|---|---|---|---|
 | Previous version | 0.47 | 0.20 | 0.62 | 2.4 / 1,003 | 2.6 s |
-| [DocPixie](https://github.com/qnguyen3/docpixie) | 0.70 | 0.75 | 0.74 | 5.5 / 7,834 | 6.6 s |
 | **PDFusion** | **0.93** | **0.97** | **0.85** | **1 / 2,925** | **2.2 s** |
 
-Charts went from 0.00 to 1.00 and scanned pages from unindexable to 0.91 ranked
-first. The cost per question doesn't grow with the document: about 2,400 tokens
-on a 57-page PDF, where DocPixie, which looks at every page, used 18,000.
+Charts went from 0.00 to 1.00, and scanned pages went from not indexable at all
+to the right page ranked first 91% of the time. The cost per question doesn't
+grow with the document: about 2,400 tokens on the 57-page PDF.
 
 **First use downloads about 470 MB** — a multilingual embedding model, fetched
 once into `~/.cache/huggingface`. Everything after that is local. This is the
