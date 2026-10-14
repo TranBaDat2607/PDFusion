@@ -15,7 +15,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, Iterable, Optional, Tuple
+from typing import Any, Callable, Iterable, Optional, Tuple
 
 
 @dataclass(frozen=True)
@@ -31,8 +31,8 @@ class ListedModel:
 @dataclass(frozen=True)
 class Listing:
     models: Tuple[ListedModel, ...]
-    # What the non-chat filter took out. A heuristic on ids can be wrong, so
-    # it is kept for a "show all" rather than thrown away.
+    # What the non-chat and release-date filters took out. Both are guesses
+    # that can be wrong, so it is kept for a "show all" rather than thrown away.
     hidden: Tuple[ListedModel, ...] = ()
 
 
@@ -55,6 +55,20 @@ _OPENAI_NON_CHAT = re.compile(
 # like its text models, but answer in audio or images, or need a tool loop.
 _GEMINI_NON_TEXT = re.compile(r"-(tts|image|native-audio|computer-use)(-|$)")
 
+# Only models released from here on are offered; older ones go to `hidden`, so
+# "show all" still reaches them. The lists run back to 2023, and a picker of
+# `gpt-3.5-turbo`, `gpt-4-0613` and Gemini 1.5 buried the models anyone picks.
+# Unix ms, UTC: 2025-01-01T00:00:00Z.
+RELEASED_FROM = 1_735_689_600_000
+
+# Gemini's listing carries no date, so the family's version stands in for one:
+# Gemini 2.0 went GA in February 2025 and Gemma 3 came out in March 2025. An id
+# without a version (`gemini-flash-latest`, `gemini-exp-1206`) can't be dated
+# and stays offered. Gemma 1 put the parameter size where later releases put
+# the version — `gemma-7b-it` — so a number ending in `b` is a size.
+_GEMINI_FAMILY = re.compile(r"^(gemini|gemma)-(\d+)(?:\.(\d+))?(b(?:-|$))?")
+_GEMINI_FIRST_OFFERED = {"gemini": (2, 0), "gemma": (3, 0)}
+
 # OpenAI's own endpoint, where the id filter above applies. It is sent
 # explicitly since #88 (`registry.endpoint_for`), so "no endpoint" can't be
 # what marks it; any other server — OpenRouter, Ollama, a proxy — names its
@@ -64,6 +78,28 @@ _OPENAI_API = "https://api.openai.com/v1"
 # Both SDKs read a timeout in seconds. A listing is one small GET; the route's
 # own deadline (`catalog.PROBE_TIMEOUT_S`) sits above this.
 _TIMEOUT_S = 10
+
+
+def _split(models: Iterable[ListedModel], hide: Callable[[ListedModel], bool]) -> Listing:
+    models = tuple(models)
+    return Listing(
+        models=tuple(m for m in models if not hide(m)),
+        hidden=tuple(m for m in models if hide(m)),
+    )
+
+
+def _released_too_early(model: ListedModel) -> bool:
+    # An undated model is offered: hiding it would be a guess.
+    return model.created_at is not None and model.created_at < RELEASED_FROM
+
+
+def _gemini_too_early(model: ListedModel) -> bool:
+    match = _GEMINI_FAMILY.match(model.id)
+    if match is None:
+        return False
+    family, major, minor, size = match.groups()
+    version = (1, 0) if size else (int(major), int(minor or 0))
+    return version < _GEMINI_FIRST_OFFERED[family]
 
 
 def list_openai_models(
@@ -87,11 +123,11 @@ def list_openai_models(
     ]
     if base_url is not None and base_url.rstrip("/") != _OPENAI_API:
         # Ollama, LM Studio and proxies name models anything; `whisper-…` or
-        # `…-audio` there may well be the chat model the user wants.
+        # `…-audio` there may well be the chat model the user wants. Nor is
+        # `created` a release date there: Ollama's is when it was pulled.
         return Listing(models=tuple(models))
-    return Listing(
-        models=tuple(m for m in models if not _OPENAI_NON_CHAT.search(m.id)),
-        hidden=tuple(m for m in models if _OPENAI_NON_CHAT.search(m.id)),
+    return _split(
+        models, lambda m: bool(_OPENAI_NON_CHAT.search(m.id)) or _released_too_early(m)
     )
 
 
@@ -131,7 +167,7 @@ def list_anthropic_models(
         # A page that doesn't advance — a misbehaving proxy — ends the walk:
         # the route's deadline abandons the result, not this thread.
         if not page.has_more or not page.last_id or page.last_id == after_id:
-            return Listing(models=tuple(models))
+            return _split(models, _released_too_early)
         after_id = page.last_id
 
 
@@ -162,9 +198,8 @@ def list_gemini_models(
                 output_tokens=model.output_token_limit,
             )
         )
-    return Listing(
-        models=tuple(m for m in models if not _GEMINI_NON_TEXT.search(m.id)),
-        hidden=tuple(m for m in models if _GEMINI_NON_TEXT.search(m.id)),
+    return _split(
+        models, lambda m: bool(_GEMINI_NON_TEXT.search(m.id)) or _gemini_too_early(m)
     )
 
 

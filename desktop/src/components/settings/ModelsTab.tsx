@@ -585,7 +585,7 @@ function ModelList({
                   {row.kind === "custom"
                     ? "added"
                     : row.kind === "hidden"
-                      ? "not a chat model?"
+                      ? "older, or not chat?"
                       : "suggested"}
                 </span>
               )}
@@ -606,8 +606,8 @@ function ModelList({
           onClick={() => setShowAll((s) => !s)}
         >
           {showAll
-            ? "Hide models that don't look like chat models"
-            : `Show all (${hiddenCount} more that don't look like chat models)`}
+            ? "Hide models from before 2025, and ones that don't look like chat models"
+            : `Show all (${hiddenCount} more: from before 2025, or not chat models)`}
         </button>
       )}
 

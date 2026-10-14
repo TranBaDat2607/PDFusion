@@ -34,7 +34,11 @@ from desktop_pdf_translator.providers.listing import (
 
 _FIXTURES = Path(__file__).resolve().parent / "fixtures" / "model_lists"
 
-OPENAI_CHAT_IDS = ["gpt-4.1", "gpt-4o-mini", "o3", "chatgpt-4o-latest", "gpt-5"]
+# Offered on OpenAI's own endpoint: chat models released in 2025 or later. The
+# two 2024 chat models in the fixture (gpt-4o-mini, chatgpt-4o-latest) move to
+# "show all" along with the non-chat ids.
+OPENAI_CHAT_IDS = ["gpt-4.1", "o3", "gpt-5"]
+OPENAI_OLD_CHAT_IDS = {"gpt-4o-mini", "chatgpt-4o-latest"}
 # One id per pattern in #84's table, so a pattern the filter forgets shows up
 # as a chat model the user can pick and then can't translate with.
 OPENAI_NON_CHAT_IDS = {
@@ -53,6 +57,9 @@ OPENAI_NON_CHAT_IDS = {
 
 ANTHROPIC_PAGE1_LAST_ID = "claude-haiku-4-5-20251001"
 GEMINI_PAGE2_TOKEN = "page-2-token"
+
+# Models released before this instant are no longer offered by default.
+CUTOFF_S = 1735689600  # 2025-01-01T00:00:00Z
 
 
 def _fixture(name: str) -> dict:
@@ -121,8 +128,8 @@ def test_openai_hides_non_chat_models_on_its_own_endpoint():
     assert isinstance(listing, Listing)
     assert [m.id for m in listing.models] == OPENAI_CHAT_IDS
     hidden_ids = [m.id for m in listing.hidden]
-    assert set(hidden_ids) == OPENAI_NON_CHAT_IDS
-    assert len(hidden_ids) == len(OPENAI_NON_CHAT_IDS)
+    assert set(hidden_ids) == OPENAI_NON_CHAT_IDS | OPENAI_OLD_CHAT_IDS
+    assert len(hidden_ids) == len(OPENAI_NON_CHAT_IDS | OPENAI_OLD_CHAT_IDS)
     assert len(seen) == 1
     assert seen[0].headers["authorization"] == "Bearer sk-test-key"
 
@@ -143,7 +150,9 @@ def test_openai_hides_non_chat_models_at_its_own_url_named_explicitly():
     )
 
     assert [m.id for m in listing.models] == OPENAI_CHAT_IDS
-    assert set(m.id for m in listing.hidden) == OPENAI_NON_CHAT_IDS
+    assert set(m.id for m in listing.hidden) == (
+        OPENAI_NON_CHAT_IDS | OPENAI_OLD_CHAT_IDS
+    )
 
 
 def test_openai_hides_non_chat_models_at_its_own_url_with_a_trailing_slash():
@@ -156,7 +165,9 @@ def test_openai_hides_non_chat_models_at_its_own_url_with_a_trailing_slash():
         "sk-test-key", "https://api.openai.com/v1/", http_client=client
     )
 
-    assert set(m.id for m in listing.hidden) == OPENAI_NON_CHAT_IDS
+    assert set(m.id for m in listing.hidden) == (
+        OPENAI_NON_CHAT_IDS | OPENAI_OLD_CHAT_IDS
+    )
 
 
 def test_openai_hides_nothing_at_another_providers_own_endpoint():
@@ -221,11 +232,26 @@ def test_openai_created_seconds_become_milliseconds():
     assert ListedModel(id="whisper-1", created_at=1677532384000) in listing.hidden
 
 
-def _openai_list_of(ids: List[str]) -> Callable[[httpx.Request], httpx.Response]:
+# gpt-4.1's own `created` (2025-04-10): recent enough that the release-date
+# rule never touches a test that is about something else.
+OPENAI_MODERN_CREATED = 1744316542
+
+
+def _openai_list_of(
+    ids: List[str], created: int = OPENAI_MODERN_CREATED
+) -> Callable[[httpx.Request], httpx.Response]:
     body = {
         "object": "list",
-        "data": [{"id": i, "object": "model", "created": 1, "owned_by": "openai"} for i in ids],
+        "data": [
+            {"id": i, "object": "model", "created": created, "owned_by": "openai"}
+            for i in ids
+        ],
     }
+    return lambda request: httpx.Response(200, json=body)
+
+
+def _openai_entries(entries: List[dict]) -> Callable[[httpx.Request], httpx.Response]:
+    body = {"object": "list", "data": entries}
     return lambda request: httpx.Response(200, json=body)
 
 
@@ -270,6 +296,117 @@ def test_openai_hides_models_chat_completions_cannot_call():
     assert [m.id for m in listing.hidden] == OPENAI_UNCALLABLE_IDS
 
 
+@pytest.mark.parametrize(
+    "base_url",
+    [None, "https://api.openai.com/v1", "https://api.openai.com/v1/"],
+    ids=["default", "explicit", "trailing-slash"],
+)
+def test_openai_moves_models_released_before_2025_to_hidden(base_url):
+    """Only models from 2025 on are worth choosing for a translation; the older
+    ones stay reachable under "show all" because `created` can be wrong and a
+    user may still want one. The cutoff is 2025-01-01T00:00:00Z inclusive."""
+    client = _mock_client(
+        _openai_entries(
+            [
+                {"id": "gpt-4o", "created": CUTOFF_S - 1},  # 2024-12-31T23:59:59Z
+                {"id": "gpt-4.1", "created": CUTOFF_S},  # 2025-01-01T00:00:00Z
+                {"id": "gpt-4-turbo", "created": 1712361441},  # 2024-04-06T00:37:21Z
+                {"id": "gpt-5", "created": 1754425777},  # 2025-08-05T20:09:37Z
+            ]
+        ),
+        [],
+    )
+
+    listing = list_openai_models("sk-test-key", base_url, http_client=client)
+
+    assert [m.id for m in listing.models] == ["gpt-4.1", "gpt-5"]
+    assert [m.id for m in listing.hidden] == ["gpt-4o", "gpt-4-turbo"]
+    assert listing.models[0].created_at == 1735689600000  # 2025-01-01T00:00:00Z
+    assert listing.hidden[0].created_at == 1735689599000  # 2024-12-31T23:59:59Z
+
+
+def test_openai_keeps_a_model_it_cannot_date():
+    """`created` of 0 or none at all says nothing about age, so the model stays
+    on offer rather than being hidden on no evidence."""
+    client = _mock_client(
+        _openai_entries(
+            [
+                {"id": "gpt-zero", "created": 0},
+                {"id": "gpt-undated"},
+            ]
+        ),
+        [],
+    )
+
+    listing = list_openai_models("sk-test-key", None, http_client=client)
+
+    assert [m.id for m in listing.models] == ["gpt-zero", "gpt-undated"]
+    assert listing.hidden == ()
+
+
+def test_openai_lists_a_non_chat_model_that_is_also_old_once():
+    """`whisper-1` fails both rules; "show all" must not list it twice."""
+    client = _mock_client(
+        _openai_entries(
+            [
+                {"id": "whisper-1", "created": 1677532384},  # 2023-02-27T21:13:04Z
+                {"id": "gpt-4.1", "created": 1744316542},  # 2025-04-10
+            ]
+        ),
+        [],
+    )
+
+    listing = list_openai_models("sk-test-key", None, http_client=client)
+
+    assert [m.id for m in listing.models] == ["gpt-4.1"]
+    assert [m.id for m in listing.hidden] == ["whisper-1"]
+
+
+def test_openai_hidden_keeps_the_providers_order_across_both_rules():
+    """The "show all" list reads in the order the provider returned, not
+    grouped by why each model was hidden."""
+    client = _mock_client(
+        _openai_entries(
+            [
+                {"id": "gpt-4-0613", "created": 1686588896},  # 2023-06-12, old chat
+                {"id": "text-embedding-3-large", "created": OPENAI_MODERN_CREATED},
+                {"id": "gpt-4.1", "created": OPENAI_MODERN_CREATED},
+                {"id": "gpt-4o", "created": 1715367049},  # 2024-05-10, old chat
+                {"id": "o3", "created": 1744225308},  # 2025-04-09
+                {"id": "tts-1", "created": 1681940951},  # 2023-04-19, old non-chat
+            ]
+        ),
+        [],
+    )
+
+    listing = list_openai_models("sk-test-key", None, http_client=client)
+
+    assert [m.id for m in listing.models] == ["gpt-4.1", "o3"]
+    assert [m.id for m in listing.hidden] == [
+        "gpt-4-0613",
+        "text-embedding-3-large",
+        "gpt-4o",
+        "tts-1",
+    ]
+
+
+@pytest.mark.parametrize(
+    "base_url",
+    ["https://openrouter.ai/api/v1", "http://localhost:11434/v1"],
+    ids=["openrouter", "ollama"],
+)
+def test_openai_release_date_rule_does_not_apply_at_another_endpoint(base_url):
+    """Ollama's `created` is when the model was pulled and OpenRouter serves
+    other vendors' models, so an old `created` there says nothing about
+    release."""
+    client = _mock_client(_openai_list_of(["llama3.2:latest", "qwen2.5"], created=1), [])
+
+    listing = list_openai_models("key", base_url, http_client=client)
+
+    assert [m.id for m in listing.models] == ["llama3.2:latest", "qwen2.5"]
+    assert listing.hidden == ()
+
+
 # --- Anthropic --------------------------------------------------------------
 
 
@@ -300,9 +437,8 @@ def test_anthropic_follows_pagination():
     assert [m.id for m in listing.models] == [
         "claude-opus-4-1-20250805",
         "claude-haiku-4-5-20251001",
-        "claude-3-haiku-20240307",
     ]
-    assert listing.hidden == ()
+    assert [m.id for m in listing.hidden] == ["claude-3-haiku-20240307"]
     assert len(seen) == 2
     assert "after_id" not in seen[0].url.params
     assert seen[1].url.params["after_id"] == ANTHROPIC_PAGE1_LAST_ID
@@ -353,6 +489,9 @@ def test_anthropic_maps_display_name_timestamp_and_limits():
             output_tokens=64000,
             created_at=1760531400000,  # 2025-10-15T12:30:00Z
         ),
+    )
+    # Mapped the same way when hidden, since "show all" shares the picker.
+    assert listing.hidden == (
         ListedModel(
             id="claude-3-haiku-20240307",
             display_name="Claude Haiku 3",
@@ -372,8 +511,59 @@ def test_anthropic_custom_base_url_is_where_the_request_goes():
         "sk-ant-test", "https://proxy.example.com", http_client=client
     )
 
-    assert len(listing.models) == 3
+    assert len(listing.models) == 2
+    assert len(listing.hidden) == 1
     assert seen and all(r.url.host == "proxy.example.com" for r in seen)
+
+
+def _anthropic_models_of(entries: List[dict]):
+    body = {"data": entries, "has_more": False}
+    return lambda request: httpx.Response(200, json=body)
+
+
+def _anthropic_entry(model_id: str, created_at: str | None) -> dict:
+    entry = {"type": "model", "id": model_id, "display_name": model_id}
+    if created_at is not None:
+        entry["created_at"] = created_at
+    return entry
+
+
+@pytest.mark.parametrize(
+    "base_url", [None, "https://proxy.example.com"], ids=["default", "proxy"]
+)
+def test_anthropic_moves_models_released_before_2025_to_hidden(base_url):
+    """A proxy still serves Anthropic's own ids and dates, so the rule applies
+    at any endpoint. The cutoff, 2025-01-01T00:00:00Z, is inclusive."""
+    client = _mock_client(
+        _anthropic_models_of(
+            [
+                _anthropic_entry("claude-old", "2024-12-31T23:59:59Z"),
+                _anthropic_entry("claude-edge", "2025-01-01T00:00:00Z"),
+                _anthropic_entry("claude-3-opus-20240229", "2024-02-29T00:00:00Z"),
+                _anthropic_entry("claude-new", "2025-10-15T12:30:00Z"),
+            ]
+        ),
+        [],
+    )
+
+    listing = list_anthropic_models("sk-ant-test", base_url, http_client=client)
+
+    assert [m.id for m in listing.models] == ["claude-edge", "claude-new"]
+    assert [m.id for m in listing.hidden] == ["claude-old", "claude-3-opus-20240229"]
+    assert listing.models[0].created_at == 1735689600000  # 2025-01-01T00:00:00Z
+    assert listing.hidden[0].created_at == 1735689599000  # 2024-12-31T23:59:59Z
+
+
+def test_anthropic_keeps_a_model_without_a_created_at():
+    """No date is no evidence of age, so the model stays on offer."""
+    client = _mock_client(
+        _anthropic_models_of([_anthropic_entry("claude-undated", None)]), []
+    )
+
+    listing = list_anthropic_models("sk-ant-test", None, http_client=client)
+
+    assert [m.id for m in listing.models] == ["claude-undated"]
+    assert listing.hidden == ()
 
 
 # --- Gemini -----------------------------------------------------------------
@@ -465,6 +655,90 @@ def test_gemini_hides_generate_content_models_that_do_not_answer_in_text():
 
     assert [m.id for m in listing.models] == [n.removeprefix("models/") for n in text]
     assert [m.id for m in listing.hidden] == [n.removeprefix("models/") for n in other]
+
+
+def _gemini_models_of(names: List[str], methods=("generateContent", "countTokens")):
+    body = {
+        "models": [
+            {"name": f"models/{n}", "supportedGenerationMethods": list(methods)}
+            for n in names
+        ]
+    }
+    return lambda request: httpx.Response(200, json=body)
+
+
+def test_gemini_hides_families_older_than_gemini_2_and_gemma_3():
+    """The listing carries no date, so the family's version in the id stands in
+    for one: Gemini 1.x and Gemma 1/2 are 2024-and-earlier, while Gemini 2.0
+    (GA February 2025) and Gemma 3 (March 2025) are kept. Order is the
+    provider's, whichever family each model belongs to."""
+    ids = [
+        "gemini-1.5-pro",
+        "gemini-2.5-flash",
+        "gemma-2-9b-it",
+        "gemini-1.0-pro-vision-latest",
+        "gemini-2.0-flash",
+        "gemma-3-27b-it",
+        "gemini-1.5-flash-8b",
+        "gemma-2-27b-it",
+        "gemini-3-pro-preview",
+    ]
+    client = _mock_client(_gemini_models_of(ids), [])
+
+    listing = list_gemini_models("gm-test-key", http_client=client)
+
+    assert [m.id for m in listing.models] == [
+        "gemini-2.5-flash",
+        "gemini-2.0-flash",
+        "gemma-3-27b-it",
+        "gemini-3-pro-preview",
+    ]
+    assert [m.id for m in listing.hidden] == [
+        "gemini-1.5-pro",
+        "gemma-2-9b-it",
+        "gemini-1.0-pro-vision-latest",
+        "gemini-1.5-flash-8b",
+        "gemma-2-27b-it",
+    ]
+
+
+def test_gemini_reads_gemma_1s_parameter_size_as_gemma_1():
+    """Gemma 1 (February 2024) put the parameter size straight after the family
+    — `gemma-7b-it` — so the `7` is a size, not "Gemma 7". Gemma 3n's `3n` is
+    still Gemma 3."""
+    ids = ["gemma-7b-it", "gemma-3n-e4b-it", "gemma-2b-it", "gemma-1.1-7b-it"]
+    client = _mock_client(_gemini_models_of(ids), [])
+
+    listing = list_gemini_models("gm-test-key", http_client=client)
+
+    assert [m.id for m in listing.models] == ["gemma-3n-e4b-it"]
+    assert [m.id for m in listing.hidden] == ["gemma-7b-it", "gemma-2b-it", "gemma-1.1-7b-it"]
+
+
+def test_gemini_keeps_ids_it_cannot_date():
+    """An alias or an experiment names no version, so hiding it would be a
+    guess; it stays on offer."""
+    ids = ["gemini-flash-latest", "gemini-exp-1206", "learnlm-2.0-flash-experimental"]
+    client = _mock_client(_gemini_models_of(ids), [])
+
+    listing = list_gemini_models("gm-test-key", http_client=client)
+
+    assert [m.id for m in listing.models] == ids
+    assert listing.hidden == ()
+
+
+def test_gemini_still_drops_old_models_without_generate_content_outright():
+    """Dropping non-`generateContent` models is a capability fact and happens
+    before dating: an old embedding model is in neither bucket."""
+    client = _mock_client(
+        _gemini_models_of(["gemini-1.0-embedding", "gemini-1.5-pro"], ("embedContent",)),
+        [],
+    )
+
+    listing = list_gemini_models("gm-test-key", http_client=client)
+
+    assert listing.models == ()
+    assert listing.hidden == ()
 
 
 # --- A refused key ----------------------------------------------------------

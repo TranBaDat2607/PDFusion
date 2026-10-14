@@ -545,7 +545,7 @@ now a Windows + Linux matrix) is what settles the PyInstaller half.
 | `src/desktop_pdf_translator/config/` | `ConfigManager` + Pydantic `AppSettings` (unchanged) |
 | `src/desktop_pdf_translator/processors/` | `PDFProcessor` async generator wrapping BabelDOC (unchanged) |
 | `src/desktop_pdf_translator/providers/registry.py` | The provider registry: one `ProviderSpec` per provider, which every per-provider rule is read from. Stdlib-only — see "Provider registry" |
-| `src/desktop_pdf_translator/providers/listing.py` | Asking an endpoint which models a key can use, one function per protocol, and the non-chat filter; imports its SDK on call |
+| `src/desktop_pdf_translator/providers/listing.py` | Asking an endpoint which models a key can use, one function per protocol, and the non-chat and release-date filters; imports its SDK on call |
 | `src/desktop_pdf_translator/providers/catalog.py` | The model catalog (a cache, keyed by provider and endpoint) and `list_models`, which sorts a failed listing into a refused key or anything else — see "Verifying keys and discovering models" |
 | `src/desktop_pdf_translator/api/routes/providers.py` | `/providers`: key state, the catalog, `verify`, and the only place a key or endpoint changes |
 | `src/desktop_pdf_translator/translators/` | `BaseTranslator`, OpenAI/Gemini/Anthropic/Argos + `TranslatorFactory` |
@@ -1472,6 +1472,23 @@ inside the function and reached through `ProviderSpec.lister`:
   sorted by `translators/base.py:is_fatal_translation_error` — the same test
   that aborts a translation, with its "api key not valid" marker — rather than
   by status alone.
+
+**Only models released from 2025 on are offered** by those three
+(`listing.RELEASED_FROM`); older ones go to `hidden`, so "Show all" still
+reaches them and a model already switched on stays on. A picker full of
+`gpt-3.5-turbo`, `gpt-4-0613` and Gemini 1.5 buried the models anyone would
+choose. OpenAI and Anthropic are dated by the listing's own `created` /
+`created_at`. OpenAI's rule applies only at its own endpoint, like the id
+filter: Ollama's `created` is when the model was pulled, not released.
+Gemini's listing carries no date, so its family version stands in —
+`gemini-` below 2.0 (2.0 went GA in Feb 2025) and `gemma-` below 3 (March
+2025) are hidden (Gemma 1's `gemma-7b` is a size, not a version), and an id
+with no version in it can't be dated and stays. So the Gemini cut is
+approximate: `gemini-2.0-flash-exp` and `gemini-exp-1206` (December 2024) stay
+offered. An undated model is kept, never guessed old. Catalog migration 2
+marks the listings cached before the rule stale, which would otherwise have
+offered the old models for up to a day. It doesn't delete them, because the
+same row records the last key check.
 
 `catalog.list_models` runs the lister through `asyncio.to_thread` under
 `PROBE_TIMEOUT_S` and turns every failure into `KeyRejected` (a refused key) or
