@@ -43,3 +43,42 @@ def test_spaces_the_recogniser_did_emit_are_kept_and_not_doubled():
 
 def test_an_empty_line_is_empty():
     assert respace([], []) == ""
+
+
+class _FakeRapidOcr:
+    """RapidOCR's call: `(result, elapsed)`, one entry per line."""
+
+    def __init__(self, result):
+        self.result = result
+
+    def __call__(self, png, return_word_box=False):
+        assert return_word_box, "the character boxes are what respacing needs"
+        return self.result, [0.1]
+
+
+def _engine_with(result):
+    from desktop_pdf_translator.rag.ocr import RapidOcrEngine
+
+    engine = RapidOcrEngine()
+    engine._engine = _FakeRapidOcr(result)
+    return engine
+
+
+def test_the_engine_respaces_each_line_from_its_character_boxes():
+    # rapidocr-onnxruntime 1.4: [box, text, score, char boxes, chars, char scores]
+    chars = list("TheBoa")
+    boxes = _boxes([(120, 135), (138, 151), (151, 165), (174, 189), (192, 205), (205, 217)])
+    engine = _engine_with([[[[0, 0]] * 4, "TheBoa", 0.9, boxes, chars, [0.9] * 6]])
+
+    assert engine(b"png") == ["The Boa"]
+
+
+def test_an_entry_without_character_boxes_keeps_its_text():
+    """Older releases return only box, text and score."""
+    engine = _engine_with([[[[0, 0]] * 4, "Plain line", 0.9]])
+
+    assert engine(b"png") == ["Plain line"]
+
+
+def test_a_page_with_nothing_recognised_gives_no_lines():
+    assert _engine_with(None)(b"png") == []

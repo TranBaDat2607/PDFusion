@@ -34,7 +34,8 @@ export function AssistantMessage({ answer, byline, onJumpToPage }: AssistantMess
               // `[p. N](#page=N)` is a citation the sidecar checked against
               // the pages the model was shown (`rag/citations.py`): a jump in
               // the viewer, never a navigation of the webview.
-              a: ({ href, children, ...rest }) => {
+              // `node` is react-markdown's hast node, not a DOM attribute.
+              a: ({ node: _node, href, children, ...rest }) => {
                 const page = pageFromCitationHref(href);
                 if (page === undefined) {
                   return (

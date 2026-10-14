@@ -1,13 +1,13 @@
 """Keyword scoring for chat retrieval: BM25 over one index's chunks (#31).
 
-`vector_store.hybrid_search` blends these scores with semantic similarity. The
-keyword side used to count which query words appeared anywhere in a chunk, as
+`rag_chain.EnhancedRAGChain.retrieve` fuses this ranking with the semantic
+one by rank (`retrieval.reciprocal_rank_fusion`). The keyword side used to count which query words appeared anywhere in a chunk, as
 substrings: "the" weighed as much as the one rare term a question hinged on,
 "rate" matched inside "accurate", and the scan ran on the event loop.
 
 An index is built from the chunk list a question has already read
 (`vector_store.get_chunks`), so it only ever scores that one document, and it is
-built once per question for both keyword passes. Building and scoring are CPU
+built once per question. Building and scoring are CPU
 work: call both through `asyncio.to_thread`.
 
 Stdlib-only. `rank-bm25` was dropped from the dependencies and is excluded from

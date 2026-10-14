@@ -1089,9 +1089,10 @@ index's chunks:
 
 **The answer** (`_generate_answer`, `_create_answer_prompt`):
 
-- **The model reads every evidence page, whole, under its 1-indexed page
-  number** — the chat lists each page as a source, so the answer must have
-  read all of them.
+- **The model reads every evidence page under its 1-indexed page number**:
+  each page's hits and their neighbours on it (`NEIGHBOURS = 1`), every chunk
+  whole. The chat lists each page as a source, so the answer must have read
+  all of them.
 - **The best-ranked pages whose content the text loses are shown as images**
   (`retrieval.select_image_pages`, at most `DEFAULT_MAX_IMAGES = 3`): visual
   and scanned pages, and pages with a table chunk. They are rendered when the

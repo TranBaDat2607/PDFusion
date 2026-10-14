@@ -53,7 +53,11 @@ OcrEngine = Callable[[bytes], List[str]]
 # the heading `retrieval.contextual_text` puts in front.
 MAX_CHUNK_CHARS = 600
 # A table is kept whole up to here — its rows mean little apart from its
-# header — and split into header-repeating parts past it.
+# header — and split into header-repeating parts past it. Past ~500 characters
+# a part outruns the embedding window and is found by BM25 alone; splitting at
+# 600 instead was measured and changed no retrieval result
+# (benchmarks/rag/results/v2-table600-retrieval.json), and a whole table is
+# better context for the answer.
 MAX_TABLE_CHARS = 2000
 
 # A heading is set this much larger than the document's body text — or, in

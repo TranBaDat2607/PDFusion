@@ -664,3 +664,41 @@ def test_one_page_failing_ocr_is_counted_and_the_rest_are_still_read(tmp_path: P
     assert {c["page"] for c in chunks} == {1}
     assert ingestor.stats()["ocr_failed_pages"] == 1
     assert ingestor.stats()["ocr_pages"] == 1
+
+
+def test_a_long_table_is_split_with_its_caption_and_header_on_every_part(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A row means little without its header: each part repeats it, and the
+    caption that says what the table is."""
+    from desktop_pdf_translator.rag import ingest
+
+    monkeypatch.setattr(ingest, "MAX_TABLE_CHARS", 120)
+    rows = [["Region", "Revenue", "Growth"]] + [[f"Region{i}", f"{i}00", f"{i}.0%"] for i in range(1, 9)]
+    doc = fitz.open()
+    _table_page(doc, rows, caption_above="Table 5: Revenue by region")
+    path = _save(doc, tmp_path)
+
+    _, chunks = _ingest(path)
+
+    parts = [c["text"] for c in chunks if c["metadata"]["kind"] == "table"]
+    assert len(parts) > 1
+    for part in parts:
+        lines = part.splitlines()
+        assert lines[0] == "Table 5: Revenue by region"
+        assert lines[1] == "| Region | Revenue | Growth |"
+    body_rows = [line for part in parts for line in part.splitlines()[3:]]
+    assert body_rows == [f"| Region{i} | {i}00 | {i}.0% |" for i in range(1, 9)]
+
+
+def test_a_table_sits_between_the_paragraphs_around_it(tmp_path: Path) -> None:
+    """Reading order within a page: the chunk before a table is the text above it."""
+    doc = fitz.open()
+    page = _table_page(doc, [["A", "B", "C"], ["1", "2", "3"], ["4", "5", "6"]], intro="Words above the table.")
+    _write_html(page, fitz.Rect(50, 400, 545, 450), '<p style="font-size:11pt">Words below the table.</p>')
+    path = _save(doc, tmp_path)
+
+    _, chunks = _ingest(path, max_chunk_chars=30)
+
+    kinds = [(c["metadata"]["kind"], c["text"][:11]) for c in chunks]
+    assert kinds == [("text", "Words above"), ("table", "| A | B | C"), ("text", "Words below")]

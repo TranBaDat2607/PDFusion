@@ -195,7 +195,9 @@ class PdfReferencePayload(BaseModel):
     has_equations: bool = False
     has_tables: bool = False
     has_figures: bool = False
-    # The best-matching passage's region on its page, in PDF points.
+    # The region on its page, in PDF points, of the paragraphs the
+    # best-matching chunk was packed from (`ingest.PdfIngestor`). Nothing
+    # reads it yet.
     bbox: Optional[List[float]] = None
 
 
