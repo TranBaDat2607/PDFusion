@@ -11,11 +11,14 @@ Three documents, each chosen for a failure a text-only chat index has:
   paper with tables, figures and equations.
 - `attention_scanned.pdf` — the same paper rasterized to images, no text
   layer: what a scanned copy of it looks like to an index.
+- `long.pdf` — the paper (pp. 1-15), the report (pp. 16-29), then BERT and
+  ResNet: ~57 pages, to measure how each system's cost grows with length.
 
-Deterministic: the same corpus every run, except the paper, which is
-downloaded once. Run with the app's interpreter:
+Deterministic: the same corpus every run, except the papers, which are
+downloaded once. A file that exists is left alone — a benchmark may be
+reading it — unless `--force`. Run with the app's interpreter:
 
-    python benchmarks/rag/build_corpus.py
+    python benchmarks/rag/build_corpus.py [--force]
 """
 
 from __future__ import annotations
@@ -30,6 +33,12 @@ import fitz  # PyMuPDF
 
 DATA = Path(__file__).resolve().parent / ".data"
 PAPER_URL = "https://arxiv.org/pdf/1706.03762v7"
+# Filler for the long document: two more real papers, so its other pages are
+# the kind of text a question could plausibly be about.
+FILLER_URLS = {
+    "bert.pdf": "https://arxiv.org/pdf/1810.04805v2",
+    "resnet.pdf": "https://arxiv.org/pdf/1512.03385v1",
+}
 
 W, H = 595, 842  # A4 in points
 MARGIN = 56
@@ -272,14 +281,35 @@ def build_scanned_copy(source: Path, path: Path, dpi: int = 120) -> None:
     out.save(path)
 
 
+def build_long(path: Path, parts) -> None:
+    out = fitz.open()
+    for part in parts:
+        out.insert_pdf(fitz.open(part))
+    out.save(path)
+
+
 def main() -> None:
+    import sys
+
+    force = "--force" in sys.argv[1:]
     DATA.mkdir(parents=True, exist_ok=True)
+
+    def wanted(name: str) -> bool:
+        return force or not (DATA / name).exists()
+
     paper = DATA / "attention.pdf"
     if not paper.exists():
         urllib.request.urlretrieve(PAPER_URL, paper)
-    build_report(DATA / "report.pdf")
-    build_scanned_copy(paper, DATA / "attention_scanned.pdf")
-    for name in ("report.pdf", "attention.pdf", "attention_scanned.pdf"):
+    for name, url in FILLER_URLS.items():
+        if not (DATA / name).exists():
+            urllib.request.urlretrieve(url, DATA / name)
+    if wanted("report.pdf"):
+        build_report(DATA / "report.pdf")
+    if wanted("attention_scanned.pdf"):
+        build_scanned_copy(paper, DATA / "attention_scanned.pdf")
+    if wanted("long.pdf"):
+        build_long(DATA / "long.pdf", [paper, DATA / "report.pdf", DATA / "bert.pdf", DATA / "resnet.pdf"])
+    for name in ("report.pdf", "attention.pdf", "attention_scanned.pdf", "long.pdf"):
         doc = fitz.open(DATA / name)
         chars = sum(len(p.get_text()) for p in doc)
         print(f"{name}: {doc.page_count} pages, {chars} text-layer characters")

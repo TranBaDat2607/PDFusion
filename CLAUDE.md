@@ -42,6 +42,11 @@ cd desktop && pnpm test               # vitest, node env (no jsdom)
 cd desktop/src-tauri && cargo test
 ruff check src tests scripts          # the lint gate
 
+# Chat RAG benchmark (local; --answers spends a few cents on the configured model)
+python benchmarks/rag/build_corpus.py
+python benchmarks/rag/run.py --system v2 [--answers]
+python benchmarks/rag/compare.py baseline-answers v2-answers docpixie-answers
+
 # After touching api/schemas.py, api/sse_schemas.py or any route:
 python -m desktop_pdf_translator.api.export_openapi --output desktop/src/lib/openapi.json
 cd desktop && pnpm run generate:api-types
@@ -113,7 +118,8 @@ singleton with no job id, so it is polled via `GET /setup/status`.
 | `providers/` | `registry.py` — one `ProviderSpec` per provider, the source of every per-provider rule (stdlib-only); `listing.py` — one model lister per protocol; `catalog.py` — the model catalog cache and `list_models` |
 | `processors/` | `PDFProcessor` (BabelDOC), `page_selection.py`, `pdf_pages.py`, `pdf_cache.py`, `doc_layout_cache.py` |
 | `translators/` | `BaseTranslator` + OpenAI/Gemini/Anthropic/Argos, `factory.py`, `capabilities.py`, `rate_limiter.py`, `translation_cache.py`, `param_compat.py`, `usage_estimate.py` |
-| `rag/` | `EnhancedRAGChain`, `vector_store.py`, `index_spec.py`, `onnx_embeddings.py`, `keyword_search.py` |
+| `rag/` | `rag_chain.py` (`EnhancedRAGChain`), `ingest.py` (PDF → chunks, page kinds), `ocr.py`, `retrieval.py` (RRF, page evidence), `citations.py`, `page_images.py`, `vector_store.py`, `index_spec.py`, `onnx_embeddings.py`, `keyword_search.py` |
+| `benchmarks/rag/` | Corpus, questions with gold pages, harness (baseline from a `main` worktree, the real DocPixie), results — `README.md` there has the numbers |
 | `storage/` | `sqlite.py` (pragmas, per-thread connections), `migrations.py`, `records.py` (`pdfusion.db`) |
 | `utils/` | `encryption.py`, `file_export.py`, `logging_setup.py`, `paths.py` |
 
@@ -254,7 +260,22 @@ a test. They are the things most easily undone by "simplifying".
   the chain or rerun `_recover` to pick up settings.
 - A failure is an `error` event, never a fallback answer; retrieval that finds
   nothing never reaches the model.
-- Changing the embedding model or chunker means editing `rag/index_spec.py`.
+- **Retrieve by text, read by vision.** Indexing and retrieval are local and
+  make no model call; the answer is the only paid request, and it sees images
+  of at most `DEFAULT_MAX_IMAGES` pages, the best-ranked visual/table/scanned
+  ones (`retrieval.select_image_pages`) — never every page, as DocPixie does.
+  Evidence is **pages**: `max_pdf_sources` counts pages, references are one per
+  page, cited first.
+- `generate()` gets `images=` only when there are some (older backends take
+  three arguments). A model that refuses an image is sent text only for the
+  rest of the process; a 401 is not a refusal.
+- Only citations `citations.link_citations` checked against the evidence pages
+  reach the chat, as `[p. N](#page=N)`; the panel turns those into jumps.
+- A reranker, if ever added, is fused with the first stage, never substituted
+  for it — the one measured ranked tables below prose. Decisions here are
+  re-measured with `benchmarks/rag/`, not argued.
+- Changing the embedding model, the chunker, or what `vector_store.add_chunks`
+  embeds means editing `rag/index_spec.py`.
 
 **PDF viewer** (#30)
 - A slot's size comes from `lib/pdf-viewer/layout.ts`, never from a canvas;
@@ -461,13 +482,17 @@ Covered: PDF export, the language contract, key storage, config read/write and
 the config API's key/endpoint rules, the job registry, both caches, Argos
 batching, failure/retry accounting, param adaptation, model listing (recorded
 responses) and the model catalog, the records DB, chat
-isolation (real ChromaDB under `tmp_path`), chunking and rolling-PDF assembly,
+isolation (real ChromaDB under `tmp_path`), chat ingestion (real PDFs built with
+PyMuPDF), OCR respacing, rank fusion and page evidence, citation checking,
+page images, multimodal `generate()` per SDK, the answer chain's image and
+citation rules, chunking and rolling-PDF assembly,
 the data root per platform, packaging config agreement, and the viewer's pure
 half.
 
-Not covered: `processors/processor.py` proper, most of `rag/` (extraction,
-ranking, generation), and the viewer's DOM half (vitest runs in node) —
-exercise those in `pnpm tauri dev`.
+Not covered: `processors/processor.py` proper, chat quality with the real
+embedding/OCR models and a real LLM (that is what `benchmarks/rag/` measures —
+run it after touching `rag/`), and the viewer's DOM half (vitest runs in node)
+— exercise those in `pnpm tauri dev`.
 
 Two conventions that keep the default run in-process and ~10 s:
 

@@ -45,6 +45,13 @@
     {"id": "s05", "doc": "attention_scanned.pdf", "kind": "scan", "q": "What F1 did the Transformer get on WSJ constituency parsing in the semi-supervised setting?", "pages": [10], "answer": ["92\\.7"]},
     {"id": "s06", "doc": "attention_scanned.pdf", "kind": "scan", "q": "How many attention heads and what key dimension does the base model use?", "pages": [5, 9], "answer": ["\\b8\\b", "\\b64\\b"]},
     {"id": "s07", "doc": "attention_scanned.pdf", "kind": "scan", "q": "What vocabulary was used for English-German and how large was it?", "pages": [7], "answer": ["byte.pair|BPE", "37,?000"]},
-    {"id": "s08", "doc": "attention_scanned.pdf", "kind": "negative", "q": "What BLEU score did the Transformer reach on English-to-Japanese translation?", "pages": [], "answer": []}
+    {"id": "s08", "doc": "attention_scanned.pdf", "kind": "negative", "q": "What BLEU score did the Transformer reach on English-to-Japanese translation?", "pages": [], "answer": []},
+
+    {"id": "l01", "doc": "long.pdf", "kind": "table", "q": "What BLEU score does the big Transformer reach on WMT 2014 English-to-German?", "pages": [8], "answer": ["28\\.4"]},
+    {"id": "l02", "doc": "long.pdf", "kind": "text", "q": "What value of warmup_steps was used for the learning rate schedule?", "pages": [7], "answer": ["4,?000"]},
+    {"id": "l03", "doc": "long.pdf", "kind": "table", "q": "What was Northwind's revenue growth in Europe?", "pages": [19], "answer": ["4\\.7\\s?%"]},
+    {"id": "l04", "doc": "long.pdf", "kind": "chart", "q": "In which quarter did Northwind's warranty claims peak, and how many claims were there?", "pages": [20], "answer": ["Q3|third quarter", "154"]},
+    {"id": "l05", "doc": "long.pdf", "kind": "scan", "q": "What final dividend per share did Northwind's board approve?", "pages": [22], "answer": ["0[.,]42"]},
+    {"id": "l06", "doc": "long.pdf", "kind": "scan", "q": "What was Osaka Metals' on-time delivery rate?", "pages": [29], "answer": ["88[.,]1"]}
   ]
 }
