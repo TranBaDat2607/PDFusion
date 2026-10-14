@@ -551,3 +551,26 @@ def test_chunk_metadata_carries_every_documented_key(tmp_path: Path, key: str) -
     _, chunks = _ingest(path)
 
     assert chunks and all(key in c["metadata"] for c in chunks)
+
+
+def test_a_ruled_grid_whose_cells_are_mostly_empty_is_not_a_table(tmp_path: Path) -> None:
+    """A figure drawn with lines — the Attention paper's attention maps — reads
+    to `find_tables` as a grid with a word in one cell of every few. Quoted as
+    a table it is a wall of `|  |  |`; as text, its words still say something."""
+    doc = fitz.open()
+    page = doc.new_page(width=PAGE_W, height=PAGE_H)
+    words = {(0, 0): "The", (2, 3): "Law", (4, 1): "will", (5, 5): "never"}
+    for r in range(6):
+        for c in range(6):
+            rect = fitz.Rect(72 + c * 70, 200 + r * 22, 72 + (c + 1) * 70, 200 + (r + 1) * 22)
+            page.draw_rect(rect, color=(0, 0, 0), width=0.6)
+            if (r, c) in words:
+                _write_html(page, rect + (3, 2, -3, -2), f'<p style="font-size:10pt">{words[(r, c)]}</p>')
+    assert page.find_tables().tables, "fixture must look like a table to find_tables"
+    path = _save(doc, tmp_path)
+
+    ingestor, chunks = _ingest(path)
+
+    assert not any(c["metadata"]["kind"] == "table" for c in chunks)
+    assert ingestor.stats()["tables"] == 0
+    assert "Law" in _all_text(chunks)
