@@ -163,6 +163,10 @@ class V2System:
         from desktop_pdf_translator.rag.vector_store import ChromaDBManager
 
         self.store = ChromaDBManager(persist_directory=workdir / "vectors")
+        if options.pop("rerank", False):
+            from cross_encoder import OnnxCrossEncoder
+
+            options["reranker"] = OnnxCrossEncoder()
         self.chain = EnhancedRAGChain(self.store, **options)
         self.model = self.chain._answer_model() if use_model else None
         if self.model is not None:
@@ -170,8 +174,10 @@ class V2System:
 
     async def index(self, pdf: Path, index_id: str) -> Dict[str, Any]:
         from desktop_pdf_translator.rag.ingest import PdfIngestor
+        from desktop_pdf_translator.rag.ocr import load_ocr_engine
 
-        ingestor = PdfIngestor()
+        # As the app's index route builds it (`api/routes/rag.py`).
+        ingestor = PdfIngestor(ocr=load_ocr_engine())
         chunks = await asyncio.to_thread(ingestor.process_pdf, pdf)
         await self.store.add_chunks(index_id, chunks)
         return {"chunks": len(chunks), **ingestor.stats()}

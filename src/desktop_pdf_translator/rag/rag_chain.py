@@ -49,6 +49,7 @@ from .keyword_search import Bm25Index
 from .page_images import render_pages
 from .retrieval import (
     PageEvidence,
+    chunk_map,
     contextual_text,
     group_by_page,
     reciprocal_rank_fusion,
@@ -140,6 +141,9 @@ DEFAULT_MAX_IMAGES = 3
 CANDIDATES = 20
 # Chunks shown either side of a hit, on its page.
 NEIGHBOURS = 1
+# Fused chunks a reranker re-scores. Its cost is linear in this; past ~30 the
+# chunks it would promote were never going to reach the evidence anyway.
+RERANK_DEPTH = 30
 # Thinking counts toward this on a model that thinks by default.
 ANSWER_MAX_TOKENS = 4000
 
@@ -163,12 +167,19 @@ class EnhancedRAGChain:
 
     def __init__(self, vector_store: ChromaDBManager, *, hyde: bool = False,
                  max_images: int = DEFAULT_MAX_IMAGES, candidates: int = CANDIDATES,
-                 neighbours: int = NEIGHBOURS):
+                 neighbours: int = NEIGHBOURS, reranker: Optional[Any] = None,
+                 rerank_depth: int = RERANK_DEPTH):
         self.vector_store = vector_store
         self.hyde = hyde
         self.max_images = max_images
         self.candidates = candidates
         self.neighbours = neighbours
+        # Anything with `scores(question, texts) -> List[float]`; `None`, the
+        # app's choice, keeps the first stage's order. A local cross-encoder
+        # gained one question in 39 for +0.5 s a question and a 113 MB
+        # download (`benchmarks/rag/cross_encoder.py`, `benchmarks/rag/README.md`).
+        self.reranker = reranker
+        self.rerank_depth = rerank_depth
         self._model: Optional[AnswerModel] = None
         self._model_key: Optional[Tuple[Any, ...]] = None
         self._model_lock = threading.Lock()
@@ -339,6 +350,17 @@ class EnhancedRAGChain:
             rankings.append([chunks[i]['chunk_id'] for i in best])
 
         fused = reciprocal_rank_fusion(rankings)
+        if self.reranker is not None and fused:
+            by_id = chunk_map(chunks)
+            shortlist = [chunk_id for chunk_id, _ in fused[:self.rerank_depth]]
+            scores = await asyncio.to_thread(
+                self.reranker.scores, question, [contextual_text(by_id[i]) for i in shortlist]
+            )
+            reranked = sorted(zip(shortlist, scores), key=lambda pair: pair[1], reverse=True)
+            # One more vote, fused by rank, not the verdict: the multilingual
+            # cross-encoder benchmarked alone ranked Markdown tables below the
+            # prose around them, and fused it did better than either alone.
+            fused = reciprocal_rank_fusion([shortlist, [chunk_id for chunk_id, _ in reranked]])
         evidence = await asyncio.to_thread(
             group_by_page, fused, chunks, max_pages, self.neighbours
         )

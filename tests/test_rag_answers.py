@@ -463,3 +463,30 @@ def test_without_a_model_the_answer_quotes_the_best_evidence_with_page_links(tmp
     cited = {r["page"] for r in result["pdf_references"] if r["cited"]}
     assert linked and linked == cited
     assert (result["provider"], result["model"]) == (None, None)
+
+
+class _Reranker:
+    """Scores the texts in a fixed preference order: page 3's text best."""
+
+    def __init__(self, preference: List[str]):
+        self.preference = preference
+
+    def scores(self, question: str, texts: List[str]) -> List[float]:
+        return [float(len(self.preference) - self.preference.index(t)) for t in texts]
+
+
+def test_a_reranker_is_fused_with_the_first_stage_rather_than_replacing_it(tmp_path, store):
+    """A cross-encoder alone ranked tables worse than the searches it re-scored
+    (benchmarks/rag/README.md), so its order is one more vote, not the verdict.
+
+    First stage: pages 1, 2, 3, 4. Reranker: 3, 1, 2, 4. Fused by rank (k=60):
+    page 1 = 1/61 + 1/62, page 3 = 1/63 + 1/61, page 2 = 1/62 + 1/63,
+    page 4 = 1/64 + 1/64 → pages 1, 3, 2, 4. Replacing would give 3, 1, 2, 4.
+    """
+    index_id, path = build_document(tmp_path, store, [{"text": t} for t in RANKED_TEXTS])
+    reranker = _Reranker([RANKED_TEXTS[2], RANKED_TEXTS[0], RANKED_TEXTS[1], RANKED_TEXTS[3]])
+    chain = make_chain(store, None, reranker=reranker)
+
+    evidence = asyncio.run(chain.retrieve(QUESTION, index_id, 4))
+
+    assert [page.page + 1 for page in evidence] == [1, 3, 2, 4]

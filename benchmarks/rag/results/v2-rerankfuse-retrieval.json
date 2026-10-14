@@ -1,0 +1,1082 @@
+{
+ "system": "v2",
+ "src": "C:\\Users\\Admin\\Desktop\\PDFusion\\src",
+ "answers": false,
+ "model": null,
+ "options": "{\"rerank\": true, \"rerank_fuse\": true}",
+ "indexing": {
+  "attention.pdf": {
+   "seconds": 5.8,
+   "chunks": 86,
+   "pages": 15,
+   "text_pages": 6,
+   "visual_pages": 9,
+   "scanned_pages": 0,
+   "ocr_pages": 0,
+   "tables": 2,
+   "llm_input_tokens": 0,
+   "llm_output_tokens": 0
+  },
+  "attention_scanned.pdf": {
+   "seconds": 102.13,
+   "chunks": 77,
+   "pages": 15,
+   "text_pages": 0,
+   "visual_pages": 0,
+   "scanned_pages": 15,
+   "ocr_pages": 15,
+   "tables": 0,
+   "llm_input_tokens": 0,
+   "llm_output_tokens": 0
+  },
+  "report.pdf": {
+   "seconds": 4.0,
+   "chunks": 15,
+   "pages": 14,
+   "text_pages": 8,
+   "visual_pages": 4,
+   "scanned_pages": 2,
+   "ocr_pages": 2,
+   "tables": 2,
+   "llm_input_tokens": 0,
+   "llm_output_tokens": 0
+  }
+ },
+ "questions": [
+  {
+   "id": "r01",
+   "doc": "report.pdf",
+   "kind": "text",
+   "q": "How many employees did Northwind have at the end of 2025?",
+   "retrieve_seconds": 1.412,
+   "ranked_pages": [
+    1,
+    2,
+    6,
+    8,
+    9
+   ],
+   "retrieval": {
+    "hit@1": 0.0,
+    "hit@3": 1.0,
+    "hit@5": 1.0,
+    "mrr@5": 0.5
+   },
+   "llm_input_tokens": 0,
+   "llm_output_tokens": 0,
+   "llm_calls": 0
+  },
+  {
+   "id": "r02",
+   "doc": "report.pdf",
+   "kind": "text",
+   "q": "What share of unit output comes from the Da Nang plant?",
+   "retrieve_seconds": 0.127,
+   "ranked_pages": [
+    3,
+    8,
+    7,
+    9,
+    13
+   ],
+   "retrieval": {
+    "hit@1": 1.0,
+    "hit@3": 1.0,
+    "hit@5": 1.0,
+    "mrr@5": 1.0
+   },
+   "llm_input_tokens": 0,
+   "llm_output_tokens": 0,
+   "llm_calls": 0
+  },
+  {
+   "id": "r03",
+   "doc": "report.pdf",
+   "kind": "table",
+   "q": "What was revenue growth in Europe?",
+   "retrieve_seconds": 0.128,
+   "ranked_pages": [
+    11,
+    4,
+    2,
+    9,
+    3
+   ],
+   "retrieval": {
+    "hit@1": 0.0,
+    "hit@3": 1.0,
+    "hit@5": 1.0,
+    "mrr@5": 0.5
+   },
+   "llm_input_tokens": 0,
+   "llm_output_tokens": 0,
+   "llm_calls": 0
+  },
+  {
+   "id": "r04",
+   "doc": "report.pdf",
+   "kind": "table",
+   "q": "Which region had negative revenue growth, and how much?",
+   "retrieve_seconds": 0.129,
+   "ranked_pages": [
+    4,
+    11,
+    3,
+    9,
+    8
+   ],
+   "retrieval": {
+    "hit@1": 1.0,
+    "hit@3": 1.0,
+    "hit@5": 1.0,
+    "mrr@5": 1.0
+   },
+   "llm_input_tokens": 0,
+   "llm_output_tokens": 0,
+   "llm_calls": 0
+  },
+  {
+   "id": "r05",
+   "doc": "report.pdf",
+   "kind": "chart",
+   "q": "In which quarter did warranty claims peak, and how many claims were there?",
+   "retrieve_seconds": 0.136,
+   "ranked_pages": [
+    5,
+    6,
+    7,
+    2,
+    9
+   ],
+   "retrieval": {
+    "hit@1": 1.0,
+    "hit@3": 1.0,
+    "hit@5": 1.0,
+    "mrr@5": 1.0
+   },
+   "llm_input_tokens": 0,
+   "llm_output_tokens": 0,
+   "llm_calls": 0
+  },
+  {
+   "id": "r06",
+   "doc": "report.pdf",
+   "kind": "chart",
+   "q": "How many warranty claims were received in Q4?",
+   "retrieve_seconds": 0.127,
+   "ranked_pages": [
+    5,
+    6,
+    2,
+    13,
+    7
+   ],
+   "retrieval": {
+    "hit@1": 1.0,
+    "hit@3": 1.0,
+    "hit@5": 1.0,
+    "mrr@5": 1.0
+   },
+   "llm_input_tokens": 0,
+   "llm_output_tokens": 0,
+   "llm_calls": 0
+  },
+  {
+   "id": "r07",
+   "doc": "report.pdf",
+   "kind": "scan",
+   "q": "What final dividend per share did the board approve?",
+   "retrieve_seconds": 0.123,
+   "ranked_pages": [
+    7,
+    2,
+    5,
+    13,
+    9
+   ],
+   "retrieval": {
+    "hit@1": 1.0,
+    "hit@3": 1.0,
+    "hit@5": 1.0,
+    "mrr@5": 1.0
+   },
+   "llm_input_tokens": 0,
+   "llm_output_tokens": 0,
+   "llm_calls": 0
+  },
+  {
+   "id": "r08",
+   "doc": "report.pdf",
+   "kind": "scan",
+   "q": "When is the dividend payable?",
+   "retrieve_seconds": 0.117,
+   "ranked_pages": [
+    7,
+    5,
+    2,
+    6,
+    9
+   ],
+   "retrieval": {
+    "hit@1": 1.0,
+    "hit@3": 1.0,
+    "hit@5": 1.0,
+    "mrr@5": 1.0
+   },
+   "llm_input_tokens": 0,
+   "llm_output_tokens": 0,
+   "llm_calls": 0
+  },
+  {
+   "id": "r09",
+   "doc": "report.pdf",
+   "kind": "multilingual",
+   "q": "By how much did CO2 emissions fall compared with 2022?",
+   "retrieve_seconds": 0.122,
+   "ranked_pages": [
+    8,
+    4,
+    2,
+    3,
+    6
+   ],
+   "retrieval": {
+    "hit@1": 1.0,
+    "hit@3": 1.0,
+    "hit@5": 1.0,
+    "mrr@5": 1.0
+   },
+   "llm_input_tokens": 0,
+   "llm_output_tokens": 0,
+   "llm_calls": 0
+  },
+  {
+   "id": "r10",
+   "doc": "report.pdf",
+   "kind": "multilingual",
+   "q": "Bao nhiêu phần trăm điện năng đến từ năng lượng tái tạo?",
+   "retrieve_seconds": 0.134,
+   "ranked_pages": [
+    8,
+    3,
+    4,
+    9,
+    2
+   ],
+   "retrieval": {
+    "hit@1": 1.0,
+    "hit@3": 1.0,
+    "hit@5": 1.0,
+    "mrr@5": 1.0
+   },
+   "llm_input_tokens": 0,
+   "llm_output_tokens": 0,
+   "llm_calls": 0
+  },
+  {
+   "id": "r11",
+   "doc": "report.pdf",
+   "kind": "text",
+   "q": "How many patent applications were filed in 2025?",
+   "retrieve_seconds": 0.125,
+   "ranked_pages": [
+    9,
+    2,
+    6,
+    5,
+    8
+   ],
+   "retrieval": {
+    "hit@1": 1.0,
+    "hit@3": 1.0,
+    "hit@5": 1.0,
+    "mrr@5": 1.0
+   },
+   "llm_input_tokens": 0,
+   "llm_output_tokens": 0,
+   "llm_calls": 0
+  },
+  {
+   "id": "r12",
+   "doc": "report.pdf",
+   "kind": "chart",
+   "q": "What percentage of the workforce is in engineering?",
+   "retrieve_seconds": 0.128,
+   "ranked_pages": [
+    9,
+    3,
+    2,
+    10,
+    4
+   ],
+   "retrieval": {
+    "hit@1": 0.0,
+    "hit@3": 0.0,
+    "hit@5": 1.0,
+    "mrr@5": 0.25
+   },
+   "llm_input_tokens": 0,
+   "llm_output_tokens": 0,
+   "llm_calls": 0
+  },
+  {
+   "id": "r13",
+   "doc": "report.pdf",
+   "kind": "table",
+   "q": "What is the average price of the Gateway G7?",
+   "retrieve_seconds": 0.123,
+   "ranked_pages": [
+    12,
+    5,
+    6,
+    9,
+    2
+   ],
+   "retrieval": {
+    "hit@1": 1.0,
+    "hit@3": 1.0,
+    "hit@5": 1.0,
+    "mrr@5": 1.0
+   },
+   "llm_input_tokens": 0,
+   "llm_output_tokens": 0,
+   "llm_calls": 0
+  },
+  {
+   "id": "r14",
+   "doc": "report.pdf",
+   "kind": "table",
+   "q": "Which product shipped the most units?",
+   "retrieve_seconds": 0.132,
+   "ranked_pages": [
+    12,
+    3,
+    6,
+    9,
+    5
+   ],
+   "retrieval": {
+    "hit@1": 1.0,
+    "hit@3": 1.0,
+    "hit@5": 1.0,
+    "mrr@5": 1.0
+   },
+   "llm_input_tokens": 0,
+   "llm_output_tokens": 0,
+   "llm_calls": 0
+  },
+  {
+   "id": "r15",
+   "doc": "report.pdf",
+   "kind": "scan",
+   "q": "What was Osaka Metals' on-time delivery rate?",
+   "retrieve_seconds": 0.127,
+   "ranked_pages": [
+    14,
+    3,
+    7,
+    2,
+    12
+   ],
+   "retrieval": {
+    "hit@1": 1.0,
+    "hit@3": 1.0,
+    "hit@5": 1.0,
+    "mrr@5": 1.0
+   },
+   "llm_input_tokens": 0,
+   "llm_output_tokens": 0,
+   "llm_calls": 0
+  },
+  {
+   "id": "r16",
+   "doc": "report.pdf",
+   "kind": "scan",
+   "q": "Which supplier had the best on-time delivery?",
+   "retrieve_seconds": 0.133,
+   "ranked_pages": [
+    14,
+    6,
+    1,
+    2,
+    5
+   ],
+   "retrieval": {
+    "hit@1": 1.0,
+    "hit@3": 1.0,
+    "hit@5": 1.0,
+    "mrr@5": 1.0
+   },
+   "llm_input_tokens": 0,
+   "llm_output_tokens": 0,
+   "llm_calls": 0
+  },
+  {
+   "id": "r17",
+   "doc": "report.pdf",
+   "kind": "text",
+   "q": "What caused the spike in warranty claims?",
+   "retrieve_seconds": 0.131,
+   "ranked_pages": [
+    5,
+    11,
+    13,
+    6,
+    7
+   ],
+   "retrieval": {
+    "hit@1": 1.0,
+    "hit@3": 1.0,
+    "hit@5": 1.0,
+    "mrr@5": 1.0
+   },
+   "llm_input_tokens": 0,
+   "llm_output_tokens": 0,
+   "llm_calls": 0
+  },
+  {
+   "id": "r18",
+   "doc": "report.pdf",
+   "kind": "multilingual",
+   "q": "Công suất hệ thống điện mặt trời ở nhà máy Đà Nẵng là bao nhiêu?",
+   "retrieve_seconds": 0.146,
+   "ranked_pages": [
+    8,
+    3,
+    12,
+    7,
+    2
+   ],
+   "retrieval": {
+    "hit@1": 1.0,
+    "hit@3": 1.0,
+    "hit@5": 1.0,
+    "mrr@5": 1.0
+   },
+   "llm_input_tokens": 0,
+   "llm_output_tokens": 0,
+   "llm_calls": 0
+  },
+  {
+   "id": "r19",
+   "doc": "report.pdf",
+   "kind": "negative",
+   "q": "How many retail stores does Northwind operate in Africa?",
+   "llm_input_tokens": 0,
+   "llm_output_tokens": 0,
+   "llm_calls": 0
+  },
+  {
+   "id": "r20",
+   "doc": "report.pdf",
+   "kind": "negative",
+   "q": "What was the company's net profit margin in 2025?",
+   "llm_input_tokens": 0,
+   "llm_output_tokens": 0,
+   "llm_calls": 0
+  },
+  {
+   "id": "a01",
+   "doc": "attention.pdf",
+   "kind": "table",
+   "q": "What BLEU score does the big Transformer reach on WMT 2014 English-to-German?",
+   "retrieve_seconds": 0.633,
+   "ranked_pages": [
+    8,
+    1,
+    9,
+    10,
+    7
+   ],
+   "retrieval": {
+    "hit@1": 1.0,
+    "hit@3": 1.0,
+    "hit@5": 1.0,
+    "mrr@5": 1.0
+   },
+   "llm_input_tokens": 0,
+   "llm_output_tokens": 0,
+   "llm_calls": 0
+  },
+  {
+   "id": "a02",
+   "doc": "attention.pdf",
+   "kind": "text",
+   "q": "How long did training the big model take, and on what hardware?",
+   "retrieve_seconds": 0.524,
+   "ranked_pages": [
+    7,
+    8,
+    1,
+    10,
+    9
+   ],
+   "retrieval": {
+    "hit@1": 1.0,
+    "hit@3": 1.0,
+    "hit@5": 1.0,
+    "mrr@5": 1.0
+   },
+   "llm_input_tokens": 0,
+   "llm_output_tokens": 0,
+   "llm_calls": 0
+  },
+  {
+   "id": "a03",
+   "doc": "attention.pdf",
+   "kind": "text",
+   "q": "What value of warmup_steps was used for the learning rate schedule?",
+   "retrieve_seconds": 0.607,
+   "ranked_pages": [
+    7,
+    8,
+    9,
+    10,
+    2
+   ],
+   "retrieval": {
+    "hit@1": 1.0,
+    "hit@3": 1.0,
+    "hit@5": 1.0,
+    "mrr@5": 1.0
+   },
+   "llm_input_tokens": 0,
+   "llm_output_tokens": 0,
+   "llm_calls": 0
+  },
+  {
+   "id": "a04",
+   "doc": "attention.pdf",
+   "kind": "text",
+   "q": "What were the Adam optimizer's beta2 and epsilon?",
+   "retrieve_seconds": 0.512,
+   "ranked_pages": [
+    7,
+    11,
+    1,
+    3,
+    8
+   ],
+   "retrieval": {
+    "hit@1": 1.0,
+    "hit@3": 1.0,
+    "hit@5": 1.0,
+    "mrr@5": 1.0
+   },
+   "llm_input_tokens": 0,
+   "llm_output_tokens": 0,
+   "llm_calls": 0
+  },
+  {
+   "id": "a05",
+   "doc": "attention.pdf",
+   "kind": "table",
+   "q": "What is the per-layer complexity of self-attention compared with recurrent layers?",
+   "retrieve_seconds": 0.608,
+   "ranked_pages": [
+    6,
+    7,
+    3,
+    13,
+    5
+   ],
+   "retrieval": {
+    "hit@1": 1.0,
+    "hit@3": 1.0,
+    "hit@5": 1.0,
+    "mrr@5": 1.0
+   },
+   "llm_input_tokens": 0,
+   "llm_output_tokens": 0,
+   "llm_calls": 0
+  },
+  {
+   "id": "a06",
+   "doc": "attention.pdf",
+   "kind": "text",
+   "q": "How many attention heads and what key dimension does the base model use?",
+   "retrieve_seconds": 0.542,
+   "ranked_pages": [
+    5,
+    9,
+    4,
+    14,
+    15
+   ],
+   "retrieval": {
+    "hit@1": 1.0,
+    "hit@3": 1.0,
+    "hit@5": 1.0,
+    "mrr@5": 1.0
+   },
+   "llm_input_tokens": 0,
+   "llm_output_tokens": 0,
+   "llm_calls": 0
+  },
+  {
+   "id": "a07",
+   "doc": "attention.pdf",
+   "kind": "text",
+   "q": "What label smoothing value was used during training?",
+   "retrieve_seconds": 0.476,
+   "ranked_pages": [
+    8,
+    7,
+    6,
+    10,
+    9
+   ],
+   "retrieval": {
+    "hit@1": 1.0,
+    "hit@3": 1.0,
+    "hit@5": 1.0,
+    "mrr@5": 1.0
+   },
+   "llm_input_tokens": 0,
+   "llm_output_tokens": 0,
+   "llm_calls": 0
+  },
+  {
+   "id": "a08",
+   "doc": "attention.pdf",
+   "kind": "table",
+   "q": "What F1 did the Transformer get on WSJ constituency parsing in the semi-supervised setting?",
+   "retrieve_seconds": 0.676,
+   "ranked_pages": [
+    10,
+    9,
+    8,
+    2,
+    1
+   ],
+   "retrieval": {
+    "hit@1": 1.0,
+    "hit@3": 1.0,
+    "hit@5": 1.0,
+    "mrr@5": 1.0
+   },
+   "llm_input_tokens": 0,
+   "llm_output_tokens": 0,
+   "llm_calls": 0
+  },
+  {
+   "id": "a09",
+   "doc": "attention.pdf",
+   "kind": "text",
+   "q": "What vocabulary was used for English-German and how large was it?",
+   "retrieve_seconds": 0.733,
+   "ranked_pages": [
+    7,
+    1,
+    9,
+    12,
+    8
+   ],
+   "retrieval": {
+    "hit@1": 1.0,
+    "hit@3": 1.0,
+    "hit@5": 1.0,
+    "mrr@5": 1.0
+   },
+   "llm_input_tokens": 0,
+   "llm_output_tokens": 0,
+   "llm_calls": 0
+  },
+  {
+   "id": "a10",
+   "doc": "attention.pdf",
+   "kind": "figure",
+   "q": "In the figure of the model architecture, what sits on top of the decoder stack before the output probabilities?",
+   "retrieve_seconds": 0.49,
+   "ranked_pages": [
+    3,
+    5,
+    2,
+    8,
+    6
+   ],
+   "retrieval": {
+    "hit@1": 1.0,
+    "hit@3": 1.0,
+    "hit@5": 1.0,
+    "mrr@5": 1.0
+   },
+   "llm_input_tokens": 0,
+   "llm_output_tokens": 0,
+   "llm_calls": 0
+  },
+  {
+   "id": "a11",
+   "doc": "attention.pdf",
+   "kind": "table",
+   "q": "What BLEU does the base model get on English-to-French?",
+   "retrieve_seconds": 0.668,
+   "ranked_pages": [
+    1,
+    8,
+    9,
+    7,
+    10
+   ],
+   "retrieval": {
+    "hit@1": 0.0,
+    "hit@3": 1.0,
+    "hit@5": 1.0,
+    "mrr@5": 0.5
+   },
+   "llm_input_tokens": 0,
+   "llm_output_tokens": 0,
+   "llm_calls": 0
+  },
+  {
+   "id": "a12",
+   "doc": "attention.pdf",
+   "kind": "table",
+   "q": "In the model variations table, what dropout rate and how many training steps are listed for the big model?",
+   "retrieve_seconds": 0.652,
+   "ranked_pages": [
+    8,
+    7,
+    9,
+    6,
+    10
+   ],
+   "retrieval": {
+    "hit@1": 0.0,
+    "hit@3": 1.0,
+    "hit@5": 1.0,
+    "mrr@5": 0.3333333333333333
+   },
+   "llm_input_tokens": 0,
+   "llm_output_tokens": 0,
+   "llm_calls": 0
+  },
+  {
+   "id": "a13",
+   "doc": "attention.pdf",
+   "kind": "text",
+   "q": "Why does the model use sinusoidal positional encodings instead of learned ones?",
+   "retrieve_seconds": 0.657,
+   "ranked_pages": [
+    6,
+    9,
+    5,
+    4,
+    3
+   ],
+   "retrieval": {
+    "hit@1": 1.0,
+    "hit@3": 1.0,
+    "hit@5": 1.0,
+    "mrr@5": 1.0
+   },
+   "llm_input_tokens": 0,
+   "llm_output_tokens": 0,
+   "llm_calls": 0
+  },
+  {
+   "id": "a14",
+   "doc": "attention.pdf",
+   "kind": "figure",
+   "q": "In the attention visualization of the encoder self-attention in layer 5, which word's attention is shown completing the phrase?",
+   "retrieve_seconds": 0.473,
+   "ranked_pages": [
+    13,
+    14,
+    15,
+    5,
+    6
+   ],
+   "retrieval": {
+    "hit@1": 1.0,
+    "hit@3": 1.0,
+    "hit@5": 1.0,
+    "mrr@5": 1.0
+   },
+   "llm_input_tokens": 0,
+   "llm_output_tokens": 0,
+   "llm_calls": 0
+  },
+  {
+   "id": "a15",
+   "doc": "attention.pdf",
+   "kind": "negative",
+   "q": "What BLEU score did the Transformer reach on English-to-Japanese translation?",
+   "llm_input_tokens": 0,
+   "llm_output_tokens": 0,
+   "llm_calls": 0
+  },
+  {
+   "id": "s01",
+   "doc": "attention_scanned.pdf",
+   "kind": "scan",
+   "q": "What BLEU score does the big Transformer reach on WMT 2014 English-to-German?",
+   "retrieve_seconds": 0.627,
+   "ranked_pages": [
+    8,
+    1,
+    10,
+    9,
+    7
+   ],
+   "retrieval": {
+    "hit@1": 1.0,
+    "hit@3": 1.0,
+    "hit@5": 1.0,
+    "mrr@5": 1.0
+   },
+   "llm_input_tokens": 0,
+   "llm_output_tokens": 0,
+   "llm_calls": 0
+  },
+  {
+   "id": "s02",
+   "doc": "attention_scanned.pdf",
+   "kind": "scan",
+   "q": "How long did training the big model take, and on what hardware?",
+   "retrieve_seconds": 0.628,
+   "ranked_pages": [
+    7,
+    1,
+    8,
+    6,
+    9
+   ],
+   "retrieval": {
+    "hit@1": 1.0,
+    "hit@3": 1.0,
+    "hit@5": 1.0,
+    "mrr@5": 1.0
+   },
+   "llm_input_tokens": 0,
+   "llm_output_tokens": 0,
+   "llm_calls": 0
+  },
+  {
+   "id": "s03",
+   "doc": "attention_scanned.pdf",
+   "kind": "scan",
+   "q": "What value of warmup_steps was used for the learning rate schedule?",
+   "retrieve_seconds": 0.609,
+   "ranked_pages": [
+    7,
+    8,
+    10,
+    9,
+    11
+   ],
+   "retrieval": {
+    "hit@1": 1.0,
+    "hit@3": 1.0,
+    "hit@5": 1.0,
+    "mrr@5": 1.0
+   },
+   "llm_input_tokens": 0,
+   "llm_output_tokens": 0,
+   "llm_calls": 0
+  },
+  {
+   "id": "s04",
+   "doc": "attention_scanned.pdf",
+   "kind": "scan",
+   "q": "What label smoothing value was used during training?",
+   "retrieve_seconds": 0.553,
+   "ranked_pages": [
+    8,
+    2,
+    7,
+    6,
+    9
+   ],
+   "retrieval": {
+    "hit@1": 1.0,
+    "hit@3": 1.0,
+    "hit@5": 1.0,
+    "mrr@5": 1.0
+   },
+   "llm_input_tokens": 0,
+   "llm_output_tokens": 0,
+   "llm_calls": 0
+  },
+  {
+   "id": "s05",
+   "doc": "attention_scanned.pdf",
+   "kind": "scan",
+   "q": "What F1 did the Transformer get on WSJ constituency parsing in the semi-supervised setting?",
+   "retrieve_seconds": 0.665,
+   "ranked_pages": [
+    10,
+    9,
+    2,
+    1,
+    8
+   ],
+   "retrieval": {
+    "hit@1": 1.0,
+    "hit@3": 1.0,
+    "hit@5": 1.0,
+    "mrr@5": 1.0
+   },
+   "llm_input_tokens": 0,
+   "llm_output_tokens": 0,
+   "llm_calls": 0
+  },
+  {
+   "id": "s06",
+   "doc": "attention_scanned.pdf",
+   "kind": "scan",
+   "q": "How many attention heads and what key dimension does the base model use?",
+   "retrieve_seconds": 0.594,
+   "ranked_pages": [
+    9,
+    5,
+    4,
+    14,
+    3
+   ],
+   "retrieval": {
+    "hit@1": 0.0,
+    "hit@3": 1.0,
+    "hit@5": 1.0,
+    "mrr@5": 0.5
+   },
+   "llm_input_tokens": 0,
+   "llm_output_tokens": 0,
+   "llm_calls": 0
+  },
+  {
+   "id": "s07",
+   "doc": "attention_scanned.pdf",
+   "kind": "scan",
+   "q": "What vocabulary was used for English-German and how large was it?",
+   "retrieve_seconds": 0.616,
+   "ranked_pages": [
+    10,
+    1,
+    9,
+    8,
+    7
+   ],
+   "retrieval": {
+    "hit@1": 0.0,
+    "hit@3": 0.0,
+    "hit@5": 1.0,
+    "mrr@5": 0.2
+   },
+   "llm_input_tokens": 0,
+   "llm_output_tokens": 0,
+   "llm_calls": 0
+  },
+  {
+   "id": "s08",
+   "doc": "attention_scanned.pdf",
+   "kind": "negative",
+   "q": "What BLEU score did the Transformer reach on English-to-Japanese translation?",
+   "llm_input_tokens": 0,
+   "llm_output_tokens": 0,
+   "llm_calls": 0
+  }
+ ],
+ "summary": {
+  "all": {
+   "n": 43,
+   "hit@1": 0.821,
+   "hit@3": 0.949,
+   "hit@5": 1.0,
+   "mrr@5": 0.892,
+   "correct": null,
+   "cites_gold": null,
+   "citation_precision": null,
+   "pages_cited": null,
+   "retrieve_p50_s": 0.49
+  },
+  "text": {
+   "n": 11,
+   "hit@1": 0.909,
+   "hit@3": 1.0,
+   "hit@5": 1.0,
+   "mrr@5": 0.955,
+   "correct": null,
+   "cites_gold": null,
+   "citation_precision": null,
+   "pages_cited": null,
+   "retrieve_p50_s": 0.524
+  },
+  "table": {
+   "n": 9,
+   "hit@1": 0.667,
+   "hit@3": 1.0,
+   "hit@5": 1.0,
+   "mrr@5": 0.815,
+   "correct": null,
+   "cites_gold": null,
+   "citation_precision": null,
+   "pages_cited": null,
+   "retrieve_p50_s": 0.608
+  },
+  "chart": {
+   "n": 3,
+   "hit@1": 0.667,
+   "hit@3": 0.667,
+   "hit@5": 1.0,
+   "mrr@5": 0.75,
+   "correct": null,
+   "cites_gold": null,
+   "citation_precision": null,
+   "pages_cited": null,
+   "retrieve_p50_s": 0.128
+  },
+  "scan": {
+   "n": 11,
+   "hit@1": 0.818,
+   "hit@3": 0.909,
+   "hit@5": 1.0,
+   "mrr@5": 0.882,
+   "correct": null,
+   "cites_gold": null,
+   "citation_precision": null,
+   "pages_cited": null,
+   "retrieve_p50_s": 0.594
+  },
+  "multilingual": {
+   "n": 3,
+   "hit@1": 1.0,
+   "hit@3": 1.0,
+   "hit@5": 1.0,
+   "mrr@5": 1.0,
+   "correct": null,
+   "cites_gold": null,
+   "citation_precision": null,
+   "pages_cited": null,
+   "retrieve_p50_s": 0.134
+  },
+  "negative": {
+   "n": 4,
+   "hit@1": null,
+   "hit@3": null,
+   "hit@5": null,
+   "mrr@5": null,
+   "correct": null,
+   "cites_gold": null,
+   "citation_precision": null,
+   "pages_cited": null
+  },
+  "figure": {
+   "n": 2,
+   "hit@1": 1.0,
+   "hit@3": 1.0,
+   "hit@5": 1.0,
+   "mrr@5": 1.0,
+   "correct": null,
+   "cites_gold": null,
+   "citation_precision": null,
+   "pages_cited": null,
+   "retrieve_p50_s": 0.481
+  }
+ },
+ "usage": {
+  "calls": 0,
+  "input_tokens": 0,
+  "output_tokens": 0
+ }
+}
