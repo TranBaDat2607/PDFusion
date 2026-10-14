@@ -23,6 +23,7 @@ from ..utils.paths import appdata_dir
 from .errors import IndexUnavailableError
 from .keyword_search import Bm25Index
 from .onnx_embeddings import OnnxEmbeddingFunction
+from .retrieval import contextual_text
 
 logger = logging.getLogger(__name__)
 
@@ -96,28 +97,35 @@ class ChromaDBManager:
         Raises on failure. The caller fails the index and drops its collection,
         so a half-written index is never taken for a finished one.
 
-        Chunks keep only the metadata retrieval reads. The document's id and
-        path are not repeated on every chunk: the collection is the document's,
-        and the records know where it lives.
+        What is embedded is the chunk with its section heading in front
+        (`retrieval.contextual_text`); what is stored, and quoted, is the
+        chunk's own text, with the heading kept in its metadata. Chunks keep
+        only the metadata retrieval and the answer step read. The document's
+        id and path are not repeated on every chunk: the collection is the
+        document's, and the records know where it lives.
         """
         ids: List[str] = []
         documents: List[str] = []
+        contextual: List[str] = []
         metadatas: List[Dict[str, Any]] = []
         for i, chunk in enumerate(chunks):
             section = chunk.get('metadata', {})
             metadata = {
                 'chunk_index': i,
                 'page': chunk.get('page', 0),
-                'chunk_type': section.get('section_type', 'content'),
+                'kind': section.get('kind', 'text'),
+                'heading': section.get('heading', ''),
+                'page_kind': section.get('page_kind', 'text'),
                 'has_equations': bool(section.get('has_equations', False)),
                 'has_tables': bool(section.get('has_tables', False)),
                 'has_figures': bool(section.get('has_figures', False)),
             }
-            bbox = _first_bbox(chunk.get('elements'))
+            bbox = section.get('bbox') or _first_bbox(chunk.get('elements'))
             if bbox is not None:
-                metadata['bbox'] = json.dumps(bbox)
+                metadata['bbox'] = json.dumps([float(v) for v in bbox])
             ids.append(f"chunk_{i}")
             documents.append(chunk['text'])
+            contextual.append(contextual_text({'text': chunk['text'], 'metadata': metadata}))
             metadatas.append(metadata)
 
         def add() -> None:
@@ -128,6 +136,7 @@ class ChromaDBManager:
                     ids=ids[start:end],
                     documents=documents[start:end],
                     metadatas=metadatas[start:end],
+                    embeddings=self.embedding_function(contextual[start:end]),
                 )
 
         # Embedding is CPU-heavy and blocking: off the event loop.

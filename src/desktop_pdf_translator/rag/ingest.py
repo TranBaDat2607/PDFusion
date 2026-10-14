@@ -25,7 +25,7 @@ one did, and why each part changed:
   dehyphenated.
 
 Headings are kept as each chunk's `heading` rather than as chunks of their own:
-retrieval prefixes it to the text it embeds and scores (`contextual_text`), so
+retrieval prefixes it to the text it embeds and scores (`retrieval.contextual_text`), so
 a chunk under "Products" matches a question about products even when its own
 words don't say so.
 
@@ -50,7 +50,7 @@ logger = logging.getLogger(__name__)
 OcrEngine = Callable[[bytes], List[str]]
 
 # ~128 tokens of English, the embedding model's input limit, less room for
-# the heading `contextual_text` puts in front.
+# the heading `retrieval.contextual_text` puts in front.
 MAX_CHUNK_CHARS = 600
 # A table is kept whole up to here — its rows mean little apart from its
 # header — and split into header-repeating parts past it.
@@ -83,13 +83,6 @@ Rect = Tuple[float, float, float, float]
 def normalize_text(text: str) -> str:
     """NFKC (ligatures, full-width forms), whitespace runs to one space."""
     return _WHITESPACE.sub(" ", unicodedata.normalize("NFKC", text)).strip()
-
-
-def contextual_text(chunk: Dict[str, Any]) -> str:
-    """What retrieval embeds and keyword-scores for a chunk: its heading, then
-    its text. The text alone is what the model and the reader see."""
-    heading = chunk.get("metadata", {}).get("heading") or ""
-    return f"{heading}\n{chunk['text']}" if heading else chunk["text"]
 
 
 @dataclass

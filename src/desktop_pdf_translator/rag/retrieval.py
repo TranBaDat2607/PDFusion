@@ -32,6 +32,14 @@ RRF_K = 60
 _IMAGE_PAGE_KINDS = frozenset({"scanned", "visual"})
 
 
+def contextual_text(chunk: Dict[str, Any]) -> str:
+    """What retrieval embeds and keyword-scores for a chunk: its section
+    heading, then its text (`ingest.PdfIngestor` keeps the heading in the
+    metadata). The text alone is what the model and the reader see."""
+    heading = chunk.get("metadata", {}).get("heading") or ""
+    return f"{heading}\n{chunk['text']}" if heading else chunk["text"]
+
+
 def reciprocal_rank_fusion(rankings: Sequence[Sequence[str]], k: int = RRF_K) -> List[Tuple[str, float]]:
     """Every id in `rankings`, scored Σ 1/(k + rank) over the lists it is in.
 
