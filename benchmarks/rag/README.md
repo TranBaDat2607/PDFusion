@@ -92,7 +92,19 @@ the baseline, which cites nothing, the references it lists are its citations.
 
 \* Includes the provider's 429 retries, which `_call_with_backoff` counts as calls.
 
-LONG_SECTION
+### How cost grows with length (`long.pdf`, 57 pages, 6 questions)
+
+| | correct | citation precision | input tokens / question | p50 s / question | LLM tokens to index |
+|---|---|---|---|---|---|
+| **v2** | **6/6** | 1.00 | **2,450** (15 pages: 2,921) | **2.2** | 0 (25 s local, OCR included) |
+| DocPixie | 4/6 | 0.58 | 18,026 (15 pages: 7,834) | 9.6 | 14,795 |
+
+v2's per-question cost does not depend on the document's length — retrieval
+picks the pages, and at most three are sent as images. DocPixie's grows with
+every page: on the long document it twice answered that the analysed pages
+held no information about the question (the dividend memo, the revenue
+table), having picked pages from the wrong part of the document. Six questions
+is a small sample; the token figures are what it is for.
 
 Indexing, once per document: v2 takes 6 s for the 15-page paper (baseline 17 s,
 Camelot retrying without Ghostscript) and 4 s for the report; the scanned paper
