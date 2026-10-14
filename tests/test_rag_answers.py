@@ -333,7 +333,7 @@ def test_a_provider_that_takes_no_images_gets_no_images_keyword(tmp_path, store)
 
     (prompt, _system, kwargs), = translator.calls
     assert "images" not in kwargs
-    assert "[p. N]" in prompt  # the page text still reaches it, cited by page
+    assert RANKED_TEXTS[0] in prompt, "the page's text still reaches it"
 
 
 def test_with_no_page_to_show_the_keyword_is_omitted_for_a_three_argument_backend(
@@ -426,7 +426,7 @@ def test_a_chunk_on_page_zero_is_page_one_in_the_references(tmp_path, store):
     result = ask(make_chain(store, translator), index, path)
 
     references = result["pdf_references"]
-    assert all("cited" in r for r in references)
+    assert [r["cited"] for r in references] == [False] * len(references), "'ok' cites nothing"
     pages = [r["page"] for r in references]
     assert 0 not in pages and 1 in pages
     assert len(pages) == len(set(pages))
@@ -490,3 +490,75 @@ def test_a_reranker_is_fused_with_the_first_stage_rather_than_replacing_it(tmp_p
     evidence = asyncio.run(chain.retrieve(QUESTION, index_id, 4))
 
     assert [page.page + 1 for page in evidence] == [1, 3, 2, 4]
+
+
+
+def test_a_visual_page_of_a_moved_file_is_not_reported_as_read_from_its_image(tmp_path, store):
+    """The file was moved after indexing: nothing could be rendered, so the
+    chat must not say the page was read from its image."""
+    translator = _Translator("It drifts [p. 1].")
+    index, path = build_document(tmp_path, store, ranked("visual"))
+    gone = tmp_path / "moved-away.pdf"
+
+    result = ask(make_chain(store, translator), index, gone)
+
+    (_, _, kwargs), = translator.calls
+    assert "images" not in kwargs
+    assert result["quality_metrics"]["images_sent"] == 0
+    assert not any(r["shown_as_image"] for r in result["pdf_references"])
+
+
+def test_after_an_image_refusal_no_page_is_reported_as_read_from_its_image(tmp_path, store):
+    refusal = _SdkError(400, "image input is not supported by this model")
+    translator = _Translator(refusal, "It drifts [p. 1].")
+    index, path = build_document(tmp_path, store, ranked("visual"))
+
+    result = ask(make_chain(store, translator), index, path)
+
+    assert not any(r["shown_as_image"] for r in result["pdf_references"])
+
+
+def test_a_page_whose_image_was_sent_is_reported_as_read_from_it(tmp_path, store):
+    translator = _Translator("It drifts [p. 1].")
+    index, path = build_document(tmp_path, store, ranked("visual"))
+
+    result = ask(make_chain(store, translator), index, path)
+
+    shown = [r["page"] for r in result["pdf_references"] if r["shown_as_image"]]
+    assert shown == [1]
+
+
+class _GeminiError(Exception):
+    """google-genai's `APIError`: the HTTP status is `.code`, and `.status`
+    is a word, not a number."""
+
+    def __init__(self, code: int, status: str, message: str):
+        super().__init__(f"{code} {status}. {message}")
+        self.code = code
+        self.status = status
+
+
+class _NotFound(Exception):
+    def __init__(self, message: str):
+        super().__init__(f"Error code: 404 - {message}")
+        self.status_code = 404
+
+
+@pytest.mark.parametrize(
+    "refusal",
+    [
+        _GeminiError(400, "INVALID_ARGUMENT", "Unable to process input image."),
+        # OpenRouter, for a text-only model sent an image.
+        _NotFound("No endpoints found that support image input"),
+    ],
+    ids=["gemini", "openrouter"],
+)
+def test_refusals_in_the_shapes_real_providers_send_are_recognised(tmp_path, store, refusal):
+    translator = _Translator(refusal, "It drifts [p. 1].")
+    index, path = build_document(tmp_path, store, ranked("visual"))
+
+    result = ask(make_chain(store, translator), index, path)
+
+    assert len(translator.calls) == 2
+    assert "images" not in translator.calls[1][2]
+    assert "[p. 1](#page=1)" in result["answer"]

@@ -39,6 +39,7 @@ from ..translators.base import (
     LANGUAGE_DISPLAY_NAMES,
     BaseTranslator,
     PageImage,
+    _status_code_of,
     is_fatal_translation_error,
 )
 from ..translators.capabilities import SERVICE_LABELS
@@ -46,7 +47,7 @@ from ..translators.factory import TranslatorFactory
 from .citations import link_citations, page_link
 from .errors import AnswerGenerationError, IndexUnavailableError
 from .keyword_search import Bm25Index
-from .page_images import render_pages
+from .page_images import page_label, render_pages
 from .retrieval import (
     PageEvidence,
     chunk_map,
@@ -148,14 +149,19 @@ RERANK_DEPTH = 30
 ANSWER_MAX_TOKENS = 4000
 
 # A status that, with "image" in the message, is a model saying it takes no
-# images — a text-only model behind OpenRouter or Ollama, say — rather than a
-# broken request: 400 (OpenAI, Anthropic, Gemini), 415 and 422 (some proxies).
-_IMAGE_REFUSAL_STATUSES = frozenset({400, 415, 422})
+# images rather than a broken request: 400 (OpenAI, Anthropic, Gemini), 404
+# (OpenRouter's "No endpoints found that support image input", for a
+# text-only model), 415 and 422 (some proxies).
+_IMAGE_REFUSAL_STATUSES = frozenset({400, 404, 415, 422})
 
 
 def is_image_refusal(error: BaseException) -> bool:
-    status = getattr(error, "status_code", None) or getattr(error, "status", None)
-    return status in _IMAGE_REFUSAL_STATUSES and "image" in str(error).lower()
+    # `_status_code_of` reads the status however the SDK carries it:
+    # google-genai's is `.code`, and its `.status` is a word.
+    return (
+        _status_code_of(error) in _IMAGE_REFUSAL_STATUSES
+        and "image" in str(error).lower()
+    )
 
 
 class _ImagesRefused(Exception):
@@ -444,6 +450,12 @@ Question: {question}"""
             images = []
             prompt = self._create_answer_prompt(question, evidence, answer_lang, images)
             answer = await self._generate_with_llm(model, prompt, answer_lang, images)
+        # What the references report as read from the image: the pages whose
+        # image was in the call that wrote the answer — not the ones picked,
+        # which a moved file, a page it lacks, or a refusal leave unrendered.
+        sent = {image.label for image in images}
+        for page in evidence:
+            page.wants_image = page_label(page.page) in sent
         return answer, len(images)
 
     def _create_answer_prompt(self, question: str, evidence: Sequence[PageEvidence],
