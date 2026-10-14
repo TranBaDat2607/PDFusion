@@ -69,7 +69,18 @@ def _v1_catalog(conn: sqlite3.Connection) -> None:
     )
 
 
-_MIGRATIONS = (Migration(1, "model catalog", _v1_catalog),)
+def _v2_stale_undated_listings(conn: sqlite3.Connection) -> None:
+    # Listings cached before the release-date filter (`listing.RELEASED_FROM`)
+    # still offer older models, and would for up to `TTL_MS`. Marked stale
+    # rather than deleted: the row also holds what the last check said about
+    # the key, and a stale listing is still what's shown when a relist fails.
+    conn.execute("UPDATE catalog SET fetched_at = 0 WHERE models_json IS NOT NULL")
+
+
+_MIGRATIONS = (
+    Migration(1, "model catalog", _v1_catalog),
+    Migration(2, "stale the listings split before the release-date filter", _v2_stale_undated_listings),
+)
 
 
 def _encode(models: tuple) -> str:

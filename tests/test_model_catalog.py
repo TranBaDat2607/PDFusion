@@ -222,10 +222,42 @@ def test_listings_survive_a_restart(tmp_path: Path):
     assert entry.key_state == "valid"
 
 
-def test_a_new_store_is_migrated_to_schema_version_one(catalog: ModelCatalog):
+def test_a_new_store_is_migrated_to_the_newest_schema(catalog: ModelCatalog):
     catalog.put("openai", None, FULL_LISTING, now=T0)
 
-    assert _user_version(catalog.db_path) == 1
+    assert _user_version(catalog.db_path) == 2
+
+
+def test_listings_cached_before_the_release_date_filter_go_stale(tmp_path: Path):
+    """A listing cached by an older build split `models`/`hidden` without the
+    release-date rule, so it would keep offering pre-2025 models for up to a
+    day; it must be listed again on the next picker open. What the last check
+    said about each key is not part of that split and must survive — wiping it
+    would turn every card back to "Not verified", and forget a refused key."""
+    cache_dir = tmp_path / "model_catalog"
+    cache_dir.mkdir(parents=True)
+    conn = sqlite3.connect(cache_dir / "catalog.db")
+    catalog_module._v1_catalog(conn)
+    conn.execute(
+        "INSERT INTO catalog VALUES ('openai', '', '[]', '[]', ?, 'valid', ?)", (T0, T0)
+    )
+    conn.execute(
+        "INSERT INTO catalog VALUES ('gemini', '', NULL, NULL, NULL, 'invalid', ?)", (T0,)
+    )
+    conn.execute("PRAGMA user_version = 1")
+    conn.commit()
+    conn.close()
+
+    catalog = ModelCatalog(cache_dir=cache_dir)
+
+    listed = catalog.get("openai", None)
+    assert listed is not None
+    assert not is_fresh(listed, now=T0)
+    assert (listed.key_state, listed.verified_at) == ("valid", T0)
+    refused = catalog.get("gemini", None)
+    assert refused is not None
+    assert (refused.key_state, refused.verified_at) == ("invalid", T0)
+    assert _user_version(catalog.db_path) == 2
 
 
 def test_a_store_from_a_newer_build_is_set_aside_for_an_empty_one(tmp_path: Path):
@@ -244,7 +276,7 @@ def test_a_store_from_a_newer_build_is_set_aside_for_an_empty_one(tmp_path: Path
     entry = catalog.get("openai", None)
 
     assert entry is not None and entry.listing == OTHER_LISTING
-    assert _user_version(catalog.db_path) == 1
+    assert _user_version(catalog.db_path) == 2
     own_files = {
         catalog.db_path.name + suffix for suffix in ("", "-wal", "-shm", "-journal")
     }

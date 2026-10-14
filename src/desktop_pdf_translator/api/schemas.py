@@ -492,7 +492,7 @@ class ModelCatalogResponse(BaseModel):
     model_config = _EVERY_FIELD_SENT
 
     models: List[ModelRecord] = Field(default_factory=list)
-    # What the non-chat id filter took out, for a "show all".
+    # What the non-chat and release-date filters took out, for a "show all".
     hidden: List[ModelRecord] = Field(default_factory=list)
     fetched_at: Optional[str] = None
     key_state: KeyState = "unverified"

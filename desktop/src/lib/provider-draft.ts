@@ -230,7 +230,7 @@ export interface ModelRow {
   id: string;
   enabled: boolean;
   /** `custom`: switched on, but no list has it. `hidden`: the non-chat
-   *  filter took it out (`providers/listing.py`). */
+   *  or release-date filter took it out (`providers/listing.py`). */
   kind: "listed" | "suggested" | "hidden" | "custom";
 }
 
