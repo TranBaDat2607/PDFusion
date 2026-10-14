@@ -271,11 +271,14 @@ class PdfIngestor:
         # records the document's page count from its length.
         self.page_layouts: Dict[int, Dict[str, Any]] = {}
         self._stats: Dict[str, int] = {}
+        self._ocr_failed = 0
 
     def process_pdf(self, path: Path) -> List[Dict[str, Any]]:
         counts = dict.fromkeys(
-            ("pages", "text_pages", "visual_pages", "scanned_pages", "ocr_pages", "tables", "chunks"), 0
+            ("pages", "text_pages", "visual_pages", "scanned_pages", "ocr_pages",
+             "ocr_failed_pages", "tables", "chunks"), 0
         )
+        self._ocr_failed = 0
         chunks: List[Dict[str, Any]] = []
         with fitz.open(path) as doc:
             pages = [_read_page(page) for page in doc]
@@ -300,6 +303,7 @@ class PdfIngestor:
                 if self.on_page is not None:
                     self.on_page(page.number + 1, doc.page_count)
         counts["chunks"] = len(chunks)
+        counts["ocr_failed_pages"] = self._ocr_failed
         self._stats = counts
         logger.info("Ingested %s: %s", Path(path).name, counts)
         return chunks
@@ -453,7 +457,10 @@ class PdfIngestor:
         try:
             lines = self.ocr(png)
         except Exception:  # noqa: BLE001 — one unreadable page shouldn't fail the document
-            logger.warning("OCR failed on page %d", page.number, exc_info=True)
+            # Counted, so a scan whose every page failed can say so
+            # (`api/routes/rag.py:_no_text_message`), and logged with the cause.
+            logger.error("OCR failed on page %d", page.number + 1, exc_info=True)
+            self._ocr_failed += 1
             return []
         text = normalize_text(" ".join(lines))
         if not text:

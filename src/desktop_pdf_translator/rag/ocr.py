@@ -85,16 +85,21 @@ class RapidOcrEngine:
 
 
 _engine: Optional[RapidOcrEngine] = None
+_engine_lock = threading.Lock()
 
 
 def load_ocr_engine() -> Optional[RapidOcrEngine]:
-    """The process's OCR engine, or `None` when RapidOCR isn't installed."""
+    """The process's OCR engine, or `None` when RapidOCR isn't installed.
+
+    One per process, so two documents indexed at once share one set of models.
+    """
     global _engine
-    if _engine is None:
-        try:
-            import rapidocr_onnxruntime  # noqa: F401
-        except ImportError:
-            logger.info("RapidOCR is not installed; scanned pages won't be indexed")
-            return None
-        _engine = RapidOcrEngine()
-    return _engine
+    with _engine_lock:
+        if _engine is None:
+            try:
+                import rapidocr_onnxruntime  # noqa: F401
+            except ImportError:
+                logger.warning("RapidOCR is not installed; scanned pages won't be indexed")
+                return None
+            _engine = RapidOcrEngine()
+        return _engine

@@ -63,6 +63,20 @@ NOT_INDEXED_MESSAGE = (
 NO_TEXT_MESSAGE = (
     "No text could be extracted from this PDF, so there is nothing to ask about."
 )
+UNREADABLE_SCAN_MESSAGE = (
+    "This PDF is scanned, and its pages could not be read (OCR failed or is "
+    "unavailable), so there is nothing to ask about. The log has the details."
+)
+
+
+def _no_text_message(processor: object) -> str:
+    """Why a document gave no chunks. A scan has no text layer to extract, so
+    the generic message sent its user looking for the wrong thing."""
+    stats = getattr(processor, "stats", None)
+    counts = stats() if callable(stats) else {}
+    if counts.get("scanned_pages") and not counts.get("ocr_pages"):
+        return UNREADABLE_SCAN_MESSAGE
+    return NO_TEXT_MESSAGE
 # The `code` on `/rag/ask`'s `error` event when the question's index had to be
 # cleared. The chat panel indexes the document again when it sees it.
 INDEX_UNAVAILABLE = "index_unavailable"
@@ -79,6 +93,10 @@ _init_lock = asyncio.Lock()
 # index job whenever a PDF is opened, so one document can be asked for twice at
 # once; the second job waits, then finds the first one's index ready.
 _document_locks: Dict[str, asyncio.Lock] = {}
+
+
+class _IndexCancelled(Exception):
+    """Raised from the ingestor's page callback once the job is cancelled."""
 
 
 def _document_lock(document_id: str) -> asyncio.Lock:
@@ -259,6 +277,11 @@ async def _run_index(job: Job, payload: IndexRequest) -> None:
             loop = asyncio.get_running_loop()
 
             def on_page(done: int, total: int) -> None:
+                # Checked between pages, in the worker thread: OCR takes
+                # seconds a page, and a long scan would otherwise be read to
+                # its end before Cancel took effect.
+                if job.cancelled:
+                    raise _IndexCancelled()
                 # Extraction is 20 → 65%; OCR of a scanned page takes seconds.
                 asyncio.run_coroutine_threadsafe(
                     job.emit("progress", {
@@ -270,13 +293,17 @@ async def _run_index(job: Job, payload: IndexRequest) -> None:
 
             processor = make_processor(on_page=on_page)
             # Blocking PyMuPDF and OCR work — keep it off the event loop.
-            chunks = await asyncio.to_thread(processor.process_pdf, file_path)
+            try:
+                chunks = await asyncio.to_thread(processor.process_pdf, file_path)
+            except _IndexCancelled:
+                await job.finish("cancelled", {})
+                return
 
             if job.cancelled:
                 await job.finish("cancelled", {})
                 return
             if not chunks:
-                await job.finish("error", {"message": NO_TEXT_MESSAGE})
+                await job.finish("error", {"message": _no_text_message(processor)})
                 return
 
             building = await asyncio.to_thread(

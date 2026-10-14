@@ -639,3 +639,28 @@ def test_a_short_bold_line_slightly_larger_than_the_body_is_a_heading(tmp_path: 
 
     assert chunks and all(c["metadata"]["heading"] == "3 Experiments" for c in chunks)
     assert not any(c["text"].startswith("3 Experiments") for c in chunks)
+
+
+class _FlakyOcr(FakeOcr):
+    """Fails on its first page, reads the rest."""
+
+    def __call__(self, png: bytes) -> List[str]:
+        self.calls.append(png)
+        if len(self.calls) == 1:
+            raise RuntimeError("onnxruntime: bad page")
+        return list(self.lines)
+
+
+def test_one_page_failing_ocr_is_counted_and_the_rest_are_still_read(tmp_path: Path) -> None:
+    """A scanned document whose OCR broke used to end in "No text could be
+    extracted", with nothing to say why."""
+    doc = fitz.open()
+    _scanned_page(doc, ["First scan."])
+    _scanned_page(doc, ["Second scan."])
+    path = _save(doc, tmp_path)
+
+    ingestor, chunks = _ingest(path, ocr=_FlakyOcr(["Recognised words."]))
+
+    assert {c["page"] for c in chunks} == {1}
+    assert ingestor.stats()["ocr_failed_pages"] == 1
+    assert ingestor.stats()["ocr_pages"] == 1

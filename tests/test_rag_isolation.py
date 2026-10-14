@@ -1104,3 +1104,57 @@ def test_the_models_are_given_room_to_think(
     hyde_tokens, answer_tokens = translator.max_tokens
     assert hyde_tokens >= 1024
     assert answer_tokens >= 4000
+
+
+class _SlowScan:
+    """Stands in for an ingestor OCRing a long scan: reports each page."""
+
+    pages_read = 0
+
+    def __init__(self, on_page=None, **_options) -> None:
+        self.on_page = on_page
+        self.page_layouts = {0: {}, 1: {}, 2: {}}
+
+    def process_pdf(self, path: Path) -> List[Dict[str, Any]]:
+        for page in range(3):
+            _SlowScan.pages_read += 1
+            if self.on_page is not None:
+                self.on_page(page + 1, 3)
+        return _chunks(ALPHA)
+
+
+def test_cancelling_an_index_stops_it_at_the_next_page(
+    sidecar, two_papers, records: RecordsStore, monkeypatch: pytest.MonkeyPatch
+):
+    """OCR takes seconds a page: a 100-page scan Cancel only stopped once it
+    was read to the end, a quarter of an hour later."""
+    monkeypatch.setattr(rag_routes, "_load_document_processor", lambda: _SlowScan)
+    _SlowScan.pages_read = 0
+    job = Job(job_id="index")
+    job.cancel()
+
+    asyncio.run(rag_routes._run_index(job, IndexRequest(file_path=str(two_papers[0]))))
+
+    assert job.history[-1]["type"] == "cancelled"
+    assert _SlowScan.pages_read == 1
+    assert records.index_ids() == set()
+
+
+def test_a_scan_no_page_of_which_could_be_read_says_so(
+    sidecar, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """"No text could be extracted" sent the user looking for a text layer; a
+    scan has none, and the thing that failed was reading its pictures."""
+
+    class _UnreadableScan(_FakeProcessor):
+        def process_pdf(self, path: Path) -> List[Dict[str, Any]]:
+            return []
+
+        def stats(self) -> Dict[str, int]:
+            return {"pages": 2, "scanned_pages": 2, "ocr_pages": 0, "ocr_failed_pages": 2}
+
+    monkeypatch.setattr(rag_routes, "_load_document_processor", lambda: _UnreadableScan)
+
+    result = run_index(_write_paper(tmp_path / "scan.pdf", b"scan"))
+
+    assert (result["type"], result["data"]) == ("error", {"message": rag_routes.UNREADABLE_SCAN_MESSAGE})
