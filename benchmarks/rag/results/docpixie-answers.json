@@ -770,7 +770,7 @@
     ]
    },
    "answer_score": {
-    "correct": 0.0,
+    "correct": 1.0,
     "cites_gold": 1.0,
     "citation_precision": 1.0,
     "pages_cited": 1.0
@@ -1407,7 +1407,7 @@
    "hit@3": 0.872,
    "hit@5": 0.872,
    "mrr@5": 0.808,
-   "correct": 0.674,
+   "correct": 0.698,
    "cites_gold": 0.872,
    "citation_precision": 0.752,
    "pages_cited": 1.359,
@@ -1420,7 +1420,7 @@
    "hit@3": 0.909,
    "hit@5": 0.909,
    "mrr@5": 0.864,
-   "correct": 0.636,
+   "correct": 0.727,
    "cites_gold": 0.909,
    "citation_precision": 0.803,
    "pages_cited": 1.273,

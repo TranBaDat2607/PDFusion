@@ -17,6 +17,9 @@ python benchmarks/rag/compare.py baseline-answers v2-answers docpixie-answers
 python benchmarks/rag/rescore.py <labels…>            # after changing the scoring
 ```
 
+`--system baseline` needs a tree from before the redesign (it imports the
+deleted `rag/document_processor.py`), hence the worktree.
+
 `--answers` spends credits on the model the app is configured with
 (`rag.answer_model`, else `translation.model`); every call's tokens are
 counted. The runs below used **Gemini 2.5 Flash-Lite**, the configured model,
@@ -61,10 +64,13 @@ the baseline, which cites nothing, the references it lists are its citations.
 
 ### Answers (Gemini 2.5 Flash-Lite, 43 questions)
 
+v2 is the branch's final code (`results/v2-final-answers.json`); a run on the code
+before the review fixes scored the same. The ablation rows are from that earlier code.
+
 | | correct | text | table | chart | figure | scan | multilingual | negative | cites a gold page | citation precision |
 |---|---|---|---|---|---|---|---|---|---|---|
 | baseline | 0.47 | 0.82 | 0.44 | 0.00 | 0.50 | 0.00 | 1.00 | 0.75 | 0.69 | 0.20 |
-| DocPixie | 0.67 | 0.64 | 0.67 | 1.00 | 0.50 | 0.55 | 1.00 | 0.75 | 0.87 | 0.75 |
+| DocPixie | 0.70 | 0.73 | 0.67 | 1.00 | 0.50 | 0.55 | 1.00 | 0.75 | 0.87 | 0.75 |
 | **v2** | **0.93** | 1.00 | 1.00 | 1.00 | 0.50 | 0.82 | 1.00 | 1.00 | **0.97** | **0.97** |
 | v2, no page images | 0.86 | 1.00 | 0.89 | 0.00 | 0.50 | 0.91 | 1.00 | 1.00 | 0.90 | 0.88 |
 | v2 + HyDE | 0.93 | 1.00 | 0.89 | 1.00 | 0.50 | 0.91 | 1.00 | 1.00 | 1.00 | 0.99 |
@@ -86,7 +92,7 @@ the baseline, which cites nothing, the references it lists are its citations.
 |---|---|---|---|---|---|
 | baseline | 2.4 | 1,003 | 149 | 2.62 | 2.94 |
 | DocPixie | 5.5 | 7,834 | 226 | 6.63 | 11.82 |
-| **v2** | **1.0** | 2,921 | 26 | **2.09** | 2.31 |
+| **v2** | **1.0** | 2,925 | 25 | **2.18** | 2.78 |
 | v2, no page images | 1.0 | 2,225 | 30 | 0.76 | 0.93 |
 | v2 + HyDE | 2.9* | 3,130 | 184 | 4.26 | 5.06 |
 
@@ -96,7 +102,7 @@ the baseline, which cites nothing, the references it lists are its citations.
 
 | | correct | citation precision | input tokens / question | p50 s / question | LLM tokens to index |
 |---|---|---|---|---|---|
-| **v2** | **6/6** | 1.00 | **2,450** (15 pages: 2,921) | **2.2** | 0 (25 s local, OCR included) |
+| **v2** | **6/6** | 1.00 | **2,366** (15 pages: 2,925) | **2.2** | 0 (25 s local, OCR included) |
 | DocPixie | 4/6 | 0.58 | 18,026 (15 pages: 7,834) | 9.6 | 14,795 |
 
 v2's per-question cost does not depend on the document's length — retrieval
@@ -118,7 +124,7 @@ an LLM call: ~3.8k tokens per document to summarise it from its page images.
 - **Retrieve by text, read by vision** (vs. DocPixie's read-everything-by-vision).
   DocPixie's page selection is good where text retrieval is weakest (charts:
   1.00), but every question pays for every page — 7.8k tokens a question at 15
-  pages — and its answers came out less accurate (0.67), partly because its
+  pages — and its answers came out less accurate (0.70), partly because its
   analysis prompt labels page images by position ("[Page 1 from document]" is
   the first *selected* page), so its citations can name the wrong page. v2 sends
   at most three page images, chosen by retrieval, labelled with the real page
@@ -149,6 +155,18 @@ an LLM call: ~3.8k tokens per document to summarise it from its page images.
   desktop that is minutes per document to index. Text retrieval over OCR plus
   visual reading of the top pages got scans to 0.91 hit@1 and charts to 1.00
   answer accuracy without them.
+
+## Verified outside the benchmark
+
+The frozen sidecar (`scripts/build_sidecar.py`, PyInstaller) was rebuilt with
+the spec change — RapidOCR bundled, Camelot and pdfplumber gone; the tree is
+834 MB, ~15 MB more than before — and driven over HTTP against a throwaway
+data root: `report.pdf` indexed into 15 chunks (13 without OCR, so both scans
+were OCRed in the bundle), the dividend question answered from the scanned
+memo with `[p. 7](#page=7)` cited, and an Argos translate finished with 0
+failed paragraphs (with `CUDA_VISIBLE_DEVICES=-1`: on this machine's RTX 5060
+GPU Argos fails a few paragraphs with `CUBLAS_STATUS_NOT_SUPPORTED`, a known
+issue unrelated to chat).
 
 ## Limitations
 
