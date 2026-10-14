@@ -138,10 +138,10 @@ class OpenAITranslator(BaseTranslator):
         the error into the chat's `error` event. It used to be logged and
         swallowed, so the chat answered with a template instead (#31).
         """
-        messages: List[Dict[str, str]] = []
+        messages: List[Dict[str, Any]] = []
         if system:
             messages.append({"role": "system", "content": system})
-        messages.append({"role": "user", "content": prompt})
+        messages.append({"role": "user", "content": self._user_content(prompt, images)})
         response = self._call_adapting(
             lambda rejected: self.client.chat.completions.create(
                 model=self.model,
@@ -156,6 +156,23 @@ class OpenAITranslator(BaseTranslator):
             raise RuntimeError("The model stopped at its token limit")
         content = response.choices[0].message.content
         return content.strip() if content else None
+
+    @staticmethod
+    def _user_content(prompt: str, images: Optional[Sequence[PageImage]]) -> Any:
+        """The prompt alone as a string, exactly as before images existed, or
+        each image after its label and the prompt last, as content parts."""
+        if not images:
+            return prompt
+        parts: List[Dict[str, Any]] = []
+        for image in images:
+            if image.label:
+                parts.append({"type": "text", "text": image.label})
+            parts.append({
+                "type": "image_url",
+                "image_url": {"url": f"data:{image.mime_type};base64,{image.base64()}"},
+            })
+        parts.append({"type": "text", "text": prompt})
+        return parts
 
     def _create_translation_prompt(self, text: str) -> List[Dict[str, str]]:
         return [

@@ -139,6 +139,11 @@ class PageImage:
     mime_type: str = "image/jpeg"
     label: Optional[str] = None
 
+    def base64(self) -> str:
+        import base64
+
+        return base64.b64encode(self.data).decode("ascii")
+
 
 class TranslationCancelled(Exception):
     """The job's cancel flag fired while `_call_with_backoff` was waiting on

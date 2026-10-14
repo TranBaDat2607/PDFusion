@@ -154,7 +154,7 @@ class GeminiTranslator(BaseTranslator):
         response = self._call_with_backoff(
             lambda: self.client.models.generate_content(
                 model=self.model_name,
-                contents=prompt,
+                contents=self._contents(prompt, images),
                 config=config,
             )
         )
@@ -163,6 +163,20 @@ class GeminiTranslator(BaseTranslator):
             raise RuntimeError("Gemini stopped at its token limit")
         text = response.text
         return text.strip() if text else None
+
+    @staticmethod
+    def _contents(prompt: str, images: Optional[Sequence[PageImage]]):
+        """The prompt alone, as before images existed, or each image after
+        its label and the prompt last."""
+        if not images:
+            return prompt
+        contents: list = []
+        for image in images:
+            if image.label:
+                contents.append(image.label)
+            contents.append(genai_types.Part.from_bytes(data=image.data, mime_type=image.mime_type))
+        contents.append(prompt)
+        return contents
 
     def _create_translation_prompt(self, text: str) -> str:
         return f"{self._translation_instructions()}\n\nTranslate this text:\n\n{text}"

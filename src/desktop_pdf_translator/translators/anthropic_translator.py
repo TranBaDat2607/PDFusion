@@ -171,7 +171,7 @@ class AnthropicTranslator(BaseTranslator):
             lambda rejected: self.client.messages.create(
                 model=self.model,
                 max_tokens=max_tokens,
-                messages=[{"role": "user", "content": prompt}],
+                messages=[{"role": "user", "content": self._user_content(prompt, images)}],
                 timeout=60,
                 **kwargs,
                 **self._sampling_kwargs(rejected, 0.3),
@@ -188,6 +188,24 @@ class AnthropicTranslator(BaseTranslator):
             if getattr(block, "type", None) == "text"
         ).strip()
         return text or None
+
+    @staticmethod
+    def _user_content(prompt: str, images: Optional[Sequence[PageImage]]) -> Any:
+        """The prompt alone as a string, as before images existed, or each
+        image after its label and the prompt last: Anthropic advises images
+        before the text that asks about them."""
+        if not images:
+            return prompt
+        blocks: list = []
+        for image in images:
+            if image.label:
+                blocks.append({"type": "text", "text": image.label})
+            blocks.append({
+                "type": "image",
+                "source": {"type": "base64", "media_type": image.mime_type, "data": image.base64()},
+            })
+        blocks.append({"type": "text", "text": prompt})
+        return blocks
 
     def _create_translation_prompt(self, text: str) -> tuple[str, str]:
         return self._translation_instructions(), f"Translate this text:\n\n{text}"
