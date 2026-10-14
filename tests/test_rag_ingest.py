@@ -584,3 +584,58 @@ def test_progress_is_reported_after_every_page(tmp_path: Path) -> None:
     PdfIngestor(ocr=FakeOcr(["text"]), on_page=lambda done, total: seen.append((done, total))).process_pdf(path)
 
     assert seen == [(1, 4), (2, 4), (3, 4), (4, 4)]
+
+
+def _body_page(doc: fitz.Document, top: float = 300.0) -> fitz.Page:
+    """A page whose 11 pt body text outweighs everything else on it."""
+    page = doc.new_page(width=PAGE_W, height=PAGE_H)
+    body = " ".join(f"Body sentence {i} carries the ordinary running text." for i in range(25))
+    _write_html(page, fitz.Rect(50, top, 545, 800), f'<p style="font-size:11pt">{body}</p>')
+    return page
+
+
+def test_a_paragraph_set_larger_than_the_body_stays_text(tmp_path: Path) -> None:
+    """The Attention paper's permission notice is 12 pt over a 10 pt body, and
+    three lines long. Read line by line as headings, it vanished from the index."""
+    doc = fitz.open()
+    page = _body_page(doc)
+    notice = ("Provided proper attribution is provided, Google hereby grants permission to "
+              "reproduce the tables and figures in this paper solely for use in journalistic works.")
+    _write_html(page, fitz.Rect(50, 60, 545, 200), f'<p style="font-size:13pt">{notice}</p>')
+    path = _save(doc, tmp_path)
+
+    _, chunks = _ingest(path)
+
+    assert "journalistic" in _all_text(chunks)
+    assert all("journalistic" not in c["metadata"]["heading"] for c in chunks)
+
+
+def test_rotated_text_is_never_a_heading(tmp_path: Path) -> None:
+    """arXiv stamps its id up the margin at 20 pt. Taken for a heading, it
+    labelled 137 of BERT's 142 chunks."""
+    doc = fitz.open()
+    page = _body_page(doc, top=60.0)
+    page.insert_text((30, 700), "arXiv:1810.04805v2 [cs.CL] 24 May 2019", fontsize=20, rotate=90)
+    _body_page(doc, top=60.0)  # a heading carries on: the next page is where it would show
+    path = _save(doc, tmp_path)
+
+    _, chunks = _ingest(path)
+
+    assert _on_page(chunks, 1)
+    assert all("arXiv" not in c["metadata"]["heading"] for c in chunks)
+
+
+def test_a_short_bold_line_slightly_larger_than_the_body_is_a_heading(tmp_path: Path) -> None:
+    """BERT's section headings are 12 pt bold over 10.9 pt text: 1.10x, under
+    the size rule alone. Bold and on a line of its own, it is a heading."""
+    doc = fitz.open()
+    page = doc.new_page(width=PAGE_W, height=PAGE_H)
+    _write_html(page, fitz.Rect(50, 60, 545, 90), '<p style="font-size:12pt"><b>3 Experiments</b></p>')
+    body = " ".join(f"Experiment sentence {i} describes the set-up." for i in range(20))
+    _write_html(page, fitz.Rect(50, 100, 545, 800), f'<p style="font-size:11pt">{body}</p>')
+    path = _save(doc, tmp_path)
+
+    _, chunks = _ingest(path)
+
+    assert chunks and all(c["metadata"]["heading"] == "3 Experiments" for c in chunks)
+    assert not any(c["text"].startswith("3 Experiments") for c in chunks)

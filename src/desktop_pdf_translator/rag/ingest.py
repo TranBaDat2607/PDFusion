@@ -56,9 +56,15 @@ MAX_CHUNK_CHARS = 600
 # header — and split into header-repeating parts past it.
 MAX_TABLE_CHARS = 2000
 
-# A heading is set this much larger than the document's body text.
+# A heading is set this much larger than the document's body text — or, in
+# bold, this much (BERT's section headings: 12 pt bold over 10.9 pt, 1.10x).
 _HEADING_RATIO = 1.15
+_BOLD_HEADING_RATIO = 1.05
+# ...and is short: at most two lines and this many characters. A longer run
+# of large text is a paragraph set large (the Attention paper's 12 pt
+# permission notice), and stays text.
 _HEADING_MAX_CHARS = 120
+_HEADING_MAX_LINES = 2
 # Fewer characters than this and a page has no usable text layer.
 _MIN_TEXT_CHARS = 20
 # Share of the page images must cover for it to count as a scan, or as visual.
@@ -90,6 +96,9 @@ class _Line:
     text: str
     size: float
     bbox: Rect
+    bold: bool = False
+    # Rotated text — arXiv's id stamped up the margin — is never a heading.
+    horizontal: bool = True
 
 
 @dataclass
@@ -150,7 +159,15 @@ def _read_page(page: fitz.Page) -> _Page:
             if not spans:
                 continue
             text = "".join(s["text"] for s in line["spans"])
-            lines.append(_Line(text=text, size=max(s["size"] for s in spans), bbox=tuple(line["bbox"])))
+            direction = line.get("dir", (1.0, 0.0))
+            lines.append(_Line(
+                text=text,
+                size=max(s["size"] for s in spans),
+                bbox=tuple(line["bbox"]),
+                bold=all(s.get("flags", 0) & fitz.TEXT_FONT_BOLD or "bold" in s.get("font", "").lower()
+                         for s in spans),
+                horizontal=abs(direction[0] - 1.0) < 0.01 and abs(direction[1]) < 0.01,
+            ))
         if lines:
             result.blocks.append(_Block(lines=lines, bbox=tuple(block["bbox"])))
     result.text_chars = sum(len(b.text.replace(" ", "")) for b in result.blocks)
@@ -359,23 +376,11 @@ class PdfIngestor:
                 for text in self._table_texts(rows, caption):
                     chunks.append(self._chunk(text, page.number, "table", heading, _clip(area, rect), meta))
                 continue
-            body_lines: List[_Line] = []
-            for line in item.lines:
-                line_text = normalize_text(line.text)
-                if (
-                    body
-                    and line.size >= body * _HEADING_RATIO
-                    and 0 < len(line_text) < _HEADING_MAX_CHARS
-                ):
-                    if body_lines:
-                        pending.append((normalize_text(" ".join(x.text for x in body_lines)),
-                                        _union(x.bbox for x in body_lines)))
-                        body_lines = []
-                    flush()
-                    # A heading set over two lines arrives as two heading lines.
-                    heading = f"{heading} {line_text}" if self._continues_heading(item, line) else line_text
-                    continue
-                body_lines.append(line)
+            lead = self._heading_lines(item, body)
+            if lead:
+                flush()
+                heading = normalize_text(" ".join(line.text for line in item.lines[:lead]))
+            body_lines = item.lines[lead:]
             if body_lines:
                 text = normalize_text(" ".join(x.text for x in body_lines))
                 if text:
@@ -384,12 +389,28 @@ class PdfIngestor:
         return chunks, heading, kind, len(tables)
 
     @staticmethod
-    def _continues_heading(block: _Block, line: _Line) -> bool:
-        index = block.lines.index(line)
-        if index == 0:
-            return False
-        previous = block.lines[index - 1]
-        return abs(previous.size - line.size) < 0.5
+    def _heading_lines(block: _Block, body: float) -> int:
+        """How many of the block's first lines are a heading; 0 for none.
+
+        Decided for the run as a whole, not line by line: taken a line at a
+        time, a paragraph set large was read as a stack of headings, each
+        replacing the last, and its text never reached a chunk.
+        """
+        if not body:
+            return 0
+        count = 0
+        for line in block.lines:
+            styled = line.horizontal and (
+                line.size >= body * _HEADING_RATIO
+                or (line.bold and line.size >= body * _BOLD_HEADING_RATIO)
+            )
+            if not styled:
+                break
+            count += 1
+        text = normalize_text(" ".join(line.text for line in block.lines[:count]))
+        if count > _HEADING_MAX_LINES or not 0 < len(text) < _HEADING_MAX_CHARS:
+            return 0
+        return count
 
     def _tables(self, page: fitz.Page) -> List[Tuple[Rect, List[List[Optional[str]]]]]:
         try:

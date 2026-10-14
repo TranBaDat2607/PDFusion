@@ -43,7 +43,11 @@ FORBIDDEN_AT_BOOT = (
     "stanza",
     "babeldoc",
     "sklearn",
-    "camelot",
+    # Chat's OCR (rag/ocr.py), loaded only when a scanned page is indexed.
+    # `camelot` stood here until the chat chunker that imported it was
+    # replaced; requirements.txt no longer installs it, so it had to go —
+    # see the note above on names that cannot be imported at all.
+    "rapidocr_onnxruntime",
 )
 
 
