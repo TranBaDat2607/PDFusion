@@ -1273,9 +1273,10 @@ export interface components {
         };
         /**
          * PdfReferencePayload
-         * @description One entry of `AskResultPayload.pdf_references`
-         *     (`rag_chain._create_pdf_references`). `page` is 1-indexed, or `None` when
-         *     the chunk has no usable page — see `rag_chain._display_page`.
+         * @description One page of the evidence an answer was written from
+         *     (`rag_chain._create_pdf_references`): cited pages first, in the order the
+         *     answer cites them. `page` is 1-indexed, or `None` when the chunk has no
+         *     usable page — see `rag_chain._display_page`.
          */
         PdfReferencePayload: {
             /**
@@ -1285,6 +1286,11 @@ export interface components {
             bbox: number[] | null;
             /** Chunk Id */
             chunk_id: string;
+            /**
+             * Cited
+             * @default false
+             */
+            cited: boolean;
             /** Confidence */
             confidence: number;
             /** Document Id */
@@ -1311,6 +1317,16 @@ export interface components {
              * @default null
              */
             page: number | null;
+            /**
+             * Page Kind
+             * @default text
+             */
+            page_kind: string;
+            /**
+             * Shown As Image
+             * @default false
+             */
+            shown_as_image: boolean;
             /** Text */
             text: string;
             /**

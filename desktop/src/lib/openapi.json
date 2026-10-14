@@ -1519,7 +1519,7 @@
         "type": "object"
       },
       "PdfReferencePayload": {
-        "description": "One entry of `AskResultPayload.pdf_references`\n(`rag_chain._create_pdf_references`). `page` is 1-indexed, or `None` when\nthe chunk has no usable page \u2014 see `rag_chain._display_page`.",
+        "description": "One page of the evidence an answer was written from\n(`rag_chain._create_pdf_references`): cited pages first, in the order the\nanswer cites them. `page` is 1-indexed, or `None` when the chunk has no\nusable page \u2014 see `rag_chain._display_page`.",
         "properties": {
           "bbox": {
             "anyOf": [
@@ -1539,6 +1539,11 @@
           "chunk_id": {
             "title": "Chunk Id",
             "type": "string"
+          },
+          "cited": {
+            "default": false,
+            "title": "Cited",
+            "type": "boolean"
           },
           "confidence": {
             "title": "Confidence",
@@ -1578,6 +1583,16 @@
             ],
             "default": null,
             "title": "Page"
+          },
+          "page_kind": {
+            "default": "text",
+            "title": "Page Kind",
+            "type": "string"
+          },
+          "shown_as_image": {
+            "default": false,
+            "title": "Shown As Image",
+            "type": "boolean"
           },
           "text": {
             "title": "Text",

@@ -199,3 +199,20 @@ def test_completion_event_all_defaults_matches_payload_model() -> None:
 )
 def test_ask_result_payload_covers_both_real_shapes(example: Dict[str, Any]) -> None:
     AskResultPayload.model_validate(example)
+
+
+def test_a_reference_says_whether_the_answer_cites_it_and_how_its_page_was_read() -> None:
+    """The chat marks the pages an answer cites, and which it was shown as an
+    image (`rag_chain._create_pdf_references`); the generated TypeScript type
+    comes from this model, so a field missing here never reaches the panel."""
+    reference = {
+        "page": 5, "text": "x", "confidence": 0.03, "document_id": "d",
+        "document_path": "C:/d.pdf", "chunk_id": "chunk_4",
+        "cited": True, "page_kind": "visual", "shown_as_image": True,
+    }
+
+    dumped = AskResultPayload.model_validate(
+        {"answer": "a [p. 5](#page=5)", "pdf_references": [reference]}
+    ).model_dump()["pdf_references"][0]
+
+    assert (dumped["cited"], dumped["page_kind"], dumped["shown_as_image"]) == (True, "visual", True)
