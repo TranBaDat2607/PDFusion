@@ -277,8 +277,22 @@ def score_retrieval(ranked: List[int], gold: List[int]) -> Dict[str, float]:
     }
 
 
+# Citations, in every system's format, so a page number can't pass for an
+# answer: `8` would otherwise match "[p. 8](#page=8)".
+_CITATION = re.compile(
+    r"\[p\. \d+\]\(#page=\d+\)"              # v2's checked links
+    r"|\[[^\]]*(?:page|pages|p\.|pp\.)\s*\d[^\]]*\]"  # [Document 1, Page 8], [p. 8]
+    r"|\(\s*(?:page|p\.)\s*\d+[^)]*\)",           # (page 8)
+    re.IGNORECASE,
+)
+
+
+def strip_citations(text: str) -> str:
+    return _CITATION.sub(" ", text)
+
+
 def score_answer(q: Dict[str, Any], answer: Dict[str, Any]) -> Dict[str, float]:
-    text = answer["text"] or ""
+    text = strip_citations(answer["text"] or "")
     if q["kind"] == "negative":
         abstained = bool(ABSTAIN.search(text))
         return {"correct": float(abstained), "abstained": float(abstained)}

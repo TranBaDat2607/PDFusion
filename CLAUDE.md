@@ -51,19 +51,19 @@ cd desktop && pnpm run generate:api-types
 
 ```bash
 conda create -n pdfusion python=3.11.14 && conda activate pdfusion
-pip install -r requirements.txt       # canonical: flat install of the rag+advanced extras
+pip install -r requirements.txt       # canonical: flat install of the rag extra
 cd desktop && pnpm install
 ```
 
 - `requirements.txt` and `pyproject.toml` are **not** in lockstep — the extras
-  (`rag`, `advanced`, `all`) live in pyproject. For a fully working app use
+  (`rag`, `all`) live in pyproject. For a fully working app use
   `requirements.txt` or `pip install -e ".[all]"`.
 - The shell auto-detects conda envs named `pdfusion`/`pdfusion-env` under
   `anaconda3`/`miniconda3`/`miniforge3`; otherwise set `PDFUSION_PYTHON` to your
   interpreter.
 - External deps: Rust toolchain; the system webview (**Windows** WebView2 +
   MSVC Build Tools; **Linux** webkit2gtk **4.1** — 4.0 does not satisfy the
-  build; **macOS** Xcode CLT); Ghostscript optionally, for Camelot.
+  build; **macOS** Xcode CLT).
 - API keys: `.env` at the repo root (`OPENAI_API_KEY`, `GEMINI_API_KEY`,
   `ANTHROPIC_API_KEY`) or the in-app Settings sheet, which encrypts them into
   `config.toml` (DPAPI on Windows, an OS-keystore-backed Fernet key elsewhere,

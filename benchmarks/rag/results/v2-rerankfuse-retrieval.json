@@ -935,10 +935,10 @@
     3
    ],
    "retrieval": {
-    "hit@1": 0.0,
+    "hit@1": 1.0,
     "hit@3": 1.0,
     "hit@5": 1.0,
-    "mrr@5": 0.5
+    "mrr@5": 1.0
    },
    "llm_input_tokens": 0,
    "llm_output_tokens": 0,
@@ -980,10 +980,10 @@
  "summary": {
   "all": {
    "n": 43,
-   "hit@1": 0.821,
+   "hit@1": 0.846,
    "hit@3": 0.949,
    "hit@5": 1.0,
-   "mrr@5": 0.892,
+   "mrr@5": 0.905,
    "correct": null,
    "cites_gold": null,
    "citation_precision": null,
@@ -1028,10 +1028,10 @@
   },
   "scan": {
    "n": 11,
-   "hit@1": 0.818,
+   "hit@1": 0.909,
    "hit@3": 0.909,
    "hit@5": 1.0,
-   "mrr@5": 0.882,
+   "mrr@5": 0.927,
    "correct": null,
    "cites_gold": null,
    "citation_precision": null,

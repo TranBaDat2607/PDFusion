@@ -604,10 +604,10 @@
     2
    ],
    "retrieval": {
-    "hit@1": 0.0,
+    "hit@1": 1.0,
     "hit@3": 1.0,
     "hit@5": 1.0,
-    "mrr@5": 0.5
+    "mrr@5": 1.0
    },
    "llm_input_tokens": 0,
    "llm_output_tokens": 0,
@@ -935,10 +935,10 @@
     14
    ],
    "retrieval": {
-    "hit@1": 0.0,
+    "hit@1": 1.0,
     "hit@3": 1.0,
     "hit@5": 1.0,
-    "mrr@5": 0.5
+    "mrr@5": 1.0
    },
    "llm_input_tokens": 0,
    "llm_output_tokens": 0,
@@ -980,10 +980,10 @@
  "summary": {
   "all": {
    "n": 43,
-   "hit@1": 0.769,
+   "hit@1": 0.821,
    "hit@3": 0.974,
    "hit@5": 0.974,
-   "mrr@5": 0.868,
+   "mrr@5": 0.893,
    "correct": null,
    "cites_gold": null,
    "citation_precision": null,
@@ -992,10 +992,10 @@
   },
   "text": {
    "n": 11,
-   "hit@1": 0.818,
+   "hit@1": 0.909,
    "hit@3": 1.0,
    "hit@5": 1.0,
-   "mrr@5": 0.909,
+   "mrr@5": 0.955,
    "correct": null,
    "cites_gold": null,
    "citation_precision": null,
@@ -1028,10 +1028,10 @@
   },
   "scan": {
    "n": 11,
-   "hit@1": 0.909,
+   "hit@1": 1.0,
    "hit@3": 1.0,
    "hit@5": 1.0,
-   "mrr@5": 0.955,
+   "mrr@5": 1.0,
    "correct": null,
    "cites_gold": null,
    "citation_precision": null,

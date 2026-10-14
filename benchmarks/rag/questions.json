@@ -1,5 +1,5 @@
 {
-  "_doc": "Gold pages are 1-indexed. `answer` lists regexes that must all match (case-insensitive) for an answer to count as correct; `negative` questions have no answer in the document and are correct only when the answer says so. `kind` says which evidence the question needs.",
+  "_doc": "Gold pages are 1-indexed: every page that states the answer (a02/a06 and their scanned twins state it on two).  `answer` lists regexes that must all match (case-insensitive) for an answer to count as correct; `negative` questions have no answer in the document and are correct only when the answer says so. `kind` says which evidence the question needs.",
   "questions": [
     {"id": "r01", "doc": "report.pdf", "kind": "text", "q": "How many employees did Northwind have at the end of 2025?", "pages": [2], "answer": ["1,?240"]},
     {"id": "r02", "doc": "report.pdf", "kind": "text", "q": "What share of unit output comes from the Da Nang plant?", "pages": [3], "answer": ["38\\s?%"]},
@@ -23,11 +23,11 @@
     {"id": "r20", "doc": "report.pdf", "kind": "negative", "q": "What was the company's net profit margin in 2025?", "pages": [], "answer": []},
 
     {"id": "a01", "doc": "attention.pdf", "kind": "table", "q": "What BLEU score does the big Transformer reach on WMT 2014 English-to-German?", "pages": [8], "answer": ["28\\.4"]},
-    {"id": "a02", "doc": "attention.pdf", "kind": "text", "q": "How long did training the big model take, and on what hardware?", "pages": [7], "answer": ["3\\.5\\s+days", "P100"]},
+    {"id": "a02", "doc": "attention.pdf", "kind": "text", "q": "How long did training the big model take, and on what hardware?", "pages": [7, 8], "answer": ["3\\.5\\s+days", "P100"]},
     {"id": "a03", "doc": "attention.pdf", "kind": "text", "q": "What value of warmup_steps was used for the learning rate schedule?", "pages": [7], "answer": ["4,?000"]},
     {"id": "a04", "doc": "attention.pdf", "kind": "text", "q": "What were the Adam optimizer's beta2 and epsilon?", "pages": [7], "answer": ["0\\.98", "10\\s*(\\^|−|-|\\{)?\\s*-?\\s*9|1e-9|10-9|10−9"]},
     {"id": "a05", "doc": "attention.pdf", "kind": "table", "q": "What is the per-layer complexity of self-attention compared with recurrent layers?", "pages": [6], "answer": ["n\\s*(\\^|²|\\*\\*)\\s*2|n²|n\\^\\{?2", "d\\s*(\\^|²)\\s*2|d²|d\\^\\{?2"]},
-    {"id": "a06", "doc": "attention.pdf", "kind": "text", "q": "How many attention heads and what key dimension does the base model use?", "pages": [5], "answer": ["\\b8\\b", "\\b64\\b"]},
+    {"id": "a06", "doc": "attention.pdf", "kind": "text", "q": "How many attention heads and what key dimension does the base model use?", "pages": [5, 9], "answer": ["\\b8\\b", "\\b64\\b"]},
     {"id": "a07", "doc": "attention.pdf", "kind": "text", "q": "What label smoothing value was used during training?", "pages": [8], "answer": ["0\\.1"]},
     {"id": "a08", "doc": "attention.pdf", "kind": "table", "q": "What F1 did the Transformer get on WSJ constituency parsing in the semi-supervised setting?", "pages": [10], "answer": ["92\\.7"]},
     {"id": "a09", "doc": "attention.pdf", "kind": "text", "q": "What vocabulary was used for English-German and how large was it?", "pages": [7], "answer": ["byte.pair|BPE", "37,?000"]},
@@ -39,11 +39,11 @@
     {"id": "a15", "doc": "attention.pdf", "kind": "negative", "q": "What BLEU score did the Transformer reach on English-to-Japanese translation?", "pages": [], "answer": []},
 
     {"id": "s01", "doc": "attention_scanned.pdf", "kind": "scan", "q": "What BLEU score does the big Transformer reach on WMT 2014 English-to-German?", "pages": [8], "answer": ["28\\.4"]},
-    {"id": "s02", "doc": "attention_scanned.pdf", "kind": "scan", "q": "How long did training the big model take, and on what hardware?", "pages": [7], "answer": ["3\\.5\\s+days", "P100"]},
+    {"id": "s02", "doc": "attention_scanned.pdf", "kind": "scan", "q": "How long did training the big model take, and on what hardware?", "pages": [7, 8], "answer": ["3\\.5\\s+days", "P100"]},
     {"id": "s03", "doc": "attention_scanned.pdf", "kind": "scan", "q": "What value of warmup_steps was used for the learning rate schedule?", "pages": [7], "answer": ["4,?000"]},
     {"id": "s04", "doc": "attention_scanned.pdf", "kind": "scan", "q": "What label smoothing value was used during training?", "pages": [8], "answer": ["0\\.1"]},
     {"id": "s05", "doc": "attention_scanned.pdf", "kind": "scan", "q": "What F1 did the Transformer get on WSJ constituency parsing in the semi-supervised setting?", "pages": [10], "answer": ["92\\.7"]},
-    {"id": "s06", "doc": "attention_scanned.pdf", "kind": "scan", "q": "How many attention heads and what key dimension does the base model use?", "pages": [5], "answer": ["\\b8\\b", "\\b64\\b"]},
+    {"id": "s06", "doc": "attention_scanned.pdf", "kind": "scan", "q": "How many attention heads and what key dimension does the base model use?", "pages": [5, 9], "answer": ["\\b8\\b", "\\b64\\b"]},
     {"id": "s07", "doc": "attention_scanned.pdf", "kind": "scan", "q": "What vocabulary was used for English-German and how large was it?", "pages": [7], "answer": ["byte.pair|BPE", "37,?000"]},
     {"id": "s08", "doc": "attention_scanned.pdf", "kind": "negative", "q": "What BLEU score did the Transformer reach on English-to-Japanese translation?", "pages": [], "answer": []}
   ]

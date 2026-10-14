@@ -42,7 +42,6 @@ python main.py          # equivalent to: pdfusion-sidecar (console script from p
 > everywhere else.
 
 **External system dependencies:**
-- Ghostscript (optional — only needed by Camelot for table extraction during RAG indexing; pdfplumber fallback runs without it)
 - Rust toolchain (rustup + cargo) — required to build/run the Tauri shell (`cargo check` / `pnpm tauri dev` / `pnpm tauri build`)
 - The system webview, which is the one dependency that is genuinely different per platform:
   - **Windows**: WebView2 Runtime (ships with Windows 11), plus MSVC Build Tools 2022/2026 for Rust's linker.
@@ -53,8 +52,8 @@ python main.py          # equivalent to: pdfusion-sidecar (console script from p
 ```bash
 conda create -n pdfusion python=3.11.14
 conda activate pdfusion
-pip install -r requirements.txt        # canonical install — pins all RAG + advanced deps
-# Alternative: pip install -e ".[rag,advanced]"  (extras live in pyproject.toml)
+pip install -r requirements.txt        # canonical install — pins all RAG deps
+# Alternative: pip install -e ".[rag]"  (extras live in pyproject.toml)
 
 cd desktop
 pnpm install
@@ -65,9 +64,9 @@ pnpm install
 > install it globally instead: `npm install -g pnpm`.
 
 > Note: `requirements.txt` and `pyproject.toml` are **not** kept in lockstep.
-> `requirements.txt` flatly installs the RAG + advanced extras (chromadb, the
-> onnxruntime embedding stack, camelot, pdfplumber); `pyproject.toml` puts those
-> behind `[project.optional-dependencies]` named `rag`, `advanced`, `all`. For
+> `requirements.txt` flatly installs the RAG extra (chromadb, the onnxruntime
+> embedding stack, RapidOCR); `pyproject.toml` puts those behind
+> `[project.optional-dependencies]` named `rag` and `all`. For
 > the desktop app to fully work (RAG chat especially), install everything via
 > `requirements.txt` or `pip install -e ".[all]"`.
 
@@ -1012,27 +1011,141 @@ that true:
 
 ### Chat answers
 
-`rag/rag_chain.py` answers from one index's chunks, as above. What else it has
-to keep (#31), each with a test in `test_rag_isolation.py`:
+Chat is multimodal RAG built on one rule: **retrieve by text, read by
+vision.** Everything that runs per document or per question on the user's
+machine is local, offline and free; the only paid call is the answer itself,
+and it is shown pictures of at most three pages. The design, the alternatives
+it was chosen over, and the measurements behind each choice are in
+`benchmarks/rag/README.md`. In short:
 
-- **A failure is an `error` event, never an answer.** `answer_question` raises,
-  and `_run_ask` ends the job with `error`. The chain used to catch everything
-  and return "Sorry, I cannot answer…" as the answer, and a failing LLM fell
-  back to the template answer, which hid a rejected key behind excerpts that
-  looked like one. `generate()` on every LLM backend now goes through
+```
+index (once per document, rag/ingest.py)            ask (rag/rag_chain.py)
+  PyMuPDF blocks → paragraphs ≤600 chars              dense top-20  ─┐
+  headings → chunk metadata                           BM25 top-20   ─┴─ RRF → pages (≤5)
+  ruled tables → Markdown (find_tables)                     │
+  scanned pages → RapidOCR (rag/ocr.py)               best visual/table/scanned pages
+  page_kind: text | visual | scanned                   rendered → images (≤3)
+  embed heading+text (MiniLM ONNX) → ChromaDB               │
+                                                      answer model: page text + images,
+                                                      cites [p. N] → checked, linked
+```
+
+**Ingestion** (`rag/ingest.py`, `PdfIngestor`) replaced
+`ScientificPDFProcessor`, and each difference fixed a measured failure:
+
+- **Chunks fit the embedding model.** MiniLM reads 128 tokens
+  (`onnx_embeddings._MAX_SEQ_LENGTH`), ~500 characters of English; the old
+  ~1000-character chunks were half unembedded. Paragraphs are packed up to
+  `MAX_CHUNK_CHARS = 600`, split between sentences, never across pages.
+- **Headings are context, not chunks.** A line ≥1.15× the document's body
+  size is a heading; it becomes the `heading` of the chunks under it, and
+  `retrieval.contextual_text` puts it in front of the chunk for embedding and
+  BM25 — so a table row under "Products" matches a question about products.
+  The stored and quoted text is the chunk's own. Body size ignores table
+  cells, which papers often set smaller.
+- **Tables are Markdown from PyMuPDF's `find_tables`**, built from
+  `Table.extract()` (`to_markdown()` HTML-escapes `-` as `&#45;`), caption
+  first, cells not repeated as text. A grid that is mostly empty — the
+  Attention paper's attention maps — is a figure drawn with lines, not a
+  table. Camelot (which needs Ghostscript, so mostly failed) and pdfplumber
+  are gone, and with them the "Column 1 | Column 2 / Table data | not
+  extracted" placeholder the old chunker wrote into chunks and chat quoted.
+- **Every page has a `page_kind`**: `scanned` (no text layer, mostly image),
+  `visual` (an image ≥10% of the page, a table, or a `Figure N:`/`Table N:`
+  caption — which also catches vector figures and unruled tables), `text`.
+  This is what decides which pages the answer model sees as images.
+- **Scanned pages are OCRed** (`rag/ocr.py`) with RapidOCR, which BabelDOC
+  already installs; the spec now bundles it. Its recogniser drops the spaces
+  between English words; `respace` restores them from the character boxes'
+  gaps (word F1 0.33 → 0.64 against the paper's real text). A scanned PDF used
+  to be refused outright ("No text could be extracted"). OCR is slow — ~7 s a
+  dense page on an i5 — and runs once, with per-page progress on the index job.
+- Text is NFKC-normalised (ligatures: "ﬁrmware" never matched "firmware")
+  and dehyphenated. `CHUNKER_VERSION` is "2", so every existing index is
+  rebuilt the next time chat opens its document.
+
+**Retrieval** (`EnhancedRAGChain.retrieve`) is local and costs one read of the
+index's chunks:
+
+- **Two searches, fused by rank.** ChromaDB's top 20 by cosine and BM25's top
+  20 (`keyword_search.py`, over the contextual text) are combined by
+  reciprocal rank fusion (`retrieval.reciprocal_rank_fusion`, k = 60). The old
+  blend added cosine to BM25 scaled so its best hit was 1.0 — two scales with
+  nothing in common, so one rare word outranked every semantic hit.
+- **Evidence is pages, not chunks** (`retrieval.group_by_page`). A page ranks
+  by its best hit (a long page matches common words many times over, which
+  says little), brings its hits and their neighbours *on that page*, and is
+  what a citation names, the viewer jumps to, and the model can be shown.
+  `max_pdf_sources` is now a number of pages.
+- **No re-rank by heuristics, no HyDE by default.** The old re-rank scored
+  pages by how early they came, so page 1 won ties. HyDE put a model round
+  trip in front of every search; with `hyde=True` it still runs (its prompt
+  still carries no language instruction). A local multilingual cross-encoder
+  was measured too: it ranked Markdown tables below the prose around them,
+  and fused with the first stage gained one question in 39 for +0.5 s a
+  question and a 113 MB download, so the app ships without one. The chain
+  keeps a `reranker=` seam that always fuses; the experiment lives in
+  `benchmarks/rag/cross_encoder.py`.
+
+**The answer** (`_generate_answer`, `_create_answer_prompt`):
+
+- **The model reads every evidence page, whole, under its 1-indexed page
+  number** — the chat lists each page as a source, so the answer must have
+  read all of them.
+- **The best-ranked pages whose content the text loses are shown as images**
+  (`retrieval.select_image_pages`, at most `DEFAULT_MAX_IMAGES = 3`): visual
+  and scanned pages, and pages with a table chunk. They are rendered when the
+  question is asked (`rag/page_images.py`, JPEG, long side 1600 px, ~1.5k
+  tokens each), not stored at index time, and each goes after a text label,
+  `[Image of page N]`, so the model can cite what it saw. A file moved since
+  indexing costs the images, not the answer. DocPixie, by contrast, shows the
+  model every page of the document on every question, and labels images by
+  their position among those sent, so its citations name that position.
+- **`generate(images=...)`** (`translators/base.PageImage`) is implemented
+  for OpenAI (content parts), Gemini (`Part.from_bytes`) and Anthropic
+  (base64 blocks); with no images the request is byte-for-byte what it was.
+  `images` is passed only when there are some. `ProviderSpec.accepts_images`
+  is False for DeepSeek, whose API takes text only. **A model that refuses an
+  image** — a 400/415/422 mentioning "image", typically a text-only model
+  behind OpenRouter or Ollama — is asked again without them, and that
+  (provider, model) is sent text only for the rest of the process
+  (`EnhancedRAGChain._text_only`). A 401 is not a refusal: it is the usual
+  error, never retried.
+- **Citations are checked, not trusted** (`rag/citations.py`). The prompt asks
+  for `[p. N]`; `link_citations` turns each cited page the model was shown
+  into `[p. N](#page=N)` and removes the rest, counting them in
+  `quality_metrics.invalid_citations`. Only bracketed page words count —
+  `[1]` is a bibliography reference and `[0, 1]` an interval. The chat renders
+  those links as jumps (`desktop/src/lib/citation-links.ts`), never as
+  navigation of the webview.
+- **References are one per evidence page, cited first** in the order the
+  answer cites them, then the rest in retrieval order, each with `cited`,
+  `page_kind` and `shown_as_image` (`sse_schemas.PdfReferencePayload`). They
+  used to be every retrieved chunk, unranked by use, so the list said nothing
+  about where the answer came from.
+- With no key, the answer is extractive — the best passages, each with its
+  page link — and says so; it used to read like a synthesis.
+
+What it still has to keep (#31), each with a test in `test_rag_isolation.py`
+or `test_rag_answers.py`:
+
+- **A failure is an `error` event, never an answer.** `answer_question`
+  raises, and `_run_ask` ends the job with `error`. The chain used to catch
+  everything and return "Sorry, I cannot answer…" as the answer, and a failing
+  LLM fell back to the template answer, which hid a rejected key behind
+  excerpts that looked like one. `generate()` on every LLM backend goes through
   `_call_with_backoff` and raises, the same as `translate()`'s SDK calls.
 - **Retrieval that finds nothing never reaches the model**
   (`NOTHING_FOUND_ANSWER`). Given an empty context, a model answers from its
-  own knowledge, as if the document had said it.
+  own knowledge, as if the document had said it. The prompt also tells it to
+  say so when the pages don't hold the answer.
 - **Each answer records the model that wrote it** (#87). `answer_question`
   returns its `provider` and `model` (`None` for both when no model wrote it:
-  the template answer, or nothing found), `_run_ask` saves them in
+  the extractive answer, or nothing found), `_run_ask` saves them in
   `chat_messages`' own `provider` / `model` columns (records migration 3,
   appended; older rows read `NULL`), and the chat panel prints them under the
-  answer (`model-choice.ts:answeredBy`), so a conversation that changed models
-  part-way stays readable. The model is chosen once, when the question
-  starts, and HyDE and the answer both use it: a question being answered keeps
-  its model when the choice changes meanwhile.
+  answer (`model-choice.ts:answeredBy`). The model is chosen once, when the
+  question starts, and HyDE and the answer both use it.
 - **The answer model is looked up for every question**
   (`EnhancedRAGChain._answer_model`), from `get_settings()` as it is at that
   moment, and rebuilt only when the service, key, model or endpoint changed —
@@ -1044,18 +1157,14 @@ to keep (#31), each with a test in `test_rag_isolation.py`:
 - **Keyword scores are BM25** (`rag/keyword_search.py`). `rank-bm25` is not a
   dependency and is excluded from the bundle. The index is built once per
   question from the list `get_chunks` returned, so it only ever scores that
-  document. It runs off the event loop, and so does the surrounding-context
-  step. It folds case, diacritics and `đ` the way the viewer's find does.
-- **The answer model reads every retrieved source, whole.** The chat lists
-  each source as a reference, and `_add_surrounding_context` puts a hit's
-  neighbours *before* it, so the 300-character cut each source used to get
-  kept the neighbour and dropped the passage that matched.
+  document. It runs off the event loop, and so does page grouping. It folds
+  case, diacritics and `đ` the way the viewer's find does — which also makes
+  OCR text that lost its Vietnamese diacritics findable.
 - **The answer language goes in the answer prompt only.**
   `AskRequest.target_lang` is `None`-defaulted to `default_target_lang` and
   resolved when the question is accepted, as `/translate` does. The HyDE prompt
   gets no language instruction: its text is a search query, and in the answer's
-  language it would miss the words of a document written in another. With no
-  key, the template answer stays English.
+  language it would miss the words of a document written in another.
 - **A ready index whose collection is gone is repaired in three places.**
   `_recover` deletes the row. `_run_index` rebuilds the index instead of
   reporting "Already indexed". `_run_ask` clears the row and ends with `error`
@@ -1064,14 +1173,14 @@ to keep (#31), each with a test in `test_rag_isolation.py`:
 - **A conversation belongs to a document, not to an index.** `chat_messages`
   references `documents(id)`. `complete_index` deletes a document's other
   indexes, so history keyed by index would vanish on every `index_spec.py`
-  change. Saved page numbers stay right because the id is the hash of the
-  bytes; saved `chunk_id`s don't, and nothing may rely on them. `_run_ask`
-  saves the exchange under the document the question was *accepted* for, and
-  does so before it sends `answer`, so a late answer is filed under the right
-  document and a panel that refetches on `answer` finds it. Saving is
-  best-effort (a document removed mid-question can't be saved to), and a
-  failed question is never saved. Remove forgets a document outright; Reset
-  deletes only indexes, and neither ever needs the vector store open.
+  change — the `CHUNKER_VERSION` bump to "2" among them. Saved page numbers
+  stay right because the id is the hash of the bytes; saved `chunk_id`s don't,
+  and nothing may rely on them. `_run_ask` saves the exchange under the
+  document the question was *accepted* for, and does so before it sends
+  `answer`, so a late answer is filed under the right document and a panel
+  that refetches on `answer` finds it. Saving is best-effort, and a failed
+  question is never saved. Remove forgets a document outright; Reset deletes
+  only indexes, and neither ever needs the vector store open.
 
 ### Two-tier translation caching
 
@@ -2205,8 +2314,9 @@ seconds slower than gzip, and the zip in (5) takes more disk.
 `excludes` can only drop a whole importable package, and the heavy ones are all
 reachable by now: babeldoc's layout parser imports cv2
 (`document_il/midend/layout_parser.py`), its char extractor imports
-`sklearn.cluster.DBSCAN` (`document_il/utils/extract_char.py`), and RAG
-indexing imports camelot, which brings pandas. So the spec also prunes *inside*
+`sklearn.cluster.DBSCAN` (`document_il/utils/extract_char.py`). (RAG
+indexing imported camelot too, and pandas with it, until the chat ingestion
+redesign replaced it with PyMuPDF's table finder.) So the spec also prunes *inside*
 the packages it keeps: `_prune()` filters `a.binaries` and `a.datas` after
 `Analysis` and prints what each rule removed, because a rule that silently
 stops matching — a renamed directory, a new wheel layout — looks exactly like
@@ -2267,12 +2377,11 @@ What is left is left on purpose: `babeldoc_assets` (228 MB) and `argos_pack`
 (67 MB) are the offline-first installer's whole point; `cv2.pyd` (71 MB),
 `ctranslate2` (62 MB), `chromadb_rust_bindings` (63 MB), scipy and its libs
 (76 MB) are single files or hard dependencies of one. The largest remaining
-*file-count* item is camelot's chain — pandas, pytz and tzdata are 1,209 files
-for 19 MB — but by the figures above that is worth well under a second of
-install time, and dropping it means dropping camelot's table extraction, which
-`rag/document_processor.py` already falls back from when Ghostscript is
-missing. Not worth it for the size, and a product decision rather than a
-packaging one if it ever happens for another reason.
+*file-count* item was camelot's chain — pandas, pytz and tzdata, 1,209 files
+for 19 MB. It left as a product decision, not a packaging one: chat ingestion
+(`rag/ingest.py`) reads tables with PyMuPDF, and nothing imports camelot. The
+same redesign put RapidOCR *in* (16 MB of ONNX models, `collect_data_files`),
+which the spec used to exclude as unused.
 
 **Why the installer is the size it is**, and why little else here will change
 it: those two asset blobs are already-compressed archives that pass through any
