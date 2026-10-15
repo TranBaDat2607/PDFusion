@@ -107,7 +107,10 @@ export function paneMask(
  * unmasked, which is a run starting or ending. A page queued but not yet drawn
  * belongs to its run: carried into the next one it would sweep in as a
  * translation that run never made, and kept after the result shows it would
- * sweep in whenever the reader first scrolls to it, minutes later.
+ * sweep in whenever the reader first scrolls to it, minutes later. `forget`
+ * alone doesn't prevent the second: the `stream` returned alongside it when
+ * the result shows is added after the drop, and `pendingAfterWindowDrawn`
+ * retires whatever of it the first drawn window didn't use.
  */
 export function maskTransition(
   previous: PaneMask | null,
@@ -132,6 +135,39 @@ export function maskTransition(
     next === null ||
     next.drawable === null;
   return { hide, stream, forget };
+}
+
+/** The pages still waiting to stream once `transition` (from
+ *  `maskTransition`) has been applied to the ones that were. */
+export function pendingAfterMask(
+  pending: ReadonlySet<number>,
+  transition: { stream: readonly number[]; forget: boolean },
+): Set<number> {
+  const next = new Set(transition.forget ? [] : pending);
+  for (const page of transition.stream) next.add(page);
+  return next;
+}
+
+/**
+ * The pages still waiting to stream once the renderer has drawn everything it
+ * can of `window`, its render window, under `mask`.
+ *
+ * Once the run's result is on screen, the pages that arrive with it are the
+ * ones it draws straight away; anything still waiting after that would sweep
+ * in whenever the reader first scrolls to it, for the rest of the session. The
+ * transition that lifts the mask can't drop them itself: it is the same step
+ * that adds the result's pages, which on a cache hit is every page, and when
+ * the result is the first file the pane loads there is no window yet to tell
+ * which of them are on screen. So they go here, after the first window of the
+ * result has been drawn, and an empty window drops nothing.
+ */
+export function pendingAfterWindowDrawn(
+  pending: ReadonlySet<number>,
+  mask: PaneMask | null,
+  window: readonly number[],
+): Set<number> {
+  const runOver = mask === null || mask.drawable === null;
+  return runOver && window.length > 0 ? new Set() : new Set(pending);
 }
 
 /** Bands the reveal sweeps, top to bottom: a paragraph or so each on a letter
