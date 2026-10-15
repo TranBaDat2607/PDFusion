@@ -334,8 +334,9 @@ either — only a real translate through the frozen exe catches them.
 - Runtime config is `config.toml` under the data root; the defaults are the
   field defaults of the Pydantic models in `config/models.py`; `.env`
   overrides the TOML. Access via `get_config_manager()` / `get_settings()`.
-- Logs: `logs/app.log` (sidecar) and `logs/shell.log` (Rust) under the data
-  root, rotating at 5 MB × 5.
+- Logs: `logs/app.log` (sidecar) and `logs/shell.log` (Rust, plus the
+  webview's warnings and errors via `lib/webview-log.ts`) under the data root,
+  rotating at 5 MB × 5.
 - `ruff` is the only Python gate and runs its default rule set; black/isort/
   mypy stay local. No pre-commit, no Makefile, no ESLint — TypeScript is
   checked by `pnpm build`.

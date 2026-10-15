@@ -2390,6 +2390,19 @@ Support/PDFusion/logs` on macOS), rotating at 5 MB with 5 backups kept:
   with no file target, which meant a release build (`main.rs` sets
   `windows_subsystem = "windows"`, so there's no console) discarded that
   stream entirely — "Sidecar failed to start" had nowhere to go.
+- **Webview** → also `shell.log`, through the same plugin's JS side
+  (`@tauri-apps/plugin-log`, capability `log:allow-log` only).
+  `lib/webview-log.ts` forwards `console.warn`/`console.error`, uncaught
+  `error` events and unhandled rejections; `main.tsx` installs it before the
+  first render, in the shell only. Before it the webview had no log at all: a
+  viewer bug that threw inside an effect blanked the whole window while both
+  log files read as a clean run, and only devtools held the stack. Three
+  guards, each with a test: the sink's own console traffic is never forwarded
+  (no loop), a failing IPC call is swallowed (an unhandled rejection would be
+  forwarded in turn), and at most `LOG_BUDGET` messages a minute go through,
+  with a "N suppressed" line after, so a warning in a render loop can't rotate
+  the shell's own lines out of `shell.log`. The plugin tags each line with its
+  caller, which is always the forwarder; the error's stack is in the message.
 
 The boot-error screen's "Show logs folder" button (`open_logs_folder` in
 `lib.rs`) opens this directory regardless of which file(s) exist yet.
