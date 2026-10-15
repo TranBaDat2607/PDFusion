@@ -561,7 +561,7 @@ now a Windows + Linux matrix) is what settles the PyInstaller half.
 | `src/desktop_pdf_translator/translators/translation_cache.py` | Persistent **paragraph-level** SQLite cache (singleton `get_translation_cache()`) |
 | `src/desktop_pdf_translator/processors/pdf_cache.py` | Persistent **whole-PDF** SQLite cache (singleton `get_pdf_cache()`) |
 | `src/desktop_pdf_translator/processors/page_selection.py` | Which pages a translation covers, whether it may run (`validate_selection`), and the chunk and rolling-PDF plans. Stdlib-only — see "Page ranges and limits" |
-| `src/desktop_pdf_translator/processors/pdf_pages.py` | The PyMuPDF half: `inspect_pdf`, `split_into_chunks`, `rebuild_rolling_pdf`. Imports `fitz` inside each function, because the `/translate` pre-flight calls it |
+| `src/desktop_pdf_translator/processors/pdf_pages.py` | The PyMuPDF half: `inspect_pdf`, `split_into_chunks`, `subset_embedded_fonts`, `rebuild_rolling_pdf`. Imports `fitz` inside each function, because the `/translate` pre-flight calls it |
 | `src/desktop_pdf_translator/processors/doc_layout_cache.py` | Process-wide DocLayout-YOLO model, loaded once (`get_shared_doc_layout_model()`) |
 
 ### HTTP API (sidecar)
@@ -866,6 +866,32 @@ The Pages box resets when a different document opens (`setOriginalPdfPath`).
 Accepting the offer writes the chosen pages back into it, so Re-translate and
 Retry ask for the same pages.
 
+### Each chunk's fonts are subset before it is merged
+
+BabelDOC subsets fonts only in its clean step, and PDFusion passes
+`skip_clean=True` (which `enhance_compatibility` would force anyway:
+`skip_clean = skip_clean or enhance_compatibility` in BabelDOC 0.5.24). With
+one page per BabelDOC job, every page therefore arrived with whole fonts —
+~500 KB per Noto Serif style for a Latin target, ~14 MB for CJK — and the
+rolling PDF carried a full copy per page: a 9-page paper came out at 6.8 MB
+with 10.3 MB of embedded fonts across 123 font objects. pdf.js converts each
+font object separately, so every page re-paid the parse. Removing duplicate
+objects (`garbage=4`) shrinks the file but not that work: each page's font
+dictionary differs, so pdf.js still sees 123 fonts.
+
+`pdf_pages.subset_embedded_fonts` cuts each chunk's fonts to the glyphs it
+uses, once per chunk (45–70 ms a page), rather than on the rolling PDF, which
+is rebuilt after every chunk. Measured in the viewer on that paper, pages 1–5:
+pdf.js worker time 2825 → 1496 ms, the fifth page done 34% sooner. It is
+in-process MuPDF, not BabelDOC's 60-second subprocess: the native subsetter
+took ≤106 ms even on 15 MB CJK fonts, and the process already runs far more
+MuPDF in-process. A failure keeps the unsubset file — still a correct
+translation, only a heavier one.
+
+MuPDF's subsetter keeps glyph ids (these are Identity-H fonts addressed by id),
+so `loca`/`hmtx` stay full length and a subset CJK font is still ~400 KB of
+index; the outlines are what shrink (3.0 MB → 1.3 KB in the test fixture).
+
 ### Language selection and backend capabilities
 
 The toolbar's From/To selection reaches the pipeline through the request body,
@@ -1104,7 +1130,8 @@ offset. A cache file written by a newer build is moved aside and started fresh
    pipeline**, copy the cached PDF into the live output dir, and emit synthetic
    SSE `progress`/`done` events. LRU-evicted to `pdf_cache_max_size_mb` (default
    1000 MB). Bump `PIPELINE_VERSION` when any BabelDOC config field that changes
-   output (font, watermark mode, etc.) changes.
+   output (font, watermark mode, etc.) changes, or how that output is
+   post-processed before it is cached (v2: fonts subset per chunk).
 2. **Paragraph cache** (`translators/translation_cache.py`,
    `get_translation_cache()`). Keyed on `lang_in|lang_out|service|model|text`,
    with a TTL (`expires_at`). Memoizes individual `translate()` calls across all
@@ -1971,6 +1998,24 @@ out of React state. There are five invariants, and each one is easy to break by
   fallback, 827 ms with the WASM decoder, 7 ms for a vector-only slide.** The
   same decode costs 287 ms under Node's V8, so a ~2.9x gap to Chromium remains
   and is JavaScriptCore's, not something this app can reach.
+
+- **Fonts are drawn as paths, never registered (`disableFontFace: true`).**
+  By default pdf.js turns every font object into a `FontFace` and adds it to
+  the document's font set, and each one costs the main thread a pass over the
+  text layers already on screen. A translated paper is the worst case: one
+  BabelDOC run per page means every page brings its own 10–20 font objects
+  (`document.fonts` climbed 51 → 133 in nine pages). Measured in the app's
+  translated pane on a cache hit, the main thread was blocked 430–910 ms of
+  every second and page 5 arrived at 10.5 s; with the flag set, 160–235 ms and
+  3.7 s. Subsetting the fonts (`pdf_pages.subset_embedded_fonts`) shrank the
+  bytes but not the count, which is why it barely moved this. Reproduced
+  outside the app with the app's text layer: 9 pages took 6.1 s → 3.9 s in
+  WebKitGTK 2.52 and 4.4 s → 2.7 s in Chromium 149, and without a text layer
+  the flag made no difference in either — so it is the text layer the
+  registrations are expensive against, not one engine, and the flag is set on
+  every platform. The options live in `lib/pdf-viewer/load-options.ts`, which
+  the fixture tests share; pdf.js defaults the flag to `isNodeJS`, so a test
+  that left it out would pass while the app ran without it.
 
 Synchronized scrolling between the panes (the first item in #30) is
 deliberately not implemented: the panes scroll and zoom independently.

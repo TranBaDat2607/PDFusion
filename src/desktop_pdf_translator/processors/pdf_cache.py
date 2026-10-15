@@ -53,11 +53,13 @@ from ..utils.paths import appdata_dir
 logger = logging.getLogger(__name__)
 
 
-# Bump when BabelDOC config fields that affect output change (font,
+# Bump when BabelDOC config fields that affect output change, or how its
+# output is post-processed before it is cached (font,
 # watermark_output_mode, min_text_length, skip_scanned_detection,
 # auto_extract_glossary, enhance_compatibility, pool_max_workers). Old entries
 # stay on disk but stop matching; they get LRU-evicted naturally.
-PIPELINE_VERSION = "1"
+# 2: each page's fonts are subset before merging (`subset_embedded_fonts`).
+PIPELINE_VERSION = "2"
 
 _HASH_CHUNK = 1024 * 1024  # 1 MB streaming reads
 

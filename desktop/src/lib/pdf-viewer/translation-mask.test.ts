@@ -6,6 +6,8 @@ import {
   maskAfterArtifact,
   maskTransition,
   paneMask,
+  pendingAfterMask,
+  pendingAfterWindowDrawn,
   STREAM_LINES,
   STREAM_MS,
   streamBand,
@@ -277,5 +279,98 @@ describe("streamBand", () => {
       const above = bands[i - 1];
       expect(bands[i].delay).toBeLessThan(above.delay + above.duration);
     }
+  });
+});
+
+describe("pages waiting to sweep once a run is over", () => {
+  const chunk = (
+    mask: ReturnType<typeof emptyMask>,
+    path: string,
+    pages: [number, number],
+  ) => maskAfterArtifact(maskAfterArtifact(mask, path, null), path, pages);
+
+  // The renderer's draw: a page with no canvas leaves the set, and sweeps
+  // iff it was in it.
+  const draw = (pending: Set<number>, pages: number[]) => {
+    const swept: number[] = [];
+    for (const page of pages) {
+      if (pending.delete(page)) swept.push(page);
+    }
+    return swept;
+  };
+
+  const showResult = (
+    previous: PaneMask | null,
+    next: PaneMask | null,
+    pending: ReadonlySet<number>,
+    window: number[],
+  ) => {
+    let now = pendingAfterMask(pending, maskTransition(previous, next, []));
+    const swept = draw(now, window);
+    now = pendingAfterWindowDrawn(now, next, window);
+    return { pending: now, swept };
+  };
+
+  const window = [1, 2, 3, 4, 5, 6, 7, 8];
+
+  it("sweeps nothing in later after a cached file shows", () => {
+    let mask = chunk(emptyMask(), "result.pdf", [1, 20]);
+    const done = finishMask(mask, "result.pdf");
+    const shown = showResult(
+      paneMask(mask, "original.pdf"),
+      paneMask(done, "result.pdf"),
+      new Set(),
+      window,
+    );
+    expect(shown.swept).toEqual(window);
+    const later = draw(shown.pending, [20]);
+    expect(later).toEqual([]);
+  });
+
+  it("sweeps nothing in later after a live run's last chunk shows", () => {
+    let mask = emptyMask();
+    mask = chunk(mask, "r1.pdf", [1, 5]);
+    mask = chunk(mask, "r2.pdf", [6, 10]);
+    mask = chunk(mask, "r3.pdf", [11, 17]);
+    const beforeFinal = paneMask(mask, "r3.pdf");
+    mask = chunk(mask, "final.pdf", [18, 20]);
+    const done = finishMask(mask, "final.pdf");
+    const shown = showResult(
+      beforeFinal,
+      paneMask(done, "final.pdf"),
+      new Set(),
+      [1, 2, 3, 4, 5],
+    );
+    expect(draw(shown.pending, [18, 19, 20])).toEqual([]);
+  });
+
+  it("keeps a page translated elsewhere pending while the run is in force", () => {
+    const mask = chunk(chunk(emptyMask(), "r1.pdf", [1, 5]), "r2.pdf", [15, 16]);
+    const next = paneMask(mask, "r2.pdf")!;
+    expect(next.drawable).not.toBeNull();
+    const pending = pendingAfterMask(
+      new Set(),
+      maskTransition(paneMask(mask, "r1.pdf"), next, []),
+    );
+    const after = pendingAfterWindowDrawn(pending, next, [1, 2, 3, 4, 5]);
+    expect(draw(after, [15, 16])).toEqual([15, 16]);
+  });
+
+  it("drops nothing when the result shows before the pane has a layout", () => {
+    const mask = chunk(emptyMask(), "result.pdf", [1, 20]);
+    const done = finishMask(mask, "result.pdf");
+    const next = paneMask(done, "result.pdf");
+    const pending = pendingAfterMask(
+      new Set(),
+      maskTransition(paneMask(mask, "original.pdf"), next, []),
+    );
+    const after = pendingAfterWindowDrawn(pending, next, []);
+    expect(draw(after, window)).toEqual(window);
+  });
+
+  it("does not mutate the set it is given", () => {
+    const pending = new Set([1, 2, 20]);
+    pendingAfterWindowDrawn(pending, pane(null, [1, 2, 20]), window);
+    expect([...pending]).toEqual([1, 2, 20]);
   });
 });

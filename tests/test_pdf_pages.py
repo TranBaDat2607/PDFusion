@@ -8,6 +8,8 @@ be read back from its text.
 
 from __future__ import annotations
 
+import struct
+import os
 from pathlib import Path
 
 import fitz  # PyMuPDF
@@ -22,6 +24,7 @@ from desktop_pdf_translator.processors.pdf_pages import (
     inspect_pdf,
     rebuild_rolling_pdf,
     split_into_chunks,
+    subset_embedded_fonts,
     text_stats,
 )
 
@@ -219,3 +222,160 @@ def test_a_segment_without_its_translation_is_a_bug(source: Path, tmp_path: Path
     segments = rolling_segments(10, [(1, 1)], [True])
     with pytest.raises(ValueError):
         rebuild_rolling_pdf(tmp_path / "out.pdf", source, segments, [None])
+
+
+# ---------------------------------------------------------------------------
+# subset_embedded_fonts
+# ---------------------------------------------------------------------------
+
+# CJK as well as Latin: high glyph ids, so a subsetter that renumbered glyphs
+# would draw the wrong ones. (The bundled font has no Vietnamese glyphs.)
+_LINES = ["Hello world 123", "你好，世界", "日本語のテキスト"]
+
+
+def _write_full_font_pdf(path: Path) -> Path:
+    """One page per line, each embedding the whole of MuPDF's bundled CJK font.
+
+    BabelDOC is told not to subset, so a page it typesets carries the full font;
+    this reproduces that without depending on a system font (CI runs on Windows
+    and Linux). A plain `doc.save` does not subset: the file comes out ~3.5 MB.
+    """
+    buffer = fitz.Font("cjk").buffer
+    with fitz.open() as doc:
+        for line in _LINES:
+            page = doc.new_page()
+            page.insert_font(fontname="F0", fontbuffer=buffer)
+            page.insert_text((72, 72), line, fontname="F0")
+        doc.save(path)
+    return path
+
+
+def _font_bytes(path: Path) -> int:
+    """Total size of the embedded font programs, counting each font once."""
+    total = 0
+    with fitz.open(path) as doc:
+        seen: set[int] = set()
+        for page in doc:
+            for font in page.get_fonts():
+                if font[0] not in seen:
+                    seen.add(font[0])
+                    total += len(doc.extract_font(font[0])[3])
+    return total
+
+
+def _text(path: Path) -> list[str]:
+    with fitz.open(path) as doc:
+        return [page.get_text() for page in doc]
+
+
+def _pixels(path: Path) -> list[bytes]:
+    with fitz.open(path) as doc:
+        return [page.get_pixmap(dpi=72).samples for page in doc]
+
+
+@pytest.fixture
+def full_font_pdf(tmp_path: Path) -> Path:
+    path = _write_full_font_pdf(tmp_path / "page.pdf")
+    # Guard the fixture: if this fails the tests below prove nothing.
+    assert _font_bytes(path) > 3_000_000
+    return path
+
+
+def _glyf_bytes(path: Path) -> int:
+    """Size of the `glyf` table (the outlines) of the first embedded font.
+
+    Read from the sfnt table directory: 4-byte version, numTables at bytes 4-6,
+    then 16-byte records of tag, checksum, offset, length from byte 12.
+    """
+    with fitz.open(path) as doc:
+        font = doc.extract_font(doc[0].get_fonts()[0][0])[3]
+    (num_tables,) = struct.unpack(">H", font[4:6])
+    for n in range(num_tables):
+        tag, _, _, length = struct.unpack(">4sIII", font[12 + 16 * n : 28 + 16 * n])
+        if tag == b"glyf":
+            return length
+    raise AssertionError("embedded font has no glyf table")
+
+
+def test_a_full_embedded_font_is_cut_down_to_its_glyphs(full_font_pdf: Path):
+    """Asserts on the outlines, which are what "cut down to the glyphs used" cuts.
+
+    Whole-file size is not a fair measure: a Type0/Identity-H font is addressed
+    by glyph id, so per-glyph index tables (`loca`, `hmtx`) must keep one entry
+    per id of the original font and cannot shrink with the glyphs used.
+    """
+    before = _glyf_bytes(full_font_pdf)
+
+    assert subset_embedded_fonts(full_font_pdf) is True
+
+    # The pages use a few dozen distinct glyphs out of ~50k; even with generous
+    # slack for per-glyph size, the outlines must fall below 2% of the original.
+    assert _glyf_bytes(full_font_pdf) < before * 0.02
+
+
+def test_subsetting_leaves_the_text_unchanged(full_font_pdf: Path):
+    before = _text(full_font_pdf)
+    assert subset_embedded_fonts(full_font_pdf) is True
+    assert _text(full_font_pdf) == before
+
+
+def test_subsetting_leaves_the_rendering_unchanged(full_font_pdf: Path):
+    """The glyphs the page uses must survive the cut, not just the text map."""
+    before = _pixels(full_font_pdf)
+    assert subset_embedded_fonts(full_font_pdf) is True
+    assert _pixels(full_font_pdf) == before
+
+
+def test_a_subsetting_failure_leaves_the_file_as_it_was(
+    full_font_pdf: Path, monkeypatch: pytest.MonkeyPatch
+):
+    def boom(self, *args, **kwargs):
+        raise RuntimeError("cannot subset")
+
+    monkeypatch.setattr(fitz.Document, "subset_fonts", boom)
+    before = full_font_pdf.read_bytes()
+
+    assert subset_embedded_fonts(full_font_pdf) is False
+    assert full_font_pdf.read_bytes() == before
+
+
+def test_a_pdf_without_embedded_fonts_stays_a_valid_pdf(tmp_path: Path):
+    path = _write_pdf(tmp_path / "plain.pdf", ["alpha", "beta"])
+
+    subset_embedded_fonts(path)  # must not raise, whatever it returns
+
+    assert _labels(path) == ["alpha", "beta"]
+
+
+def test_a_locked_staged_file_still_leaves_the_original_as_it_was(
+    full_font_pdf: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """Windows: a scanner holding the freshly written copy makes both the
+    replace and the clean-up of the copy fail. Neither may fail the chunk."""
+
+    def locked(*args, **kwargs):
+        raise PermissionError("in use by another process")
+
+    monkeypatch.setattr(os, "replace", locked)
+    monkeypatch.setattr(Path, "unlink", locked)
+    before = full_font_pdf.read_bytes()
+
+    assert subset_embedded_fonts(full_font_pdf) is False
+    assert full_font_pdf.read_bytes() == before
+
+
+def test_a_failed_replace_leaves_no_copy_behind(
+    full_font_pdf: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """The subset copy is written before it replaces the original, so a failure
+    there is the one that can strand it next to the chunk."""
+
+    def refused(*args, **kwargs):
+        raise OSError("cannot replace")
+
+    monkeypatch.setattr(os, "replace", refused)
+    before = full_font_pdf.read_bytes()
+
+    assert subset_embedded_fonts(full_font_pdf) is False
+    assert full_font_pdf.read_bytes() == before
+    assert sorted(full_font_pdf.parent.iterdir()) == [full_font_pdf]

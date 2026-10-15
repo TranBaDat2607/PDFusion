@@ -11,6 +11,7 @@ import {
   type PendingChanges,
 } from "@/lib/pdf-viewer/artifact-swap";
 import { pdfAssetUrl } from "@/lib/pdf-viewer/asset-urls";
+import { pdfDocumentOptions } from "@/lib/pdf-viewer/load-options";
 import {
   trackDocumentLoad,
   type DocumentLoad,
@@ -122,34 +123,11 @@ export function usePdfDocument({
         );
         const token = await sidecarToken();
         if (cancelled) return;
-        // pdf.js fetches all three of these at runtime and defaults every one
-        // of them to null, warning about none: an unset prefix costs the JPX
-        // pages (#73), then the CJK text and the standard-font metrics (#77).
-        // See lib/pdf-viewer/asset-urls.ts.
         const base = document.baseURI;
         const task = getDocument({
           url,
           httpHeaders: { Authorization: `Bearer ${token}` },
-          wasmUrl: pdfAssetUrl("wasm", base),
-          cMapUrl: pdfAssetUrl("cmaps", base),
-          // Load-bearing on this path, not a restatement of the default:
-          // `fetchBuiltInCMap` appends `.bcmap` and sets `isCompressed` from
-          // it, so an unset value asks for an extensionless file and then
-          // reads the bytes as if they were not compressed.
-          cMapPacked: true,
-          standardFontDataUrl: pdfAssetUrl("standardFonts", base),
-          // Otherwise pdf.js substitutes a non-embedded standard font from
-          // whatever the webview has, and the prefix above is consulted for
-          // Symbol and ZapfDingbats alone. The substitute's widths are a
-          // guess that differs per platform; the bundled Foxit metrics are
-          // the real ones, which is the whole point of shipping them.
-          useSystemFonts: false,
-          // Pinned, because pdf.js would otherwise derive it from whether the
-          // base URI is http: Tauri serves http://tauri.localhost on Windows
-          // but tauri://localhost on Linux and macOS, so the default would
-          // fetch from the worker on Windows and from the main thread
-          // everywhere else. One path keeps the CSP surface where #73 left it.
-          useWorkerFetch: false,
+          ...pdfDocumentOptions((dir) => pdfAssetUrl(dir, base)),
         });
         load = trackDocumentLoad(task);
         const doc = await load.promise;

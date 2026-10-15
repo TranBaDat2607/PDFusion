@@ -44,6 +44,8 @@ import {
 import {
   STREAM_LINES,
   maskTransition,
+  pendingAfterMask,
+  pendingAfterWindowDrawn,
   streamBand,
   type PaneMask,
 } from "@/lib/pdf-viewer/translation-mask";
@@ -160,7 +162,9 @@ export class PageRenderer {
   /** Revealed by the mask and not drawn since: they sweep in when they are.
    *  Kept for pages outside the render window too, so a page translated while
    *  the reader was elsewhere still arrives as a translation — but only for as
-   *  long as its run is on screen (`maskTransition`'s `forget`). */
+   *  long as its run is in progress: `maskTransition`'s `forget` drops them
+   *  when a run starts or ends, and `pendingAfterWindowDrawn` drops the pages
+   *  the result itself added once its first window has been drawn. */
   private streamPending = new Set<number>();
 
   /** Register the element page `page` draws into, or with `null`, forget it. */
@@ -231,11 +235,10 @@ export class PageRenderer {
     const rendered = [...this.pages]
       .filter(([, state]) => state.canvas !== null || state.task !== null)
       .map(([page]) => page);
-    const { hide, stream, forget } = maskTransition(this.mask, mask, rendered);
+    const transition = maskTransition(this.mask, mask, rendered);
     this.mask = mask;
-    for (const page of hide) this.release(page);
-    if (forget) this.streamPending.clear();
-    for (const page of stream) this.streamPending.add(page);
+    for (const page of transition.hide) this.release(page);
+    this.streamPending = pendingAfterMask(this.streamPending, transition);
     this.pump();
   }
 
@@ -372,6 +375,15 @@ export class PageRenderer {
           if (page === undefined) break;
           await this.renderPage(page);
         }
+        // Only here, once nothing in the window is left to draw: the pages a
+        // result arrives with sweep in, and none the reader scrolls to later
+        // do. A page skipped for a failed render loses its sweep, which only
+        // ever errs towards drawing it plainly.
+        this.streamPending = pendingAfterWindowDrawn(
+          this.streamPending,
+          this.mask,
+          this.queue,
+        );
       } finally {
         this.pumping = false;
       }
