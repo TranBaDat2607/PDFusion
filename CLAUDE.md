@@ -261,6 +261,10 @@ a test. They are the things most easily undone by "simplifying".
   only visible pages ±3 hold one.
 - A canvas is only ever replaced by a finished one; the translated pane swaps
   **pages**, not documents, driven by the `translatedChanges` log.
+- During a run the translated pane draws only translated pages
+  (`translationMask`, kept **per rolling path**, read for the path actually
+  loaded). Terminal events *finish* the mask rather than clearing it, so it
+  lifts only once the result is on screen.
 - `cleanup()` on a released page is deferred, never skipped (#76). The
   retention list in `lib/pdf-viewer/decode-retention.ts` is the record of what
   still owes one, so a page renewed into the window stays on the list and only

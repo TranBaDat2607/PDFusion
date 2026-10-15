@@ -16,6 +16,9 @@ GlobalWorkerOptions.workerSrc = workerSrc;
 
 export interface LoadedDocument {
   doc: PDFDocumentProxy;
+  /** The file `doc` was read from, which during a translation names the
+   *  rolling version on screen while a newer one may already be loading. */
+  path: string;
   /** `null`: a different document from the one before. Otherwise the pages
    *  that differ from the version it replaced. */
   changes: PendingChanges | null;
@@ -156,6 +159,7 @@ export function usePdfDocument({
           previous.doc.numPages === doc.numPages;
         show({
           doc,
+          path: filePath,
           changes: sameShape ? (pendingRef.current ?? "all") : null,
           keepPosition: incremental,
         });

@@ -1801,6 +1801,52 @@ out of React state. There are five invariants, and each one is easy to break by
   `keep=2` (see "Rolling-PDF pruning keeps two files"): the old version is still
   what's displayed, and still what pdf.js issues range requests against, until
   the new one has loaded.
+- **During a run the translated pane is blank except for translated pages.**
+  Every rolling PDF carries the original wherever a chunk hasn't finished, so
+  drawing what the file holds showed the source text first and swapped the
+  translation over it later. `store.translationMask` records, *per rolling
+  path*, which pages that file has translated
+  (`lib/pdf-viewer/translation-mask.ts`). The pane draws only those, and
+  `PageRenderer` checks the mask in `needsRender` and again after every
+  `await`. A newly translated page sweeps in under white strips, one per band,
+  each sliding off to the right shortly after the one above
+  (`PageRenderer.streamIn`, timing in `streamBand`).
+  - **Why strips, not `clip-path`:** the first version rewrote the canvas's
+    `clip-path` every frame from `requestAnimationFrame`. That repaints the
+    full-resolution bitmap per frame and shares the main thread with pdf.js,
+    which during a cache hit is rendering the next page for the whole sweep,
+    so it stuttered. The strips animate only `transform` (Web Animations),
+    which the compositor runs without repainting. The bands also overlap,
+    three in flight at once: back to back, each got about five frames and
+    read as a stepped wipe.
+  - **Why per path, not per run:** when chunk N lands, the pane is still on
+    version N-1 until N loads. "Chunk N's page may draw" applied to N-1 would
+    paint the original onto it, the very flash this exists to prevent. So
+    `PdfViewer` asks for the mask of the path it actually *loaded*, and runs
+    `setMask` after `setDocument` in the same commit.
+  - **Every version is kept.** Each new path cancels the load in flight, so a
+    pane can sit on an old version for many chunks, and a capped list once
+    blanked pages already shown translated.
+  - **The mask outlives the run.** Terminal events *finish* it
+    (`finishMask(mask, translatedPdfPath)`); they don't clear it. `done` lands
+    straight after the last `chunk_ready`, usually before that file has loaded,
+    and lifting the mask then would draw the previous version's untranslated
+    page. It lifts only once its result is the file on screen. Dismiss leaves
+    it alone for the same reason; opening another document or abandoning the
+    run clears it.
+  - **Before the first chunk** there is no translated file, so `MainLayout`
+    points the pane at the original, which has exactly the right shape, and the
+    mask blanks every page of it. That path never reaches `translatedPdfPath`,
+    so Save and Open can't pick it up.
+  - **Only a translation sweeps in.** Pages outside a page selection appear
+    without the sweep when the mask lifts. A cache hit's `chunk_ready` spans
+    every page, so it adopts with the selection as its translated pages. Pages
+    queued to sweep but not yet drawn are forgotten when a run starts or ends
+    (`maskTransition`'s `forget`). Kept, they sweep in during the next run, or
+    whenever the reader first scrolls to them long after this one.
+  - **Sweep timing:** 8 bands over 640 ms is about five frames a band. At 14
+    bands over 520 ms each band got two frames, and the left-to-right half of
+    the motion never registered. `prefers-reduced-motion` skips the sweep.
 - **Text layers are core `pdfjs.TextLayer`, plus two pieces copied from
   `pdf_viewer.mjs` rather than imported.** `pdf-viewer.css` carries its
   `.textLayer` rules, and `text-selection.ts` ports `TextLayerBuilder`'s

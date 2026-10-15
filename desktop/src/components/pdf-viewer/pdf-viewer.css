@@ -32,6 +32,31 @@
   transition: opacity 180ms ease-out;
 }
 
+/* A newly translated page sweeping in (PageRenderer.streamIn). The strips are
+   the slot's white, so the page under them reads as not there yet. */
+.pdf-stream-cover {
+  --stream-feather: 32px;
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+/* Each strip starts a feather's width left of the page, so its soft leading
+   edge is off the page until it moves. Sliding by its own width then takes it
+   exactly clear of the right edge. */
+.pdf-stream-band {
+  position: absolute;
+  left: calc(-1 * var(--stream-feather));
+  width: calc(100% + var(--stream-feather));
+  background: linear-gradient(
+    to right,
+    rgb(255 255 255 / 0),
+    #fff var(--stream-feather)
+  );
+  will-change: transform;
+}
+
 /* TextLayer measures text on a canvas it appends to <body>. */
 .hiddenCanvasElement {
   position: absolute;
