@@ -283,6 +283,9 @@ a test. They are the things most easily undone by "simplifying".
   runs. `useWorkerFetch` is pinned to `false` so one fetch path covers every
   platform, which is also why `iccUrl` is *not* set: it is unreachable under the
   pin. On Linux `lib.rs:enable_wasm_relaxed_simd` must run first in `run()` (#74).
+- Every document opens with `lib/pdf-viewer/load-options.ts`, which sets
+  `disableFontFace: true` on all platforms: each registered `FontFace` costs a
+  pass over the text layers, and a translated page brings 10–20 of them.
 - Shortcuts are owned by `MainLayout`'s capture-phase handler and are always
   `preventDefault`ed.
 

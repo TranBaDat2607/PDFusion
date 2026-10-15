@@ -10,6 +10,7 @@ import {
   pdfAssetUrl,
   type PdfAssetDirectory,
 } from "./asset-urls";
+import { pdfDocumentOptions } from "./load-options";
 
 const directories = Object.keys(pdfAssetDirectories) as PdfAssetDirectory[];
 
@@ -78,28 +79,20 @@ const fixtures = path.join(
   "__fixtures__",
 );
 
-/** The same options the app hands `getDocument`, with the prefixes pointed at
- *  the package instead of a server — in Node pdf.js reads them off the
- *  filesystem.
+/** The options the app hands `getDocument` — the same function, so the flags
+ *  cannot drift — with the prefixes pointed at the package instead of a
+ *  server: in Node pdf.js reads them off the filesystem.
  *
- *  These have to stay in step with `usePdfDocument.ts` including the flags,
- *  not just the prefixes. `useSystemFonts` is the one that bites: it defaults
- *  to `!isNodeJS`, so a test that leaves it out gets `false` here and `true`
- *  in the webview, and `standardFontDataUrl` is then exercised in a
- *  configuration the app never runs. */
+ *  Sharing the flags matters as much as sharing the prefixes. `useSystemFonts`
+ *  is the one that bit: it defaults to `!isNodeJS`, so a test that left it out
+ *  got `false` here and `true` in the webview, and exercised
+ *  `standardFontDataUrl` in a configuration the app never runs. */
 function assetOptions() {
   // A forward slash even on Windows: pdf.js concatenates filenames onto this
   // and rejects a prefix that does not end in one, whatever the platform.
-  const prefix = (dir: PdfAssetDirectory) =>
-    `${path.join(pdfjsRoot, pdfAssetDirectories[dir])}/`;
-  return {
-    wasmUrl: prefix("wasm"),
-    cMapUrl: prefix("cmaps"),
-    cMapPacked: true,
-    standardFontDataUrl: prefix("standardFonts"),
-    useSystemFonts: false,
-    useWorkerFetch: false,
-  };
+  return pdfDocumentOptions(
+    (dir) => `${path.join(pdfjsRoot, pdfAssetDirectories[dir])}/`,
+  );
 }
 
 /** The legacy build, because this runs in Node: it substitutes a filesystem

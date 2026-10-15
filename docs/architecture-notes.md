@@ -1999,6 +1999,24 @@ out of React state. There are five invariants, and each one is easy to break by
   same decode costs 287 ms under Node's V8, so a ~2.9x gap to Chromium remains
   and is JavaScriptCore's, not something this app can reach.
 
+- **Fonts are drawn as paths, never registered (`disableFontFace: true`).**
+  By default pdf.js turns every font object into a `FontFace` and adds it to
+  the document's font set, and each one costs the main thread a pass over the
+  text layers already on screen. A translated paper is the worst case: one
+  BabelDOC run per page means every page brings its own 10–20 font objects
+  (`document.fonts` climbed 51 → 133 in nine pages). Measured in the app's
+  translated pane on a cache hit, the main thread was blocked 430–910 ms of
+  every second and page 5 arrived at 10.5 s; with the flag set, 160–235 ms and
+  3.7 s. Subsetting the fonts (`pdf_pages.subset_embedded_fonts`) shrank the
+  bytes but not the count, which is why it barely moved this. Reproduced
+  outside the app with the app's text layer: 9 pages took 6.1 s → 3.9 s in
+  WebKitGTK 2.52 and 4.4 s → 2.7 s in Chromium 149, and without a text layer
+  the flag made no difference in either — so it is the text layer the
+  registrations are expensive against, not one engine, and the flag is set on
+  every platform. The options live in `lib/pdf-viewer/load-options.ts`, which
+  the fixture tests share; pdf.js defaults the flag to `isNodeJS`, so a test
+  that left it out would pass while the app ran without it.
+
 Synchronized scrolling between the panes (the first item in #30) is
 deliberately not implemented: the panes scroll and zoom independently.
 
