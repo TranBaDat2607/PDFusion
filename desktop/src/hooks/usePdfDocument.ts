@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { GlobalWorkerOptions, getDocument } from "pdfjs-dist";
-import type { PDFDocumentLoadingTask, PDFDocumentProxy } from "pdfjs-dist";
+import type { PDFDocumentProxy } from "pdfjs-dist";
 import workerSrc from "pdfjs-dist/build/pdf.worker.min.mjs?url";
 
 import { sidecarToken, sidecarUrl } from "@/lib/api-client";
@@ -11,11 +11,18 @@ import {
   type PendingChanges,
 } from "@/lib/pdf-viewer/artifact-swap";
 import { pdfAssetUrl } from "@/lib/pdf-viewer/asset-urls";
+import {
+  trackDocumentLoad,
+  type DocumentLoad,
+} from "@/lib/pdf-viewer/document-lifetime";
 
 GlobalWorkerOptions.workerSrc = workerSrc;
 
 export interface LoadedDocument {
   doc: PDFDocumentProxy;
+  /** The file `doc` was read from, which during a translation names the
+   *  rolling version on screen while a newer one may already be loading. */
+  path: string;
   /** `null`: a different document from the one before. Otherwise the pages
    *  that differ from the version it replaced. */
   changes: PendingChanges | null;
@@ -107,7 +114,7 @@ export function usePdfDocument({
     setError(null);
 
     let cancelled = false;
-    let task: PDFDocumentLoadingTask | null = null;
+    let load: DocumentLoad | null = null;
     void (async () => {
       try {
         const url = await sidecarUrl(
@@ -120,7 +127,7 @@ export function usePdfDocument({
         // pages (#73), then the CJK text and the standard-font metrics (#77).
         // See lib/pdf-viewer/asset-urls.ts.
         const base = document.baseURI;
-        task = getDocument({
+        const task = getDocument({
           url,
           httpHeaders: { Authorization: `Bearer ${token}` },
           wasmUrl: pdfAssetUrl("wasm", base),
@@ -144,7 +151,8 @@ export function usePdfDocument({
           // everywhere else. One path keeps the CSP surface where #73 left it.
           useWorkerFetch: false,
         });
-        const doc = await task.promise;
+        load = trackDocumentLoad(task);
+        const doc = await load.promise;
         if (cancelled) {
           void doc.destroy();
           return;
@@ -156,6 +164,7 @@ export function usePdfDocument({
           previous.doc.numPages === doc.numPages;
         show({
           doc,
+          path: filePath,
           changes: sameShape ? (pendingRef.current ?? "all") : null,
           keepPosition: incremental,
         });
@@ -178,8 +187,14 @@ export function usePdfDocument({
     return () => {
       cancelled = true;
       // Stops the fetch and frees the worker-side transport of a load that
-      // was overtaken before it finished.
-      void task?.destroy();
+      // was overtaken before it finished. A load that finished is the document
+      // on screen, and is left to the `[loaded]` effect below, which destroys
+      // it once its successor has replaced it. One gap: a document shown in the
+      // same tick a new path takes its place on the non-incremental branch is
+      // superseded by `show(null)` before it ever commits, so nothing destroys
+      // it. That needs a commit-tracking ref to close and costs one worker per
+      // occurrence; it was judged rarer than the crash this spares.
+      load?.abandon();
     };
     // `incrementalUpdates` is fixed per pane, and the change log is read
     // through its ref when a load starts: neither should start a load.

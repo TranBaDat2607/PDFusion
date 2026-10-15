@@ -19,6 +19,10 @@ import { usePdfDocument } from "@/hooks/usePdfDocument";
 import { usePdfFind } from "@/hooks/usePdfFind";
 import type { ArtifactChange } from "@/lib/pdf-viewer/artifact-swap";
 import {
+  paneMask,
+  type TranslationMask,
+} from "@/lib/pdf-viewer/translation-mask";
+import {
   CONTENT_PADDING,
   PAGE_GAP,
   fitWidthZoom,
@@ -82,6 +86,9 @@ interface PdfViewerProps {
   incrementalUpdates?: boolean;
   /** `translatedChanges` from the store. Only read with `incrementalUpdates`. */
   changeLog?: readonly ArtifactChange[];
+  /** `translationMask` from the store: while it's set, only the pages the
+   *  file on screen has translated are drawn, and the rest stay blank. */
+  mask?: TranslationMask | null;
   /** This pane receives the zoom and find shortcuts; its label says so. */
   active?: boolean;
   ref?: Ref<PdfViewerHandle>;
@@ -120,6 +127,7 @@ export function PdfViewer({
   reloadKey = 0,
   incrementalUpdates = false,
   changeLog = NO_CHANGES,
+  mask = null,
   active = false,
   ref,
 }: PdfViewerProps) {
@@ -130,6 +138,9 @@ export function PdfViewer({
     changeLog,
   });
   const doc = loaded?.doc ?? null;
+  const loadedPath = loaded?.path ?? null;
+  const pane = useMemo(() => paneMask(mask, loadedPath), [mask, loadedPath]);
+  const drawable = pane?.drawable ?? null;
 
   // Created once. StrictMode's development remount releases it rather than
   // destroying it, so the same instance keeps working afterwards.
@@ -214,6 +225,13 @@ export function PdfViewer({
     }
     scheduleViewportUpdate();
   }, [loaded, doc, renderer, scheduleViewportUpdate]);
+
+  // After the document effect above, which runs first in a commit that
+  // changes both: a page revealed with the version that translated it must be
+  // drawn from that version, not the one it replaces.
+  useEffect(() => {
+    renderer.setMask(pane);
+  }, [renderer, pane]);
 
   // Page sizes. Every page starts at the first page's size, so the scroll
   // height is about right immediately, and is corrected as the real sizes come
@@ -419,6 +437,7 @@ export function PdfViewer({
   const find = usePdfFind({
     doc,
     changes: loaded?.changes ?? null,
+    searchable: drawable,
     renderer,
     currentPage: () => currentPageRef.current,
     revealPage,
@@ -437,7 +456,10 @@ export function PdfViewer({
   useImperativeHandle(
     ref,
     () => ({
-      hasDocument: () => doc !== null,
+      // A pane blank throughout a run has nothing to zoom or search, so its
+      // shortcuts fall through to the other one.
+      hasDocument: () =>
+        doc !== null && (drawable === null || drawable.size > 0),
       zoomIn: () => changeZoom(zoomIn),
       zoomOut: () => changeZoom(zoomOut),
       resetZoom: () => changeZoom(() => 1),
@@ -445,7 +467,7 @@ export function PdfViewer({
       findNext: find.next,
       findPrevious: find.previous,
     }),
-    [doc, changeZoom, find.openFind, find.next, find.previous],
+    [doc, drawable, changeZoom, find.openFind, find.next, find.previous],
   );
 
   // One stable callback per page. A new callback every render would make React
@@ -479,6 +501,7 @@ export function PdfViewer({
             >
               {sizes.map((size, index) => {
                 const slot = slotSize(size, zoom);
+
                 return (
                   <div
                     key={index}
@@ -491,19 +514,26 @@ export function PdfViewer({
                       } as CSSProperties
                     }
                   >
-                    <span
-                      aria-hidden
-                      className="absolute inset-0 flex select-none items-center justify-center text-xs text-neutral-400"
-                    >
-                      Page {index + 1}
-                    </span>
+                    {/* Not while masked: a revealed page sweeps in onto plain
+                        white, and the label would show through the part the
+                        sweep hasn't reached. */}
+                    {drawable === null && (
+                      <span
+                        aria-hidden
+                        className="absolute inset-0 flex select-none items-center justify-center text-xs text-neutral-400"
+                      >
+                        Page {index + 1}
+                      </span>
+                    )}
                     <div ref={hostRef(index + 1)} className="absolute inset-0" />
                   </div>
                 );
               })}
             </div>
           )}
-          {!filePath && placeholderSize && (
+          {/* Also while a file loads, so a translation starting doesn't flash
+              "Loading PDF…" between the blank page and the blank document. */}
+          {(!filePath || (!doc && loading)) && placeholderSize && (
             <div className="mx-auto w-fit" style={{ padding: CONTENT_PADDING }}>
               <div
                 aria-label="Translation placeholder page"
@@ -517,7 +547,7 @@ export function PdfViewer({
               {emptyState}
             </div>
           )}
-          {filePath && !doc && loading && (
+          {filePath && !doc && loading && !placeholderSize && (
             <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
               Loading PDF…
             </div>

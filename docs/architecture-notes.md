@@ -1751,8 +1751,12 @@ out of React state. There are five invariants, and each one is easy to break by
   aimed at the incoming document's pages. What the flush on the swap path does
   *not* do is free memory — `usePdfDocument` destroys the outgoing proxy in a
   cleanup React runs before the effect that calls `setDocument`, so by then
-  `getPage()` rejects and the flush is a no-op. It earns its place by clearing
-  the list, which must not survive into a document it does not describe.
+  the document is gone and the flush is a no-op. It earns its place by clearing
+  the list, which must not survive into a document it does not describe. Note
+  that a destroyed document's `getPage()` **throws synchronously** (its
+  message handler is `null`) rather than rejecting, so every cleanup goes
+  through `cleanupPage` in `lib/pdf-viewer/document-lifetime.ts`, which
+  swallows it. Inside an effect, that throw unmounted the whole app.
 
   A decoded 2.2 MP image is ~9 MB and these pages carry two, so six retained
   pages is roughly 110 MB on that document — and the viewer mounts two panes,
@@ -1795,12 +1799,63 @@ out of React state. There are five invariants, and each one is easy to break by
   would never repaint the other chunk's pages. Changes also accumulate across
   loads overtaken by the next chunk (`artifact-swap.ts`). Every replaced
   `PDFDocumentProxy` is `destroy()`ed; before this, every chunk leaked one into
-  the worker. Every async render re-checks a document *generation*, so a render
-  that lost a race is dropped rather than drawn. A failed swap keeps the
-  previous version on screen. None of this removes the need for the backend's
+  the worker. Only the *replaced* one: the load effect's cleanup runs on every
+  new path and every reload while the old document is still on screen, so it
+  may stop a load in flight but must spare a document that arrived
+  (`trackDocumentLoad`). It once destroyed that one too; a Re-translate (which
+  bumps the reload key) then left the pane drawing from a dead document, and
+  the next page cleanup threw and blanked the window. Every async render
+  re-checks a document *generation*, so a render that lost a race is dropped
+  rather than drawn. A failed swap keeps the previous version on screen. None of this removes the need for the backend's
   `keep=2` (see "Rolling-PDF pruning keeps two files"): the old version is still
   what's displayed, and still what pdf.js issues range requests against, until
   the new one has loaded.
+- **During a run the translated pane is blank except for translated pages.**
+  Every rolling PDF carries the original wherever a chunk hasn't finished, so
+  drawing what the file holds showed the source text first and swapped the
+  translation over it later. `store.translationMask` records, *per rolling
+  path*, which pages that file has translated
+  (`lib/pdf-viewer/translation-mask.ts`). The pane draws only those, and
+  `PageRenderer` checks the mask in `needsRender` and again after every
+  `await`. A newly translated page sweeps in under white strips, one per band,
+  each sliding off to the right shortly after the one above
+  (`PageRenderer.streamIn`, timing in `streamBand`).
+  - **Why strips, not `clip-path`:** the first version rewrote the canvas's
+    `clip-path` every frame from `requestAnimationFrame`. That repaints the
+    full-resolution bitmap per frame and shares the main thread with pdf.js,
+    which during a cache hit is rendering the next page for the whole sweep,
+    so it stuttered. The strips animate only `transform` (Web Animations),
+    which the compositor runs without repainting. The bands also overlap,
+    three in flight at once: back to back, each got about five frames and
+    read as a stepped wipe.
+  - **Why per path, not per run:** when chunk N lands, the pane is still on
+    version N-1 until N loads. "Chunk N's page may draw" applied to N-1 would
+    paint the original onto it, the very flash this exists to prevent. So
+    `PdfViewer` asks for the mask of the path it actually *loaded*, and runs
+    `setMask` after `setDocument` in the same commit.
+  - **Every version is kept.** Each new path cancels the load in flight, so a
+    pane can sit on an old version for many chunks, and a capped list once
+    blanked pages already shown translated.
+  - **The mask outlives the run.** Terminal events *finish* it
+    (`finishMask(mask, translatedPdfPath)`); they don't clear it. `done` lands
+    straight after the last `chunk_ready`, usually before that file has loaded,
+    and lifting the mask then would draw the previous version's untranslated
+    page. It lifts only once its result is the file on screen. Dismiss leaves
+    it alone for the same reason; opening another document or abandoning the
+    run clears it.
+  - **Before the first chunk** there is no translated file, so `MainLayout`
+    points the pane at the original, which has exactly the right shape, and the
+    mask blanks every page of it. That path never reaches `translatedPdfPath`,
+    so Save and Open can't pick it up.
+  - **Only a translation sweeps in.** Pages outside a page selection appear
+    without the sweep when the mask lifts. A cache hit's `chunk_ready` spans
+    every page, so it adopts with the selection as its translated pages. Pages
+    queued to sweep but not yet drawn are forgotten when a run starts or ends
+    (`maskTransition`'s `forget`). Kept, they sweep in during the next run, or
+    whenever the reader first scrolls to them long after this one.
+  - **Sweep timing:** 8 bands over 640 ms is about five frames a band. At 14
+    bands over 520 ms each band got two frames, and the left-to-right half of
+    the motion never registered. `prefers-reduced-motion` skips the sweep.
 - **Text layers are core `pdfjs.TextLayer`, plus two pieces copied from
   `pdf_viewer.mjs` rather than imported.** `pdf-viewer.css` carries its
   `.textLayer` rules, and `text-selection.ts` ports `TextLayerBuilder`'s
@@ -2335,6 +2390,19 @@ Support/PDFusion/logs` on macOS), rotating at 5 MB with 5 backups kept:
   with no file target, which meant a release build (`main.rs` sets
   `windows_subsystem = "windows"`, so there's no console) discarded that
   stream entirely — "Sidecar failed to start" had nowhere to go.
+- **Webview** → also `shell.log`, through the same plugin's JS side
+  (`@tauri-apps/plugin-log`, capability `log:allow-log` only).
+  `lib/webview-log.ts` forwards `console.warn`/`console.error`, uncaught
+  `error` events and unhandled rejections; `main.tsx` installs it before the
+  first render, in the shell only. Before it the webview had no log at all: a
+  viewer bug that threw inside an effect blanked the whole window while both
+  log files read as a clean run, and only devtools held the stack. Three
+  guards, each with a test: the sink's own console traffic is never forwarded
+  (no loop), a failing IPC call is swallowed (an unhandled rejection would be
+  forwarded in turn), and at most `LOG_BUDGET` messages a minute go through,
+  with a "N suppressed" line after, so a warning in a render loop can't rotate
+  the shell's own lines out of `shell.log`. The plugin tags each line with its
+  caller, which is always the forwarder; the error's stack is in the message.
 
 The boot-error screen's "Show logs folder" button (`open_logs_folder` in
 `lib.rs`) opens this directory regardless of which file(s) exist yet.

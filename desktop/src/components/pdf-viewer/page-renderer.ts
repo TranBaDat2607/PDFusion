@@ -19,6 +19,10 @@
  *   CSS, until `ZOOM_SETTLE_MS` passes without another zoom. After a document
  *   swap, only the pages that changed are redrawn at all.
  *
+ * The one deliberate blank is the translation mask (`setMask`): while a run is
+ * in progress, a page the file on screen hasn't translated is never drawn, and
+ * one it has translated sweeps in when first drawn.
+ *
  * Every `await` re-checks that the document, its generation and the page's
  * state are still the ones it started with. A render that lost a race is
  * dropped rather than landing on the wrong page or the wrong document.
@@ -37,6 +41,13 @@ import {
   pagesToRefresh,
   type PendingChanges,
 } from "@/lib/pdf-viewer/artifact-swap";
+import {
+  STREAM_LINES,
+  maskTransition,
+  streamBand,
+  type PaneMask,
+} from "@/lib/pdf-viewer/translation-mask";
+import { cleanupPage as freePageResources } from "@/lib/pdf-viewer/document-lifetime";
 import {
   renewRetained,
   retainReleased,
@@ -83,6 +94,12 @@ interface PageState {
   /** `generation:zoom` a render failed at. Not retried until one of them
    *  changes, so a page that can't render doesn't spin the queue. */
   failedAt: string | null;
+  /** The strips still covering the page while it sweeps in, if it is. */
+  streamCover: HTMLElement | null;
+}
+
+function prefersReducedMotion(): boolean {
+  return window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
 }
 
 function newPageState(): PageState {
@@ -98,7 +115,23 @@ function newPageState(): PageState {
     pendingText: null,
     detachSelection: null,
     failedAt: null,
+    streamCover: null,
   };
+}
+
+function samePages(
+  a: ReadonlySet<number> | null,
+  b: ReadonlySet<number> | null,
+): boolean {
+  if (a === null || b === null) return a === b;
+  if (a.size !== b.size) return false;
+  for (const page of a) if (!b.has(page)) return false;
+  return true;
+}
+
+function sameMask(a: PaneMask | null, b: PaneMask | null): boolean {
+  if (a === null || b === null) return a === b;
+  return samePages(a.drawable, b.drawable) && samePages(a.translated, b.translated);
 }
 
 /** Release a canvas's backing store now rather than at garbage collection. A
@@ -123,6 +156,12 @@ export class PageRenderer {
   private pumping = false;
   /** Released pages whose pdf.js resources are still held, oldest first. */
   private retained: number[] = [];
+  private mask: PaneMask | null = null;
+  /** Revealed by the mask and not drawn since: they sweep in when they are.
+   *  Kept for pages outside the render window too, so a page translated while
+   *  the reader was elsewhere still arrives as a translation — but only for as
+   *  long as its run is on screen (`maskTransition`'s `forget`). */
+  private streamPending = new Set<number>();
 
   /** Register the element page `page` draws into, or with `null`, forget it. */
   setHost(page: number, host: HTMLElement | null): void {
@@ -161,8 +200,10 @@ export class PageRenderer {
     // the cleanup would be aimed at its pages instead. On the paths the app
     // actually takes the flush frees nothing: `usePdfDocument` destroys the
     // outgoing proxy in a cleanup that React runs before this effect, and that
-    // reclaims everything the flush would have. It stays because the retention
-    // list must not survive into a document it does not describe.
+    // reclaims everything the flush would have — so the flush is aimed at a
+    // destroyed document, whose `getPage` throws, and `cleanupPage` has to
+    // swallow that. It stays because the retention list must not survive into
+    // a document it does not describe.
     if (!doc || changes === null) {
       for (const page of [...this.pages.keys()]) this.release(page);
     }
@@ -175,6 +216,26 @@ export class PageRenderer {
         if (state) state.dirty = true;
       }
     }
+    this.pump();
+  }
+
+  /**
+   * Draw only the pages `mask` allows (all of them for `null`). A rendered
+   * page it doesn't allow is blanked now; a page newly translated is swept in
+   * when it's drawn. Call it after `setDocument` for the same commit, so a page
+   * revealed together with the version that translated it is drawn from that
+   * version.
+   */
+  setMask(mask: PaneMask | null): void {
+    if (sameMask(mask, this.mask)) return;
+    const rendered = [...this.pages]
+      .filter(([, state]) => state.canvas !== null || state.task !== null)
+      .map(([page]) => page);
+    const { hide, stream, forget } = maskTransition(this.mask, mask, rendered);
+    this.mask = mask;
+    for (const page of hide) this.release(page);
+    if (forget) this.streamPending.clear();
+    for (const page of stream) this.streamPending.add(page);
     this.pump();
   }
 
@@ -242,6 +303,7 @@ export class PageRenderer {
     this.pages.delete(page);
     state.task?.cancel();
     state.pendingText?.cancel();
+    state.streamCover?.remove();
     state.detachSelection?.();
     if (state.canvas) freeCanvas(state.canvas);
     state.textDiv?.remove();
@@ -265,11 +327,10 @@ export class PageRenderer {
     // the document the caller meant. `pages` is consulted only while that is
     // still the document on screen: after a swap it describes the incoming one
     // and says nothing about this page.
-    void doc?.getPage(page).then(
-      (proxy) => {
-        if (this.doc !== doc || !this.pages.has(page)) proxy.cleanup();
-      },
-      () => undefined,
+    freePageResources(
+      doc,
+      page,
+      () => this.doc !== doc || !this.pages.has(page),
     );
   }
 
@@ -282,11 +343,17 @@ export class PageRenderer {
   private needsRender(page: number): boolean {
     const doc = this.doc;
     if (!doc || page > doc.numPages || !this.hosts.has(page)) return false;
+    if (!this.mayDraw(page)) return false;
     const state = this.pages.get(page);
     if (!state?.canvas) return state?.failedAt !== this.failureKey();
     if (state.failedAt === this.failureKey()) return false;
     if (state.dirty) return true;
     return state.zoom !== this.zoom && performance.now() >= this.zoomSettlesAt;
+  }
+
+  private mayDraw(page: number): boolean {
+    const drawable = this.mask?.drawable ?? null;
+    return drawable === null || drawable.has(page);
   }
 
   private failureKey(): string {
@@ -327,7 +394,8 @@ export class PageRenderer {
       this.doc === doc &&
       this.generation === generation &&
       this.pages.get(pageNumber) === page_ &&
-      this.hosts.get(pageNumber) === host;
+      this.hosts.get(pageNumber) === host &&
+      this.mayDraw(pageNumber);
     const fail = (what: string, error: unknown) => {
       if (!current()) return;
       page_.failedAt = `${generation}:${zoom}`;
@@ -374,8 +442,15 @@ export class PageRenderer {
 
     const previous = page_.canvas;
     if (previous) {
+      // A redraw mid-sweep (a zoom) goes in under the cover, which carries on
+      // regardless: it belongs to the slot, not to the canvas.
       previous.replaceWith(canvas);
       freeCanvas(previous);
+    } else if (this.streamPending.delete(pageNumber) && !prefersReducedMotion()) {
+      // Covered in the same task it goes in, so no frame ever shows the
+      // whole page.
+      host.insertBefore(canvas, page_.textDiv);
+      this.streamIn(page_, host);
     } else {
       // Fade in only onto an empty slot; a replacement swaps in place.
       canvas.style.opacity = "0";
@@ -396,6 +471,46 @@ export class PageRenderer {
       page_.textLayer.update({ viewport: textViewport });
       page_.textZoom = zoom;
     }
+  }
+
+  /**
+   * Sweep the page in: white strips over it, one per band, each sliding off to
+   * the right a little after the one above. Only `transform` animates, which
+   * the compositor can run without repainting the canvas, so the sweep holds
+   * its frame rate while pdf.js draws the next page on this thread. The first
+   * version rewrote the canvas's `clip-path` every frame instead, which
+   * repainted the full-resolution bitmap each time and stuttered whenever a
+   * render was in progress, which during a cache hit is the whole sweep.
+   */
+  private streamIn(state: PageState, host: HTMLElement): void {
+    const cover = document.createElement("div");
+    cover.className = "pdf-stream-cover";
+    let last: Animation | null = null;
+    for (let index = 0; index < STREAM_LINES; index++) {
+      const band = document.createElement("div");
+      band.className = "pdf-stream-band";
+      band.style.top = `${(index / STREAM_LINES) * 100}%`;
+      // A pixel taller than its share: percentage edges land on fractional
+      // pixels, and the hairline between two bands would show the page.
+      band.style.height = `calc(${100 / STREAM_LINES}% + 1px)`;
+      cover.append(band);
+      // `both`: a band waiting its turn covers, and a finished one stays off
+      // the page until the cover is removed, rather than snapping back.
+      last = band.animate(
+        [{ transform: "translateX(0)" }, { transform: "translateX(100%)" }],
+        { ...streamBand(index, STREAM_LINES), easing: "ease-in-out", fill: "both" },
+      );
+    }
+    host.insertBefore(cover, state.textDiv);
+    state.streamCover = cover;
+    last?.finished.then(
+      () => {
+        cover.remove();
+        if (state.streamCover === cover) state.streamCover = null;
+      },
+      // Cancelled with its page, whose release already removed the cover.
+      () => undefined,
+    );
   }
 
   private async buildTextLayer(

@@ -172,6 +172,8 @@ function Workspace() {
     (path: string) => {
       setOriginalPath(path);
       setTranslatedPath(null);
+      // A finished run's mask describes this document's result, not the next.
+      useAppStore.getState().clearTranslationMask();
       // The saved copy belongs to the *previous* document — keeping it would
       // make the toolbar offer "Open" on an unrelated file.
       setExportedPath(null);

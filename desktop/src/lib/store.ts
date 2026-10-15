@@ -9,6 +9,12 @@ import {
   appendArtifactChange,
   type ArtifactChange,
 } from "@/lib/pdf-viewer/artifact-swap";
+import {
+  emptyMask,
+  finishMask,
+  maskAfterArtifact,
+  type TranslationMask,
+} from "@/lib/pdf-viewer/translation-mask";
 import type { ChunkProgress } from "@/lib/translation-progress";
 
 export type Theme = "light" | "dark" | "system";
@@ -59,10 +65,13 @@ interface AppState {
    *
    *  `changedPages` is how the new artifact differs from the one it replaces
    *  (`chunk_ready.pages_in_chunk`, `[first, last]`, 1-indexed). It goes into
-   *  `translatedChanges`; omitted means unknown. */
+   *  `translatedChanges`; omitted means unknown. `translatedPages` is what
+   *  the artifact translated, when that isn't `changedPages`: a cache hit
+   *  repaints every page but translated only the selection. */
   adoptTranslatedArtifact: (
     path: string,
     changedPages?: [number, number] | null,
+    translatedPages?: readonly [number, number][] | null,
   ) => void;
 
   /** Every artifact adopted, newest last, trimmed to the last few dozen. The
@@ -72,6 +81,25 @@ interface AppState {
    *  `lib/pdf-viewer/artifact-swap.ts`. Re-adopting the path already on screen
    *  adds nothing, because the file didn't change. */
   translatedChanges: ArtifactChange[];
+
+  /** While a translation runs, the pages of each rolling artifact that are
+   *  actually translated; the translated pane draws only those and leaves the
+   *  rest blank, rather than showing the original text the rolling file
+   *  carries there. Kept per artifact because the pane is still showing the
+   *  previous file while the next one loads, and a page drawn from that file
+   *  early would be the original. After the run it stays, marked with its
+   *  result, until that file is on screen — so it outlives the run until the
+   *  next one starts or another document opens. `null`: everything draws. */
+  translationMask: TranslationMask | null;
+  beginTranslationMask: () => void;
+  /** The run is over: lift the mask once the pane shows the result, which is
+   *  `translatedPdfPath` as it stands. Not straight away — the result may
+   *  still be loading, and the file on screen until then has untranslated
+   *  pages. */
+  finishTranslationMask: () => void;
+  /** Drop the mask now: its run is being walked away from, or the document it
+   *  describes is being closed. */
+  clearTranslationMask: () => void;
 
   /** Language the on-screen translation was actually produced in, as reported
    *  by the job that produced it — not read from live config, which the user
@@ -142,7 +170,7 @@ export const useAppStore = create<AppState>((set) => ({
   exportedPdfPath: null,
   setExportedPdfPath: (path) => set({ exportedPdfPath: path }),
 
-  adoptTranslatedArtifact: (path, changedPages) =>
+  adoptTranslatedArtifact: (path, changedPages, translatedPages) =>
     set((s) => ({
       translatedPdfPath: path,
       exportedPdfPath: null,
@@ -150,9 +178,24 @@ export const useAppStore = create<AppState>((set) => ({
         path === s.translatedPdfPath
           ? s.translatedChanges
           : appendArtifactChange(s.translatedChanges, changedPages ?? null),
+      translationMask: s.translationMask
+        ? (translatedPages ?? (changedPages ? [changedPages] : [])).reduce(
+            (mask, span) => maskAfterArtifact(mask, path, span),
+            // Records the path even when no span does.
+            maskAfterArtifact(s.translationMask, path, null),
+          )
+        : null,
     })),
 
   translatedChanges: [],
+
+  translationMask: null,
+  beginTranslationMask: () => set({ translationMask: emptyMask() }),
+  finishTranslationMask: () =>
+    set((s) => ({
+      translationMask: finishMask(s.translationMask, s.translatedPdfPath),
+    })),
+  clearTranslationMask: () => set({ translationMask: null }),
 
   translationTargetLang: "vi",
   setTranslationTargetLang: (translationTargetLang) =>

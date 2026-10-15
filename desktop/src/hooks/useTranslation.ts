@@ -112,6 +112,9 @@ export function useTranslation() {
   const bumpTranslatedReloadKey = useAppStore(
     (s) => s.bumpTranslatedReloadKey,
   );
+  const beginMask = useAppStore((s) => s.beginTranslationMask);
+  const finishMask = useAppStore((s) => s.finishTranslationMask);
+  const clearMask = useAppStore((s) => s.clearTranslationMask);
 
   const start = useCallback(
     async (filePath: string, opts: StartOptions = {}) => {
@@ -158,6 +161,9 @@ export function useTranslation() {
         );
         jobId = accepted.job_id;
         setActiveJob(jobId);
+        // Only once the job is accepted: a refused request would otherwise
+        // blank the translated pane for the moment it takes to come back.
+        beginMask();
       } catch (e) {
         // The sidecar pre-flights the language pair, the document's size and
         // the pages asked for, and answers 422 with a sentence meant for the
@@ -231,8 +237,14 @@ export function useTranslation() {
                 toast.success(`Loaded from cache · translated ${when}`);
               }
               // The chunk's own pages are all that differ from the previous
-              // rolling PDF, so the translated viewer repaints only those.
-              adoptArtifact(c.rolling_pdf_path, c.pages_in_chunk);
+              // rolling PDF, so the translated viewer repaints only those. A
+              // cache hit's span is every page, but only the selection is a
+              // translation the pane should sweep in.
+              adoptArtifact(
+                c.rolling_pdf_path,
+                c.pages_in_chunk,
+                c.cache_hit ? opts.pageRanges : undefined,
+              );
               // Read the store rather than close over it: chunk_ready fires
               // per completed chunk and each one builds on the last.
               const progress = applyChunkReady(
@@ -269,6 +281,9 @@ export function useTranslation() {
               if (c.translated_file) {
                 adoptArtifact(c.translated_file);
               }
+              // Every page draws once this file is on screen, including the
+              // ones outside a page selection, which it carries untranslated.
+              finishMask();
               if (c.target_lang) setTranslationTargetLang(c.target_lang);
               setState((s) => ({
                 ...s,
@@ -284,6 +299,7 @@ export function useTranslation() {
               if (c.translated_file) {
                 adoptArtifact(c.translated_file);
               }
+              finishMask();
               setState((s) => ({
                 ...s,
                 status: "cancelled",
@@ -291,6 +307,7 @@ export function useTranslation() {
               }));
             } else if (type === "error") {
               const e = data as JobErrorPayload;
+              finishMask();
               setState((s) => ({ ...s, status: "error", error: e.message }));
             }
           },
@@ -307,6 +324,7 @@ export function useTranslation() {
         // here, and the run it walked away from is neither unexpected nor
         // still the user's business (#44).
         if (!controller.signal.aborted) {
+          finishMask();
           setState((s) =>
             s.status === "running"
               ? {
@@ -320,6 +338,7 @@ export function useTranslation() {
           );
         }
       } catch (e) {
+        finishMask();
         setState((s) => ({ ...s, status: "error", error: (e as Error).message }));
       } finally {
         // Retract only *our* job. An abandoned stream resolves a moment after
@@ -337,6 +356,8 @@ export function useTranslation() {
       setTranslationTargetLang,
       setChunkProgress,
       bumpTranslatedReloadKey,
+      beginMask,
+      finishMask,
     ],
   );
 
@@ -361,6 +382,9 @@ export function useTranslation() {
     // backend closes the stream itself once that event fires.
   }, []);
 
+  // Leaves the mask alone: Dismiss can land between `done` and the result
+  // loading, and lifting the mask then would draw the file still on screen,
+  // untranslated pages and all. Opening another document clears it instead.
   const reset = useCallback(() => setState(INITIAL), []);
 
   /**
@@ -383,6 +407,7 @@ export function useTranslation() {
     setState(INITIAL);
     setActiveJob(null);
     setChunkProgress(null);
+    clearMask();
     if (!jobId) return;
     try {
       await api.post(`/translate/${jobId}/cancel`);
@@ -390,7 +415,7 @@ export function useTranslation() {
       // Best-effort: the user has already moved on, and the sidecar's own
       // stale-job sweep reclaims a job nobody reattaches to.
     }
-  }, [setActiveJob, setChunkProgress]);
+  }, [setActiveJob, setChunkProgress, clearMask]);
 
   // Live re-prioritization: when the user scrolls during translation, POST
   // the new visible page so backend workers pivot to translating pages near

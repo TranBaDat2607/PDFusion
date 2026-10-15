@@ -28,6 +28,10 @@ interface Options {
   doc: PDFDocumentProxy | null;
   /** How `doc` differs from the document before it. See `usePdfDocument`. */
   changes: PendingChanges | null;
+  /** The only pages that may match, or `null` for all. A translation in
+   *  progress keeps its untranslated pages blank, and a match there would
+   *  scroll the reader to an empty page. */
+  searchable: ReadonlySet<number> | null;
   renderer: PageRenderer;
   /** The page the reader is on. The first match picked is on it or after it. */
   currentPage: () => number;
@@ -69,7 +73,7 @@ export interface PdfFind {
  * to the first match.
  */
 export function usePdfFind(options: Options): PdfFind {
-  const { doc, renderer } = options;
+  const { doc, searchable, renderer } = options;
   const optionsRef = useRef(options);
   optionsRef.current = options;
 
@@ -105,9 +109,11 @@ export function usePdfFind(options: Options): PdfFind {
     pages: Map<number, string>;
   }>({ doc: null, pages: new Map() });
   /** The query and document of the search that last started. */
-  const searchedRef = useRef<{ needle: string; doc: PDFDocumentProxy } | null>(
-    null,
-  );
+  const searchedRef = useRef<{
+    needle: string;
+    doc: PDFDocumentProxy;
+    searchable: ReadonlySet<number> | null;
+  } | null>(null);
   /** Per rendered page, the text spans its highlights changed. */
   const touchedRef = useRef(new Map<number, Set<number>>());
   /** A match to scroll to once its highlight exists. */
@@ -221,8 +227,8 @@ export function usePdfFind(options: Options): PdfFind {
       active &&
       lastSearch !== null &&
       lastSearch.needle === needle &&
-      lastSearch.doc !== doc;
-    searchedRef.current = active && doc ? { needle, doc } : null;
+      (lastSearch.doc !== doc || lastSearch.searchable !== searchable);
+    searchedRef.current = active && doc ? { needle, doc, searchable } : null;
 
     if (!refresh) {
       matchesRef.current = [];
@@ -248,7 +254,8 @@ export function usePdfFind(options: Options): PdfFind {
       const found: DocumentMatch[] = [];
       let picked = refresh;
       for (let page = 1; page <= doc.numPages; page++) {
-        let text = texts.get(page);
+        // Skipped, not `continue`d: the last page still has to publish.
+        let text = searchable && !searchable.has(page) ? "" : texts.get(page);
         if (text === undefined) {
           try {
             const content = await (await doc.getPage(page)).getTextContent();
@@ -303,7 +310,7 @@ export function usePdfFind(options: Options): PdfFind {
       cancelled = true;
       window.clearTimeout(timer);
     };
-  }, [open, query, doc, select]);
+  }, [open, query, doc, searchable, select]);
 
   useEffect(() => {
     const selectedPage =

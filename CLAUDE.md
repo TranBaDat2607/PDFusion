@@ -261,6 +261,10 @@ a test. They are the things most easily undone by "simplifying".
   only visible pages ±3 hold one.
 - A canvas is only ever replaced by a finished one; the translated pane swaps
   **pages**, not documents, driven by the `translatedChanges` log.
+- During a run the translated pane draws only translated pages
+  (`translationMask`, kept **per rolling path**, read for the path actually
+  loaded). Terminal events *finish* the mask rather than clearing it, so it
+  lifts only once the result is on screen.
 - `cleanup()` on a released page is deferred, never skipped (#76). The
   retention list in `lib/pdf-viewer/decode-retention.ts` is the record of what
   still owes one, so a page renewed into the window stays on the list and only
@@ -330,8 +334,9 @@ either — only a real translate through the frozen exe catches them.
 - Runtime config is `config.toml` under the data root; the defaults are the
   field defaults of the Pydantic models in `config/models.py`; `.env`
   overrides the TOML. Access via `get_config_manager()` / `get_settings()`.
-- Logs: `logs/app.log` (sidecar) and `logs/shell.log` (Rust) under the data
-  root, rotating at 5 MB × 5.
+- Logs: `logs/app.log` (sidecar) and `logs/shell.log` (Rust, plus the
+  webview's warnings and errors via `lib/webview-log.ts`) under the data root,
+  rotating at 5 MB × 5.
 - `ruff` is the only Python gate and runs its default rule set; black/isort/
   mypy stay local. No pre-commit, no Makefile, no ESLint — TypeScript is
   checked by `pnpm build`.

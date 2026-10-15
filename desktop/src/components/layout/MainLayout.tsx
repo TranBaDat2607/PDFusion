@@ -34,6 +34,7 @@ export function MainLayout({ onPickFile, onOpenSettings }: MainLayoutProps) {
   const translatedPath = useAppStore((s) => s.translatedPdfPath);
   const translatedReloadKey = useAppStore((s) => s.translatedReloadKey);
   const translatedChanges = useAppStore((s) => s.translatedChanges);
+  const translationMask = useAppStore((s) => s.translationMask);
   const originalFirstPageSize = useAppStore((s) => s.originalFirstPageSize);
   const setOriginalFirstPageSize = useAppStore(
     (s) => s.setOriginalFirstPageSize,
@@ -43,6 +44,11 @@ export function MainLayout({ onPickFile, onOpenSettings }: MainLayoutProps) {
   const chatOpen = useAppStore((s) => s.chatOpen);
   const chatEnabled = useChatEnabled();
   const [scrollToPage, setScrollToPage] = useState<number | undefined>();
+  // Before a run's first page lands there is no translated file, but the pane
+  // should already show the whole document as blank pages. The original has
+  // exactly that shape, and the mask keeps every page of it from drawing.
+  const translatedViewPath =
+    translatedPath ?? (translationMask ? originalPath : null);
 
   // Turning chat off in Settings unmounts the panel, so nothing is indexed.
   const showChat = chatOpen && chatEnabled;
@@ -208,12 +214,13 @@ export function MainLayout({ onPickFile, onOpenSettings }: MainLayoutProps) {
         >
           <PdfViewer
             ref={translatedViewer}
-            filePath={translatedPath}
+            filePath={translatedViewPath}
             label="Translated"
             active={activePane === "translated"}
             reloadKey={translatedReloadKey}
             incrementalUpdates
             changeLog={translatedChanges}
+            mask={translationMask}
             placeholderSize={originalPath ? originalFirstPageSize : null}
             emptyState={
               <div className="flex flex-col items-center gap-2 text-center">
