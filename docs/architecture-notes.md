@@ -1751,8 +1751,12 @@ out of React state. There are five invariants, and each one is easy to break by
   aimed at the incoming document's pages. What the flush on the swap path does
   *not* do is free memory — `usePdfDocument` destroys the outgoing proxy in a
   cleanup React runs before the effect that calls `setDocument`, so by then
-  `getPage()` rejects and the flush is a no-op. It earns its place by clearing
-  the list, which must not survive into a document it does not describe.
+  the document is gone and the flush is a no-op. It earns its place by clearing
+  the list, which must not survive into a document it does not describe. Note
+  that a destroyed document's `getPage()` **throws synchronously** (its
+  message handler is `null`) rather than rejecting, so every cleanup goes
+  through `cleanupPage` in `lib/pdf-viewer/document-lifetime.ts`, which
+  swallows it. Inside an effect, that throw unmounted the whole app.
 
   A decoded 2.2 MP image is ~9 MB and these pages carry two, so six retained
   pages is roughly 110 MB on that document — and the viewer mounts two panes,
@@ -1795,9 +1799,14 @@ out of React state. There are five invariants, and each one is easy to break by
   would never repaint the other chunk's pages. Changes also accumulate across
   loads overtaken by the next chunk (`artifact-swap.ts`). Every replaced
   `PDFDocumentProxy` is `destroy()`ed; before this, every chunk leaked one into
-  the worker. Every async render re-checks a document *generation*, so a render
-  that lost a race is dropped rather than drawn. A failed swap keeps the
-  previous version on screen. None of this removes the need for the backend's
+  the worker. Only the *replaced* one: the load effect's cleanup runs on every
+  new path and every reload while the old document is still on screen, so it
+  may stop a load in flight but must spare a document that arrived
+  (`trackDocumentLoad`). It once destroyed that one too; a Re-translate (which
+  bumps the reload key) then left the pane drawing from a dead document, and
+  the next page cleanup threw and blanked the window. Every async render
+  re-checks a document *generation*, so a render that lost a race is dropped
+  rather than drawn. A failed swap keeps the previous version on screen. None of this removes the need for the backend's
   `keep=2` (see "Rolling-PDF pruning keeps two files"): the old version is still
   what's displayed, and still what pdf.js issues range requests against, until
   the new one has loaded.

@@ -47,6 +47,7 @@ import {
   streamBand,
   type PaneMask,
 } from "@/lib/pdf-viewer/translation-mask";
+import { cleanupPage as freePageResources } from "@/lib/pdf-viewer/document-lifetime";
 import {
   renewRetained,
   retainReleased,
@@ -199,8 +200,10 @@ export class PageRenderer {
     // the cleanup would be aimed at its pages instead. On the paths the app
     // actually takes the flush frees nothing: `usePdfDocument` destroys the
     // outgoing proxy in a cleanup that React runs before this effect, and that
-    // reclaims everything the flush would have. It stays because the retention
-    // list must not survive into a document it does not describe.
+    // reclaims everything the flush would have — so the flush is aimed at a
+    // destroyed document, whose `getPage` throws, and `cleanupPage` has to
+    // swallow that. It stays because the retention list must not survive into
+    // a document it does not describe.
     if (!doc || changes === null) {
       for (const page of [...this.pages.keys()]) this.release(page);
     }
@@ -324,11 +327,10 @@ export class PageRenderer {
     // the document the caller meant. `pages` is consulted only while that is
     // still the document on screen: after a swap it describes the incoming one
     // and says nothing about this page.
-    void doc?.getPage(page).then(
-      (proxy) => {
-        if (this.doc !== doc || !this.pages.has(page)) proxy.cleanup();
-      },
-      () => undefined,
+    freePageResources(
+      doc,
+      page,
+      () => this.doc !== doc || !this.pages.has(page),
     );
   }
 
