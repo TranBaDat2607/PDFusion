@@ -43,7 +43,12 @@ from .page_selection import (
     validate_selection,
 )
 from .pdf_cache import compute_file_hash, get_pdf_cache, is_cacheable_artifact
-from .pdf_pages import inspect_pdf, rebuild_rolling_pdf, split_into_chunks
+from .pdf_pages import (
+    inspect_pdf,
+    rebuild_rolling_pdf,
+    split_into_chunks,
+    subset_embedded_fonts,
+)
 from .exceptions import (
     ProcessingError,
     BabelDOCError,
@@ -891,6 +896,16 @@ class PDFProcessor:
                             f"Could not locate translated PDF for chunk "
                             f"{idx + 1} in {chunk_out_dir}"
                         )
+                    # BabelDOC ties font subsetting to its clean step, which
+                    # `skip_clean=True` turns off for every translator (and
+                    # `enhance_compatibility` would force off anyway), so each
+                    # page arrives with whole fonts: ~500 KB per Noto style for
+                    # a Latin target, ~14 MB for CJK. Merged, that is a full
+                    # copy per page, and pdf.js re-parses each one; on a 9-page
+                    # paper, cutting them halved its worker time per page in
+                    # the viewer. Once per chunk rather than on the rolling
+                    # PDF, which is rebuilt after every chunk.
+                    await asyncio.to_thread(subset_embedded_fonts, translated)
                     chunk_results[idx] = translated
                 except asyncio.CancelledError:
                     # The workers are being stopped (see `worker`). Not a

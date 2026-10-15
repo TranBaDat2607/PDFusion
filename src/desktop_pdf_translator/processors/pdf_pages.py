@@ -12,6 +12,9 @@ this half can be tested against real PDFs.
 
 from __future__ import annotations
 
+import contextlib
+import logging
+import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Optional, Sequence, Tuple
@@ -19,6 +22,8 @@ from typing import List, Optional, Sequence, Tuple
 from ..translators.usage_estimate import count_cjk
 from .exceptions import FileValidationError
 from .page_selection import PageRange, Segment
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -123,6 +128,29 @@ def split_into_chunks(
                 chunk_doc.save(chunk_path)
             chunks.append((chunk_path, (first, last)))
     return chunks
+
+
+def subset_embedded_fonts(path: Path) -> bool:
+    """Rewrite the PDF at `path` with each embedded font cut down to the glyphs
+    its pages use. Returns whether the file was rewritten; a failure leaves it
+    exactly as it was."""
+    import fitz  # PyMuPDF
+
+    staged = path.with_name(f"{path.name}.subset")
+    try:
+        with fitz.open(path) as doc:
+            doc.subset_fonts(fallback=False)
+            doc.save(staged, garbage=4, deflate=True)
+        os.replace(staged, path)
+    except Exception:
+        logger.warning("Could not subset the fonts of %s", path, exc_info=True)
+        # Whatever kept the replace from happening (a scanner holding the
+        # copy, on Windows) can keep this from happening too, and a stray copy
+        # is harmless next to a chunk that would otherwise fail the whole run.
+        with contextlib.suppress(OSError):
+            staged.unlink(missing_ok=True)
+        return False
+    return True
 
 
 def rebuild_rolling_pdf(
