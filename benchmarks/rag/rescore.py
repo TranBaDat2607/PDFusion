@@ -1,6 +1,6 @@
 """Score stored answers again after a change to `run.score_answer`.
 
-    python benchmarks/rag/rescore.py baseline-answers v2-answers docpixie-answers
+    python benchmarks/rag/rescore.py baseline-answers v2-answers
 
 Re-reads `results/<label>.json`, recomputes each question's retrieval and answer scores
 and the summary from the answers already there, and writes the file back. No

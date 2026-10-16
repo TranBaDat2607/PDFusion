@@ -3,7 +3,6 @@
     python benchmarks/rag/run.py --system baseline --src ../PDFusion-baseline/src
     python benchmarks/rag/run.py --system v2
     python benchmarks/rag/run.py --system v2 --answers          # also asks the LLM
-    python benchmarks/rag/run.py --system docpixie --answers    # the real DocPixie
 
 Each system is imported from the `src` tree given (default: this checkout's),
 so the baseline is measured from a worktree of the commit before the redesign
@@ -25,7 +24,6 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
-import os
 import re
 import statistics
 import sys
@@ -200,63 +198,6 @@ class V2System:
         }
 
 
-class DocPixieSystem:
-    """The real DocPixie (github.com/qnguyen3/docpixie), cloned to `--docpixie`,
-    talking to Gemini through its OpenAI-compatible endpoint with the key the
-    app has saved. Vision-only: no index, every question looks at page images."""
-
-    name = "docpixie"
-
-    def __init__(self, workdir: Path, clone: Path, model_name: str, api_key: str) -> None:
-        sys.path.insert(0, str(clone))
-        os.environ["OPENAI_BASE_URL"] = "https://generativelanguage.googleapis.com/v1beta/openai/"
-        os.environ["OPENAI_API_KEY"] = api_key
-        import openai.resources.chat.completions as completions
-        from docpixie import DocPixie, DocPixieConfig
-
-        original = completions.AsyncCompletions.create
-
-        async def counted(self_, *args, **kwargs):
-            response = await original(self_, *args, **kwargs)
-            usage = getattr(response, "usage", None)
-            USAGE.add(getattr(usage, "prompt_tokens", 0), getattr(usage, "completion_tokens", 0))
-            return response
-
-        completions.AsyncCompletions.create = counted
-        config = DocPixieConfig(
-            provider="openai", model=model_name, vision_model=model_name,
-            local_storage_path=str(workdir / "docpixie"),
-        )
-        self.pixie = DocPixie(config=config)
-        self.documents: Dict[str, Any] = {}
-
-    async def index(self, pdf: Path, index_id: str) -> Dict[str, Any]:
-        document = await self.pixie.add_document(str(pdf), document_id=index_id)
-        self.documents[index_id] = document
-        return {"pages": len(document.pages)}
-
-    async def _query(self, index_id: str, question: str):
-        # DocPixie answers across every document it holds; give it only this one.
-        storage = self.pixie.storage
-        held = await storage.get_all_documents()
-        for document in held:
-            if document.id != index_id:
-                await storage.delete_document(document.id)
-        if not any(d.id == index_id for d in held):
-            await storage.save_document(self.documents[index_id])
-        return await self.pixie.query(question)
-
-    async def retrieve(self, index_id: str, pdf: Path, question: str, k: int) -> List[int]:
-        result = await self._query(index_id, question)
-        self._last = (question, result)
-        return list(result.page_numbers)[:k]
-
-    async def answer(self, index_id: str, pdf: Path, question: str) -> Dict[str, Any]:
-        last = getattr(self, "_last", None)
-        result = last[1] if last and last[0] == question else await self._query(index_id, question)
-        return {"text": result.answer, "cited_pages": list(result.page_numbers)}
-
-
 # ---------------------------------------------------------------------------
 # scoring
 # ---------------------------------------------------------------------------
@@ -358,19 +299,16 @@ async def run(args: argparse.Namespace) -> Dict[str, Any]:
     workdir = Path(tempfile.mkdtemp(prefix="pdfusion-bench-"))
 
     _import_src(Path(args.src).resolve())
-    settings, ref = _model_settings()
+    _, ref = _model_settings()
     if args.system == "baseline":
         system = BaselineSystem(workdir, use_model=args.answers or args.hyde)
-    elif args.system == "v2":
+    else:
         options = json.loads(args.options) if args.options else {}
         system = V2System(workdir, use_model=args.answers or args.query_model, options=options)
-    else:
-        key = settings.providers[ref.provider.value].api_key
-        system = DocPixieSystem(workdir, Path(args.docpixie), ref.model, key)
 
     report: Dict[str, Any] = {
         "system": system.name, "src": str(args.src), "answers": args.answers,
-        "model": f"{ref.provider.value}:{ref.model}" if (args.answers or args.system == "docpixie") else None,
+        "model": f"{ref.provider.value}:{ref.model}" if args.answers else None,
         "options": args.options, "indexing": {}, "questions": [],
     }
 
@@ -397,7 +335,7 @@ async def run(args: argparse.Namespace) -> Dict[str, Any]:
         row: Dict[str, Any] = {"id": q["id"], "doc": q["doc"], "kind": q["kind"], "q": q["q"]}
         pdf = DATA / q["doc"]
         before = USAGE.snapshot()
-        if q["kind"] not in retrieval_only_kinds or args.system == "docpixie":
+        if q["kind"] not in retrieval_only_kinds:
             started = time.perf_counter()
             try:
                 ranked = await system.retrieve(indexes[q["doc"]], pdf, q["q"], 5)
@@ -406,8 +344,7 @@ async def run(args: argparse.Namespace) -> Dict[str, Any]:
                 ranked = []
             row["retrieve_seconds"] = round(time.perf_counter() - started, 3)
             row["ranked_pages"] = _unique(ranked)
-            if q["kind"] not in retrieval_only_kinds:
-                row["retrieval"] = score_retrieval(ranked, q["pages"])
+            row["retrieval"] = score_retrieval(ranked, q["pages"])
         if args.answers:
             started = time.perf_counter()
             try:
@@ -433,13 +370,12 @@ async def run(args: argparse.Namespace) -> Dict[str, Any]:
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--system", choices=["baseline", "v2", "docpixie"], required=True)
+    parser.add_argument("--system", choices=["baseline", "v2"], required=True)
     parser.add_argument("--src", default=str(REPO / "src"))
     parser.add_argument("--answers", action="store_true", help="ask the configured LLM too")
     parser.add_argument("--hyde", action="store_true", help="baseline: retrieve with HyDE (uses the LLM)")
     parser.add_argument("--query-model", action="store_true", help="v2: let retrieval use the LLM")
     parser.add_argument("--options", help="v2: JSON of EnhancedRAGChain keyword options")
-    parser.add_argument("--docpixie", default=str(HERE / ".data" / "docpixie"))
     parser.add_argument("--docs", nargs="*")
     parser.add_argument("--ids", nargs="*")
     parser.add_argument("--label", default=None)

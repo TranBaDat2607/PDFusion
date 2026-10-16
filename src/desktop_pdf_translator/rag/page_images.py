@@ -3,9 +3,8 @@
 Rendered when a question is answered, from the PDF itself, rather than stored
 when it is indexed: PyMuPDF renders a page in ~50 ms, and storing page images
 for every indexed document would cost tens of megabytes each for pages that
-are mostly never asked about. DocPixie renders and keeps every page at index
-time because every question looks at every page; here only the few pages
-retrieval picked are ever looked at (`retrieval.select_image_pages`).
+are mostly never asked about. Only the few pages retrieval picked are ever
+looked at (`retrieval.select_image_pages`).
 
 Blocking: call through `asyncio.to_thread`.
 """
