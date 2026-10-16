@@ -1125,9 +1125,7 @@ index's chunks:
   question is asked (`rag/page_images.py`, JPEG, long side 1600 px, ~1.5k
   tokens each), not stored at index time, and each goes after a text label,
   `[Image of page N]`, so the model can cite what it saw. A file moved since
-  indexing costs the images, not the answer. DocPixie, by contrast, shows the
-  model every page of the document on every question, and labels images by
-  their position among those sent, so its citations name that position.
+  indexing costs the images, not the answer.
 - **`generate(images=...)`** (`translators/base.PageImage`) is implemented
   for OpenAI (content parts), Gemini (`Part.from_bytes`) and Anthropic
   (base64 blocks); with no images the request is byte-for-byte what it was.

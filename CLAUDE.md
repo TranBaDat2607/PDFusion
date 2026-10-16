@@ -45,7 +45,7 @@ ruff check src tests scripts          # the lint gate
 # Chat RAG benchmark (local; --answers spends a few cents on the configured model)
 python benchmarks/rag/build_corpus.py
 python benchmarks/rag/run.py --system v2 [--answers]
-python benchmarks/rag/compare.py baseline-answers v2-answers docpixie-answers
+python benchmarks/rag/compare.py baseline-answers v2-answers
 
 # After touching api/schemas.py, api/sse_schemas.py or any route:
 python -m desktop_pdf_translator.api.export_openapi --output desktop/src/lib/openapi.json
@@ -119,7 +119,7 @@ singleton with no job id, so it is polled via `GET /setup/status`.
 | `processors/` | `PDFProcessor` (BabelDOC), `page_selection.py`, `pdf_pages.py`, `pdf_cache.py`, `doc_layout_cache.py` |
 | `translators/` | `BaseTranslator` + OpenAI/Gemini/Anthropic/Argos, `factory.py`, `capabilities.py`, `rate_limiter.py`, `translation_cache.py`, `param_compat.py`, `usage_estimate.py` |
 | `rag/` | `rag_chain.py` (`EnhancedRAGChain`), `ingest.py` (PDF → chunks, page kinds), `ocr.py`, `retrieval.py` (RRF, page evidence), `citations.py`, `page_images.py`, `vector_store.py`, `index_spec.py`, `onnx_embeddings.py`, `keyword_search.py` |
-| `benchmarks/rag/` | Corpus, questions with gold pages, harness (baseline from a `main` worktree, the real DocPixie), results — `README.md` there has the numbers |
+| `benchmarks/rag/` | Corpus, questions with gold pages, harness (baseline from a `main` worktree), results — `README.md` there has the numbers |
 | `storage/` | `sqlite.py` (pragmas, per-thread connections), `migrations.py`, `records.py` (`pdfusion.db`) |
 | `utils/` | `encryption.py`, `file_export.py`, `logging_setup.py`, `paths.py` |
 
@@ -263,7 +263,7 @@ a test. They are the things most easily undone by "simplifying".
 - **Retrieve by text, read by vision.** Indexing and retrieval are local and
   make no model call; the answer is the only paid request, and it sees images
   of at most `DEFAULT_MAX_IMAGES` pages, the best-ranked visual/table/scanned
-  ones (`retrieval.select_image_pages`) — never every page, as DocPixie does.
+  ones (`retrieval.select_image_pages`) — never every page.
   Evidence is **pages**: `max_pdf_sources` counts pages, references are one per
   page, cited first.
 - `generate()` gets `images=` only when there are some (older backends take

@@ -18,10 +18,9 @@ pages by how early in the document they were; HyDE on every question, a model
 round trip before retrieval could start (`hyde=True` keeps it — see the
 benchmark for what it bought); answers that cited nothing, with every
 retrieved chunk listed as a reference whether the answer used it or not; and
-no way to read a chart or a scan. DocPixie (github.com/qnguyen3/docpixie)
-answers by showing the model every page of the document for every question;
-this shows it at most `max_images` pages, chosen by retrieval, so a question
-costs about the same on a 300-page document as on a 3-page one.
+no way to read a chart or a scan. The answer is shown at most `max_images`
+page images, chosen by retrieval, never every page, so a question costs about
+the same on a 300-page document as on a 3-page one.
 """
 
 import asyncio

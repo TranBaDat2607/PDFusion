@@ -130,9 +130,9 @@ class PageImage:
     page the chat answers from (`rag/page_images.py`).
 
     `label` is sent as text right before the image. It is how the model knows
-    which page it is looking at, so it can cite it: DocPixie's analysis prompt
-    labels images by their position among those sent, and its citations name
-    that position instead of the page.
+    which page it is looking at, so it can cite it: an image labelled only by
+    its position among those sent gets cited by that position instead of the
+    page.
     """
 
     data: bytes

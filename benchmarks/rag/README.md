@@ -11,9 +11,7 @@ python benchmarks/rag/run.py --system v2              # retrieval only: local, f
 python benchmarks/rag/run.py --system v2 --answers    # + answers from the configured model
 git worktree add ../PDFusion-baseline <commit before the redesign, e.g. 453229d>
 python benchmarks/rag/run.py --system baseline --src ../PDFusion-baseline/src --answers
-git clone https://github.com/qnguyen3/docpixie <dir>
-python benchmarks/rag/run.py --system docpixie --docpixie <dir> --answers
-python benchmarks/rag/compare.py baseline-answers v2-answers docpixie-answers
+python benchmarks/rag/compare.py baseline-answers v2-answers
 python benchmarks/rag/rescore.py <labels…>            # after changing the scoring
 ```
 
@@ -53,11 +51,6 @@ the baseline, which cites nothing, the references it lists are its citations.
   (~1000 chars, Camelot/pdfplumber tables), ChromaDB + BM25 blended by score,
   HyDE (one extra LLM call before retrieval), a heuristic re-rank, a text-only
   answer with no citations.
-- **DocPixie** — the real library ([qnguyen3/docpixie](https://github.com/qnguyen3/docpixie)),
-  unmodified, pointed at Gemini's OpenAI-compatible endpoint. Vision-only: no
-  index; per question it classifies the query, plans tasks, sends **every page
-  image** to the model to pick pages, analyses the picked pages, and
-  synthesises.
 - **v2** — this redesign (see `docs/architecture-notes.md` → "Chat answers").
 
 ## Results
@@ -70,7 +63,6 @@ before the review fixes scored the same. The ablation rows are from that earlier
 | | correct | text | table | chart | figure | scan | multilingual | negative | cites a gold page | citation precision |
 |---|---|---|---|---|---|---|---|---|---|---|
 | baseline | 0.47 | 0.82 | 0.44 | 0.00 | 0.50 | 0.00 | 1.00 | 0.75 | 0.69 | 0.20 |
-| DocPixie | 0.70 | 0.73 | 0.67 | 1.00 | 0.50 | 0.55 | 1.00 | 0.75 | 0.87 | 0.75 |
 | **v2** | **0.93** | 1.00 | 1.00 | 1.00 | 0.50 | 0.82 | 1.00 | 1.00 | **0.97** | **0.97** |
 | v2, no page images | 0.86 | 1.00 | 0.89 | 0.00 | 0.50 | 0.91 | 1.00 | 1.00 | 0.90 | 0.88 |
 | v2 + HyDE | 0.93 | 1.00 | 0.89 | 1.00 | 0.50 | 0.91 | 1.00 | 1.00 | 1.00 | 0.99 |
@@ -80,7 +72,6 @@ before the review fixes scored the same. The ablation rows are from that earlier
 | | hit@1 | hit@3 | MRR@5 | scan hit@1 | table hit@1 |
 |---|---|---|---|---|---|
 | baseline | 0.62 | 0.69 | 0.65 | 0.00 | 0.67 |
-| DocPixie (vision page selection, LLM) | 0.74 | 0.87 | 0.81 | 0.64 | 0.56 |
 | **v2** | **0.85** | 0.95 | **0.90** | 0.91 | 0.67 |
 | v2 + cross-encoder replacing the order | 0.82 | 0.97 | 0.89 | 1.00 | 0.44 |
 | v2 + cross-encoder fused | 0.85 | 0.95 | 0.90 | 0.91 | 0.67 |
@@ -91,7 +82,6 @@ before the review fixes scored the same. The ablation rows are from that earlier
 | | LLM calls | input tokens | output tokens | p50 total s | p90 total s |
 |---|---|---|---|---|---|
 | baseline | 2.4 | 1,003 | 149 | 2.62 | 2.94 |
-| DocPixie | 5.5 | 7,834 | 226 | 6.63 | 11.82 |
 | **v2** | **1.0** | 2,925 | 25 | **2.18** | 2.78 |
 | v2, no page images | 1.0 | 2,225 | 30 | 0.76 | 0.93 |
 | v2 + HyDE | 2.9* | 3,130 | 184 | 4.26 | 5.06 |
@@ -103,32 +93,23 @@ before the review fixes scored the same. The ablation rows are from that earlier
 | | correct | citation precision | input tokens / question | p50 s / question | LLM tokens to index |
 |---|---|---|---|---|---|
 | **v2** | **6/6** | 1.00 | **2,366** (15 pages: 2,925) | **2.2** | 0 (25 s local, OCR included) |
-| DocPixie | 4/6 | 0.58 | 18,026 (15 pages: 7,834) | 9.6 | 14,795 |
 
 v2's per-question cost does not depend on the document's length — retrieval
-picks the pages, and at most three are sent as images. DocPixie's grows with
-every page: on the long document it twice answered that the analysed pages
-held no information about the question (the dividend memo, the revenue
-table), having picked pages from the wrong part of the document. Six questions
-is a small sample; the token figures are what it is for.
+picks the pages, and at most three are sent as images. Six questions is a
+small sample; the token figures are what it is for.
 
 Indexing, once per document: v2 takes 6 s for the 15-page paper (baseline 17 s,
 Camelot retrying without Ghostscript) and 4 s for the report; the scanned paper
 takes ~110 s, nearly all of it RapidOCR at ~7 s a dense page. The baseline
 "indexes" the scanned paper in 1.6 s because it finds no text and refuses it —
-in the app, "No text could be extracted from this PDF". DocPixie's indexing is
-an LLM call: ~3.8k tokens per document to summarise it from its page images.
+in the app, "No text could be extracted from this PDF".
 
 ## What each design decision rests on
 
-- **Retrieve by text, read by vision** (vs. DocPixie's read-everything-by-vision).
-  DocPixie's page selection is good where text retrieval is weakest (charts:
-  1.00), but every question pays for every page — 7.8k tokens a question at 15
-  pages — and its answers came out less accurate (0.70), partly because its
-  analysis prompt labels page images by position ("[Page 1 from document]" is
-  the first *selected* page), so its citations can name the wrong page. v2 sends
-  at most three page images, chosen by retrieval, labelled with the real page
-  number: charts reach 1.00 too, at a third of the tokens and of the latency.
+- **Retrieve by text, read by vision** (rather than sending every page as an
+  image, which makes every question pay for every page). v2 sends at most
+  three page images, chosen by retrieval, each labelled with its real page
+  number so its citations name the right page: charts reach 1.00.
 - **Page images at answer time.** Without them v2 answers no chart question
   (0.00 → 1.00 with them) and loses a table; with them it is 1.3 s slower. They
   are rendered when asked, not stored.
