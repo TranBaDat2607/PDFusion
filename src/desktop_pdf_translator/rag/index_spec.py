@@ -11,5 +11,7 @@ Stdlib-only: `api/routes/rag.py` imports it at module level, on the boot path.
 EMBEDDING_MODEL = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
 EMBEDDING_DIMENSIONS = 384
 
-# Bump when `rag/document_processor.py` changes how a PDF becomes chunks.
-CHUNKER_VERSION = "1"
+# Bump when `rag/ingest.py` changes how a PDF becomes chunks, or
+# `vector_store.add_chunks` what is embedded for one. "2": page-aware ingestion
+# with OCR, embedded under section headings, replaced ScientificPDFProcessor.
+CHUNKER_VERSION = "2"

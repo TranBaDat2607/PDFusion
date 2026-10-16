@@ -1,0 +1,1680 @@
+{
+ "system": "baseline",
+ "src": "../PDFusion-baseline/src",
+ "answers": true,
+ "model": "gemini:gemini-2.5-flash-lite",
+ "options": null,
+ "indexing": {
+  "attention.pdf": {
+   "seconds": 16.74,
+   "chunks": 102,
+   "llm_input_tokens": 0,
+   "llm_output_tokens": 0
+  },
+  "attention_scanned.pdf": {
+   "seconds": 1.58,
+   "chunks": 0,
+   "llm_input_tokens": 0,
+   "llm_output_tokens": 0
+  },
+  "report.pdf": {
+   "seconds": 0.57,
+   "chunks": 27,
+   "llm_input_tokens": 0,
+   "llm_output_tokens": 0
+  }
+ },
+ "questions": [
+  {
+   "id": "r01",
+   "doc": "report.pdf",
+   "kind": "text",
+   "q": "How many employees did Northwind have at the end of 2025?",
+   "retrieve_seconds": 1.052,
+   "ranked_pages": [
+    2,
+    1,
+    10,
+    6
+   ],
+   "retrieval": {
+    "hit@1": 1.0,
+    "hit@3": 1.0,
+    "hit@5": 1.0,
+    "mrr@5": 1.0
+   },
+   "answer_seconds": 1.517,
+   "answer": {
+    "text": "Northwind Instruments had 1,240 employees at the end of 2025.",
+    "cited_pages": [
+     2,
+     1,
+     1,
+     10,
+     6
+    ]
+   },
+   "answer_score": {
+    "correct": 1.0,
+    "cites_gold": 1.0,
+    "citation_precision": 0.25,
+    "pages_cited": 4.0
+   },
+   "llm_input_tokens": 690,
+   "llm_output_tokens": 143,
+   "llm_calls": 3
+  },
+  {
+   "id": "r02",
+   "doc": "report.pdf",
+   "kind": "text",
+   "q": "What share of unit output comes from the Da Nang plant?",
+   "retrieve_seconds": 1.084,
+   "ranked_pages": [
+    3,
+    2,
+    1,
+    13,
+    10
+   ],
+   "retrieval": {
+    "hit@1": 1.0,
+    "hit@3": 1.0,
+    "hit@5": 1.0,
+    "mrr@5": 1.0
+   },
+   "answer_seconds": 1.562,
+   "answer": {
+    "text": "38%",
+    "cited_pages": [
+     3,
+     2,
+     13,
+     10,
+     5
+    ]
+   },
+   "answer_score": {
+    "correct": 1.0,
+    "cites_gold": 1.0,
+    "citation_precision": 0.2,
+    "pages_cited": 5.0
+   },
+   "llm_input_tokens": 619,
+   "llm_output_tokens": 139,
+   "llm_calls": 3
+  },
+  {
+   "id": "r03",
+   "doc": "report.pdf",
+   "kind": "table",
+   "q": "What was revenue growth in Europe?",
+   "retrieve_seconds": 1.146,
+   "ranked_pages": [
+    11,
+    4,
+    2,
+    5,
+    3
+   ],
+   "retrieval": {
+    "hit@1": 0.0,
+    "hit@3": 1.0,
+    "hit@5": 1.0,
+    "mrr@5": 0.5
+   },
+   "answer_seconds": 1.56,
+   "answer": {
+    "text": "4.7%",
+    "cited_pages": [
+     11,
+     4,
+     2,
+     5,
+     3
+    ]
+   },
+   "answer_score": {
+    "correct": 1.0,
+    "cites_gold": 1.0,
+    "citation_precision": 0.2,
+    "pages_cited": 5.0
+   },
+   "llm_input_tokens": 656,
+   "llm_output_tokens": 177,
+   "llm_calls": 3
+  },
+  {
+   "id": "r04",
+   "doc": "report.pdf",
+   "kind": "table",
+   "q": "Which region had negative revenue growth, and how much?",
+   "retrieve_seconds": 0.911,
+   "ranked_pages": [
+    4,
+    11,
+    2,
+    5,
+    3
+   ],
+   "retrieval": {
+    "hit@1": 1.0,
+    "hit@3": 1.0,
+    "hit@5": 1.0,
+    "mrr@5": 1.0
+   },
+   "answer_seconds": 1.693,
+   "answer": {
+    "text": "North America had negative revenue growth of -2.3%.",
+    "cited_pages": [
+     4,
+     11,
+     2,
+     5,
+     3
+    ]
+   },
+   "answer_score": {
+    "correct": 1.0,
+    "cites_gold": 1.0,
+    "citation_precision": 0.2,
+    "pages_cited": 5.0
+   },
+   "llm_input_tokens": 668,
+   "llm_output_tokens": 149,
+   "llm_calls": 3
+  },
+  {
+   "id": "r05",
+   "doc": "report.pdf",
+   "kind": "chart",
+   "q": "In which quarter did warranty claims peak, and how many claims were there?",
+   "retrieve_seconds": 0.862,
+   "ranked_pages": [
+    5,
+    6,
+    3,
+    2
+   ],
+   "retrieval": {
+    "hit@1": 1.0,
+    "hit@3": 1.0,
+    "hit@5": 1.0,
+    "mrr@5": 1.0
+   },
+   "answer_seconds": 1.652,
+   "answer": {
+    "text": "The provided excerpts do not contain the specific number of warranty claims for each quarter, only a mention that one quarter stood out due to a firmware issue. Therefore, I cannot determine the exact peak quarter or the number of claims.",
+    "cited_pages": [
+     5,
+     6,
+     3,
+     2,
+     6
+    ]
+   },
+   "answer_score": {
+    "correct": 0.0,
+    "cites_gold": 1.0,
+    "citation_precision": 0.25,
+    "pages_cited": 4.0
+   },
+   "llm_input_tokens": 668,
+   "llm_output_tokens": 172,
+   "llm_calls": 3
+  },
+  {
+   "id": "r06",
+   "doc": "report.pdf",
+   "kind": "chart",
+   "q": "How many warranty claims were received in Q4?",
+   "retrieve_seconds": 1.089,
+   "ranked_pages": [
+    5,
+    6,
+    13,
+    2
+   ],
+   "retrieval": {
+    "hit@1": 1.0,
+    "hit@3": 1.0,
+    "hit@5": 1.0,
+    "mrr@5": 1.0
+   },
+   "answer_seconds": 1.749,
+   "answer": {
+    "text": "This document does not contain the answer to this question. Figure 3, which shows warranty claims per quarter, is mentioned but not provided.",
+    "cited_pages": [
+     5,
+     6,
+     6,
+     13,
+     2
+    ]
+   },
+   "answer_score": {
+    "correct": 0.0,
+    "cites_gold": 1.0,
+    "citation_precision": 0.25,
+    "pages_cited": 4.0
+   },
+   "llm_input_tokens": 645,
+   "llm_output_tokens": 203,
+   "llm_calls": 3
+  },
+  {
+   "id": "r07",
+   "doc": "report.pdf",
+   "kind": "scan",
+   "q": "What final dividend per share did the board approve?",
+   "retrieve_seconds": 0.881,
+   "ranked_pages": [
+    5,
+    1,
+    13,
+    2,
+    3
+   ],
+   "retrieval": {
+    "hit@1": 0.0,
+    "hit@3": 0.0,
+    "hit@5": 0.0,
+    "mrr@5": 0.0
+   },
+   "answer_seconds": 1.642,
+   "answer": {
+    "text": "This document does not contain the answer to this question.",
+    "cited_pages": [
+     5,
+     1,
+     13,
+     2,
+     3
+    ]
+   },
+   "answer_score": {
+    "correct": 0.0,
+    "cites_gold": 0.0,
+    "citation_precision": 0.0,
+    "pages_cited": 5.0
+   },
+   "llm_input_tokens": 659,
+   "llm_output_tokens": 168,
+   "llm_calls": 3
+  },
+  {
+   "id": "r08",
+   "doc": "report.pdf",
+   "kind": "scan",
+   "q": "When is the dividend payable?",
+   "retrieve_seconds": 0.884,
+   "ranked_pages": [
+    3,
+    10,
+    6,
+    5,
+    2
+   ],
+   "retrieval": {
+    "hit@1": 0.0,
+    "hit@3": 0.0,
+    "hit@5": 0.0,
+    "mrr@5": 0.0
+   },
+   "answer_seconds": 1.636,
+   "answer": {
+    "text": "This document does not contain information about when the dividend is payable.",
+    "cited_pages": [
+     3,
+     10,
+     6,
+     5,
+     2
+    ]
+   },
+   "answer_score": {
+    "correct": 0.0,
+    "cites_gold": 0.0,
+    "citation_precision": 0.0,
+    "pages_cited": 5.0
+   },
+   "llm_input_tokens": 619,
+   "llm_output_tokens": 150,
+   "llm_calls": 3
+  },
+  {
+   "id": "r09",
+   "doc": "report.pdf",
+   "kind": "multilingual",
+   "q": "By how much did CO2 emissions fall compared with 2022?",
+   "retrieve_seconds": 1.067,
+   "ranked_pages": [
+    8,
+    10,
+    1,
+    4,
+    2
+   ],
+   "retrieval": {
+    "hit@1": 1.0,
+    "hit@3": 1.0,
+    "hit@5": 1.0,
+    "mrr@5": 1.0
+   },
+   "answer_seconds": 1.556,
+   "answer": {
+    "text": "CO2 emissions fell by 27% compared with 2022.",
+    "cited_pages": [
+     8,
+     10,
+     1,
+     4,
+     2
+    ]
+   },
+   "answer_score": {
+    "correct": 1.0,
+    "cites_gold": 1.0,
+    "citation_precision": 0.2,
+    "pages_cited": 5.0
+   },
+   "llm_input_tokens": 720,
+   "llm_output_tokens": 214,
+   "llm_calls": 3
+  },
+  {
+   "id": "r10",
+   "doc": "report.pdf",
+   "kind": "multilingual",
+   "q": "Bao nhiêu phần trăm điện năng đến từ năng lượng tái tạo?",
+   "retrieve_seconds": 0.999,
+   "ranked_pages": [
+    8,
+    1,
+    3
+   ],
+   "retrieval": {
+    "hit@1": 1.0,
+    "hit@3": 1.0,
+    "hit@5": 1.0,
+    "mrr@5": 1.0
+   },
+   "answer_seconds": 1.522,
+   "answer": {
+    "text": "64% of the electricity consumed by the plants comes from renewable energy.",
+    "cited_pages": [
+     8,
+     1,
+     8,
+     3,
+     8
+    ]
+   },
+   "answer_score": {
+    "correct": 1.0,
+    "cites_gold": 1.0,
+    "citation_precision": 0.3333333333333333,
+    "pages_cited": 3.0
+   },
+   "llm_input_tokens": 579,
+   "llm_output_tokens": 198,
+   "llm_calls": 3
+  },
+  {
+   "id": "r11",
+   "doc": "report.pdf",
+   "kind": "text",
+   "q": "How many patent applications were filed in 2025?",
+   "retrieve_seconds": 1.101,
+   "ranked_pages": [
+    9,
+    6,
+    2,
+    5,
+    1
+   ],
+   "retrieval": {
+    "hit@1": 1.0,
+    "hit@3": 1.0,
+    "hit@5": 1.0,
+    "mrr@5": 1.0
+   },
+   "answer_seconds": 1.982,
+   "answer": {
+    "text": "57 patent applications were filed in 2025.",
+    "cited_pages": [
+     9,
+     6,
+     2,
+     5,
+     1
+    ]
+   },
+   "answer_score": {
+    "correct": 1.0,
+    "cites_gold": 1.0,
+    "citation_precision": 0.2,
+    "pages_cited": 5.0
+   },
+   "llm_input_tokens": 676,
+   "llm_output_tokens": 222,
+   "llm_calls": 3
+  },
+  {
+   "id": "r12",
+   "doc": "report.pdf",
+   "kind": "chart",
+   "q": "What percentage of the workforce is in engineering?",
+   "retrieve_seconds": 1.126,
+   "ranked_pages": [
+    3,
+    9,
+    10,
+    2,
+    5
+   ],
+   "retrieval": {
+    "hit@1": 0.0,
+    "hit@3": 1.0,
+    "hit@5": 1.0,
+    "mrr@5": 0.3333333333333333
+   },
+   "answer_seconds": 1.672,
+   "answer": {
+    "text": "This document does not contain the answer to this question.",
+    "cited_pages": [
+     3,
+     9,
+     10,
+     2,
+     5
+    ]
+   },
+   "answer_score": {
+    "correct": 0.0,
+    "cites_gold": 1.0,
+    "citation_precision": 0.2,
+    "pages_cited": 5.0
+   },
+   "llm_input_tokens": 608,
+   "llm_output_tokens": 193,
+   "llm_calls": 3
+  },
+  {
+   "id": "r13",
+   "doc": "report.pdf",
+   "kind": "table",
+   "q": "What is the average price of the Gateway G7?",
+   "retrieve_seconds": 1.141,
+   "ranked_pages": [
+    12,
+    3,
+    5,
+    2,
+    6
+   ],
+   "retrieval": {
+    "hit@1": 1.0,
+    "hit@3": 1.0,
+    "hit@5": 1.0,
+    "mrr@5": 1.0
+   },
+   "answer_seconds": 1.678,
+   "answer": {
+    "text": "The average price of the Gateway G7 is $899.",
+    "cited_pages": [
+     12,
+     3,
+     5,
+     2,
+     6
+    ]
+   },
+   "answer_score": {
+    "correct": 1.0,
+    "cites_gold": 1.0,
+    "citation_precision": 0.2,
+    "pages_cited": 5.0
+   },
+   "llm_input_tokens": 649,
+   "llm_output_tokens": 217,
+   "llm_calls": 3
+  },
+  {
+   "id": "r14",
+   "doc": "report.pdf",
+   "kind": "table",
+   "q": "Which product shipped the most units?",
+   "retrieve_seconds": 0.953,
+   "ranked_pages": [
+    12,
+    5,
+    2,
+    6,
+    9
+   ],
+   "retrieval": {
+    "hit@1": 1.0,
+    "hit@3": 1.0,
+    "hit@5": 1.0,
+    "mrr@5": 1.0
+   },
+   "answer_seconds": 1.671,
+   "answer": {
+    "text": "The Probe P1 shipped the most units, with 230,000 units shipped.",
+    "cited_pages": [
+     12,
+     5,
+     2,
+     6,
+     9
+    ]
+   },
+   "answer_score": {
+    "correct": 1.0,
+    "cites_gold": 1.0,
+    "citation_precision": 0.2,
+    "pages_cited": 5.0
+   },
+   "llm_input_tokens": 627,
+   "llm_output_tokens": 145,
+   "llm_calls": 3
+  },
+  {
+   "id": "r15",
+   "doc": "report.pdf",
+   "kind": "scan",
+   "q": "What was Osaka Metals' on-time delivery rate?",
+   "retrieve_seconds": 1.074,
+   "ranked_pages": [
+    5,
+    2,
+    3,
+    1,
+    11
+   ],
+   "retrieval": {
+    "hit@1": 0.0,
+    "hit@3": 0.0,
+    "hit@5": 0.0,
+    "mrr@5": 0.0
+   },
+   "answer_seconds": 1.57,
+   "answer": {
+    "text": "This document does not contain information about Osaka Metals' on-time delivery rate.",
+    "cited_pages": [
+     5,
+     2,
+     3,
+     1,
+     11
+    ]
+   },
+   "answer_score": {
+    "correct": 0.0,
+    "cites_gold": 0.0,
+    "citation_precision": 0.0,
+    "pages_cited": 5.0
+   },
+   "llm_input_tokens": 661,
+   "llm_output_tokens": 191,
+   "llm_calls": 3
+  },
+  {
+   "id": "r16",
+   "doc": "report.pdf",
+   "kind": "scan",
+   "q": "Which supplier had the best on-time delivery?",
+   "retrieve_seconds": 0.985,
+   "ranked_pages": [
+    1,
+    5,
+    11,
+    2,
+    3
+   ],
+   "retrieval": {
+    "hit@1": 0.0,
+    "hit@3": 0.0,
+    "hit@5": 0.0,
+    "mrr@5": 0.0
+   },
+   "answer_seconds": 1.606,
+   "answer": {
+    "text": "This document does not contain information about supplier on-time delivery.",
+    "cited_pages": [
+     1,
+     5,
+     11,
+     2,
+     3
+    ]
+   },
+   "answer_score": {
+    "correct": 0.0,
+    "cites_gold": 0.0,
+    "citation_precision": 0.0,
+    "pages_cited": 5.0
+   },
+   "llm_input_tokens": 658,
+   "llm_output_tokens": 152,
+   "llm_calls": 3
+  },
+  {
+   "id": "r17",
+   "doc": "report.pdf",
+   "kind": "text",
+   "q": "What caused the spike in warranty claims?",
+   "retrieve_seconds": 0.994,
+   "ranked_pages": [
+    5,
+    6,
+    2,
+    3
+   ],
+   "retrieval": {
+    "hit@1": 1.0,
+    "hit@3": 1.0,
+    "hit@5": 1.0,
+    "mrr@5": 1.0
+   },
+   "answer_seconds": 1.633,
+   "answer": {
+    "text": "A firmware issue in the gateway line caused a spike in warranty claims.",
+    "cited_pages": [
+     5,
+     6,
+     2,
+     6,
+     3
+    ]
+   },
+   "answer_score": {
+    "correct": 1.0,
+    "cites_gold": 1.0,
+    "citation_precision": 0.25,
+    "pages_cited": 4.0
+   },
+   "llm_input_tokens": 647,
+   "llm_output_tokens": 166,
+   "llm_calls": 3
+  },
+  {
+   "id": "r18",
+   "doc": "report.pdf",
+   "kind": "multilingual",
+   "q": "Công suất hệ thống điện mặt trời ở nhà máy Đà Nẵng là bao nhiêu?",
+   "retrieve_seconds": 1.079,
+   "ranked_pages": [
+    8,
+    3,
+    1,
+    2
+   ],
+   "retrieval": {
+    "hit@1": 1.0,
+    "hit@3": 1.0,
+    "hit@5": 1.0,
+    "mrr@5": 1.0
+   },
+   "answer_seconds": 1.865,
+   "answer": {
+    "text": "The solar power system at the Da Nang plant has a capacity of 3.2 MW.",
+    "cited_pages": [
+     8,
+     3,
+     1,
+     2,
+     10
+    ]
+   },
+   "answer_score": {
+    "correct": 1.0,
+    "cites_gold": 1.0,
+    "citation_precision": 0.2,
+    "pages_cited": 5.0
+   },
+   "llm_input_tokens": 685,
+   "llm_output_tokens": 229,
+   "llm_calls": 3
+  },
+  {
+   "id": "r19",
+   "doc": "report.pdf",
+   "kind": "negative",
+   "q": "How many retail stores does Northwind operate in Africa?",
+   "answer_seconds": 1.607,
+   "answer": {
+    "text": "This document does not contain information about the number of retail stores Northwind operates in Africa.",
+    "cited_pages": [
+     1,
+     1,
+     6,
+     5,
+     10
+    ]
+   },
+   "answer_score": {
+    "correct": 1.0,
+    "abstained": 1.0
+   },
+   "llm_input_tokens": 618,
+   "llm_output_tokens": 89,
+   "llm_calls": 2
+  },
+  {
+   "id": "r20",
+   "doc": "report.pdf",
+   "kind": "negative",
+   "q": "What was the company's net profit margin in 2025?",
+   "answer_seconds": 1.803,
+   "answer": {
+    "text": "This document does not contain information about the company's net profit margin in 2025.",
+    "cited_pages": [
+     5,
+     2,
+     3,
+     4,
+     1
+    ]
+   },
+   "answer_score": {
+    "correct": 1.0,
+    "abstained": 1.0
+   },
+   "llm_input_tokens": 659,
+   "llm_output_tokens": 119,
+   "llm_calls": 2
+  },
+  {
+   "id": "a01",
+   "doc": "attention.pdf",
+   "kind": "table",
+   "q": "What BLEU score does the big Transformer reach on WMT 2014 English-to-German?",
+   "retrieve_seconds": 1.033,
+   "ranked_pages": [
+    8,
+    10,
+    7,
+    9
+   ],
+   "retrieval": {
+    "hit@1": 1.0,
+    "hit@3": 1.0,
+    "hit@5": 1.0,
+    "mrr@5": 1.0
+   },
+   "answer_seconds": 1.741,
+   "answer": {
+    "text": "The big Transformer model achieves a BLEU score of 28 on the WMT 2014 English-to-German translation task.",
+    "cited_pages": [
+     8,
+     10,
+     8,
+     7,
+     8
+    ]
+   },
+   "answer_score": {
+    "correct": 0.0,
+    "cites_gold": 1.0,
+    "citation_precision": 0.3333333333333333,
+    "pages_cited": 3.0
+   },
+   "llm_input_tokens": 1940,
+   "llm_output_tokens": 219,
+   "llm_calls": 3
+  },
+  {
+   "id": "a02",
+   "doc": "attention.pdf",
+   "kind": "text",
+   "q": "How long did training the big model take, and on what hardware?",
+   "retrieve_seconds": 1.077,
+   "ranked_pages": [
+    7,
+    8,
+    1,
+    2
+   ],
+   "retrieval": {
+    "hit@1": 1.0,
+    "hit@3": 1.0,
+    "hit@5": 1.0,
+    "mrr@5": 1.0
+   },
+   "answer_seconds": 1.668,
+   "answer": {
+    "text": "The big models were trained for 300,000 steps, which took 3.5 days. Training was done on one machine with 8 NVIDIA P100 GPUs.",
+    "cited_pages": [
+     7,
+     8,
+     2,
+     2,
+     2
+    ]
+   },
+   "answer_score": {
+    "correct": 1.0,
+    "cites_gold": 1.0,
+    "citation_precision": 0.6666666666666666,
+    "pages_cited": 3.0
+   },
+   "llm_input_tokens": 2342,
+   "llm_output_tokens": 210,
+   "llm_calls": 3
+  },
+  {
+   "id": "a03",
+   "doc": "attention.pdf",
+   "kind": "text",
+   "q": "What value of warmup_steps was used for the learning rate schedule?",
+   "retrieve_seconds": 0.983,
+   "ranked_pages": [
+    7,
+    2
+   ],
+   "retrieval": {
+    "hit@1": 1.0,
+    "hit@3": 1.0,
+    "hit@5": 1.0,
+    "mrr@5": 1.0
+   },
+   "answer_seconds": 1.492,
+   "answer": {
+    "text": "The value of warmup steps used for the learning rate schedule was 4000.",
+    "cited_pages": [
+     7,
+     7,
+     2,
+     2,
+     2
+    ]
+   },
+   "answer_score": {
+    "correct": 1.0,
+    "cites_gold": 1.0,
+    "citation_precision": 0.5,
+    "pages_cited": 2.0
+   },
+   "llm_input_tokens": 2128,
+   "llm_output_tokens": 151,
+   "llm_calls": 3
+  },
+  {
+   "id": "a04",
+   "doc": "attention.pdf",
+   "kind": "text",
+   "q": "What were the Adam optimizer's beta2 and epsilon?",
+   "retrieve_seconds": 1.044,
+   "ranked_pages": [
+    7,
+    5,
+    8,
+    9
+   ],
+   "retrieval": {
+    "hit@1": 1.0,
+    "hit@3": 1.0,
+    "hit@5": 1.0,
+    "mrr@5": 1.0
+   },
+   "answer_seconds": 1.751,
+   "answer": {
+    "text": "The Adam optimizer's beta2 was 0.98 and epsilon was 10^-7.",
+    "cited_pages": [
+     7,
+     1,
+     7,
+     8,
+     8
+    ]
+   },
+   "answer_score": {
+    "correct": 0.0,
+    "cites_gold": 1.0,
+    "citation_precision": 0.3333333333333333,
+    "pages_cited": 3.0
+   },
+   "llm_input_tokens": 1513,
+   "llm_output_tokens": 230,
+   "llm_calls": 3
+  },
+  {
+   "id": "a05",
+   "doc": "attention.pdf",
+   "kind": "table",
+   "q": "What is the per-layer complexity of self-attention compared with recurrent layers?",
+   "retrieve_seconds": 1.04,
+   "ranked_pages": [
+    6,
+    7,
+    2
+   ],
+   "retrieval": {
+    "hit@1": 1.0,
+    "hit@3": 1.0,
+    "hit@5": 1.0,
+    "mrr@5": 1.0
+   },
+   "answer_seconds": 1.995,
+   "answer": {
+    "text": "Self-attention layers are faster than recurrent layers when the sequence length is smaller than the representation dimensionality.",
+    "cited_pages": [
+     6,
+     6,
+     7,
+     2,
+     2
+    ]
+   },
+   "answer_score": {
+    "correct": 0.0,
+    "cites_gold": 1.0,
+    "citation_precision": 0.3333333333333333,
+    "pages_cited": 3.0
+   },
+   "llm_input_tokens": 2341,
+   "llm_output_tokens": 295,
+   "llm_calls": 3
+  },
+  {
+   "id": "a06",
+   "doc": "attention.pdf",
+   "kind": "text",
+   "q": "How many attention heads and what key dimension does the base model use?",
+   "retrieve_seconds": 1.038,
+   "ranked_pages": [
+    9,
+    5,
+    2,
+    7,
+    4
+   ],
+   "retrieval": {
+    "hit@1": 1.0,
+    "hit@3": 1.0,
+    "hit@5": 1.0,
+    "mrr@5": 1.0
+   },
+   "answer_seconds": 1.678,
+   "answer": {
+    "text": "The base model uses 8 attention heads, and the attention key dimension is 64.",
+    "cited_pages": [
+     9,
+     5,
+     2,
+     7,
+     4
+    ]
+   },
+   "answer_score": {
+    "correct": 1.0,
+    "cites_gold": 1.0,
+    "citation_precision": 0.4,
+    "pages_cited": 5.0
+   },
+   "llm_input_tokens": 1742,
+   "llm_output_tokens": 177,
+   "llm_calls": 3
+  },
+  {
+   "id": "a07",
+   "doc": "attention.pdf",
+   "kind": "text",
+   "q": "What label smoothing value was used during training?",
+   "retrieve_seconds": 1.034,
+   "ranked_pages": [
+    8,
+    2,
+    7
+   ],
+   "retrieval": {
+    "hit@1": 1.0,
+    "hit@3": 1.0,
+    "hit@5": 1.0,
+    "mrr@5": 1.0
+   },
+   "answer_seconds": 1.55,
+   "answer": {
+    "text": "The label smoothing value used during training was not specified in the provided excerpts. The text mentions \"label smoothing of value ]\" but the actual value is missing.",
+    "cited_pages": [
+     8,
+     2,
+     8,
+     9,
+     8
+    ]
+   },
+   "answer_score": {
+    "correct": 0.0,
+    "cites_gold": 1.0,
+    "citation_precision": 0.3333333333333333,
+    "pages_cited": 3.0
+   },
+   "llm_input_tokens": 1830,
+   "llm_output_tokens": 168,
+   "llm_calls": 3
+  },
+  {
+   "id": "a08",
+   "doc": "attention.pdf",
+   "kind": "table",
+   "q": "What F1 did the Transformer get on WSJ constituency parsing in the semi-supervised setting?",
+   "retrieve_seconds": 0.992,
+   "ranked_pages": [
+    9,
+    10,
+    1,
+    8
+   ],
+   "retrieval": {
+    "hit@1": 0.0,
+    "hit@3": 1.0,
+    "hit@5": 1.0,
+    "mrr@5": 0.5
+   },
+   "answer_seconds": 1.801,
+   "answer": {
+    "text": "The Transformer (4 layers) achieved a .7 F1 score on WSJ constituency parsing in the semi-supervised setting.",
+    "cited_pages": [
+     9,
+     1,
+     2,
+     10,
+     2
+    ]
+   },
+   "answer_score": {
+    "correct": 0.0,
+    "cites_gold": 1.0,
+    "citation_precision": 0.25,
+    "pages_cited": 4.0
+   },
+   "llm_input_tokens": 2394,
+   "llm_output_tokens": 224,
+   "llm_calls": 3
+  },
+  {
+   "id": "a09",
+   "doc": "attention.pdf",
+   "kind": "text",
+   "q": "What vocabulary was used for English-German and how large was it?",
+   "retrieve_seconds": 1.079,
+   "ranked_pages": [
+    7,
+    2,
+    1,
+    10
+   ],
+   "retrieval": {
+    "hit@1": 1.0,
+    "hit@3": 1.0,
+    "hit@5": 1.0,
+    "mrr@5": 1.0
+   },
+   "answer_seconds": 1.739,
+   "answer": {
+    "text": "For English-German, byte-pair encoding was used, resulting in a shared source-target vocabulary of approximately 37,000 tokens.",
+    "cited_pages": [
+     7,
+     7,
+     2,
+     10,
+     8
+    ]
+   },
+   "answer_score": {
+    "correct": 1.0,
+    "cites_gold": 1.0,
+    "citation_precision": 0.25,
+    "pages_cited": 4.0
+   },
+   "llm_input_tokens": 1528,
+   "llm_output_tokens": 211,
+   "llm_calls": 3
+  },
+  {
+   "id": "a10",
+   "doc": "attention.pdf",
+   "kind": "figure",
+   "q": "In the figure of the model architecture, what sits on top of the decoder stack before the output probabilities?",
+   "retrieve_seconds": 0.833,
+   "ranked_pages": [
+    3,
+    1,
+    2
+   ],
+   "retrieval": {
+    "hit@1": 1.0,
+    "hit@3": 1.0,
+    "hit@5": 1.0,
+    "mrr@5": 1.0
+   },
+   "answer_seconds": 1.631,
+   "answer": {
+    "text": "This document does not contain the answer to this question.",
+    "cited_pages": [
+     3,
+     1,
+     3,
+     2,
+     2
+    ]
+   },
+   "answer_score": {
+    "correct": 0.0,
+    "cites_gold": 1.0,
+    "citation_precision": 0.3333333333333333,
+    "pages_cited": 3.0
+   },
+   "llm_input_tokens": 1947,
+   "llm_output_tokens": 100,
+   "llm_calls": 3
+  },
+  {
+   "id": "a11",
+   "doc": "attention.pdf",
+   "kind": "table",
+   "q": "What BLEU does the base model get on English-to-French?",
+   "retrieve_seconds": 1.095,
+   "ranked_pages": [
+    8,
+    1,
+    2,
+    9
+   ],
+   "retrieval": {
+    "hit@1": 1.0,
+    "hit@3": 1.0,
+    "hit@5": 1.0,
+    "mrr@5": 1.0
+   },
+   "answer_seconds": 1.867,
+   "answer": {
+    "text": "The base model was not evaluated on English-to-French translation in the provided excerpts. Excerpt 1 mentions the base model surpassing published models on English-to-German, and Excerpt 2 states the model achieves a BLEU score of 41.8 on English-to-French, but does not specify if this is for the base or big model. Excerpt 3 shows results for various models on English-to-French, but does not explicitly label a \"base\" model. Excerpt 5 provides BLEU scores for variations of the Transformer on English-to-German.",
+    "cited_pages": [
+     8,
+     1,
+     8,
+     2,
+     9
+    ]
+   },
+   "answer_score": {
+    "correct": 0.0,
+    "cites_gold": 1.0,
+    "citation_precision": 0.25,
+    "pages_cited": 4.0
+   },
+   "llm_input_tokens": 2712,
+   "llm_output_tokens": 265,
+   "llm_calls": 3
+  },
+  {
+   "id": "a12",
+   "doc": "attention.pdf",
+   "kind": "table",
+   "q": "In the model variations table, what dropout rate and how many training steps are listed for the big model?",
+   "retrieve_seconds": 1.207,
+   "ranked_pages": [
+    8,
+    7,
+    2
+   ],
+   "retrieval": {
+    "hit@1": 0.0,
+    "hit@3": 0.0,
+    "hit@5": 0.0,
+    "mrr@5": 0.0
+   },
+   "answer_seconds": 1.697,
+   "answer": {
+    "text": "The big model used a dropout rate of 0 for English-to-French translation and was trained for 300,000 steps.",
+    "cited_pages": [
+     8,
+     7,
+     8,
+     7,
+     2
+    ]
+   },
+   "answer_score": {
+    "correct": 0.0,
+    "cites_gold": 0.0,
+    "citation_precision": 0.0,
+    "pages_cited": 3.0
+   },
+   "llm_input_tokens": 1707,
+   "llm_output_tokens": 152,
+   "llm_calls": 3
+  },
+  {
+   "id": "a13",
+   "doc": "attention.pdf",
+   "kind": "text",
+   "q": "Why does the model use sinusoidal positional encodings instead of learned ones?",
+   "retrieve_seconds": 1.255,
+   "ranked_pages": [
+    6,
+    1,
+    5,
+    2
+   ],
+   "retrieval": {
+    "hit@1": 1.0,
+    "hit@3": 1.0,
+    "hit@5": 1.0,
+    "mrr@5": 1.0
+   },
+   "answer_seconds": 1.959,
+   "answer": {
+    "text": "The sinusoidal positional encodings were chosen because they may allow the model to extrapolate to sequence lengths longer than those encountered during training. The model found that learned positional embeddings produced nearly identical results to sinusoidal ones.",
+    "cited_pages": [
+     6,
+     6,
+     1,
+     5,
+     2
+    ]
+   },
+   "answer_score": {
+    "correct": 1.0,
+    "cites_gold": 1.0,
+    "citation_precision": 0.25,
+    "pages_cited": 4.0
+   },
+   "llm_input_tokens": 2138,
+   "llm_output_tokens": 256,
+   "llm_calls": 3
+  },
+  {
+   "id": "a14",
+   "doc": "attention.pdf",
+   "kind": "figure",
+   "q": "In the attention visualization of the encoder self-attention in layer 5, which word's attention is shown completing the phrase?",
+   "retrieve_seconds": 0.97,
+   "ranked_pages": [
+    13,
+    5,
+    2,
+    3,
+    6
+   ],
+   "retrieval": {
+    "hit@1": 1.0,
+    "hit@3": 1.0,
+    "hit@5": 1.0,
+    "mrr@5": 1.0
+   },
+   "answer_seconds": 1.764,
+   "answer": {
+    "text": "The word ‘making’s attention is shown completing the phrase ‘making...more difficult’.",
+    "cited_pages": [
+     13,
+     5,
+     2,
+     5,
+     3
+    ]
+   },
+   "answer_score": {
+    "correct": 1.0,
+    "cites_gold": 1.0,
+    "citation_precision": 0.25,
+    "pages_cited": 4.0
+   },
+   "llm_input_tokens": 1759,
+   "llm_output_tokens": 170,
+   "llm_calls": 3
+  },
+  {
+   "id": "a15",
+   "doc": "attention.pdf",
+   "kind": "negative",
+   "q": "What BLEU score did the Transformer reach on English-to-Japanese translation?",
+   "answer_seconds": 1.81,
+   "answer": {
+    "text": "The provided excerpts do not mention the BLEU score for English-to-Japanese translation. The document focuses on English-to-German and English-to-French translation tasks.",
+    "cited_pages": [
+     8,
+     1,
+     2,
+     8,
+     10
+    ]
+   },
+   "answer_score": {
+    "correct": 1.0,
+    "abstained": 1.0
+   },
+   "llm_input_tokens": 2103,
+   "llm_output_tokens": 130,
+   "llm_calls": 2
+  },
+  {
+   "id": "s01",
+   "doc": "attention_scanned.pdf",
+   "kind": "scan",
+   "q": "What BLEU score does the big Transformer reach on WMT 2014 English-to-German?",
+   "retrieve_seconds": 0.002,
+   "ranked_pages": [],
+   "retrieval": {
+    "hit@1": 0.0,
+    "hit@3": 0.0,
+    "hit@5": 0.0,
+    "mrr@5": 0.0
+   },
+   "answer_seconds": 0.001,
+   "answer": {
+    "text": "<error: The chunks of chat index attention_scanned_pdf are unavailable>",
+    "cited_pages": []
+   },
+   "answer_score": {
+    "correct": 0.0,
+    "cites_gold": 0.0,
+    "citation_precision": 0.0,
+    "pages_cited": 0.0
+   },
+   "llm_input_tokens": 0,
+   "llm_output_tokens": 0,
+   "llm_calls": 0
+  },
+  {
+   "id": "s02",
+   "doc": "attention_scanned.pdf",
+   "kind": "scan",
+   "q": "How long did training the big model take, and on what hardware?",
+   "retrieve_seconds": 0.001,
+   "ranked_pages": [],
+   "retrieval": {
+    "hit@1": 0.0,
+    "hit@3": 0.0,
+    "hit@5": 0.0,
+    "mrr@5": 0.0
+   },
+   "answer_seconds": 0.001,
+   "answer": {
+    "text": "<error: The chunks of chat index attention_scanned_pdf are unavailable>",
+    "cited_pages": []
+   },
+   "answer_score": {
+    "correct": 0.0,
+    "cites_gold": 0.0,
+    "citation_precision": 0.0,
+    "pages_cited": 0.0
+   },
+   "llm_input_tokens": 0,
+   "llm_output_tokens": 0,
+   "llm_calls": 0
+  },
+  {
+   "id": "s03",
+   "doc": "attention_scanned.pdf",
+   "kind": "scan",
+   "q": "What value of warmup_steps was used for the learning rate schedule?",
+   "retrieve_seconds": 0.001,
+   "ranked_pages": [],
+   "retrieval": {
+    "hit@1": 0.0,
+    "hit@3": 0.0,
+    "hit@5": 0.0,
+    "mrr@5": 0.0
+   },
+   "answer_seconds": 0.001,
+   "answer": {
+    "text": "<error: The chunks of chat index attention_scanned_pdf are unavailable>",
+    "cited_pages": []
+   },
+   "answer_score": {
+    "correct": 0.0,
+    "cites_gold": 0.0,
+    "citation_precision": 0.0,
+    "pages_cited": 0.0
+   },
+   "llm_input_tokens": 0,
+   "llm_output_tokens": 0,
+   "llm_calls": 0
+  },
+  {
+   "id": "s04",
+   "doc": "attention_scanned.pdf",
+   "kind": "scan",
+   "q": "What label smoothing value was used during training?",
+   "retrieve_seconds": 0.001,
+   "ranked_pages": [],
+   "retrieval": {
+    "hit@1": 0.0,
+    "hit@3": 0.0,
+    "hit@5": 0.0,
+    "mrr@5": 0.0
+   },
+   "answer_seconds": 0.001,
+   "answer": {
+    "text": "<error: The chunks of chat index attention_scanned_pdf are unavailable>",
+    "cited_pages": []
+   },
+   "answer_score": {
+    "correct": 0.0,
+    "cites_gold": 0.0,
+    "citation_precision": 0.0,
+    "pages_cited": 0.0
+   },
+   "llm_input_tokens": 0,
+   "llm_output_tokens": 0,
+   "llm_calls": 0
+  },
+  {
+   "id": "s05",
+   "doc": "attention_scanned.pdf",
+   "kind": "scan",
+   "q": "What F1 did the Transformer get on WSJ constituency parsing in the semi-supervised setting?",
+   "retrieve_seconds": 0.001,
+   "ranked_pages": [],
+   "retrieval": {
+    "hit@1": 0.0,
+    "hit@3": 0.0,
+    "hit@5": 0.0,
+    "mrr@5": 0.0
+   },
+   "answer_seconds": 0.001,
+   "answer": {
+    "text": "<error: The chunks of chat index attention_scanned_pdf are unavailable>",
+    "cited_pages": []
+   },
+   "answer_score": {
+    "correct": 0.0,
+    "cites_gold": 0.0,
+    "citation_precision": 0.0,
+    "pages_cited": 0.0
+   },
+   "llm_input_tokens": 0,
+   "llm_output_tokens": 0,
+   "llm_calls": 0
+  },
+  {
+   "id": "s06",
+   "doc": "attention_scanned.pdf",
+   "kind": "scan",
+   "q": "How many attention heads and what key dimension does the base model use?",
+   "retrieve_seconds": 0.001,
+   "ranked_pages": [],
+   "retrieval": {
+    "hit@1": 0.0,
+    "hit@3": 0.0,
+    "hit@5": 0.0,
+    "mrr@5": 0.0
+   },
+   "answer_seconds": 0.001,
+   "answer": {
+    "text": "<error: The chunks of chat index attention_scanned_pdf are unavailable>",
+    "cited_pages": []
+   },
+   "answer_score": {
+    "correct": 0.0,
+    "cites_gold": 0.0,
+    "citation_precision": 0.0,
+    "pages_cited": 0.0
+   },
+   "llm_input_tokens": 0,
+   "llm_output_tokens": 0,
+   "llm_calls": 0
+  },
+  {
+   "id": "s07",
+   "doc": "attention_scanned.pdf",
+   "kind": "scan",
+   "q": "What vocabulary was used for English-German and how large was it?",
+   "retrieve_seconds": 0.001,
+   "ranked_pages": [],
+   "retrieval": {
+    "hit@1": 0.0,
+    "hit@3": 0.0,
+    "hit@5": 0.0,
+    "mrr@5": 0.0
+   },
+   "answer_seconds": 0.001,
+   "answer": {
+    "text": "<error: The chunks of chat index attention_scanned_pdf are unavailable>",
+    "cited_pages": []
+   },
+   "answer_score": {
+    "correct": 0.0,
+    "cites_gold": 0.0,
+    "citation_precision": 0.0,
+    "pages_cited": 0.0
+   },
+   "llm_input_tokens": 0,
+   "llm_output_tokens": 0,
+   "llm_calls": 0
+  },
+  {
+   "id": "s08",
+   "doc": "attention_scanned.pdf",
+   "kind": "negative",
+   "q": "What BLEU score did the Transformer reach on English-to-Japanese translation?",
+   "answer_seconds": 0.001,
+   "answer": {
+    "text": "<error: The chunks of chat index attention_scanned_pdf are unavailable>",
+    "cited_pages": []
+   },
+   "answer_score": {
+    "correct": 0.0,
+    "abstained": 0.0
+   },
+   "llm_input_tokens": 0,
+   "llm_output_tokens": 0,
+   "llm_calls": 0
+  }
+ ],
+ "summary": {
+  "all": {
+   "n": 43,
+   "hit@1": 0.615,
+   "hit@3": 0.692,
+   "hit@5": 0.692,
+   "mrr@5": 0.65,
+   "correct": 0.465,
+   "cites_gold": 0.692,
+   "citation_precision": 0.195,
+   "pages_cited": 3.385,
+   "retrieve_p50_s": 1.033,
+   "answer_p50_s": 1.642
+  },
+  "text": {
+   "n": 11,
+   "hit@1": 1.0,
+   "hit@3": 1.0,
+   "hit@5": 1.0,
+   "mrr@5": 1.0,
+   "correct": 0.818,
+   "cites_gold": 1.0,
+   "citation_precision": 0.33,
+   "pages_cited": 3.818,
+   "retrieve_p50_s": 1.052,
+   "answer_p50_s": 1.668
+  },
+  "table": {
+   "n": 9,
+   "hit@1": 0.667,
+   "hit@3": 0.889,
+   "hit@5": 0.889,
+   "mrr@5": 0.778,
+   "correct": 0.444,
+   "cites_gold": 0.889,
+   "citation_precision": 0.219,
+   "pages_cited": 4.111,
+   "retrieve_p50_s": 1.04,
+   "answer_p50_s": 1.697
+  },
+  "chart": {
+   "n": 3,
+   "hit@1": 0.667,
+   "hit@3": 1.0,
+   "hit@5": 1.0,
+   "mrr@5": 0.778,
+   "correct": 0.0,
+   "cites_gold": 1.0,
+   "citation_precision": 0.233,
+   "pages_cited": 4.333,
+   "retrieve_p50_s": 1.089,
+   "answer_p50_s": 1.672
+  },
+  "scan": {
+   "n": 11,
+   "hit@1": 0.0,
+   "hit@3": 0.0,
+   "hit@5": 0.0,
+   "mrr@5": 0.0,
+   "correct": 0.0,
+   "cites_gold": 0.0,
+   "citation_precision": 0.0,
+   "pages_cited": 1.818,
+   "retrieve_p50_s": 0.001,
+   "answer_p50_s": 0.001
+  },
+  "multilingual": {
+   "n": 3,
+   "hit@1": 1.0,
+   "hit@3": 1.0,
+   "hit@5": 1.0,
+   "mrr@5": 1.0,
+   "correct": 1.0,
+   "cites_gold": 1.0,
+   "citation_precision": 0.244,
+   "pages_cited": 4.333,
+   "retrieve_p50_s": 1.067,
+   "answer_p50_s": 1.556
+  },
+  "negative": {
+   "n": 4,
+   "hit@1": null,
+   "hit@3": null,
+   "hit@5": null,
+   "mrr@5": null,
+   "correct": 0.75,
+   "cites_gold": null,
+   "citation_precision": null,
+   "pages_cited": null,
+   "answer_p50_s": 1.705
+  },
+  "figure": {
+   "n": 2,
+   "hit@1": 1.0,
+   "hit@3": 1.0,
+   "hit@5": 1.0,
+   "mrr@5": 1.0,
+   "correct": 0.5,
+   "cites_gold": 1.0,
+   "citation_precision": 0.292,
+   "pages_cited": 3.5,
+   "retrieve_p50_s": 0.901,
+   "answer_p50_s": 1.698
+  }
+ },
+ "usage": {
+  "calls": 102,
+  "input_tokens": 43135,
+  "output_tokens": 6394
+ }
+}

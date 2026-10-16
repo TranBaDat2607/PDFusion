@@ -170,22 +170,34 @@ class AskProgressPayload(BaseModel):
 
 
 class PdfReferencePayload(BaseModel):
-    """One entry of `AskResultPayload.pdf_references`
-    (`rag_chain._create_pdf_references`). `page` is 1-indexed, or `None` when
-    the chunk has no usable page — see `rag_chain._display_page`."""
+    """One page of the evidence an answer was written from
+    (`rag_chain._create_pdf_references`): cited pages first, in the order the
+    answer cites them. `page` is 1-indexed, or `None` when the chunk has no
+    usable page — see `rag_chain._display_page`."""
 
     type: str = "pdf"
     page: Optional[int] = None
+    # The page's best-matching passage, cut to 150 characters.
     text: str
+    # Its rank-fusion score: comparable within one answer, not across answers.
     confidence: float
     document_id: str
     document_path: str
     chunk_id: str
+    # The answer cites this page (`[p. N](#page=N)` in its text). An uncited
+    # page was read but not relied on.
+    cited: bool = False
+    # "text", "visual" (a chart, figure or table) or "scanned"
+    # (`ingest.PdfIngestor`).
+    page_kind: str = "text"
+    # The answer model was shown an image of this page, not just its text.
+    shown_as_image: bool = False
     has_equations: bool = False
     has_tables: bool = False
     has_figures: bool = False
-    # Present only when the source chunk's metadata carries an `elements` list
-    # whose first element has a `bbox` — see `_create_pdf_references`.
+    # The region on its page, in PDF points, of the paragraphs the
+    # best-matching chunk was packed from (`ingest.PdfIngestor`). Nothing
+    # reads it yet.
     bbox: Optional[List[float]] = None
 
 

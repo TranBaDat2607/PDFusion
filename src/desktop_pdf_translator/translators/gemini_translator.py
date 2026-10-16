@@ -4,13 +4,13 @@ Google Gemini translator implementation with Vietnamese optimization.
 
 import logging
 import re
-from typing import Optional
+from typing import Optional, Sequence
 
 from google import genai
 from google.genai import types as genai_types
 
 from ..providers.registry import provider
-from .base import BaseTranslator, TranslationCancelled
+from .base import BaseTranslator, PageImage, TranslationCancelled
 from .translation_cache import llm_cache_get as _llm_cache_get, llm_cache_set as _llm_cache_set
 
 
@@ -139,6 +139,7 @@ class GeminiTranslator(BaseTranslator):
         prompt: str,
         system: Optional[str] = None,
         max_tokens: int = 1000,
+        images: Optional[Sequence[PageImage]] = None,
     ) -> Optional[str]:
         """Freeform generation used by the RAG chain.
 
@@ -153,7 +154,7 @@ class GeminiTranslator(BaseTranslator):
         response = self._call_with_backoff(
             lambda: self.client.models.generate_content(
                 model=self.model_name,
-                contents=prompt,
+                contents=self._contents(prompt, images),
                 config=config,
             )
         )
@@ -162,6 +163,20 @@ class GeminiTranslator(BaseTranslator):
             raise RuntimeError("Gemini stopped at its token limit")
         text = response.text
         return text.strip() if text else None
+
+    @staticmethod
+    def _contents(prompt: str, images: Optional[Sequence[PageImage]]):
+        """The prompt alone, as before images existed, or each image after
+        its label and the prompt last."""
+        if not images:
+            return prompt
+        contents: list = []
+        for image in images:
+            if image.label:
+                contents.append(image.label)
+            contents.append(genai_types.Part.from_bytes(data=image.data, mime_type=image.mime_type))
+        contents.append(prompt)
+        return contents
 
     def _create_translation_prompt(self, text: str) -> str:
         return f"{self._translation_instructions()}\n\nTranslate this text:\n\n{text}"

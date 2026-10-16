@@ -14,6 +14,9 @@ function makeReference(overrides: Partial<PdfReference> = {}): PdfReference {
     document_id: "doc1",
     document_path: "C:/docs/doc1.pdf",
     chunk_id: "doc1-chunk-0",
+    cited: false,
+    page_kind: "text",
+    shown_as_image: false,
     has_equations: false,
     has_tables: false,
     has_figures: false,
@@ -87,5 +90,32 @@ describe("toReferenceRows", () => {
     const [row] = toReferenceRows(makeAnswer({ pdf_references: [ref] }));
     expect(row.label).toBe("Page ?");
     expect(row.page).toBeUndefined();
+  });
+
+  // The answer cites pages as `[p. N](#page=N)`; the list marks those, so the
+  // reader can tell the pages relied on from the ones merely read.
+  it("marks the pages the answer cites", () => {
+    const rows = toReferenceRows(
+      makeAnswer({
+        pdf_references: [
+          makeReference({ page: 3, cited: true }),
+          makeReference({ page: 8, cited: false }),
+        ],
+      }),
+    );
+    expect(rows.map((row) => row.cited)).toEqual([true, false]);
+  });
+
+  it("says when the model read a page from its image", () => {
+    const [shown, read] = toReferenceRows(
+      makeAnswer({
+        pdf_references: [
+          makeReference({ page: 5, page_kind: "scanned", shown_as_image: true }),
+          makeReference({ page: 6 }),
+        ],
+      }),
+    );
+    expect(shown.note).toBe("read from the scanned page");
+    expect(read.note).toBeUndefined();
   });
 });

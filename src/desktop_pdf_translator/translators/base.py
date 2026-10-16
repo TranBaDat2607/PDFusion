@@ -8,6 +8,7 @@ import re
 import threading
 import time
 from abc import ABC, abstractmethod
+from dataclasses import dataclass
 from functools import partial
 from typing import Callable, Dict, FrozenSet, Optional, Any, Sequence
 
@@ -121,6 +122,27 @@ def is_retryable_translation_error(error: BaseException) -> bool:
     if status is None:
         return False
     return status in (408, 409, 429) or 500 <= status < 600
+
+
+@dataclass(frozen=True)
+class PageImage:
+    """An image `generate()` shows the model next to its prompt: a rendered PDF
+    page the chat answers from (`rag/page_images.py`).
+
+    `label` is sent as text right before the image. It is how the model knows
+    which page it is looking at, so it can cite it: DocPixie's analysis prompt
+    labels images by their position among those sent, and its citations name
+    that position instead of the page.
+    """
+
+    data: bytes
+    mime_type: str = "image/jpeg"
+    label: Optional[str] = None
+
+    def base64(self) -> str:
+        import base64
+
+        return base64.b64encode(self.data).decode("ascii")
 
 
 class TranslationCancelled(Exception):
@@ -438,6 +460,7 @@ class BaseTranslator(ABC):
         prompt: str,
         system: Optional[str] = None,
         max_tokens: int = 1000,
+        images: Optional[Sequence[PageImage]] = None,
     ) -> Optional[str]:
         """Freeform text generation for RAG answer synthesis.
 

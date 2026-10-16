@@ -108,6 +108,12 @@ class ProviderSpec:
     # OpenAI's reasoning models refuse the parameter outright, while
     # Anthropic's API requires one on every request.
     default_max_tokens: Optional[int] = None
+    # Whether chat may show its models page images (`generate(images=...)`):
+    # charts, tables and scans the answer is read from. A provider's models
+    # differ, so this says only that its API takes images at all. A model that
+    # refuses them anyway is sent text only from then on
+    # (`rag_chain.EnhancedRAGChain._text_only`).
+    accepts_images: bool = True
 
     @property
     def is_llm(self) -> bool:
@@ -295,6 +301,8 @@ PROVIDERS: Tuple[ProviderSpec, ...] = (
         priority=4,
         signup_url="https://platform.deepseek.com/api_keys",
         max_temperature=2.0,
+        # Its OpenAI-compatible API has no image input: an image part is a 400.
+        accepts_images=False,
     ),
     ProviderSpec(
         id="ollama",

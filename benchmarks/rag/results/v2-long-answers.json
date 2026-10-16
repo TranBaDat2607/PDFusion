@@ -1,0 +1,317 @@
+{
+ "system": "v2",
+ "src": "C:\\Users\\Admin\\Desktop\\PDFusion\\src",
+ "answers": true,
+ "model": "gemini:gemini-2.5-flash-lite",
+ "options": null,
+ "indexing": {
+  "long.pdf": {
+   "seconds": 24.48,
+   "chunks": 367,
+   "pages": 57,
+   "text_pages": 24,
+   "visual_pages": 31,
+   "scanned_pages": 2,
+   "ocr_pages": 2,
+   "tables": 21,
+   "llm_input_tokens": 0,
+   "llm_output_tokens": 0
+  }
+ },
+ "questions": [
+  {
+   "id": "l01",
+   "doc": "long.pdf",
+   "kind": "table",
+   "q": "What BLEU score does the big Transformer reach on WMT 2014 English-to-German?",
+   "retrieve_seconds": 0.067,
+   "ranked_pages": [
+    8,
+    1,
+    10,
+    9,
+    2
+   ],
+   "retrieval": {
+    "hit@1": 1.0,
+    "hit@3": 1.0,
+    "hit@5": 1.0,
+    "mrr@5": 1.0
+   },
+   "answer_seconds": 2.429,
+   "answer": {
+    "text": "The big Transformer model achieves a BLEU score of 28.4 on the WMT 2014 English-to-German translation task [p. 8](#page=8).",
+    "cited_pages": [
+     8
+    ],
+    "images_sent": 3
+   },
+   "answer_score": {
+    "correct": 1.0,
+    "cites_gold": 1.0,
+    "citation_precision": 1.0,
+    "pages_cited": 1.0
+   },
+   "llm_input_tokens": 4395,
+   "llm_output_tokens": 37,
+   "llm_calls": 1
+  },
+  {
+   "id": "l02",
+   "doc": "long.pdf",
+   "kind": "text",
+   "q": "What value of warmup_steps was used for the learning rate schedule?",
+   "retrieve_seconds": 0.071,
+   "ranked_pages": [
+    7,
+    43,
+    35,
+    42,
+    52
+   ],
+   "retrieval": {
+    "hit@1": 1.0,
+    "hit@3": 1.0,
+    "hit@5": 1.0,
+    "mrr@5": 1.0
+   },
+   "answer_seconds": 2.115,
+   "answer": {
+    "text": "warmup_steps = 4000 [p. 7](#page=7)",
+    "cited_pages": [
+     7
+    ],
+    "images_sent": 3
+   },
+   "answer_score": {
+    "correct": 1.0,
+    "cites_gold": 1.0,
+    "citation_precision": 1.0,
+    "pages_cited": 1.0
+   },
+   "llm_input_tokens": 4605,
+   "llm_output_tokens": 16,
+   "llm_calls": 1
+  },
+  {
+   "id": "l03",
+   "doc": "long.pdf",
+   "kind": "table",
+   "q": "What was Northwind's revenue growth in Europe?",
+   "retrieve_seconds": 0.072,
+   "ranked_pages": [
+    26,
+    19,
+    17,
+    16,
+    23
+   ],
+   "retrieval": {
+    "hit@1": 0.0,
+    "hit@3": 1.0,
+    "hit@5": 1.0,
+    "mrr@5": 0.5
+   },
+   "answer_seconds": 1.98,
+   "answer": {
+    "text": "Northwind's revenue growth in Europe was 4.7% [p. 19](#page=19).",
+    "cited_pages": [
+     19
+    ],
+    "images_sent": 1
+   },
+   "answer_score": {
+    "correct": 1.0,
+    "cites_gold": 1.0,
+    "citation_precision": 1.0,
+    "pages_cited": 1.0
+   },
+   "llm_input_tokens": 944,
+   "llm_output_tokens": 21,
+   "llm_calls": 1
+  },
+  {
+   "id": "l04",
+   "doc": "long.pdf",
+   "kind": "chart",
+   "q": "In which quarter did Northwind's warranty claims peak, and how many claims were there?",
+   "retrieve_seconds": 0.135,
+   "ranked_pages": [
+    21,
+    20,
+    16,
+    8,
+    22
+   ],
+   "retrieval": {
+    "hit@1": 0.0,
+    "hit@3": 1.0,
+    "hit@5": 1.0,
+    "mrr@5": 0.5
+   },
+   "answer_seconds": 2.013,
+   "answer": {
+    "text": "Northwind's warranty claims peaked in Q3 with 154 claims [p. 20](#page=20).",
+    "cited_pages": [
+     20
+    ],
+    "images_sent": 3
+   },
+   "answer_score": {
+    "correct": 1.0,
+    "cites_gold": 1.0,
+    "citation_precision": 1.0,
+    "pages_cited": 1.0
+   },
+   "llm_input_tokens": 1668,
+   "llm_output_tokens": 23,
+   "llm_calls": 1
+  },
+  {
+   "id": "l05",
+   "doc": "long.pdf",
+   "kind": "scan",
+   "q": "What final dividend per share did Northwind's board approve?",
+   "retrieve_seconds": 0.061,
+   "ranked_pages": [
+    22,
+    16,
+    21,
+    28,
+    23
+   ],
+   "retrieval": {
+    "hit@1": 1.0,
+    "hit@3": 1.0,
+    "hit@5": 1.0,
+    "mrr@5": 1.0
+   },
+   "answer_seconds": 1.909,
+   "answer": {
+    "text": "The Board of Directors approved a final dividend of USD 0.42 per share [p. 22](#page=22).",
+    "cited_pages": [
+     22
+    ],
+    "images_sent": 1
+   },
+   "answer_score": {
+    "correct": 1.0,
+    "cites_gold": 1.0,
+    "citation_precision": 1.0,
+    "pages_cited": 1.0
+   },
+   "llm_input_tokens": 874,
+   "llm_output_tokens": 24,
+   "llm_calls": 1
+  },
+  {
+   "id": "l06",
+   "doc": "long.pdf",
+   "kind": "scan",
+   "q": "What was Osaka Metals' on-time delivery rate?",
+   "retrieve_seconds": 0.066,
+   "ranked_pages": [
+    29,
+    18,
+    35,
+    20,
+    27
+   ],
+   "retrieval": {
+    "hit@1": 1.0,
+    "hit@3": 1.0,
+    "hit@5": 1.0,
+    "mrr@5": 1.0
+   },
+   "answer_seconds": 2.148,
+   "answer": {
+    "text": "Osaka Metals' on-time delivery rate was 88.1% [p. 29](#page=29).",
+    "cited_pages": [
+     29
+    ],
+    "images_sent": 3
+   },
+   "answer_score": {
+    "correct": 1.0,
+    "cites_gold": 1.0,
+    "citation_precision": 1.0,
+    "pages_cited": 1.0
+   },
+   "llm_input_tokens": 2213,
+   "llm_output_tokens": 22,
+   "llm_calls": 1
+  }
+ ],
+ "summary": {
+  "all": {
+   "n": 6,
+   "hit@1": 0.667,
+   "hit@3": 1.0,
+   "hit@5": 1.0,
+   "mrr@5": 0.833,
+   "correct": 1.0,
+   "cites_gold": 1.0,
+   "citation_precision": 1.0,
+   "pages_cited": 1.0,
+   "retrieve_p50_s": 0.069,
+   "answer_p50_s": 2.064
+  },
+  "table": {
+   "n": 2,
+   "hit@1": 0.5,
+   "hit@3": 1.0,
+   "hit@5": 1.0,
+   "mrr@5": 0.75,
+   "correct": 1.0,
+   "cites_gold": 1.0,
+   "citation_precision": 1.0,
+   "pages_cited": 1.0,
+   "retrieve_p50_s": 0.07,
+   "answer_p50_s": 2.204
+  },
+  "text": {
+   "n": 1,
+   "hit@1": 1.0,
+   "hit@3": 1.0,
+   "hit@5": 1.0,
+   "mrr@5": 1.0,
+   "correct": 1.0,
+   "cites_gold": 1.0,
+   "citation_precision": 1.0,
+   "pages_cited": 1.0,
+   "retrieve_p50_s": 0.071,
+   "answer_p50_s": 2.115
+  },
+  "chart": {
+   "n": 1,
+   "hit@1": 0.0,
+   "hit@3": 1.0,
+   "hit@5": 1.0,
+   "mrr@5": 0.5,
+   "correct": 1.0,
+   "cites_gold": 1.0,
+   "citation_precision": 1.0,
+   "pages_cited": 1.0,
+   "retrieve_p50_s": 0.135,
+   "answer_p50_s": 2.013
+  },
+  "scan": {
+   "n": 2,
+   "hit@1": 1.0,
+   "hit@3": 1.0,
+   "hit@5": 1.0,
+   "mrr@5": 1.0,
+   "correct": 1.0,
+   "cites_gold": 1.0,
+   "citation_precision": 1.0,
+   "pages_cited": 1.0,
+   "retrieve_p50_s": 0.064,
+   "answer_p50_s": 2.029
+  }
+ },
+ "usage": {
+  "calls": 6,
+  "input_tokens": 14699,
+  "output_tokens": 143
+ }
+}

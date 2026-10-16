@@ -34,7 +34,6 @@ unlock `gnome-keyring` or `kwalletmanager` if that matters to you.
 - **Python** 3.11 (via Anaconda/Miniforge) — for the FastAPI sidecar
 - **Node.js** ≥ 18 + **pnpm** — for the React frontend
 - **Rust** (rustup, cargo) — for the Tauri shell
-- **Ghostscript** — optional, only needed by Camelot for table extraction during RAG indexing (pdfplumber fallback runs without it)
 
 Per platform:
 
@@ -64,8 +63,7 @@ conda create -n pdfusion python=3.11.14
 conda activate pdfusion
 pip install -r requirements.txt
 # Optional extras (editable install — the package isn't published to PyPI):
-pip install -e ".[rag]"        # RAG chat
-pip install -e ".[advanced]"   # table extraction
+pip install -e ".[rag]"        # RAG chat (ChromaDB, ONNX embeddings, RapidOCR)
 ```
 
 > These examples name the env `pdfusion`; `pdfusion-env` also works out of the

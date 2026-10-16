@@ -1,9 +1,9 @@
 """RAG endpoints — index a PDF, ask a question, stream events.
 
-The `rag` package loads torch, chromadb, sentence-transformers and camelot
-(~10 s). RAG is off by default, so most users never need any of it — every
-import of it below lives inside the handler that needs it, and the sidecar
-boots without paying for it.
+The `rag` package loads chromadb, onnxruntime, PyMuPDF and RapidOCR (seconds).
+Chat may be off, and most sessions never ask a question — every import of it
+below lives inside the handler that needs it, and the sidecar boots without
+paying for it.
 
 What exists is recorded in `pdfusion.db` (`storage/records.py`): a document is
 the SHA-256 of its bytes, and each chat index over it is a row whose chunks live
@@ -17,12 +17,13 @@ too, and `/rag/documents`, Remove and Reset manage what is stored.
 from __future__ import annotations
 
 import asyncio
+import functools
 import logging
 import shutil
 import sys
 import time
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sse_starlette.sse import EventSourceResponse
@@ -62,6 +63,20 @@ NOT_INDEXED_MESSAGE = (
 NO_TEXT_MESSAGE = (
     "No text could be extracted from this PDF, so there is nothing to ask about."
 )
+UNREADABLE_SCAN_MESSAGE = (
+    "This PDF is scanned, and its pages could not be read (OCR failed or is "
+    "unavailable), so there is nothing to ask about. The log has the details."
+)
+
+
+def _no_text_message(processor: object) -> str:
+    """Why a document gave no chunks. A scan has no text layer to extract, so
+    the generic message sent its user looking for the wrong thing."""
+    stats = getattr(processor, "stats", None)
+    counts = stats() if callable(stats) else {}
+    if counts.get("scanned_pages") and not counts.get("ocr_pages"):
+        return UNREADABLE_SCAN_MESSAGE
+    return NO_TEXT_MESSAGE
 # The `code` on `/rag/ask`'s `error` event when the question's index had to be
 # cleared. The chat panel indexes the document again when it sees it.
 INDEX_UNAVAILABLE = "index_unavailable"
@@ -78,6 +93,10 @@ _init_lock = asyncio.Lock()
 # index job whenever a PDF is opened, so one document can be asked for twice at
 # once; the second job waits, then finds the first one's index ready.
 _document_locks: Dict[str, asyncio.Lock] = {}
+
+
+class _IndexCancelled(Exception):
+    """Raised from the ingestor's page callback once the job is cancelled."""
 
 
 def _document_lock(document_id: str) -> asyncio.Lock:
@@ -125,15 +144,17 @@ def _recover(records: RecordsStore, store: ChromaDBManager) -> None:
         records.delete_index(index_id)
 
 
-def _load_document_processor() -> type:
-    """Import the scientific-PDF processor (fitz + camelot + pdfplumber, ~4 s).
+def _load_document_processor() -> Callable[..., Any]:
+    """Import the PDF ingestor, and the OCR engine for scanned pages; return
+    what builds an ingestor (`make_processor(on_page=...)`).
 
     Blocking, for the same reason `_build_chain` is, and reached the same way —
     only ever through `asyncio.to_thread`.
     """
-    from ...rag.document_processor import ScientificPDFProcessor
+    from ...rag.ingest import PdfIngestor
+    from ...rag.ocr import load_ocr_engine
 
-    return ScientificPDFProcessor
+    return functools.partial(PdfIngestor, ocr=load_ocr_engine())
 
 
 async def _get_chain() -> EnhancedRAGChain:
@@ -252,16 +273,37 @@ async def _run_index(job: Job, payload: IndexRequest) -> None:
             # the event loop for the same reason the extraction below is, and
             # inside the try so a failure still reaches the job's error event —
             # without a terminal SSE event the chat panel waits forever.
-            ScientificPDFProcessor = await asyncio.to_thread(_load_document_processor)
-            processor = ScientificPDFProcessor()
-            # Blocking fitz/camelot/pdfplumber work — keep it off the event loop.
-            chunks = await asyncio.to_thread(processor.process_pdf, file_path)
+            make_processor = await asyncio.to_thread(_load_document_processor)
+            loop = asyncio.get_running_loop()
+
+            def on_page(done: int, total: int) -> None:
+                # Checked between pages, in the worker thread: OCR takes
+                # seconds a page, and a long scan would otherwise be read to
+                # its end before Cancel took effect.
+                if job.cancelled:
+                    raise _IndexCancelled()
+                # Extraction is 20 → 65%; OCR of a scanned page takes seconds.
+                asyncio.run_coroutine_threadsafe(
+                    job.emit("progress", {
+                        "stage": f"Reading page {done} of {total}",
+                        "progress": 20 + int(45 * done / max(total, 1)),
+                    }),
+                    loop,
+                )
+
+            processor = make_processor(on_page=on_page)
+            # Blocking PyMuPDF and OCR work — keep it off the event loop.
+            try:
+                chunks = await asyncio.to_thread(processor.process_pdf, file_path)
+            except _IndexCancelled:
+                await job.finish("cancelled", {})
+                return
 
             if job.cancelled:
                 await job.finish("cancelled", {})
                 return
             if not chunks:
-                await job.finish("error", {"message": NO_TEXT_MESSAGE})
+                await job.finish("error", {"message": _no_text_message(processor)})
                 return
 
             building = await asyncio.to_thread(

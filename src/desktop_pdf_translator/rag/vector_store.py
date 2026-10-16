@@ -21,8 +21,8 @@ from chromadb.errors import NotFoundError
 
 from ..utils.paths import appdata_dir
 from .errors import IndexUnavailableError
-from .keyword_search import Bm25Index
 from .onnx_embeddings import OnnxEmbeddingFunction
+from .retrieval import contextual_text
 
 logger = logging.getLogger(__name__)
 
@@ -96,28 +96,35 @@ class ChromaDBManager:
         Raises on failure. The caller fails the index and drops its collection,
         so a half-written index is never taken for a finished one.
 
-        Chunks keep only the metadata retrieval reads. The document's id and
-        path are not repeated on every chunk: the collection is the document's,
-        and the records know where it lives.
+        What is embedded is the chunk with its section heading in front
+        (`retrieval.contextual_text`); what is stored, and quoted, is the
+        chunk's own text, with the heading kept in its metadata. Chunks keep
+        only the metadata retrieval and the answer step read. The document's
+        id and path are not repeated on every chunk: the collection is the
+        document's, and the records know where it lives.
         """
         ids: List[str] = []
         documents: List[str] = []
+        contextual: List[str] = []
         metadatas: List[Dict[str, Any]] = []
         for i, chunk in enumerate(chunks):
             section = chunk.get('metadata', {})
             metadata = {
                 'chunk_index': i,
                 'page': chunk.get('page', 0),
-                'chunk_type': section.get('section_type', 'content'),
+                'kind': section.get('kind', 'text'),
+                'heading': section.get('heading', ''),
+                'page_kind': section.get('page_kind', 'text'),
                 'has_equations': bool(section.get('has_equations', False)),
                 'has_tables': bool(section.get('has_tables', False)),
                 'has_figures': bool(section.get('has_figures', False)),
             }
-            bbox = _first_bbox(chunk.get('elements'))
+            bbox = section.get('bbox') or _first_bbox(chunk.get('elements'))
             if bbox is not None:
-                metadata['bbox'] = json.dumps(bbox)
+                metadata['bbox'] = json.dumps([float(v) for v in bbox])
             ids.append(f"chunk_{i}")
             documents.append(chunk['text'])
+            contextual.append(contextual_text({'text': chunk['text'], 'metadata': metadata}))
             metadatas.append(metadata)
 
         def add() -> None:
@@ -128,6 +135,7 @@ class ChromaDBManager:
                     ids=ids[start:end],
                     documents=documents[start:end],
                     metadatas=metadatas[start:end],
+                    embeddings=self.embedding_function(contextual[start:end]),
                 )
 
         # Embedding is CPU-heavy and blocking: off the event loop.
@@ -201,62 +209,6 @@ class ChromaDBManager:
         ]
         logger.info(f"Found {len(formatted_results)} similar chunks for query: {query[:50]}...")
         return formatted_results
-
-    async def hybrid_search(self, index_id: str, query: str,
-                            chunks: List[Dict[str, Any]], keywords: Bm25Index,
-                            n_results: int = 5,
-                            alpha: float = 0.7) -> List[Dict[str, Any]]:
-        """
-        Blend semantic search with BM25 keyword scores, within one index.
-
-        Args:
-            index_id: The index to search
-            query: Search query
-            chunks: The index's chunks, as `get_chunks` returned them — read once
-                by the caller, not once per search
-            keywords: BM25 statistics built from `chunks`, in the same order
-            n_results: Number of results to return
-            alpha: Weight for semantic search (1-alpha for keyword search)
-
-        Returns:
-            List of ranked results
-        """
-        semantic_results = await self.search_similar(index_id, query, n_results * 2)
-
-        # Scoring every chunk is CPU work, so it runs off the event loop. It
-        # used to be a substring count, on the loop (#31). Only the best keyword
-        # hits join the blend, as only the nearest chunks do on the semantic side.
-        keyword_scores = await asyncio.to_thread(keywords.scores, query)
-        best_keyword_hits = sorted(
-            (i for i, score in enumerate(keyword_scores) if score > 0),
-            key=lambda i: keyword_scores[i],
-            reverse=True,
-        )[:n_results * 2]
-        keyword_results = [
-            {**chunks[i], 'keyword_score': keyword_scores[i]} for i in best_keyword_hits
-        ]
-
-        # Combine and rank results
-        combined_results: Dict[str, Dict[str, Any]] = {}
-        for result in semantic_results:
-            combined_results[result['chunk_id']] = {
-                **result, 'final_score': alpha * result['similarity_score']
-            }
-        for result in keyword_results:
-            existing = combined_results.get(result['chunk_id'])
-            if existing is not None:
-                existing['final_score'] += (1 - alpha) * result['keyword_score']
-            else:
-                combined_results[result['chunk_id']] = {
-                    **result,
-                    'similarity_score': 0,
-                    'final_score': (1 - alpha) * result['keyword_score'],
-                }
-
-        final_results = sorted(
-            combined_results.values(), key=lambda x: x['final_score'], reverse=True
-        )
-        return final_results[:n_results]
 
     def has_index(self, index_id: str) -> bool:
         """Whether an index has a collection. Blocking."""

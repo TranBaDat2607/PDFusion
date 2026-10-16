@@ -131,12 +131,58 @@ Then pick that service in the toolbar. Worth knowing:
 
 ## Chat with your document
 
-Open the chat panel and ask about the PDF you have loaded. Retrieval combines
-keyword and semantic search, and every answer lists the pages it drew on, so you
-can check it. Each document keeps its own conversation, which you can clear.
+Open the chat panel and ask about the PDF you have loaded. Every answer cites
+the pages it came from as `[p. 7]` links; click one to jump there. Each
+document keeps its own conversation, which you can clear.
 
 Chat answers from exactly one document — the one you have open — so it never
 blends two papers together.
+
+**How it works: retrieve by text, read by vision.**
+
+- **Indexing is local and free.** Text is split into paragraph chunks under
+  their section headings, tables are read as tables, and scanned pages are
+  OCRed on your machine.
+- **Finding the pages is local and free too.** Keyword and semantic search are
+  fused, and the results are grouped into pages.
+- **The answer is one model call.** It reads those pages, and is shown *images*
+  of up to three of them (charts, tables, scans), so it can read what the text
+  layer can't.
+- **Citations are checked.** A page the model wasn't shown never becomes a link.
+
+**Experiment design.** The [chat benchmark](benchmarks/rag/README.md) compares
+this version with the previous one, run from the commit before the redesign.
+Both use the same answer model, Gemini 2.5 Flash-Lite.
+
+- **Documents:**
+  - A synthetic 14-page annual report, with known answers on every page: prose,
+    ruled tables, charts whose numbers exist only in the image, scanned pages, a
+    Vietnamese page, and distractor pages that share a question's words but not
+    its answer.
+  - The paper *Attention Is All You Need*, plus a scanned copy of it with no
+    text layer.
+  - A 57-page document combining these with two more papers, to measure how cost
+    grows with length.
+- **Questions:** 43 on the first three documents, plus 6 on the long one. They
+  are tagged text, table, chart, figure, scan, multilingual or unanswerable, and
+  each lists every page that states its answer.
+- **Scoring:**
+  - **Retrieval:** whether a correct page is ranked first.
+  - **Answers:** whether the expected values appear, with citations stripped
+    first so a page number can't pass for a value. An unanswerable question
+    counts as correct when the answer says so.
+  - **Citation precision:** the share of cited pages that state the answer.
+  - **Cost:** model calls and tokens per question.
+  - **Time:** seconds per question, on a CPU-only machine.
+
+| | Correct answers | Citation precision | Right page ranked first | Model calls / tokens per question | Time per question |
+|---|---|---|---|---|---|
+| Previous version | 0.47 | 0.20 | 0.62 | 2.4 / 1,003 | 2.6 s |
+| **PDFusion** | **0.93** | **0.97** | **0.85** | **1 / 2,925** | **2.2 s** |
+
+Charts went from 0.00 to 1.00, and scanned pages went from not indexable at all
+to the right page ranked first 91% of the time. The cost per question doesn't
+grow with the document: about 2,400 tokens on the 57-page PDF.
 
 **First use downloads about 470 MB** — a multilingual embedding model, fetched
 once into `~/.cache/huggingface`. Everything after that is local. This is the

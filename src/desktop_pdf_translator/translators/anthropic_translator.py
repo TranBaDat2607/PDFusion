@@ -8,12 +8,12 @@ placeholders), so this class plugs in the same way OpenAITranslator/GeminiTransl
 """
 
 import logging
-from typing import Any, Dict, FrozenSet, Optional
+from typing import Any, Dict, FrozenSet, Optional, Sequence
 
 import anthropic
 
 from ..providers.registry import provider
-from .base import BaseTranslator, TranslationCancelled
+from .base import BaseTranslator, PageImage, TranslationCancelled
 from .translation_cache import llm_cache_get as _llm_cache_get, llm_cache_set as _llm_cache_set
 
 
@@ -157,6 +157,7 @@ class AnthropicTranslator(BaseTranslator):
         prompt: str,
         system: str | None = None,
         max_tokens: int = 1000,
+        images: Optional[Sequence[PageImage]] = None,
     ) -> str | None:
         """Freeform generation used by the RAG chain.
 
@@ -170,7 +171,7 @@ class AnthropicTranslator(BaseTranslator):
             lambda rejected: self.client.messages.create(
                 model=self.model,
                 max_tokens=max_tokens,
-                messages=[{"role": "user", "content": prompt}],
+                messages=[{"role": "user", "content": self._user_content(prompt, images)}],
                 timeout=60,
                 **kwargs,
                 **self._sampling_kwargs(rejected, 0.3),
@@ -187,6 +188,24 @@ class AnthropicTranslator(BaseTranslator):
             if getattr(block, "type", None) == "text"
         ).strip()
         return text or None
+
+    @staticmethod
+    def _user_content(prompt: str, images: Optional[Sequence[PageImage]]) -> Any:
+        """The prompt alone as a string, as before images existed, or each
+        image after its label and the prompt last: Anthropic advises images
+        before the text that asks about them."""
+        if not images:
+            return prompt
+        blocks: list = []
+        for image in images:
+            if image.label:
+                blocks.append({"type": "text", "text": image.label})
+            blocks.append({
+                "type": "image",
+                "source": {"type": "base64", "media_type": image.mime_type, "data": image.base64()},
+            })
+        blocks.append({"type": "text", "text": prompt})
+        return blocks
 
     def _create_translation_prompt(self, text: str) -> tuple[str, str]:
         return self._translation_instructions(), f"Translate this text:\n\n{text}"

@@ -8,11 +8,18 @@
  * This module owns the payload's field name. `rag_chain.answer_question` has
  * always returned `pdf_references`; the UI read `pdf_sources`, so the list was
  * permanently empty and click-to-jump unreachable (#13). Page semantics belong
- * to the sidecar — see `rag_chain._display_page`.
+ * to the sidecar — see `rag_chain._display_page`. A reference is one page of
+ * the evidence, cited pages first (`rag_chain._create_pdf_references`).
  */
 
 import type { ReferenceItem } from "@/components/chat/ReferenceList";
 import type { RagAnswer } from "@/hooks/useRagAsk";
+
+const IMAGE_NOTES: Record<string, string> = {
+  scanned: "read from the scanned page",
+  visual: "read from the page image",
+  text: "read from the page image",
+};
 
 export function toReferenceRows(answer: RagAnswer): ReferenceItem[] {
   return (answer.pdf_references ?? []).map((ref, i) => {
@@ -24,6 +31,8 @@ export function toReferenceRows(answer: RagAnswer): ReferenceItem[] {
       label: `Page ${page ?? "?"}`,
       detail: ref.text,
       page,
+      cited: ref.cited ?? false,
+      note: ref.shown_as_image ? IMAGE_NOTES[ref.page_kind ?? "text"] ?? IMAGE_NOTES.text : undefined,
     };
   });
 }
