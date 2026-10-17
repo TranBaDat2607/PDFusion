@@ -11,6 +11,8 @@ a hashing embedding function, a recording model.
 
 from __future__ import annotations
 
+import json
+import logging
 import re
 from pathlib import Path
 from typing import Dict, List
@@ -426,6 +428,14 @@ _TOO_LONG = [
         id="gemini",
     ),
     pytest.param(422, "Maximum Context Length exceeded", id="422-any-case"),
+    pytest.param(
+        400,
+        "input length and `max_tokens` exceed context limit: 190000 + 64000 > 200000",
+        id="anthropic-with-max-tokens",
+    ),
+    pytest.param(
+        400, "This endpoint's maximum prompt length is 131072 tokens", id="openrouter-routed"
+    ),
     pytest.param(413, "Payload Too Large", id="413-whatever-the-message"),
     pytest.param(413, "", id="413-no-message"),
 ]
@@ -538,3 +548,53 @@ def test_a_second_refusal_after_the_retry_fails_the_question(tmp_path, store):
         ask(chain, index, path, max_pdf_sources=2)
 
     assert len(translator.calls) == 2
+
+
+def test_a_context_overflow_that_mentions_images_is_not_taken_for_an_image_refusal(tmp_path, store):
+    """"...including image tokens" is a length complaint. Read as a refusal of
+    images it would make the model text-only for the rest of the process, and
+    the question would be answered from the whole read it can't hold."""
+    pages = eight_pages({_BEST: {"page_kind": "visual"}})
+    translator = _Translator(
+        _SdkError(400, "maximum context length is 131072 tokens, including image tokens"), "ok"
+    )
+    index, path = build_document(tmp_path, store, pages)
+    chain = make_chain(store, translator, full_document_chars=total_chars(pages) + 100)
+
+    ask(chain, index, path, max_pdf_sources=2)
+
+    assert chain._text_only == set()
+    (_whole, _s1, _k1), (retrieved, _s2, _k2) = translator.calls
+    assert sorted(shown_pages(retrieved)) == [_SECOND, _BEST]
+
+
+def test_a_refusal_that_is_recovered_is_not_logged_as_an_error(tmp_path, store, caplog):
+    """Support reads ERROR lines as failed questions; this one was answered."""
+    pages = eight_pages()
+    translator = _Translator(_SdkError(400, "maximum context length is 8192 tokens"), "ok")
+    index, path = build_document(tmp_path, store, pages)
+    chain = make_chain(store, translator, full_document_chars=total_chars(pages) + 100)
+
+    with caplog.at_level(logging.INFO):
+        ask(chain, index, path, max_pdf_sources=2)
+
+    assert [r.getMessage() for r in caplog.records if r.levelno >= logging.ERROR] == []
+    assert any(r.levelno == logging.WARNING for r in caplog.records)
+
+
+@pytest.mark.parametrize(("refused", "calls"), [(True, 2), (False, 1)])
+def test_the_answer_record_says_whether_the_whole_read_was_refused(
+    tmp_path, store, caplog, refused, calls
+):
+    pages = eight_pages()
+    replies = [_SdkError(400, "maximum context length is 8192 tokens"), "ok"] if refused else ["ok"]
+    translator = _Translator(*replies)
+    index, path = build_document(tmp_path, store, pages)
+    chain = make_chain(store, translator, full_document_chars=total_chars(pages) + 100)
+
+    with caplog.at_level(logging.INFO):
+        ask(chain, index, path, max_pdf_sources=2)
+
+    (record,) = [r.getMessage() for r in caplog.records if r.getMessage().startswith("rag_answer ")]
+    assert len(translator.calls) == calls
+    assert json.loads(record.removeprefix("rag_answer "))["whole_read_refused"] is refused

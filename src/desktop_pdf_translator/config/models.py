@@ -317,7 +317,7 @@ class RAGSettings(BaseModel):
     # (`benchmarks/rag/README.md`); 0 always retrieves. At most
     # `WHOLE_DOCUMENT_MAX_TOKENS`, which keeps a whole read inside DeepSeek's
     # 128k window; a provider that still refuses one is asked again with the
-    # retrieved pages (`rag_chain._generate_answer`).
+    # retrieved pages (`rag_chain.answer_question`).
     whole_document_tokens: WholeDocumentTokens = Field(
         11_500,
         description="Read a PDF whole when its text fits this many tokens (0 = always retrieve)",
@@ -329,9 +329,14 @@ class RAGSettings(BaseModel):
         # Earlier versions offered 90,000 and allowed 100,000. Left to the
         # bound, a file holding either would lose the field to the load path's
         # drop-the-bad-field repair and fall back to 11,500; the user picked
-        # "large", so it loads as the largest allowed. Only the file is
-        # clamped: `PUT /config` checks the bound before it gets here.
-        if isinstance(value, int) and not isinstance(value, bool):
+        # "large", so it loads as the largest allowed. `PUT /config` checks the
+        # bound before it gets here, so only a file or `update_settings` is
+        # clamped. A float counts (`90000.0`); a boolean is refused here, or
+        # pydantic's lax mode would read `true` as one token and turn whole
+        # reads off without a word.
+        if isinstance(value, bool):
+            raise ValueError("must be a number of tokens")
+        if isinstance(value, (int, float)):
             return min(value, WHOLE_DOCUMENT_MAX_TOKENS)
         return value
 

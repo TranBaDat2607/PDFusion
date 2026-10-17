@@ -153,6 +153,18 @@ def test_a_whole_document_budget_above_todays_maximum_loads_clamped(
     assert manager.load_settings().rag.whole_document_tokens == 80_000
 
 
+def test_a_float_budget_above_the_maximum_loads_clamped_too(manager: ConfigManager):
+    """A hand-edited `90000.0` is the same request for "large"."""
+    write_config(manager, {"rag": {"whole_document_tokens": 90_000.0}})
+    assert manager.load_settings().rag.whole_document_tokens == 80_000
+
+
+def test_a_boolean_budget_is_dropped_not_read_as_one_token(manager: ConfigManager):
+    """`true` would otherwise coerce to 1 and quietly turn whole reads off."""
+    write_config(manager, {"rag": {"whole_document_tokens": True}})
+    assert manager.load_settings().rag.whole_document_tokens == 11_500
+
+
 def test_an_endpoint_is_stored_without_its_trailing_slash(manager: ConfigManager):
     write_config(
         manager, {"providers": {"openai": {"base_url": " https://llm.example.com/v1/ "}}}

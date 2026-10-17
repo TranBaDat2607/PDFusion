@@ -217,6 +217,29 @@ def test_a_backwards_range_is_refused(
     assert "ends before it starts" in response.json()["detail"]
 
 
+def test_a_bad_selection_is_reported_before_a_missing_engine(
+    client: TestClient, five_pages: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """The selection is something the user can settle in the toolbar; the setup
+    screen can't. Reporting 409 first would send them through an install only
+    to be refused again."""
+    _settings(monkeypatch)
+    _engine(monkeypatch, ready=False)
+    assert _post(client, five_pages, page_ranges=[[4, 9]]).status_code == 422
+
+
+def test_the_pair_check_comes_before_the_selection(
+    client: TestClient, five_pages: Path, monkeypatch: pytest.MonkeyPatch
+):
+    _settings(monkeypatch)
+    _engine(monkeypatch, ready=True)
+    response = _post(
+        client, five_pages, page_ranges=[[4, 9]], source_lang="en", target_lang="ja"
+    )
+    assert response.status_code == 422
+    assert "Argos" in response.json()["detail"]
+
+
 @pytest.mark.parametrize("ranges", [[], [[0, 2]], [[1]], [[1, 2]] * 501])
 def test_a_malformed_selection_is_refused_by_the_schema(
     client: TestClient,

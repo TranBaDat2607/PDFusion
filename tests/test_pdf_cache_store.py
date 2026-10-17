@@ -511,8 +511,8 @@ def test_the_cap_evicts_least_recently_used_first(tmp_path: Path):
 
 
 def test_a_partial_entry_is_evicted_before_a_whole_document_one(tmp_path: Path):
-    """The workflow `PAGE_LIMIT_HELP` recommends — a long book a part at a
-    time — writes a full-length PDF per part. Ordered by `last_used_seq`
+    """Translating a long book a part at a
+    time writes a full-length PDF per part. Ordered by `last_used_seq`
     alone, those evict the whole-document entries that answer every request
     for their file, which is what the cache is actually for."""
     cache = PDFTranslationCache(cache_dir=tmp_path / "c", max_size_mb=10.0)

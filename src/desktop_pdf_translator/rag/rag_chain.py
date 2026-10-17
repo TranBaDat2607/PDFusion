@@ -194,13 +194,16 @@ class _ImagesRefused(Exception):
 # request outgrew the model's window rather than a broken one. OpenAI, DeepSeek
 # and OpenRouter say "maximum context length" (OpenAI also sends the code
 # `context_length_exceeded`), Anthropic "prompt is too long", Gemini "input
-# token count".
+# token count"; Anthropic with a large `max_tokens` says "exceed context
+# limit", and models routed through OpenRouter "maximum prompt length".
 _CONTEXT_REFUSAL_STATUSES = frozenset({400, 422})
 _CONTEXT_REFUSAL_MARKERS = (
     "context_length_exceeded",
     "maximum context length",
     "prompt is too long",
     "input token count",
+    "context limit",
+    "prompt length",
 )
 
 
@@ -803,7 +806,11 @@ Question: {question}
                 model.translator.generate, prompt, system, ANSWER_MAX_TOKENS, **kwargs
             )
         except Exception as e:
-            if images and is_image_refusal(e):
+            overflow = is_context_overflow(e)
+            # After the overflow check: "...including image tokens" is a
+            # length complaint, and read as a refusal of images it would make
+            # the model text-only for the rest of the process.
+            if images and not overflow and is_image_refusal(e):
                 raise _ImagesRefused() from e
             if "on_text" in kwargs and is_stream_refusal(e):
                 logger.warning(
@@ -812,8 +819,10 @@ Question: {question}
                 )
                 self._unstreamed.add((model.service.value, model.model))
                 return await self._generate_with_llm(model, prompt, answer_lang, images, fence)
-            logger.error(f"Answer generation failed: {e}")
-            failure = _ContextTooLong if is_context_overflow(e) else AnswerGenerationError
+            # A whole read's overflow is usually answered by the retry in
+            # `answer_question`; that is not an error line for support to chase.
+            logger.log(logging.WARNING if overflow else logging.ERROR, "Answer generation failed: %s", e)
+            failure = _ContextTooLong if overflow else AnswerGenerationError
             raise failure(describe_answer_error(model.service, e)) from e
         if not answer:
             label = SERVICE_LABELS.get(model.service, model.service.value)

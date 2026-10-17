@@ -61,7 +61,7 @@ inside so the app works on first run without downloading anything.
 2. **Pick your languages** in the *From* and *To* boxes. *To* defaults to
    Vietnamese.
 3. *(Optional)* **Narrow the range** in the *Pages* box — `1-10, 14, 22-` all
-   work. Up to 50 pages per run.
+   work. Leave it blank for the whole document.
 4. **Press Translate.** The translated pages appear beside the original as they
    finish; you can cancel mid-run.
 5. **Press Save PDF…** to keep it.
