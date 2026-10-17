@@ -56,7 +56,10 @@ from .retrieval import (
     chunk_map,
     contextual_text,
     group_by_page,
+    CHARS_PER_TOKEN,
     outline,
+    outline_line,
+    reading_length,
     reciprocal_rank_fusion,
     select_image_pages,
     whole_document,
@@ -160,9 +163,7 @@ ANSWER_MAX_TOKENS = 4000
 # every table" needs the whole document, and retrieval hands over five pages.
 # Long context beats retrieval on answer quality when it fits, and retrieval
 # wins on cost (Li et al., EMNLP 2024), so the budget is a setting. Measured
-# in English-equivalent characters (`_reading_length`) against it.
-# English runs ~3.5-4 characters a token; a CJK character is about a token.
-_CHARS_PER_TOKEN = 3.5
+# in English-equivalent characters (`retrieval.reading_length`) against it.
 # The outline a long document's answer gets (`retrieval.outline`): its section
 # headings with their pages, so a question about the whole of it — what it
 # contains, its sections, every benchmark — isn't answered from five pages
@@ -209,7 +210,8 @@ class EnhancedRAGChain:
                  max_images: int = DEFAULT_MAX_IMAGES, candidates: int = CANDIDATES,
                  neighbours: int = NEIGHBOURS, reranker: Optional[Any] = None,
                  rerank_depth: int = RERANK_DEPTH,
-                 full_document_chars: Optional[int] = None):
+                 full_document_chars: Optional[int] = None,
+                 outline_chars: int = OUTLINE_CHARS):
         self.vector_store = vector_store
         self.hyde = hyde
         self.max_images = max_images
@@ -225,6 +227,8 @@ class EnhancedRAGChain:
         # applies to the next one; a number (in characters) fixes it, and 0
         # turns whole-document reading off.
         self.full_document_chars = full_document_chars
+        # 0 leaves the outline out.
+        self.outline_chars = outline_chars
         self._model: Optional[AnswerModel] = None
         self._model_key: Optional[Tuple[Any, ...]] = None
         self._model_lock = threading.Lock()
@@ -342,8 +346,11 @@ class EnhancedRAGChain:
             read = await asyncio.to_thread(whole_document, chunks, evidence)
         written_at = datetime.now()
         # Read whole, the pages are the outline; read from retrieval, the
-        # outline is what the answer knows of the pages it wasn't given.
-        contents = outline(chunks, OUTLINE_CHARS) if read is evidence else []
+        # outline is what the answer knows of the pages it wasn't given. Only
+        # a model reads it.
+        contents: List[Tuple[int, str]] = []
+        if model is not None and evidence and read is evidence and self.outline_chars > 0:
+            contents = await asyncio.to_thread(outline, chunks, self.outline_chars)
         answer, images_sent = await self._generate_answer(
             question, evidence, model, answer_lang, document_path, history, on_text, read,
             contents,
@@ -568,8 +575,8 @@ Question: {question}"""
         whole-document budget, which every hosted model's window holds."""
         limit = self.full_document_chars
         if limit is None:
-            limit = int(get_settings().rag.whole_document_tokens * _CHARS_PER_TOKEN)
-        length = sum(_reading_length(chunk['text']) for chunk in chunks)
+            limit = int(get_settings().rag.whole_document_tokens * CHARS_PER_TOKEN)
+        length = sum(reading_length(chunk['text']) for chunk in chunks)
         return 0 < length <= limit
 
     def _sends_images(self, model: AnswerModel) -> bool:
@@ -675,10 +682,10 @@ Question: {question}"""
         if contents:
             # Inside the fence: headings are the document's words. Before the
             # pages, as a contents page is; cited from only through the pages.
-            listing = "\n".join(f"p. {page}: {heading}" for page, heading in contents)
+            listing = "\n".join(outline_line(page, heading) for page, heading in contents)
             pages = (
-                "The document's outline — each section heading and the page it starts on. "
-                "Only the pages below are given in full:\n" + listing + "\n\n" + pages
+                "The document's outline, each section with the page it starts on. Only "
+                "the pages after it are given in full:\n" + listing + "\n\n" + pages
             )
         conversation = ""
         if history:
@@ -689,6 +696,15 @@ Question: {question}"""
                 "(it is not evidence; answer from the pages):\n\n" + _format_turns(history)
             )
 
+        # The outline answers what the document contains and where; the pages
+        # answer what it says. Said outright, or "these pages only" makes the
+        # model refuse a question only the outline can answer, and the
+        # outline's page numbers invite citations the check then drops.
+        outline_rule = (
+            "Use the outline for what the document contains and where its sections are: "
+            "name what it lists, without a citation, and never cite a page you only know "
+            "from the outline. "
+        ) if contents else ""
         return f"""Pages of the document, with the text found on each:
 
 <{fence}>
@@ -697,7 +713,7 @@ Question: {question}"""
 
 Question: {question}
 
-Answer from these pages only, directly and concisely, without headed sections. After each statement, cite the page it comes from as [p. N], or [p. N, M] for several; cite only pages listed above. If these pages don't contain the answer, say so plainly rather than answering from general knowledge. The chat renders Markdown, and math written as $...$ or $$...$$, so use a list, table or formula where it makes the answer clearer. {answer_language_instruction(answer_lang)}"""
+{outline_rule}Answer from these pages only, directly and concisely, without headed sections. After each statement, cite the page it comes from as [p. N], or [p. N, M] for several; cite only pages listed above. If these pages don't contain the answer, say so plainly rather than answering from general knowledge. The chat renders Markdown, and math written as $...$ or $$...$$, so use a list, table or formula where it makes the answer clearer. {answer_language_instruction(answer_lang)}"""
 
     async def _generate_with_llm(self, model: AnswerModel, prompt: str, answer_lang: str,
                                  images: Sequence[PageImage] = (), fence: str = "document",
@@ -801,15 +817,6 @@ Answer from these pages only, directly and concisely, without headed sections. A
                     pass
             references.append(reference)
         return references
-
-
-def _reading_length(text: str) -> float:
-    """`text`'s length in English-equivalent characters: a character of a
-    script that takes about a token each (CJK, kana, hangul) counts as
-    `_CHARS_PER_TOKEN` of them, so a budget in characters is a budget in
-    tokens whatever the document's language."""
-    wide = sum(1 for ch in text if ord(ch) >= 0x2E80)
-    return len(text) + wide * (_CHARS_PER_TOKEN - 1)
 
 
 def _streams(translator: Any) -> bool:

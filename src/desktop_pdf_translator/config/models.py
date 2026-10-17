@@ -318,7 +318,7 @@ class RAGSettings(BaseModel):
     # paper) is where it was measured to fix answers and break none
     # (`benchmarks/rag/README.md`); 0 always retrieves. At most 100k: a whole
     # read must fit every offered model's window — DeepSeek's is 128k — and
-    # Vietnamese runs ~1.4× the estimate (`rag_chain._reading_length`).
+    # Vietnamese runs ~1.4× the estimate (`retrieval.reading_length`).
     whole_document_tokens: int = Field(
         11_500, ge=0, le=100_000,
         description="Read a PDF whole when its text fits this many tokens (0 = always retrieve)",

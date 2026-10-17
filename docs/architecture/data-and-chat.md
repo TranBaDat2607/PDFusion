@@ -298,7 +298,7 @@ there:
   here on one run each: 3 answers fixed and none broken (McNemar p 0.25 — a
   direction, not proof; one of the three had flipped between earlier runs),
   for +79% input tokens a question (11k on the Attention paper) and +0.25 s at
-  p50. The budget is in English-equivalent characters (`_reading_length`: a
+  p50. The budget is in English-equivalent characters (`retrieval.reading_length`: a
   CJK character counts as a token's worth). No model, no whole document: the extractive answer quotes retrieved
   passages. `quality_metrics.pages_read` says how many pages the answer read.
 - **A longer document comes with its outline.** Read from retrieved pages,
@@ -308,8 +308,12 @@ there:
   sections, where each topic is. Ingest keeps those headings already, so it
   costs no model call. It goes inside the fence (headings are the document's
   words), and a page known only from the outline can't be cited: the model
-  saw a heading there, not the text. On the whole-document questions about
-  PDFs too long to read whole it took 3/6 to 4/6. It is only as good as
+  saw a heading there, not the text; the prompt says so, and says to name
+  what the outline lists without citing it. Over three runs each, the
+  whole-document questions on PDFs too long to read whole went 9/18 → 10/18:
+  a section list 0/3 → 3/3, a "main ideas" summary 3/3 → 1/3. A heading that
+  starts a later section again is listed again, so a multi-paper PDF keeps
+  each paper's "Abstract". It is only as good as
   heading detection: a paper whose subsections ingest doesn't recognise as
   headings outlines as its top-level sections alone.
 - **A longer document is not given a second, whole read.** "Self-Route"

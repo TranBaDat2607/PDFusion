@@ -198,27 +198,50 @@ def whole_document(chunks: Sequence[Dict[str, Any]],
     return pages
 
 
+
+# English runs ~3.5-4 characters a token; a CJK character is about a token.
+CHARS_PER_TOKEN = 3.5
+
+
+def reading_length(text: str) -> float:
+    """`text`'s length in English-equivalent characters: a character of a
+    script that takes about a token each (CJK, kana, hangul) counts as
+    `CHARS_PER_TOKEN` of them, so a budget in characters is a budget in
+    tokens whatever the document's language."""
+    wide = sum(1 for ch in text if ord(ch) >= 0x2E80)
+    return len(text) + wide * (CHARS_PER_TOKEN - 1)
+
+
+def outline_line(page: int, heading: str) -> str:
+    """One outline entry as the prompt shows it. Not `p. N:` — that reads as a
+    page on offer to cite, and a page known only from its heading never is."""
+    return f"{heading} (from page {page})"
+
+
 def outline(chunks: Sequence[Dict[str, Any]], max_chars: int) -> List[Tuple[int, str]]:
-    """The document's table of contents from its chunks' headings: each
-    heading once, with the 1-indexed page it starts on, in page order.
+    """The document's table of contents from its chunks' headings: an entry
+    each time a new section starts, with the 1-indexed page it starts on.
 
     What an answer from five retrieved pages knows of the rest of a long
-    document. Cut at `max_chars` (each entry costing its heading plus a few
-    characters for the page), at the end: a contents page is read from the top.
+    document. A heading seen before is listed again when it starts a section
+    again: a PDF of several papers repeats "Abstract" and "References", and
+    those repeats are where each paper begins and ends. Cut at `max_chars`, as
+    rendered (`outline_line`) and in English-equivalent characters, at the end:
+    a contents page is read from the top, and one with gaps would skip
+    sections without saying so.
     """
-    first_page: Dict[str, int] = {}
-    order: List[Tuple[int, int, str]] = []
-    for chunk in sorted(chunks, key=lambda c: (_page(c), _index(c))):
-        heading = (chunk.get("metadata", {}).get("heading") or "").strip()
-        if heading and heading not in first_page:
-            first_page[heading] = _page(chunk)
-            order.append((_page(chunk), len(order), heading))
     entries: List[Tuple[int, str]] = []
-    used = 0
-    for page, _seen, heading in sorted(order):
-        cost = len(heading) + 8
+    used = 0.0
+    previous = None
+    for chunk in sorted(chunks, key=lambda c: (_page(c), _index(c))):
+        heading = ((chunk.get("metadata") or {}).get("heading") or "").strip()
+        if not heading or heading == previous:
+            continue
+        previous = heading
+        page = _page(chunk) + 1
+        cost = reading_length(outline_line(page, heading)) + 1
         if used + cost > max_chars:
             break
-        entries.append((page + 1, heading))
+        entries.append((page, heading))
         used += cost
     return entries

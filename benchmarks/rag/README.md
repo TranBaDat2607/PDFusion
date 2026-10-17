@@ -221,21 +221,36 @@ probe — follow-ups 7/9 → 9/9, whole-document questions, Vietnamese without
 diacritics, scans — and a corpus this size can't put them past p < 0.05 as a
 whole. Each category's change is in the tables above, with its interval.
 
-### Document outline for long PDFs (`longglobal-*`, `final5-answers`)
+### Document outline for long PDFs (`longglobal-*`, `final6-answers`)
 
 A PDF too long to read whole is answered from five retrieved pages, which
 can't say what the rest holds. Four whole-document questions on such PDFs
 were added (`g12`–`g15`: what `long.pdf` contains, BERT's sections, ResNet's
-datasets, BERT's benchmarks). From five pages alone the system passed 3/6 of
-the long-PDF whole-document questions — asked what `long.pdf` contains, it
-said the PDF "does not contain information about separate documents". With
-the outline (section headings and their pages, `retrieval.outline`, ≤3,000
-characters) 4/6: BERT's sections pass, and `long.pdf` is named as three of
-its four documents. BERT's benchmarks still fail: the standalone paper's
-subsections aren't detected as headings, so they aren't in its outline. On
-the 127 questions the outline isn't meant for it changed nothing (Δ 0.000,
-0 fixed, 0 broken) for +1.5% input tokens a question. With it, against
-`main` on those 127: +0.047 correct (0.000…+0.094, McNemar p 0.11).
+datasets, BERT's benchmarks). From five pages alone, asked what `long.pdf`
+contains, the system said the PDF "does not contain information about
+separate documents". The answer now also gets the outline (section headings
+and the page each starts on, `retrieval.outline`, ≤3,000 English-equivalent
+characters), with the instruction to name what it lists but never cite a page
+known only from it.
+
+These answers vary from run to run, so the six long-PDF whole-document
+questions were run three times each way (`longglobal-nooutline-r*`,
+`longglobal-outline3-r*`): **9/18 without the outline, 10/18 with it.** It is
+a trade, not a sweep. BERT's section list went 0/3 → 3/3. "The main ideas of
+BERT" went 3/3 → 1/3: with the outline the answer turned into a bulleted
+summary naming three of the five expected ideas where four pass. `long.pdf`'s
+contents improved from "no separate documents" to three of its four papers,
+still short of passing (it leaves out the annual report). BERT's benchmarks
+fail both ways: the standalone paper's subsections aren't detected as
+headings, so they aren't in its outline.
+
+On the 127 questions the outline isn't meant for (`final3` → `final6`), one
+answer was fixed (n02, ResNet, which gets the outline) and two broke: a10 is
+on a document read whole, so the outline never reached it, and p02 picked the
+wrong one of two F1 scores on the same page. Both look like run-to-run noise.
+Input tokens on those questions rose 1.9%, all of it on the long documents
+(`long.pdf`'s contents question: 3,378 → 4,312). `outline_chars=0` turns it
+off for an ablation.
 
 ### Tried and dropped: Self-Route (`final4-answers`)
 

@@ -18,7 +18,7 @@ import pytest
 
 from desktop_pdf_translator.config import AppSettings
 from desktop_pdf_translator.rag import rag_chain as rag_chain_module
-from desktop_pdf_translator.rag.retrieval import outline
+from desktop_pdf_translator.rag.retrieval import outline, outline_line
 from desktop_pdf_translator.rag.vector_store import ChromaDBManager
 
 from test_rag_answers import (
@@ -52,7 +52,7 @@ def chunk(page: int, heading: str, text: str = "words") -> Dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 
-def test_each_heading_once_with_the_page_it_starts_on_in_page_order():
+def test_each_section_once_with_the_page_it_starts_on_in_page_order():
     chunks = [
         chunk(2, "2 Related Work"), chunk(0, "Abstract"), chunk(0, "1 Introduction"),
         chunk(1, "1 Introduction"), chunk(4, "4 Experiments"), chunk(3, "4 Experiments"),
@@ -63,19 +63,50 @@ def test_each_heading_once_with_the_page_it_starts_on_in_page_order():
     ]
 
 
+def test_a_heading_that_starts_a_later_section_again_is_listed_again():
+    """A PDF of several papers repeats "Abstract" and "References"; each is
+    where one paper starts or ends, so dropping repeats blurs the papers into
+    one."""
+    chunks = [chunk(0, "Paper A"), chunk(0, "Abstract"), chunk(2, "References"),
+              chunk(3, "Paper B"), chunk(3, "Abstract"), chunk(5, "References")]
+
+    assert [heading for _page, heading in outline(chunks, max_chars=1000)] == [
+        "Paper A", "Abstract", "References", "Paper B", "Abstract", "References",
+    ]
+
+
+def test_chunks_without_a_heading_or_metadata_are_skipped():
+    chunks = [{"text": "no metadata"}, chunk(0, None), chunk(1, "  "), chunk(2, "Results")]
+
+    assert outline(chunks, max_chars=1000) == [(3, "Results")]
+
+
 def test_a_document_with_no_headings_has_no_outline():
     assert outline([chunk(0, ""), chunk(1, "")], max_chars=1000) == []
 
 
-def test_a_long_outline_is_cut_at_its_budget():
-    chunks = [chunk(page, f"Section {page} " + "x" * 40) for page in range(200)]
+def test_a_long_outline_is_cut_at_its_end_within_its_budget():
+    """Cut at the end, never thinned out: a short heading after the cut must
+    not slip in, or the outline would skip sections without saying so."""
+    long_heading = "x" * 50
+    chunks = [chunk(page, f"Section {page} {long_heading}") for page in range(20)]
+    chunks.append(chunk(20, "Short"))
 
-    entries = outline(chunks, max_chars=600)
+    entries = outline(chunks, max_chars=300)
 
-    assert 0 < len(entries) < 200
-    assert sum(len(heading) + 8 for _page, heading in entries) <= 600
-    # Cut at the end, never thinned out: the first sections stay.
-    assert entries[0] == (1, "Section 0 " + "x" * 40)
+    assert 0 < len(entries) < 20
+    assert entries[0] == (1, f"Section 0 {long_heading}")
+    assert (21, "Short") not in entries
+    # Within the budget as rendered in the prompt.
+    assert sum(len(outline_line(page, heading)) + 1 for page, heading in entries) <= 300
+
+
+def test_the_budget_counts_text_that_takes_a_token_a_character_as_longer():
+    """3,000 characters of CJK headings would be ~3k tokens, not ~1k."""
+    latin = outline([chunk(n, f"Section {n:02d}") for n in range(50)], max_chars=600)
+    cjk = outline([chunk(n, f"節{n:02d}章節章節章") for n in range(50)], max_chars=600)
+
+    assert len(cjk) < len(latin)
 
 
 # ---------------------------------------------------------------------------
@@ -119,25 +150,53 @@ def test_a_document_answered_from_retrieved_pages_shows_its_outline_inside_the_f
 
     inside = fenced(translator.calls[0][0])
     for page, heading in enumerate(headings, start=1):
-        assert re.search(rf"p\. {page}\b[^\n]*{re.escape(heading)}", inside), heading
+        assert outline_line(page, heading) in inside, heading
+    # A contents page comes first: the outline before the first page's text.
+    assert inside.index(outline_line(1, headings[0])) < inside.index("--- page")
 
 
-def test_a_document_read_whole_needs_no_outline(tmp_path, store):
+def test_an_outline_line_does_not_read_like_a_citation():
+    """`p. 4: Appendix` invites `[p. 4]`, which the citation check then drops."""
+    assert not re.search(r"\bp\.\s*\d", outline_line(4, "Appendix D"))
+    assert "4" in outline_line(4, "Appendix D")
+
+
+def test_the_prompt_says_the_outline_is_for_structure_and_never_cited(tmp_path, store):
     translator = _Translator("ok")
-    index, path, headings = build_long(tmp_path, store)
-
-    ask(make_chain(store, translator, full_document_chars=100_000), index, path, max_pdf_sources=1)
-
-    assert "outline" not in translator.calls[0][0].lower()
-
-
-def test_a_page_known_only_from_the_outline_cannot_be_cited(tmp_path, store):
-    """The model saw a heading there, not the page: citing it would vouch for
-    text it never read."""
-    translator = _Translator("Appendix D is on [p. 4].")
     index, path, _headings = build_long(tmp_path, store)
 
-    result = ask(make_chain(store, translator, full_document_chars=0), index, path, max_pdf_sources=1)
+    ask(make_chain(store, translator, full_document_chars=0), index, path, max_pdf_sources=1)
 
-    assert "[p. 4]" not in result["answer"]
-    assert result["quality_metrics"]["invalid_citations"] == 1
+    prompt, system, _kwargs = translator.calls[0]
+    instructions = (prompt[prompt.rindex("Question:"):] + (system or "")).lower()
+    assert "outline" in instructions
+    assert "never cite" in instructions or "not cite" in instructions
+
+
+def test_a_retry_without_images_keeps_the_outline(tmp_path, store, monkeypatch):
+    """A model that refuses the page image is asked again without it; that
+    second prompt is built separately and must carry the outline too."""
+    from desktop_pdf_translator.rag import retrieval as retrieval_module
+    from test_rag_answers import _SdkError
+
+    # Every retrieved page reads better as a picture, so the first request
+    # carries an image and the refusal path runs.
+    monkeypatch.setattr(retrieval_module, "wants_image", lambda evidence: True)
+    translator = _Translator(_SdkError(400, "This model does not support image input"), "ok")
+    index, path, headings = build_long(tmp_path, store)
+
+    ask(make_chain(store, translator, full_document_chars=0), index, path, max_pdf_sources=1)
+
+    assert len(translator.calls) == 2
+    assert "images" in translator.calls[0][2] and "images" not in translator.calls[1][2]
+    assert outline_line(2, headings[1]) in fenced(translator.calls[1][0])
+
+
+def test_an_outline_budget_of_zero_turns_it_off(tmp_path, store):
+    translator = _Translator("ok")
+    index, path, _headings = build_long(tmp_path, store)
+
+    ask(make_chain(store, translator, full_document_chars=0, outline_chars=0), index, path,
+        max_pdf_sources=1)
+
+    assert "outline" not in translator.calls[0][0].lower()
