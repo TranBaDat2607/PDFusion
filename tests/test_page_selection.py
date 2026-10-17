@@ -1,4 +1,4 @@
-"""Which pages a translation covers, and whether it may run (#33).
+"""Which pages a translation covers (#33).
 
 `processors/page_selection.py` is the check both `POST /translate` and the
 processor make, and the plan the processor splits and reassembles a document
@@ -14,12 +14,10 @@ from desktop_pdf_translator.processors.page_selection import (
     Segment,
     contiguous_runs,
     format_pages,
-    limit_problem,
     page_runs,
     pages_key,
     rolling_segments,
     selected_pages,
-    validate_selection,
 )
 
 
@@ -169,66 +167,3 @@ def test_segments_cover_every_page_exactly_once():
 def test_overlapping_or_overrunning_chunks_are_a_bug(chunks):
     with pytest.raises(ValueError):
         rolling_segments(10, chunks, [False] * len(chunks))
-
-
-# ---------------------------------------------------------------------------
-# Limits
-# ---------------------------------------------------------------------------
-
-
-def _problem(**overrides):
-    values = dict(
-        page_count=120, selected_count=120, size_mb=4.0, max_pages=50, max_size_mb=50.0
-    )
-    values.update(overrides)
-    return limit_problem(**values)
-
-
-def test_within_both_limits_there_is_no_problem():
-    assert _problem(page_count=40, selected_count=40) is None
-    assert _problem(selected_count=50) is None
-
-
-def test_a_long_document_is_told_how_to_proceed():
-    assert _problem() == (
-        "This PDF has 120 pages, and PDFusion translates up to 50 at a time. "
-        "Choose the pages to translate in the toolbar, or raise the limit in "
-        "Settings → Cache → Performance."
-    )
-
-
-def test_a_selection_over_the_limit_is_told_to_choose_fewer():
-    assert _problem(selected_count=60) == (
-        "60 pages are selected, and PDFusion translates up to 50 at a time. "
-        "Choose fewer pages, or raise the limit in Settings → Cache → Performance."
-    )
-
-
-def test_the_size_limit_applies_whatever_the_selection():
-    assert _problem(selected_count=1, size_mb=72.25) == (
-        "This PDF is 72.2 MB, and PDFusion translates files up to 50 MB. "
-        "You can raise the limit in Settings → Cache → Performance."
-    )
-
-
-def test_validate_selection_returns_the_pages():
-    assert (
-        validate_selection(
-            [(1, 50)], page_count=120, size_mb=4.0, max_pages=50, max_size_mb=50.0
-        )
-        == list(range(1, 51))
-    )
-
-
-def test_validate_selection_raises_the_limit_sentence():
-    with pytest.raises(PageSelectionError, match="This PDF has 120 pages"):
-        validate_selection(
-            None, page_count=120, size_mb=4.0, max_pages=50, max_size_mb=50.0
-        )
-
-
-def test_validate_selection_reports_a_bad_range_before_the_limit():
-    with pytest.raises(PageSelectionError, match="no page 200"):
-        validate_selection(
-            [(1, 200)], page_count=120, size_mb=4.0, max_pages=50, max_size_mb=50.0
-        )

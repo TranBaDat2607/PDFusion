@@ -223,10 +223,18 @@ def test_short_documents_are_read_whole_up_to_a_budget_the_user_can_change(
 
 
 # The cap keeps a whole read inside every offered model's window: DeepSeek's
-# is 128k tokens, and Vietnamese text runs ~1.4× the estimate (`_reading_length`).
-@pytest.mark.parametrize("budget", [-1, 100_001])
+# is 128k tokens, and Vietnamese text runs ~1.4× the estimate
+# (`_reading_length`), so 100k estimated tokens overflowed it (#106).
+@pytest.mark.parametrize("budget", [-1, 80_001])
 def test_a_whole_document_budget_outside_its_range_is_refused(client: TestClient, budget):
     assert put(client, {"whole_document_tokens": budget}).status_code == 422
+
+
+def test_the_largest_whole_document_budget_is_accepted(client: TestClient):
+    response = put(client, {"whole_document_tokens": 80_000})
+
+    assert response.status_code == 200
+    assert response.json()["rag"]["whole_document_tokens"] == 80_000
 
 
 def test_a_zero_whole_document_budget_means_always_retrieve(client: TestClient):
@@ -234,38 +242,22 @@ def test_a_zero_whole_document_budget_means_always_retrieve(client: TestClient):
 
 
 # ---------------------------------------------------------------------------
-# translation limits (#33)
+# no translation limits
 # ---------------------------------------------------------------------------
 
 
-def test_the_translation_limits_are_saved(client: TestClient, manager: ConfigManager):
-    response = put(client, {"max_pages": 75, "max_file_size_mb": 120})
-
-    assert response.status_code == 200
-    translation = response.json()["translation"]
-    assert (translation["max_pages"], translation["max_file_size_mb"]) == (75, 120.0)
-    reloaded = ConfigManager(config_dir=manager.config_dir).load_settings()
-    assert reloaded.translation.max_pages == 75
-    assert reloaded.translation.max_file_size_mb == 120.0
-
-
-@pytest.mark.parametrize(
-    "body",
-    [
-        {"max_pages": 0},
-        {"max_pages": 101},
-        {"max_file_size_mb": 0.5},
-        {"max_file_size_mb": 201},
-    ],
-)
-def test_a_limit_outside_its_bounds_is_refused(
-    client: TestClient, manager: ConfigManager, body: dict
+@pytest.mark.parametrize("body", [{"max_pages": 75}, {"max_file_size_mb": 120}])
+def test_the_retired_translation_limits_are_refused_not_ignored(
+    client: TestClient, body: dict
 ):
-    """422 from the request, not 500 from the settings model: both read the
-    same bounds (`config/models.py:MaxPages`, `MaxFileSizeMB`)."""
+    """Ignored, a client that still sent them would get a 200 for a limit that
+    no longer exists."""
     assert put(client, body).status_code == 422
-    reloaded = ConfigManager(config_dir=manager.config_dir).load_settings()
-    assert reloaded.translation.max_pages == 50
+
+
+def test_the_config_no_longer_reports_translation_limits(client: TestClient):
+    translation = client.get("/config", headers=AUTH).json()["translation"]
+    assert "max_pages" not in translation and "max_file_size_mb" not in translation
 
 
 # ---------------------------------------------------------------------------

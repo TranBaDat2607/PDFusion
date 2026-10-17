@@ -216,12 +216,14 @@ def _providers_default() -> Dict[str, "ProviderSettings"]:
     return {spec.id: ProviderSettings(provider_id=spec.id) for spec in PROVIDERS}
 
 
-# Bounds shared with `PUT /config` (`api/schemas.py`), so the API answers 422
-# for exactly what this model would refuse. The caps stay where they were
-# before #33: the rolling PDF is rewritten after every page, so a run's cost
-# grows with the document's length and size, not only with its page count.
-MaxPages = Annotated[int, Field(ge=1, le=100)]
-MaxFileSizeMB = Annotated[float, Field(ge=1.0, le=200.0)]
+# The largest whole-document budget, in the estimate's tokens
+# (`retrieval.reading_length`). Shared with `PUT /config` (`api/schemas.py`) so
+# the API answers 422 for exactly what this model would refuse. It has to leave
+# room in a 128k window (DeepSeek's) after Vietnamese runs ~1.4× the estimate:
+# 80,000 × 1.4 = 112k, plus 4k of answer (`ANSWER_MAX_TOKENS`), ~3k of page
+# images, ~1.5k of conversation and the prompt's own ~0.5k, ~121k (#106).
+WHOLE_DOCUMENT_MAX_TOKENS = 80_000
+WholeDocumentTokens = Annotated[int, Field(ge=0, le=WHOLE_DOCUMENT_MAX_TOKENS)]
 
 
 class TranslationSettings(BaseModel):
@@ -244,10 +246,6 @@ class TranslationSettings(BaseModel):
         ),
         description="The model that translates",
     )
-    # Pages one translation may cover — the selected pages, not the document's
-    # length (#33). A longer PDF is translated part by part.
-    max_pages: MaxPages = Field(50, description="Maximum pages per translation")
-    max_file_size_mb: MaxFileSizeMB = Field(50.0, description="Maximum file size in MB")
     cache_translations: bool = Field(True, description="Enable translation caching")
     cache_ttl_days: int = Field(30, ge=1, le=365, description="Days before cached translations expire")
     cache_max_size_mb: float = Field(500.0, ge=10.0, le=5000.0, description="Soft cap for translation cache size (MB)")
@@ -316,13 +314,26 @@ class RAGSettings(BaseModel):
     # whole is the better answer and costs several times the tokens a question
     # does, so the trade is the user's. 11,500 (~40,000 characters, a 15-page
     # paper) is where it was measured to fix answers and break none
-    # (`benchmarks/rag/README.md`); 0 always retrieves. At most 100k: a whole
-    # read must fit every offered model's window — DeepSeek's is 128k — and
-    # Vietnamese runs ~1.4× the estimate (`retrieval.reading_length`).
-    whole_document_tokens: int = Field(
-        11_500, ge=0, le=100_000,
+    # (`benchmarks/rag/README.md`); 0 always retrieves. At most
+    # `WHOLE_DOCUMENT_MAX_TOKENS`, which keeps a whole read inside DeepSeek's
+    # 128k window; a provider that still refuses one is asked again with the
+    # retrieved pages (`rag_chain._generate_answer`).
+    whole_document_tokens: WholeDocumentTokens = Field(
+        11_500,
         description="Read a PDF whole when its text fits this many tokens (0 = always retrieve)",
     )
+
+    @field_validator("whole_document_tokens", mode="before")
+    @classmethod
+    def _clamp_to_the_maximum(cls, value):
+        # Earlier versions offered 90,000 and allowed 100,000. Left to the
+        # bound, a file holding either would lose the field to the load path's
+        # drop-the-bad-field repair and fall back to 11,500; the user picked
+        # "large", so it loads as the largest allowed. Only the file is
+        # clamped: `PUT /config` checks the bound before it gets here.
+        if isinstance(value, int) and not isinstance(value, bool):
+            return min(value, WHOLE_DOCUMENT_MAX_TOKENS)
+        return value
 
 
 class AppSettings(BaseModel):

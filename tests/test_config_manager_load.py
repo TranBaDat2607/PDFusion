@@ -40,7 +40,7 @@ def manager(config_dir: Path, monkeypatch: pytest.MonkeyPatch) -> ConfigManager:
     for service in ("OPENAI", "GEMINI", "ANTHROPIC"):
         monkeypatch.delenv(f"{service}_API_KEY", raising=False)
         monkeypatch.delenv(f"{service}_MODEL", raising=False)
-    for var in ("DEBUG_MODE", "MAX_PAGES", "MAX_FILE_SIZE_MB"):
+    for var in ("DEBUG_MODE",):
         monkeypatch.delenv(var, raising=False)
     return ConfigManager(config_dir=config_dir)
 
@@ -140,6 +140,17 @@ def test_the_old_chat_switch_does_not_turn_chat_off(manager: ConfigManager):
     have removed Chat for most users (#32)."""
     write_config(manager, {"rag": {"enabled": False}})
     assert manager.load_settings().rag.chat_enabled is True
+
+
+@pytest.mark.parametrize("saved", [90_000, 100_000])
+def test_a_whole_document_budget_above_todays_maximum_loads_clamped(
+    manager: ConfigManager, saved: int
+):
+    """Earlier versions offered 90,000 and allowed 100,000; both overflow a
+    128k-token model on Vietnamese text (#106). The user chose "large", so the
+    file loads as the largest allowed, not as the 11,500 default."""
+    write_config(manager, {"rag": {"whole_document_tokens": saved}})
+    assert manager.load_settings().rag.whole_document_tokens == 80_000
 
 
 def test_an_endpoint_is_stored_without_its_trailing_slash(manager: ConfigManager):
@@ -247,23 +258,33 @@ def test_an_environment_key_is_used_when_the_saved_endpoint_is_dropped(
     assert settings.providers["openai"].api_key == "sk-from-env"
 
 
-def test_numeric_environment_overrides_are_parsed(
+def test_the_debug_override_is_parsed(
     manager: ConfigManager, monkeypatch: pytest.MonkeyPatch
 ):
-    monkeypatch.setenv("MAX_PAGES", "42")
-    monkeypatch.setenv("MAX_FILE_SIZE_MB", "12.5")
     monkeypatch.setenv("DEBUG_MODE", "yes")
-    settings = manager.load_settings()
-    assert settings.translation.max_pages == 42
-    assert settings.translation.max_file_size_mb == 12.5
-    assert settings.debug_mode is True
+    assert manager.load_settings().debug_mode is True
 
 
-def test_an_unparseable_numeric_override_is_ignored_not_fatal(
+def test_the_retired_translation_limits_load_and_are_dropped_on_the_next_save(
     manager: ConfigManager, monkeypatch: pytest.MonkeyPatch
 ):
-    monkeypatch.setenv("MAX_PAGES", "lots")
-    assert manager.load_settings().translation.max_pages == 50
+    """Translation once refused a PDF past `max_pages` or `max_file_size_mb`.
+    A file that still holds them loads, and ignores them, and so does an
+    environment that still sets them."""
+    write_config(
+        manager,
+        {"translation": {"max_pages": 7, "max_file_size_mb": 12.0, "min_text_length": 9}},
+    )
+    monkeypatch.setenv("MAX_PAGES", "3")
+
+    settings = manager.load_settings()
+
+    assert settings.translation.min_text_length == 9
+    assert not hasattr(settings.translation, "max_pages")
+    assert manager.update_settings(debug_mode=True) is True
+    on_disk = tomlkit.parse(manager.config_file.read_text(encoding="utf-8"))
+    assert "max_pages" not in on_disk["translation"]
+    assert "max_file_size_mb" not in on_disk["translation"]
 
 
 # ---------------------------------------------------------------------------
@@ -342,13 +363,13 @@ def test_a_section_of_the_wrong_shape_is_dropped_whole(manager: ConfigManager):
         manager,
         {
             "providers": {"openai": "gpt-4o", "gemini": {"api_key": "${GEMINI_API_KEY}"}},
-            "translation": {"max_pages": 7},
+            "translation": {"min_text_length": 7},
         },
     )
     settings = manager.load_settings()
     assert settings.model_for("openai") == "gpt-4.1"
     assert settings.providers["gemini"].api_key == "${GEMINI_API_KEY}"
-    assert settings.translation.max_pages == 7
+    assert settings.translation.min_text_length == 7
 
 
 def test_defaults_are_the_last_resort_not_the_first(
@@ -446,9 +467,9 @@ def test_update_settings_merges_and_persists(manager: ConfigManager):
 
 def test_update_settings_leaves_untouched_fields_alone(manager: ConfigManager):
     manager.update_settings(providers={"openai": {"enabled_models": ["gpt-4o-mini"]}})
-    manager.update_settings(translation={"max_pages": 7})
+    manager.update_settings(translation={"min_text_length": 7})
     assert manager.settings.model_for("openai") == "gpt-4o-mini"
-    assert manager.settings.translation.max_pages == 7
+    assert manager.settings.translation.min_text_length == 7
 
 
 def test_an_invalid_update_is_refused_and_changes_nothing(manager: ConfigManager):

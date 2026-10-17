@@ -1,14 +1,13 @@
-"""Which pages a translation covers, and whether it may run at all (#33).
+"""Which pages a translation covers (#33).
 
 A request names its pages as 1-indexed, inclusive `(first, last)` ranges, or
-names none and means the whole document. `validate_selection` is the one
-check both `POST /translate` and `PDFProcessor._validate_file` make, so the
+names none and means the whole document. `selected_pages` is the one check
+both `POST /translate` and `PDFProcessor._validate_file` make, so the
 pre-flight and the job can never disagree about what is allowed.
 
-`max_pages` limits the pages a translation *covers*, not the pages a
-document has: a 500-page book can be translated 50 pages at a time. The
-pages outside the selection still appear in the output, as the original
-pages, because the viewer needs a document as long as the source.
+There is no limit on how many pages, or how large a file, one translation
+covers. The pages outside the selection still appear in the output, as the
+original pages, because the viewer needs a document as long as the source.
 
 Standard library only. The pre-flight runs on the sidecar's boot path, and
 the tests import this without PyMuPDF or BabelDOC.
@@ -19,10 +18,6 @@ from __future__ import annotations
 from typing import List, NamedTuple, Optional, Sequence, Tuple
 
 PageRange = Tuple[int, int]
-
-# Where the limits live in the app, named in every sentence that cites one.
-LIMITS_LOCATION = "Settings → Cache → Performance"
-
 
 class PageSelectionError(ValueError):
     """A selection or a document that can't be translated. The message is a
@@ -151,56 +146,3 @@ def rolling_segments(
         cursor = last + 1
     original(cursor, total_pages)
     return segments
-
-
-def limit_problem(
-    *,
-    page_count: int,
-    selected_count: int,
-    size_mb: float,
-    max_pages: int,
-    max_size_mb: float,
-) -> Optional[str]:
-    """Why a translation of `selected_count` pages of this document may not
-    run, or `None`."""
-    if size_mb > max_size_mb:
-        return (
-            f"This PDF is {size_mb:.1f} MB, and PDFusion translates files up to "
-            f"{max_size_mb:g} MB. You can raise the limit in {LIMITS_LOCATION}."
-        )
-    if selected_count > max_pages:
-        if selected_count == page_count:
-            return (
-                f"This PDF has {page_count} pages, and PDFusion translates up to "
-                f"{max_pages} at a time. Choose the pages to translate in the "
-                f"toolbar, or raise the limit in {LIMITS_LOCATION}."
-            )
-        return (
-            f"{selected_count} pages are selected, and PDFusion translates up to "
-            f"{max_pages} at a time. Choose fewer pages, or raise the limit in "
-            f"{LIMITS_LOCATION}."
-        )
-    return None
-
-
-def validate_selection(
-    ranges: Optional[Sequence[PageRange]],
-    *,
-    page_count: int,
-    size_mb: float,
-    max_pages: int,
-    max_size_mb: float,
-) -> Optional[List[int]]:
-    """The pages to translate (`None`: all of them), or `PageSelectionError`
-    with the reason they can't be."""
-    pages = selected_pages(ranges, page_count)
-    problem = limit_problem(
-        page_count=page_count,
-        selected_count=page_count if pages is None else len(pages),
-        size_mb=size_mb,
-        max_pages=max_pages,
-        max_size_mb=max_size_mb,
-    )
-    if problem:
-        raise PageSelectionError(problem)
-    return pages

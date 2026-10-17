@@ -40,7 +40,7 @@ from .page_selection import (
     format_pages,
     pages_key,
     rolling_segments,
-    validate_selection,
+    selected_pages,
 )
 from .pdf_cache import compute_file_hash, get_pdf_cache, is_cacheable_artifact
 from .pdf_pages import (
@@ -722,17 +722,11 @@ class PDFProcessor:
         """Validate the PDF and the pages asked of it.
 
         `POST /translate` makes the same check before creating the job, so a
-        failure here means the file or the settings changed in between.
+        failure here means the file changed in between.
         """
         info = inspect_pdf(file_path)
         try:
-            selected = validate_selection(
-                page_ranges,
-                page_count=info.page_count,
-                size_mb=info.size_mb,
-                max_pages=self.settings.translation.max_pages,
-                max_size_mb=self.settings.translation.max_file_size_mb,
-            )
+            selected = selected_pages(page_ranges, info.page_count)
         except PageSelectionError as exc:
             raise FileValidationError(str(exc), file_path=str(file_path))
         return FileMetadata(

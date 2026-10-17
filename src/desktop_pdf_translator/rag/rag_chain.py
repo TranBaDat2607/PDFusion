@@ -190,6 +190,36 @@ class _ImagesRefused(Exception):
     pass
 
 
+# A status that, with one of these in the message, is a provider saying the
+# request outgrew the model's window rather than a broken one. OpenAI, DeepSeek
+# and OpenRouter say "maximum context length" (OpenAI also sends the code
+# `context_length_exceeded`), Anthropic "prompt is too long", Gemini "input
+# token count".
+_CONTEXT_REFUSAL_STATUSES = frozenset({400, 422})
+_CONTEXT_REFUSAL_MARKERS = (
+    "context_length_exceeded",
+    "maximum context length",
+    "prompt is too long",
+    "input token count",
+)
+
+
+def is_context_overflow(error: BaseException) -> bool:
+    status = _status_code_of(error)
+    if status == 413:
+        return True
+    # Not a 429: "Request too large ... tokens per min" is a rate limit, which
+    # waiting fixes and reading fewer pages would only hide.
+    message = str(error).lower()
+    return status in _CONTEXT_REFUSAL_STATUSES and any(
+        marker in message for marker in _CONTEXT_REFUSAL_MARKERS
+    )
+
+
+class _ContextTooLong(AnswerGenerationError):
+    """The provider refused the request as longer than the model's window."""
+
+
 # A status that, with "stream" in the message, is a provider refusing to
 # stream this model rather than a broken request: OpenAI answers `stream=True`
 # with a 400 for some models until the organisation is verified.
@@ -346,15 +376,36 @@ class EnhancedRAGChain:
             read = await asyncio.to_thread(whole_document, chunks, evidence)
         written_at = datetime.now()
         # Read whole, the pages are the outline; read from retrieval, the
-        # outline is what the answer knows of the pages it wasn't given. Only
-        # a model reads it.
-        contents: List[Tuple[int, str]] = []
-        if model is not None and evidence and read is evidence and self.outline_chars > 0:
-            contents = await asyncio.to_thread(outline, chunks, self.outline_chars)
-        answer, images_sent = await self._generate_answer(
-            question, evidence, model, answer_lang, document_path, history, on_text, read,
-            contents,
-        )
+        # outline is what the answer knows of the pages it wasn't given.
+        read_whole = read is not evidence
+        contents = [] if read_whole else await self._outline_for(model, evidence, chunks)
+        overflowed = False
+        try:
+            answer, images_sent = await self._generate_answer(
+                question, evidence, model, answer_lang, document_path, history, on_text, read,
+                contents,
+            )
+        except _ContextTooLong:
+            if not read_whole:
+                raise
+            # The budget is an estimate, and a model with a smaller window than
+            # the one it was sized for refuses a whole read of a document that
+            # "fit". Retrieval always fits, so ask again with it (#106) rather
+            # than fail every question on this document. Still the model's
+            # answer, from the pages it was shown: citations are checked
+            # against `read` below, so a page only the refused request carried
+            # can't be cited.
+            overflowed = True
+            logger.warning(
+                "%s %s refused a whole read of %s pages as too long; answering from the retrieved pages",
+                model.service.value, model.model, len(read),
+            )
+            read = evidence
+            contents = await self._outline_for(model, evidence, chunks)
+            answer, images_sent = await self._generate_answer(
+                question, evidence, model, answer_lang, document_path, history, on_text, read,
+                contents,
+            )
         finished_at = datetime.now()
 
         citations = link_citations(answer, {page.page + 1 for page in read})
@@ -383,6 +434,7 @@ class EnhancedRAGChain:
             "invalid_citations": len(citations.invalid_pages),
             "images_sent": images_sent,
             "pages_read": len(read),
+            "whole_read_refused": overflowed,
             "rewritten": search_query != question,
             "provider": model.service.value if model else None,
             "model": model.model if model else None,
@@ -579,6 +631,14 @@ Question: {question}"""
         length = sum(reading_length(chunk['text']) for chunk in chunks)
         return 0 < length <= limit
 
+    async def _outline_for(self, model: Optional[AnswerModel],
+                           evidence: Sequence[PageEvidence],
+                           chunks: Sequence[Dict[str, Any]]) -> List[Tuple[int, str]]:
+        """The outline a retrieved read comes with. Only a model reads it."""
+        if model is None or not evidence or self.outline_chars <= 0:
+            return []
+        return await asyncio.to_thread(outline, chunks, self.outline_chars)
+
     def _sends_images(self, model: AnswerModel) -> bool:
         return (
             self.max_images > 0
@@ -753,7 +813,8 @@ Question: {question}
                 self._unstreamed.add((model.service.value, model.model))
                 return await self._generate_with_llm(model, prompt, answer_lang, images, fence)
             logger.error(f"Answer generation failed: {e}")
-            raise AnswerGenerationError(describe_answer_error(model.service, e)) from e
+            failure = _ContextTooLong if is_context_overflow(e) else AnswerGenerationError
+            raise failure(describe_answer_error(model.service, e)) from e
         if not answer:
             label = SERVICE_LABELS.get(model.service, model.service.value)
             raise AnswerGenerationError(f"{label} returned an empty answer. Try asking again.")

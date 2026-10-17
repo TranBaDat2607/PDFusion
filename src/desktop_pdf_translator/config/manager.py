@@ -415,19 +415,6 @@ class ConfigManager:
         if debug := os.getenv("DEBUG_MODE"):
             env_config["debug_mode"] = debug.lower() in ("true", "1", "yes")
         
-        # Translation settings
-        if max_pages := os.getenv("MAX_PAGES"):
-            try:
-                env_config.setdefault("translation", {})["max_pages"] = int(max_pages)
-            except ValueError:
-                logger.warning(f"Invalid MAX_PAGES value: {max_pages}")
-        
-        if max_size := os.getenv("MAX_FILE_SIZE_MB"):
-            try:
-                env_config.setdefault("translation", {})["max_file_size_mb"] = float(max_size)
-            except ValueError:
-                logger.warning(f"Invalid MAX_FILE_SIZE_MB value: {max_size}")
-        
         return env_config
     
     @staticmethod

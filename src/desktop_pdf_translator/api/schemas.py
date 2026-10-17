@@ -15,7 +15,7 @@ from ..config import (
     RAGSettings,
     TranslationSettings,
 )
-from ..config.models import MaxFileSizeMB, MaxPages, normalize_base_url
+from ..config.models import WholeDocumentTokens, normalize_base_url
 
 
 # ---------------------------------------------------------------------------
@@ -82,11 +82,9 @@ class ConfigUpdateRequest(BaseModel):
     default_source_lang: Optional[LanguageCode] = None
     default_target_lang: Optional[LanguageCode] = None
     chat_enabled: Optional[bool] = None
-    whole_document_tokens: Optional[int] = Field(None, ge=0, le=100_000)
+    whole_document_tokens: Optional[WholeDocumentTokens] = None
     # Performance / cache toggles
     max_parallel_chunks: Optional[int] = Field(None, ge=0, le=16)
-    max_pages: Optional[MaxPages] = None
-    max_file_size_mb: Optional[MaxFileSizeMB] = None
     cache_translations: Optional[bool] = None
     cache_translated_pdfs: Optional[bool] = None
 
@@ -128,7 +126,7 @@ class TranslateRequest(BaseModel):
         description=(
             "Pages to translate, as [first, last] ranges (1-indexed, inclusive). "
             "Omitted or null: the whole document. The other pages stay in the "
-            "output untranslated, and `max_pages` limits the pages selected."
+            "output untranslated."
         ),
     )
 

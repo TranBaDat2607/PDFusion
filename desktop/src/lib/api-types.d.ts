@@ -943,10 +943,6 @@ export interface components {
             chat_enabled?: boolean | null;
             default_source_lang?: components["schemas"]["LanguageCode"] | null;
             default_target_lang?: components["schemas"]["LanguageCode"] | null;
-            /** Max File Size Mb */
-            max_file_size_mb?: number | null;
-            /** Max Pages */
-            max_pages?: number | null;
             /** Max Parallel Chunks */
             max_parallel_chunks?: number | null;
             translation_model?: components["schemas"]["ModelRef"] | null;
@@ -1616,7 +1612,7 @@ export interface components {
             file_path: string;
             /**
              * Page Ranges
-             * @description Pages to translate, as [first, last] ranges (1-indexed, inclusive). Omitted or null: the whole document. The other pages stay in the output untranslated, and `max_pages` limits the pages selected.
+             * @description Pages to translate, as [first, last] ranges (1-indexed, inclusive). Omitted or null: the whole document. The other pages stay in the output untranslated.
              */
             page_ranges?: [
                 number,
@@ -1672,18 +1668,6 @@ export interface components {
              * @default vi
              */
             default_target_lang: components["schemas"]["LanguageCode"];
-            /**
-             * Max File Size Mb
-             * @description Maximum file size in MB
-             * @default 50
-             */
-            max_file_size_mb: number;
-            /**
-             * Max Pages
-             * @description Maximum pages per translation
-             * @default 50
-             */
-            max_pages: number;
             /**
              * Min Text Length
              * @description Minimum text length to translate

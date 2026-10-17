@@ -19,12 +19,7 @@ from sse_starlette.sse import EventSourceResponse
 from ...config import TranslationService, get_settings
 from ...engine_assets import MISSING_ASSETS_MESSAGE, argos_pack_ready, engine_ready
 from ...processors.exceptions import FileValidationError
-from ...processors.page_selection import (
-    PageSelectionError,
-    limit_problem,
-    selected_pages,
-    validate_selection,
-)
+from ...processors.page_selection import PageSelectionError, selected_pages
 from ...processors.pdf_pages import inspect_pdf, text_stats
 from ...translators.capabilities import (
     resolve_effective_service,
@@ -63,7 +58,7 @@ def _build_cancel_payload(processor: PDFProcessor, file_path: Path) -> dict:
     }
 
 
-def _selection_problem(payload: TranslateRequest, settings) -> str | None:
+def _selection_problem(payload: TranslateRequest) -> str | None:
     """Why this file, or the pages it asks for, can't be translated.
 
     Blocking: it opens the PDF to count its pages, and `inspect_pdf` imports
@@ -71,13 +66,7 @@ def _selection_problem(payload: TranslateRequest, settings) -> str | None:
     """
     try:
         info = inspect_pdf(Path(payload.file_path))
-        validate_selection(
-            payload.page_ranges,
-            page_count=info.page_count,
-            size_mb=info.size_mb,
-            max_pages=settings.translation.max_pages,
-            max_size_mb=settings.translation.max_file_size_mb,
-        )
+        selected_pages(payload.page_ranges, info.page_count)
     except (FileValidationError, PageSelectionError) as exc:
         return str(exc)
     return None
@@ -202,11 +191,11 @@ async def start_translation(payload: TranslateRequest) -> JobAccepted:
     if reason:
         raise HTTPException(status_code=422, detail=reason)
 
-    # The document's size and the pages asked of it (#33). Checked inside the
-    # job alone, a 120-page PDF opened the progress overlay and then failed
-    # with "Too many pages: 120 > 50". Here it is a sentence the toolbar can
-    # show before anything starts. Off the event loop: it opens the PDF.
-    reason = await asyncio.to_thread(_selection_problem, payload, settings)
+    # The file and the pages asked of it (#33). Checked inside the job alone, a
+    # page past the end opened the progress overlay and then failed. Here it is
+    # a sentence the toolbar can show before anything starts. Off the event
+    # loop: it opens the PDF.
+    reason = await asyncio.to_thread(_selection_problem, payload)
     if reason:
         raise HTTPException(status_code=422, detail=reason)
 
@@ -233,18 +222,6 @@ def _measure(payload: EstimateRequest, settings) -> TranslationEstimate:
     """Blocking: opens the PDF and reads the selected pages' text."""
     path = Path(payload.file_path)
     info = inspect_pdf(path)
-    # A file too big to translate isn't read through for an estimate. The page
-    # limit is left out: over it, Translate offers the pages that fit, and the
-    # estimate describes what the user selected.
-    too_big = limit_problem(
-        page_count=info.page_count,
-        selected_count=0,
-        size_mb=info.size_mb,
-        max_pages=settings.translation.max_pages,
-        max_size_mb=settings.translation.max_file_size_mb,
-    )
-    if too_big:
-        raise PageSelectionError(too_big)
     pages = selected_pages(payload.page_ranges, info.page_count)
     stats = text_stats(path, pages, settings.translation.min_text_length)
     _, target_lang = resolve_languages(settings, None, payload.target_lang)
