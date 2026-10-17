@@ -28,7 +28,7 @@ import {
   type ProviderUpdate,
 } from "./provider-draft";
 
-const OLLAMA = "http://localhost:11434/v1";
+const COMPATIBLE_SERVER = "https://llm.example.com/v1";
 
 /** `GET /providers` entry for one LLM provider — an OpenAI-like default. */
 function provider(overrides: Partial<ProviderInfo> = {}): ProviderInfo {
@@ -86,11 +86,11 @@ function catalog(overrides: Partial<ModelCatalog> = {}): ModelCatalog {
 
 describe("draftFrom", () => {
   it("starts with a blank key, not clearing, and the saved endpoint and models", () => {
-    const p = provider({ base_url: OLLAMA, enabled_models: ["gpt-4.1", "gpt-4.1-mini"] });
+    const p = provider({ base_url: COMPATIBLE_SERVER, enabled_models: ["gpt-4.1", "gpt-4.1-mini"] });
     expect(draftFrom(p)).toEqual({
       apiKey: "",
       clearKey: false,
-      baseUrl: OLLAMA,
+      baseUrl: COMPATIBLE_SERVER,
       enabled: ["gpt-4.1", "gpt-4.1-mini"],
     });
   });
@@ -110,15 +110,15 @@ describe("draftFrom", () => {
 
 describe("normalizeEndpoint", () => {
   it("trims surrounding whitespace", () => {
-    expect(normalizeEndpoint(`  ${OLLAMA}  `)).toBe(OLLAMA);
+    expect(normalizeEndpoint(`  ${COMPATIBLE_SERVER}  `)).toBe(COMPATIBLE_SERVER);
   });
 
   it("removes a single trailing slash", () => {
-    expect(normalizeEndpoint(`${OLLAMA}/`)).toBe(OLLAMA);
+    expect(normalizeEndpoint(`${COMPATIBLE_SERVER}/`)).toBe(COMPATIBLE_SERVER);
   });
 
   it("removes multiple trailing slashes", () => {
-    expect(normalizeEndpoint("http://localhost:11434///")).toBe("http://localhost:11434");
+    expect(normalizeEndpoint("https://llm.example.com///")).toBe("https://llm.example.com");
   });
 
   it("leaves a blank value blank", () => {
@@ -126,12 +126,12 @@ describe("normalizeEndpoint", () => {
   });
 
   it("leaves an endpoint with no trailing slash unchanged", () => {
-    expect(normalizeEndpoint(OLLAMA)).toBe(OLLAMA);
+    expect(normalizeEndpoint(COMPATIBLE_SERVER)).toBe(COMPATIBLE_SERVER);
   });
 });
 
 describe("isValidEndpoint", () => {
-  it.each(["", "   ", OLLAMA, "https://proxy.example.com", "http://localhost:11434"])(
+  it.each(["", "   ", COMPATIBLE_SERVER, "https://proxy.example.com", "https://llm.example.com"])(
     "accepts %j",
     (value) => {
       expect(isValidEndpoint(value)).toBe(true);
@@ -139,7 +139,7 @@ describe("isValidEndpoint", () => {
   );
 
   it.each([
-    "localhost:11434",
+    "llm.example.com",
     "ftp://example.com",
     "http://",
     "https://",
@@ -167,54 +167,54 @@ describe("hasSavedKey", () => {
 describe("endpointNeedsKey", () => {
   it("is true for a changed endpoint, a saved key, no typed key, not clearing", () => {
     const p = provider({ has_key: true, base_url: null, takes_endpoint: true });
-    expect(endpointNeedsKey(draft({ baseUrl: OLLAMA }), p)).toBe(true);
+    expect(endpointNeedsKey(draft({ baseUrl: COMPATIBLE_SERVER }), p)).toBe(true);
   });
 
   it("counts an unreadable saved key the same as a readable one", () => {
     const p = provider({ has_key: false, key_state: "unreadable", base_url: null });
-    expect(endpointNeedsKey(draft({ baseUrl: OLLAMA }), p)).toBe(true);
+    expect(endpointNeedsKey(draft({ baseUrl: COMPATIBLE_SERVER }), p)).toBe(true);
   });
 
   it("is false when the provider doesn't take an endpoint", () => {
     const p = provider({ has_key: true, base_url: null, takes_endpoint: false });
-    expect(endpointNeedsKey(draft({ baseUrl: OLLAMA }), p)).toBe(false);
+    expect(endpointNeedsKey(draft({ baseUrl: COMPATIBLE_SERVER }), p)).toBe(false);
   });
 
   it("is false when the endpoint is unchanged, even reformatted", () => {
-    const p = provider({ has_key: true, base_url: OLLAMA });
-    expect(endpointNeedsKey(draft({ baseUrl: ` ${OLLAMA}/ ` }), p)).toBe(false);
+    const p = provider({ has_key: true, base_url: COMPATIBLE_SERVER });
+    expect(endpointNeedsKey(draft({ baseUrl: ` ${COMPATIBLE_SERVER}/ ` }), p)).toBe(false);
   });
 
   it("is false with no saved key", () => {
     const p = provider({ has_key: false, key_state: "unverified", base_url: null });
-    expect(endpointNeedsKey(draft({ baseUrl: OLLAMA }), p)).toBe(false);
+    expect(endpointNeedsKey(draft({ baseUrl: COMPATIBLE_SERVER }), p)).toBe(false);
   });
 
   it("is false when the draft clears the key", () => {
     const p = provider({ has_key: true, base_url: null });
-    expect(endpointNeedsKey(draft({ baseUrl: OLLAMA, clearKey: true }), p)).toBe(false);
+    expect(endpointNeedsKey(draft({ baseUrl: COMPATIBLE_SERVER, clearKey: true }), p)).toBe(false);
   });
 
   it("is false when a key is typed for the new endpoint", () => {
     const p = provider({ has_key: true, base_url: null });
-    expect(endpointNeedsKey(draft({ baseUrl: OLLAMA, apiKey: "sk-new" }), p)).toBe(false);
+    expect(endpointNeedsKey(draft({ baseUrl: COMPATIBLE_SERVER, apiKey: "sk-new" }), p)).toBe(false);
   });
 });
 
 describe("draftProblem", () => {
   it("names http:// or https:// for an invalid endpoint", () => {
     const p = provider();
-    expect(draftProblem(draft({ baseUrl: "localhost:11434" }), p)).toMatch(/https?:\/\//);
+    expect(draftProblem(draft({ baseUrl: "llm.example.com" }), p)).toMatch(/https?:\/\//);
   });
 
   it("asks to re-enter the key when the endpoint change orphans a saved key", () => {
     const p = provider({ has_key: true, base_url: null });
-    expect(draftProblem(draft({ baseUrl: OLLAMA }), p)).toMatch(/api key|key again/i);
+    expect(draftProblem(draft({ baseUrl: COMPATIBLE_SERVER }), p)).toMatch(/api key|key again/i);
   });
 
   it("prefers the endpoint-format problem over the re-enter-key one", () => {
     const p = provider({ has_key: true, base_url: null });
-    expect(draftProblem(draft({ baseUrl: "localhost:11434" }), p)).toMatch(/https?:\/\//);
+    expect(draftProblem(draft({ baseUrl: "llm.example.com" }), p)).toMatch(/https?:\/\//);
   });
 
   it("accepts an untouched draft with an empty model list", () => {
@@ -225,7 +225,7 @@ describe("draftProblem", () => {
 
 describe("providerUpdate", () => {
   it("is empty for an untouched draft", () => {
-    const p = provider({ has_key: true, base_url: OLLAMA, enabled_models: ["gpt-4.1"] });
+    const p = provider({ has_key: true, base_url: COMPATIBLE_SERVER, enabled_models: ["gpt-4.1"] });
     expect(providerUpdate(draftFrom(p), p)).toEqual({});
   });
 
@@ -247,17 +247,17 @@ describe("providerUpdate", () => {
 
   it("sends a changed, normalized endpoint", () => {
     const p = provider({ base_url: null, has_key: false });
-    expect(providerUpdate(draft({ baseUrl: `${OLLAMA}/` }), p)).toEqual({ base_url: OLLAMA });
+    expect(providerUpdate(draft({ baseUrl: `${COMPATIBLE_SERVER}/` }), p)).toEqual({ base_url: COMPATIBLE_SERVER });
   });
 
   it("sends an empty base_url to return to the provider's own endpoint", () => {
-    const p = provider({ base_url: OLLAMA, has_key: false });
+    const p = provider({ base_url: COMPATIBLE_SERVER, has_key: false });
     expect(providerUpdate(draft({ baseUrl: "" }), p)).toEqual({ base_url: "" });
   });
 
   it("never sends base_url for a provider that doesn't take an endpoint", () => {
     const p = provider({ base_url: null, has_key: false, takes_endpoint: false });
-    expect(providerUpdate(draft({ baseUrl: OLLAMA }), p).base_url).toBeUndefined();
+    expect(providerUpdate(draft({ baseUrl: COMPATIBLE_SERVER }), p).base_url).toBeUndefined();
   });
 
   it("sends enabled_models when the set changed", () => {
@@ -281,10 +281,10 @@ describe("providerUpdate", () => {
 
   it("combines a cleared key with a new endpoint and models in one body", () => {
     const p = provider({ has_key: true, base_url: null, enabled_models: ["gpt-4.1"] });
-    const d = draft({ clearKey: true, baseUrl: OLLAMA, enabled: ["gpt-4.1-mini"] });
+    const d = draft({ clearKey: true, baseUrl: COMPATIBLE_SERVER, enabled: ["gpt-4.1-mini"] });
     expect(providerUpdate(d, p)).toEqual({
       api_key: "",
-      base_url: OLLAMA,
+      base_url: COMPATIBLE_SERVER,
       enabled_models: ["gpt-4.1-mini"],
     });
   });
@@ -297,12 +297,12 @@ describe("needsVerify", () => {
 
   it("is true for a changed endpoint on a provider that takes one", () => {
     const p = provider({ base_url: null, takes_endpoint: true });
-    expect(needsVerify(draft({ baseUrl: OLLAMA }), p)).toBe(true);
+    expect(needsVerify(draft({ baseUrl: COMPATIBLE_SERVER }), p)).toBe(true);
   });
 
   it("is false for a changed endpoint on a provider that doesn't take one", () => {
     const p = provider({ base_url: null, takes_endpoint: false });
-    expect(needsVerify(draft({ baseUrl: OLLAMA }), p)).toBe(false);
+    expect(needsVerify(draft({ baseUrl: COMPATIBLE_SERVER }), p)).toBe(false);
   });
 
   it("is false for toggling models alone", () => {
@@ -318,22 +318,12 @@ describe("needsVerify", () => {
     // Nothing is left to check with, and the sidecar takes `api_key: ""` with
     // a new `base_url`: no saved key goes to the new endpoint.
     const p = provider({ base_url: null, has_key: true, takes_endpoint: true });
-    expect(needsVerify(draft({ baseUrl: OLLAMA, clearKey: true }), p)).toBe(false);
+    expect(needsVerify(draft({ baseUrl: COMPATIBLE_SERVER, clearKey: true }), p)).toBe(false);
   });
 
   it("is false for an untouched draft", () => {
-    const p = provider({ base_url: OLLAMA, has_key: true });
+    const p = provider({ base_url: COMPATIBLE_SERVER, has_key: true });
     expect(needsVerify(draftFrom(p), p)).toBe(false);
-  });
-
-  it("is true for a keyless provider when only the endpoint changed", () => {
-    const p = provider({ requires_key: false, base_url: null, takes_endpoint: true });
-    expect(needsVerify(draft({ baseUrl: OLLAMA }), p)).toBe(true);
-  });
-
-  it("is false for a keyless provider with the endpoint unchanged, even with something typed in the key field", () => {
-    const p = provider({ requires_key: false, base_url: OLLAMA, takes_endpoint: true });
-    expect(needsVerify(draft({ apiKey: "unused-value", baseUrl: OLLAMA }), p)).toBe(false);
   });
 });
 
@@ -370,20 +360,20 @@ describe("verifyRequest", () => {
 
   it("never sends base_url for a provider that doesn't take an endpoint", () => {
     const p = provider({ has_key: false, takes_endpoint: false });
-    const req = verifyRequest(draft({ apiKey: "sk-new", baseUrl: OLLAMA }), p);
+    const req = verifyRequest(draft({ apiKey: "sk-new", baseUrl: COMPATIBLE_SERVER }), p);
     expect(req?.base_url).toBeUndefined();
   });
 
   it("sends the normalized draft endpoint for a provider that takes one", () => {
     const p = provider({ has_key: false, takes_endpoint: true });
-    expect(verifyRequest(draft({ apiKey: "sk-new", baseUrl: `${OLLAMA}/` }), p)).toEqual({
+    expect(verifyRequest(draft({ apiKey: "sk-new", baseUrl: `${COMPATIBLE_SERVER}/` }), p)).toEqual({
       api_key: "sk-new",
-      base_url: OLLAMA,
+      base_url: COMPATIBLE_SERVER,
     });
   });
 
   it("sends an empty base_url for a blank endpoint on a provider that takes one", () => {
-    const p = provider({ has_key: false, takes_endpoint: true, base_url: OLLAMA });
+    const p = provider({ has_key: false, takes_endpoint: true, base_url: COMPATIBLE_SERVER });
     expect(verifyRequest(draft({ apiKey: "sk-new", baseUrl: "" }), p)).toEqual({
       api_key: "sk-new",
       base_url: "",
@@ -426,9 +416,9 @@ describe("autoVerifyRequest", () => {
 
   it("checks a typed key against the draft endpoint", () => {
     const p = provider({ has_key: false, takes_endpoint: true });
-    expect(autoVerifyRequest(draft({ apiKey: "sk-new", baseUrl: `${OLLAMA}/` }), p)).toEqual({
+    expect(autoVerifyRequest(draft({ apiKey: "sk-new", baseUrl: `${COMPATIBLE_SERVER}/` }), p)).toEqual({
       api_key: "sk-new",
-      base_url: OLLAMA,
+      base_url: COMPATIBLE_SERVER,
     });
   });
 
@@ -449,36 +439,26 @@ describe("autoVerifyRequest", () => {
 
   it("checks nothing while the endpoint isn't a URL the sidecar would accept", () => {
     const p = provider({ has_key: false, takes_endpoint: true });
-    expect(autoVerifyRequest(draft({ apiKey: "sk-new", baseUrl: "localhost:11434" }), p)).toBeNull();
+    expect(autoVerifyRequest(draft({ apiKey: "sk-new", baseUrl: "llm.example.com" }), p)).toBeNull();
   });
 
   it("checks nothing for a new endpoint until the saved key is typed again for it", () => {
     // Verifying would send the saved key to an endpoint it wasn't saved for.
     const p = provider({ has_key: true, base_url: null, takes_endpoint: true });
-    expect(autoVerifyRequest(draft({ baseUrl: OLLAMA }), p)).toBeNull();
+    expect(autoVerifyRequest(draft({ baseUrl: COMPATIBLE_SERVER }), p)).toBeNull();
   });
 
   it("checks nothing for a new endpoint over an unreadable saved key not typed again", () => {
     const p = provider({ has_key: false, key_state: "unreadable", takes_endpoint: true });
-    expect(autoVerifyRequest(draft({ baseUrl: OLLAMA }), p)).toBeNull();
+    expect(autoVerifyRequest(draft({ baseUrl: COMPATIBLE_SERVER }), p)).toBeNull();
   });
 
   it("checks a key typed again for a new endpoint", () => {
     const p = provider({ has_key: true, base_url: null, takes_endpoint: true });
-    expect(autoVerifyRequest(draft({ apiKey: "sk-new", baseUrl: OLLAMA }), p)).toEqual({
+    expect(autoVerifyRequest(draft({ apiKey: "sk-new", baseUrl: COMPATIBLE_SERVER }), p)).toEqual({
       api_key: "sk-new",
-      base_url: OLLAMA,
+      base_url: COMPATIBLE_SERVER,
     });
-  });
-
-  it("checks nothing for a keyless server whose endpoint is unchanged", () => {
-    const p = provider({ requires_key: false, base_url: OLLAMA, takes_endpoint: true });
-    expect(autoVerifyRequest(draftFrom(p), p)).toBeNull();
-  });
-
-  it("checks a keyless server's new endpoint", () => {
-    const p = provider({ requires_key: false, base_url: null, takes_endpoint: true });
-    expect(autoVerifyRequest(draft({ baseUrl: OLLAMA }), p)).toEqual({ base_url: OLLAMA });
   });
 });
 
@@ -493,19 +473,19 @@ describe("currentCheck", () => {
   });
 
   it("is the check made for this very draft", () => {
-    const d = draft({ apiKey: "sk-a", baseUrl: OLLAMA });
+    const d = draft({ apiKey: "sk-a", baseUrl: COMPATIBLE_SERVER });
     const check = checkFor(d);
     expect(currentCheck(check, d, p)).toBe(check);
   });
 
   it("survives a space typed after the key: the same key is sent", () => {
-    const check = checkFor(draft({ apiKey: "sk-a", baseUrl: OLLAMA }));
-    expect(currentCheck(check, draft({ apiKey: "sk-a ", baseUrl: OLLAMA }), p)).toBe(check);
+    const check = checkFor(draft({ apiKey: "sk-a", baseUrl: COMPATIBLE_SERVER }));
+    expect(currentCheck(check, draft({ apiKey: "sk-a ", baseUrl: COMPATIBLE_SERVER }), p)).toBe(check);
   });
 
   it("survives a trailing slash on the endpoint: the same endpoint is sent", () => {
-    const check = checkFor(draft({ apiKey: "sk-a", baseUrl: OLLAMA }));
-    expect(currentCheck(check, draft({ apiKey: "sk-a", baseUrl: `${OLLAMA}/` }), p)).toBe(check);
+    const check = checkFor(draft({ apiKey: "sk-a", baseUrl: COMPATIBLE_SERVER }));
+    expect(currentCheck(check, draft({ apiKey: "sk-a", baseUrl: `${COMPATIBLE_SERVER}/` }), p)).toBe(check);
   });
 
   it("survives switching models", () => {
@@ -519,7 +499,7 @@ describe("currentCheck", () => {
   });
 
   it("is none once the endpoint changes", () => {
-    const check = checkFor(draft({ apiKey: "sk-a", baseUrl: OLLAMA }));
+    const check = checkFor(draft({ apiKey: "sk-a", baseUrl: COMPATIBLE_SERVER }));
     expect(currentCheck(check, draft({ apiKey: "sk-a", baseUrl: "" }), p)).toBeNull();
   });
 
@@ -707,18 +687,6 @@ describe("statusLine", () => {
   it("prefers 'no key needed' over an unreadable key state", () => {
     const p = provider({ requires_key: false, has_key: false, key_state: "unreadable" });
     expect(statusLine(p, undefined, now)).toEqual({ tone: "ok", text: "No key needed" });
-  });
-
-  it("surfaces a catalog error for a keyless provider instead of 'No key needed'", () => {
-    const p = provider({ requires_key: false, has_key: false, key_state: "unverified" });
-    const c = catalog({ error: "connection refused" });
-    expect(statusLine(p, c, now)).toEqual({ tone: "error", text: "connection refused" });
-  });
-
-  it("counts listed models for a keyless provider with a catalog and no error", () => {
-    const p = provider({ requires_key: false, has_key: false, key_state: "unverified" });
-    const c = catalog({ models: [{ id: "llama3.2", source: "listed" }] });
-    expect(statusLine(p, c, now)).toEqual({ tone: "ok", text: "1 model" });
   });
 
   it("flags an unreadable saved key as an error", () => {
@@ -941,7 +909,7 @@ describe("selectsProvider", () => {
   it("switches onto an alias the key listed under its tagged id", () => {
     expect(
       selectsProvider({
-        provider: provider({ id: "ollama", has_key: false }),
+        provider: provider({ id: "openrouter", has_key: false }),
         update: { api_key: "sk-new" } as ProviderUpdate,
         translationProvider: "argos",
         openedFor: null,
@@ -1088,8 +1056,8 @@ describe("verifyRequest: the endpoint", () => {
     const p = provider({ has_key: true, takes_endpoint: true, base_url: null });
 
     expect(verifyRequest(draft(), p)).toEqual({ base_url: "" });
-    expect(verifyRequest(draft({ baseUrl: OLLAMA }), provider({ has_key: true, base_url: OLLAMA }))).toEqual({
-      base_url: OLLAMA,
+    expect(verifyRequest(draft({ baseUrl: COMPATIBLE_SERVER }), provider({ has_key: true, base_url: COMPATIBLE_SERVER }))).toEqual({
+      base_url: COMPATIBLE_SERVER,
     });
   });
 });

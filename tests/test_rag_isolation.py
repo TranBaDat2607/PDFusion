@@ -40,7 +40,6 @@ from desktop_pdf_translator.rag.vector_store import ChromaDBManager
 from desktop_pdf_translator.storage.records import IndexRecord, RecordsStore
 
 from conftest import MINIMAL_PDF
-from provider_fakes import make_keyless
 
 QUESTION = "What does the experiment measure?"
 ALPHA = "The experiment measures the thermal conductivity of alpha samples."
@@ -572,10 +571,10 @@ def test_a_key_saved_after_chat_started_is_used_without_rebuilding_the_chain(
 def test_a_new_endpoint_builds_the_answer_model_again(
     chain: EnhancedRAGChain, monkeypatch: pytest.MonkeyPatch
 ):
-    """Pointing OpenAI at Ollama can keep the service, the key and the model
-    name. A model kept from before would go on answering from the old server
+    """Pointing OpenAI at another compatible server can keep the service, the
+    key and the model name. A model kept from before would go on answering from the old server
     (#32)."""
-    current: Dict[str, Any] = {"settings": _KeyedSettings("ollama")}
+    current: Dict[str, Any] = {"settings": _KeyedSettings("sk-llm")}
     built: List[Any] = []
 
     def create_translator(service=None, lang_in=None, lang_out=None, **kwargs):
@@ -588,11 +587,11 @@ def test_a_new_endpoint_builds_the_answer_model_again(
     monkeypatch.setattr(rag_chain_module, "get_settings", lambda: current["settings"])
 
     first = chain._answer_model()
-    current["settings"] = _KeyedSettings("ollama", base_url="http://localhost:11434/v1")
+    current["settings"] = _KeyedSettings("sk-llm", base_url="https://llm.example.com/v1")
     second = chain._answer_model()
 
     assert second is not first
-    assert built == [None, "http://localhost:11434/v1"]
+    assert built == [None, "https://llm.example.com/v1"]
 
 
 # ---------------------------------------------------------------------------
@@ -858,43 +857,6 @@ def test_the_translation_model_answers_before_a_higher_priority_provider(
     assert built == [(TranslationService.ANTHROPIC, "claude-opus-5")]
 
 
-def test_a_keyless_provider_answers_when_chosen_as_the_answer_model(
-    chain: EnhancedRAGChain, monkeypatch: pytest.MonkeyPatch
-):
-    """A local server (Ollama, #88) needs no key; chat's own choice must still
-    reach it even though nothing is saved for it."""
-    make_keyless(monkeypatch, "openai")
-    settings = _v2_settings(
-        rag={"answer_model": {"provider": "openai", "model": "llama3.2"}},
-    )
-    monkeypatch.setattr(rag_chain_module, "get_settings", lambda: settings)
-    built = _record_builds(monkeypatch)
-
-    model = chain._answer_model()
-
-    assert model is not None
-    assert model.service == TranslationService.OPENAI
-    assert built == [(TranslationService.OPENAI, "llama3.2")]
-
-
-def test_a_keyless_provider_is_never_the_any_llm_with_a_key_fallback(
-    chain: EnhancedRAGChain, monkeypatch: pytest.MonkeyPatch
-):
-    """Unlike a keyed provider, a keyless local server may not even be
-    running, so it must never be reached for by the "any LLM with a key"
-    fallback — only by naming it outright as `rag.answer_model` or the
-    translation model."""
-    make_keyless(monkeypatch, "openai")
-    settings = _v2_settings()  # translation on Argos, no answer model, no keys
-    monkeypatch.setattr(rag_chain_module, "get_settings", lambda: settings)
-    built = _record_builds(monkeypatch)
-
-    model = chain._answer_model()
-
-    assert model is None
-    assert built == []
-
-
 # ---------------------------------------------------------------------------
 # which model wrote the answer (#87)
 # ---------------------------------------------------------------------------
@@ -1007,26 +969,6 @@ def test_a_question_keeps_the_model_it_started_with_if_the_answer_model_changes_
     )
 
     assert (answer.get("provider"), answer.get("model")) == ("anthropic", "claude-opus-5")
-
-
-def test_the_real_ollama_entry_answers_when_chosen_and_is_never_a_fallback(
-    chain: EnhancedRAGChain, monkeypatch: pytest.MonkeyPatch
-):
-    """The registry's own Ollama entry, not a stand-in: no key, chosen for
-    chat it answers; unchosen, with no key anywhere, chat has no model (#88)."""
-    built = _record_builds(monkeypatch)
-    chosen = _v2_settings(rag={"answer_model": {"provider": "ollama", "model": "llama3.2"}})
-    monkeypatch.setattr(rag_chain_module, "get_settings", lambda: chosen)
-
-    model = chain._answer_model()
-
-    assert model is not None and model.service == TranslationService("ollama")
-    assert built == [(TranslationService("ollama"), "llama3.2")]
-
-    unchosen = _v2_settings()
-    monkeypatch.setattr(rag_chain_module, "get_settings", lambda: unchosen)
-
-    assert chain._answer_model() is None
 
 
 def _page_evidence(index: int, neighbour_chars: int = 1000) -> PageEvidence:
@@ -1158,3 +1100,101 @@ def test_a_scan_no_page_of_which_could_be_read_says_so(
     result = run_index(_write_paper(tmp_path / "scan.pdf", b"scan"))
 
     assert (result["type"], result["data"]) == ("error", {"message": rag_routes.UNREADABLE_SCAN_MESSAGE})
+
+
+def test_a_question_is_answered_with_its_own_documents_recent_conversation(
+    asking: EnhancedRAGChain, two_papers, records: RecordsStore, monkeypatch: pytest.MonkeyPatch,
+):
+    """A follow-up ("and in Q4?") means nothing on its own, so `_run_ask` hands
+    the chain the document's saved exchanges — the last
+    `MAX_HISTORY_TURNS`, oldest first — and never another document's."""
+    from desktop_pdf_translator.rag.rag_chain import MAX_HISTORY_TURNS, ChatTurn
+
+    index = _ready(records, run_index(two_papers[0]))
+    other = _ready(records, run_index(two_papers[1]))
+    for n in range(MAX_HISTORY_TURNS + 2):
+        records.add_exchange(index.document_id, f"question {n}", {"answer": f"answer {n}"})
+    records.add_exchange(other.document_id, "the other paper's question", {"answer": "elsewhere"})
+    seen: Dict[str, Any] = {}
+
+    async def answer_question(**kwargs):
+        seen.update(kwargs)
+        return {"answer": "ok", "pdf_references": [], "provider": None, "model": None}
+
+    monkeypatch.setattr(asking, "answer_question", answer_question)
+
+    run_ask(index)
+
+    first = 2  # the two oldest exchanges are past the window
+    assert list(seen["history"]) == [
+        ChatTurn(question=f"question {n}", answer=f"answer {n}")
+        for n in range(first, MAX_HISTORY_TURNS + 2)
+    ]
+
+
+def test_a_first_question_has_no_conversation(
+    asking: EnhancedRAGChain, two_papers, records: RecordsStore, monkeypatch: pytest.MonkeyPatch,
+):
+    index = _ready(records, run_index(two_papers[0]))
+    seen: Dict[str, Any] = {}
+
+    async def answer_question(**kwargs):
+        seen.update(kwargs)
+        return {"answer": "ok", "pdf_references": [], "provider": None, "model": None}
+
+    monkeypatch.setattr(asking, "answer_question", answer_question)
+
+    run_ask(index)
+
+    assert list(seen["history"]) == []
+
+
+def test_the_answer_streams_as_answer_delta_events_before_the_answer(
+    asking: EnhancedRAGChain, two_papers, records: RecordsStore, monkeypatch: pytest.MonkeyPatch,
+):
+    index = _ready(records, run_index(two_papers[0]))
+
+    async def answer_question(**kwargs):
+        on_text = kwargs["on_text"]
+        # From a worker thread, as a real backend's SDK stream does.
+        await asyncio.to_thread(on_text, 0, "It measures ")
+        await asyncio.to_thread(on_text, 12, "conductivity.")
+        return {"answer": "It measures conductivity.", "pdf_references": [], "provider": None, "model": None}
+
+    monkeypatch.setattr(asking, "answer_question", answer_question)
+    job = Job(job_id="ask")
+    payload = AskRequest(question=QUESTION, document_id=index.document_id)
+
+    asyncio.run(rag_routes._run_ask(job, payload, index, "C:/papers/paper.pdf", "en"))
+
+    types = [event["type"] for event in job.history]
+    assert types[-2:] == ["answer", "done"]
+    deltas = [event["data"] for event in job.history if event["type"] == "answer_delta"]
+    assert deltas == [{"offset": 0, "text": "It measures "}, {"offset": 12, "text": "conductivity."}]
+    assert types.index("answer_delta") < types.index("answer")
+
+
+def test_no_piece_of_the_answer_arrives_after_the_answer(
+    asking: EnhancedRAGChain, two_papers, records: RecordsStore, monkeypatch: pytest.MonkeyPatch,
+):
+    """A piece is emitted from the SDK's thread, so it is still on its way
+    when the chain returns; `_run_ask` must not send `answer` ahead of it."""
+    index = _ready(records, run_index(two_papers[0]))
+
+    async def answer_question(**kwargs):
+        # Called on the loop's own thread and not awaited: the emit is only
+        # scheduled when the answer comes back.
+        kwargs["on_text"](0, "It measures conductivity.")
+        return {"answer": "It measures conductivity.", "pdf_references": [], "provider": None, "model": None}
+
+    async def save_nothing(*args):
+        return None
+
+    monkeypatch.setattr(asking, "answer_question", answer_question)
+    monkeypatch.setattr(rag_routes, "_save_exchange", save_nothing)
+    job = Job(job_id="ask")
+    payload = AskRequest(question=QUESTION, document_id=index.document_id)
+
+    asyncio.run(rag_routes._run_ask(job, payload, index, "C:/papers/paper.pdf", "en"))
+
+    assert [event["type"] for event in job.history][-3:] == ["answer_delta", "answer", "done"]

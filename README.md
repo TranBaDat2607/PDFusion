@@ -105,27 +105,19 @@ offline engine rather than failing.
 When a cloud model is selected, the toolbar shows an estimate of the tokens the
 run will use, so a 200-page document doesn't surprise you.
 
-## Use your own model
+## Use a compatible endpoint
 
 The **OpenAI** and **Claude** tabs in Settings each have an **Endpoint** field,
-so PDFusion can translate with a model running on your own machine, or through a
-proxy that speaks one of those APIs. Leave it blank to use the provider itself.
-
-| Server | Settings tab | Endpoint | API key | Model |
-|---|---|---|---|---|
-| [Ollama](https://ollama.com) | OpenAI | `http://localhost:11434/v1` | any text, e.g. `ollama` | a name from `ollama list` |
-| Ollama (recent versions) | Claude | `http://localhost:11434` | any text | a name from `ollama list` |
-| [LM Studio](https://lmstudio.ai) | OpenAI | `http://localhost:1234/v1` | any text | the model identifier LM Studio shows |
-
-Then pick that service in the toolbar. Worth knowing:
+so PDFusion can go through a proxy, or another hosted service, that speaks one
+of those APIs. Leave it blank to use the provider itself. Then pick that
+service in the toolbar. Worth knowing:
 
 - **Enter the key together with the endpoint.** A saved key is only ever sent to
   the endpoint it was saved for, so changing the endpoint asks for the key
-  again. Local servers ignore the key, but the field can't be empty. An
-  `OPENAI_API_KEY` or `ANTHROPIC_API_KEY` from your environment is only ever
-  used with the provider itself.
-- **Save checks the model with the server first.** If the server isn't running
-  yet, Save shows the error and offers **Save anyway**.
+  again. An `OPENAI_API_KEY` or `ANTHROPIC_API_KEY` from your environment is
+  only ever used with the provider itself.
+- **Save checks the model with the endpoint first.** If it can't be reached,
+  Save shows the error and offers **Save anyway**.
 - **The model field takes any name.** The list beside it only makes suggestions.
 - Chat writes its answers with the same service and endpoint.
 
@@ -184,7 +176,7 @@ Charts went from 0.00 to 1.00, and scanned pages went from not indexable at all
 to the right page ranked first 91% of the time. The cost per question doesn't
 grow with the document: about 2,400 tokens on the 57-page PDF.
 
-**First use downloads about 470 MB** — a multilingual embedding model, fetched
+**First use downloads about 120 MB** — a multilingual embedding model, fetched
 once into `~/.cache/huggingface`. Everything after that is local. This is the
 only part of PDFusion that needs the internet when you're using the offline
 translator.
@@ -225,7 +217,7 @@ you.
 **The first translation is slow.** The engine loads its layout models on first
 use. Later runs reuse them, and repeat documents come from the cache.
 
-**Chat won't start.** It needs that one-time 470 MB model download — check your
+**Chat won't start.** It needs that one-time 120 MB model download — check your
 connection and `app.log`.
 
 **A PDF won't open or looks wrong.** Scanned pages with no text layer can't be

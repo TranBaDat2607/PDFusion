@@ -55,8 +55,7 @@ def _should_prewarm_argos(settings) -> bool:
     """Pre-warm Argos when it is what a translation would run: chosen, or in
     place of an LLM whose key is missing (`resolve_effective_service`).
     Otherwise skip, so LLM users don't pay the extra RAM for the CTranslate2
-    model — a keyless local server (Ollama) included, which "no key anywhere"
-    used to count as Argos's turn (#88).
+    model.
 
     Gated on the pack already being available either way. Pre-warming is a
     background convenience; it must never be what starts an 80 MB download, at

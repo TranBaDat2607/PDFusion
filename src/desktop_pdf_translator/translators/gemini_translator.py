@@ -10,7 +10,7 @@ from google import genai
 from google.genai import types as genai_types
 
 from ..providers.registry import provider
-from .base import BaseTranslator, PageImage, TranslationCancelled
+from .base import BaseTranslator, OnText, PageImage, TranslationCancelled, deliver_stream
 from .translation_cache import llm_cache_get as _llm_cache_get, llm_cache_set as _llm_cache_set
 
 
@@ -140,6 +140,7 @@ class GeminiTranslator(BaseTranslator):
         system: Optional[str] = None,
         max_tokens: int = 1000,
         images: Optional[Sequence[PageImage]] = None,
+        on_text: Optional[OnText] = None,
     ) -> Optional[str]:
         """Freeform generation used by the RAG chain.
 
@@ -151,6 +152,8 @@ class GeminiTranslator(BaseTranslator):
             max_output_tokens=max_tokens,
             system_instruction=system if system else None,
         )
+        if on_text is not None:
+            return self._generate_streaming(prompt, images, config, on_text)
         response = self._call_with_backoff(
             lambda: self.client.models.generate_content(
                 model=self.model_name,
@@ -163,6 +166,30 @@ class GeminiTranslator(BaseTranslator):
             raise RuntimeError("Gemini stopped at its token limit")
         text = response.text
         return text.strip() if text else None
+
+    def _generate_streaming(self, prompt: str, images: Optional[Sequence[PageImage]],
+                            config, on_text: OnText) -> Optional[str]:
+        def request():
+            # The SDK's stream fails lazily, on iteration: read to its end
+            # inside the retried request, so a dropped stream is retried too.
+            chunks = self.client.models.generate_content_stream(
+                model=self.model_name,
+                contents=self._contents(prompt, images),
+                config=config,
+            )
+            cut = [False]
+
+            def pieces():
+                for chunk in chunks:
+                    cut[0] = cut[0] or _cut_short(chunk)
+                    yield getattr(chunk, "text", None)
+
+            return deliver_stream(pieces(), on_text), cut[0]
+
+        text, cut = self._call_with_backoff(request)
+        if cut:
+            raise RuntimeError("Gemini stopped at its token limit")
+        return text.strip() or None
 
     @staticmethod
     def _contents(prompt: str, images: Optional[Sequence[PageImage]]):

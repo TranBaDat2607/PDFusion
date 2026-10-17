@@ -8,17 +8,19 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
 import { ActionLog } from "@/components/chat/ActionLog";
-import { AssistantMessage } from "@/components/chat/AssistantMessage";
+import { AssistantMessage, DraftMessage } from "@/components/chat/AssistantMessage";
 import { ChatInput } from "@/components/chat/ChatInput";
 import { UserMessage } from "@/components/chat/UserMessage";
-import { useChatHistory, useClearChatHistory } from "@/hooks/useChatHistory";
+import { useChatHistory, useClearChatHistory, useRateAnswer } from "@/hooks/useChatHistory";
 import { useRagAsk } from "@/hooks/useRagAsk";
 import { useRagIndex } from "@/hooks/useRagIndex";
 import { useConfig } from "@/hooks/useConfig";
 import {
   CHAT_DOCUMENTS_KEY,
   appendExchange,
+  canRate,
   chatHistoryKey,
+  nextRating,
   type ChatHistory,
   type ChatMessage,
 } from "@/lib/chat-history";
@@ -52,6 +54,7 @@ export function ChatPanel({
   // survives the panel closing, another PDF being opened, and a restart (#31).
   const history = useChatHistory(index.state.documentId);
   const clearHistory = useClearChatHistory();
+  const rateAnswer = useRateAnswer(index.state.documentId);
   const setChatOpen = useAppStore((s) => s.setChatOpen);
   const scrollRef = useRef<HTMLDivElement>(null);
   const [pendingQuestion, setPendingQuestion] = useState<string | null>(null);
@@ -132,7 +135,7 @@ export function ChatPanel({
   useEffect(() => {
     if (!scrollRef.current) return;
     scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
-  }, [messages.length, ask.state.actions.length, ask.state.status]);
+  }, [messages.length, ask.state.actions.length, ask.state.status, ask.state.draft]);
 
   const handleSubmit = useCallback(
     ({ text }: { text: string }) => {
@@ -249,6 +252,10 @@ export function ChatPanel({
                       m.model ?? m.answer.model,
                     )}
                     onJumpToPage={onJumpToPage}
+                    rating={canRate(m) ? (m.rating ?? null) : undefined}
+                    onRate={(clicked) =>
+                      rateAnswer.mutate({ messageId: m.id, rating: nextRating(m.rating, clicked) })
+                    }
                   />
                 )}
               </motion.div>
@@ -262,11 +269,15 @@ export function ChatPanel({
                   Working on: <span className="italic">{pendingQuestion}</span>
                 </div>
               )}
-              <ActionLog
-                actions={ask.state.actions}
-                busy={true}
-                currentMessage={ask.state.message}
-              />
+              {ask.state.draft ? (
+                <DraftMessage text={ask.state.draft} />
+              ) : (
+                <ActionLog
+                  actions={ask.state.actions}
+                  busy={true}
+                  currentMessage={ask.state.message}
+                />
+              )}
             </div>
           )}
           {ask.state.status === "error" && ask.state.error && (

@@ -1,6 +1,25 @@
 {
   "components": {
     "schemas": {
+      "AnswerDeltaPayload": {
+        "description": "An `answer_delta` event: a piece of the answer as the model writes it,\nbefore its citations are checked. `offset` is where the piece starts in\nthe answer; a retried request starts again at 0, so a client places each\npiece at its offset rather than appending it. The `answer` event that\nfollows carries the checked answer, which replaces the streamed text.",
+        "properties": {
+          "offset": {
+            "title": "Offset",
+            "type": "integer"
+          },
+          "text": {
+            "title": "Text",
+            "type": "string"
+          }
+        },
+        "required": [
+          "offset",
+          "text"
+        ],
+        "title": "AnswerDeltaPayload",
+        "type": "object"
+      },
       "AskProgressPayload": {
         "properties": {
           "message": {
@@ -121,6 +140,18 @@
             },
             "title": "Quality Metrics",
             "type": "object"
+          },
+          "search_query": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Search Query"
           },
           "sources_used": {
             "anyOf": [
@@ -353,6 +384,21 @@
               }
             ],
             "title": "Provider"
+          },
+          "rating": {
+            "anyOf": [
+              {
+                "enum": [
+                  -1,
+                  1
+                ],
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rating"
           },
           "role": {
             "enum": [
@@ -751,6 +797,19 @@
                 "type": "null"
               }
             ]
+          },
+          "whole_document_tokens": {
+            "anyOf": [
+              {
+                "maximum": 100000.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Whole Document Tokens"
           }
         },
         "title": "ConfigUpdateRequest",
@@ -1267,7 +1326,7 @@
         "type": "object"
       },
       "ModelCatalogResponse": {
-        "description": "The models the saved key can use at the saved endpoint.\n\nA failure is `error` in a 200: a local server that isn't up yet is ordinary, and `models` still carries the saved\nmodel (and, on the provider's own endpoint, the suggestions).",
+        "description": "The models the saved key can use at the saved endpoint.\n\nA failure is `error` in a 200: an endpoint that is briefly down is ordinary, and `models` still carries the saved\nmodel (and, on the provider's own endpoint, the suggestions).",
         "properties": {
           "error": {
             "anyOf": [
@@ -2110,14 +2169,45 @@
             "description": "Show the Chat button and index PDFs for chat",
             "title": "Chat Enabled",
             "type": "boolean"
+          },
+          "whole_document_tokens": {
+            "default": 11500,
+            "description": "Read a PDF whole when its text fits this many tokens (0 = always retrieve)",
+            "maximum": 100000.0,
+            "minimum": 0.0,
+            "title": "Whole Document Tokens",
+            "type": "integer"
           }
         },
         "required": [
           "chat_enabled",
           "auto_process_documents",
-          "answer_model"
+          "answer_model",
+          "whole_document_tokens"
         ],
         "title": "RAGSettings",
+        "type": "object"
+      },
+      "RateAnswerRequest": {
+        "description": "The user's verdict on an answer; `None` takes a rating back.",
+        "properties": {
+          "rating": {
+            "anyOf": [
+              {
+                "enum": [
+                  -1,
+                  1
+                ],
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rating"
+          }
+        },
+        "title": "RateAnswerRequest",
         "type": "object"
       },
       "ResetIndexesResponse": {
@@ -3437,6 +3527,9 @@
                       "$ref": "#/components/schemas/AskProgressPayload"
                     },
                     {
+                      "$ref": "#/components/schemas/AnswerDeltaPayload"
+                    },
+                    {
                       "$ref": "#/components/schemas/AskResultPayload"
                     },
                     {
@@ -3623,6 +3716,77 @@
           }
         },
         "summary": "Get Chat History",
+        "tags": [
+          "rag"
+        ]
+      }
+    },
+    "/rag/document/{document_id}/messages/{message_id}/rating": {
+      "put": {
+        "description": "Rate one of a document's answers, or take the rating back.",
+        "operationId": "rate_answer_rag_document__document_id__messages__message_id__rating_put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "document_id",
+            "required": true,
+            "schema": {
+              "title": "Document Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "message_id",
+            "required": true,
+            "schema": {
+              "title": "Message Id",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RateAnswerRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Rate Answer",
         "tags": [
           "rag"
         ]

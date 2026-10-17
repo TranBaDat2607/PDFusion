@@ -2,7 +2,7 @@
 
 A listing can always be asked for again, so it lives in the cache tier, never
 in `pdfusion.db` (the system of record). Rows are keyed by
-`(provider_id, base_url)`: an Ollama endpoint and the provider's own serve
+`(provider_id, base_url)`: another endpoint and the provider's own serve
 different models under the same key section.
 
 Nothing derived from a key is stored — not the key, not a hash of it. A key

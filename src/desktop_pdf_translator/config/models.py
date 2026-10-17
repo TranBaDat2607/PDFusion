@@ -170,9 +170,8 @@ class ProviderSettings(BaseModel):
     def _no_key_for_a_keyless_provider(
         cls, value: Optional[str], info: ValidationInfo
     ) -> Optional[str]:
-        # One hand-edited into Ollama's table would be sent in place of its
-        # placeholder and could never be cleared: the API refuses a key for
-        # it both ways, while the endpoint rule guards any saved key (#88).
+        # One hand-edited into a keyless provider's table (Argos) could never be
+        # cleared: the API refuses a key for it both ways (#88).
         spec = _spec_or_none(info.data.get("provider_id"))
         if spec is not None and not spec.requires_key:
             return None
@@ -311,6 +310,18 @@ class RAGSettings(BaseModel):
     # back to any LLM with a key (`rag_chain._answer_model`).
     answer_model: Optional[ModelRef] = Field(
         None, description="The model that answers in chat. None = the translation model"
+    )
+    # A PDF whose text fits this many tokens is read whole by the answer
+    # instead of the five retrieved pages (`rag_chain._reads_whole`). Reading
+    # whole is the better answer and costs several times the tokens a question
+    # does, so the trade is the user's. 11,500 (~40,000 characters, a 15-page
+    # paper) is where it was measured to fix answers and break none
+    # (`benchmarks/rag/README.md`); 0 always retrieves. At most 100k: a whole
+    # read must fit every offered model's window — DeepSeek's is 128k — and
+    # Vietnamese runs ~1.4× the estimate (`retrieval.reading_length`).
+    whole_document_tokens: int = Field(
+        11_500, ge=0, le=100_000,
+        description="Read a PDF whole when its text fits this many tokens (0 = always retrieve)",
     )
 
 

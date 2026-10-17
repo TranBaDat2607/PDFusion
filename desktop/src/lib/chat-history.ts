@@ -57,3 +57,31 @@ export function appendExchange(
     ],
   };
 }
+
+/** The user's verdict on an answer: helpful, wrong, or none. */
+export type Rating = 1 | -1 | null;
+
+/** The history with one answer's rating changed: what the panel shows while
+ *  the sidecar saves it. */
+export function withRating(
+  history: ChatHistory,
+  messageId: number,
+  rating: Rating,
+): ChatHistory {
+  return {
+    messages: history.messages.map((m) =>
+      m.id === messageId ? { ...m, rating } : m,
+    ),
+  };
+}
+
+/** A thumb toggles: clicking the one already chosen takes the rating back. */
+export function nextRating(current: Rating | undefined, clicked: 1 | -1): Rating {
+  return current === clicked ? null : clicked;
+}
+
+/** Only a saved answer can be rated. `appendExchange`'s stand-ins have
+ *  negative ids until the refetch brings the saved copy. */
+export function canRate(message: Pick<ChatMessage, "id" | "role">): boolean {
+  return message.role === "assistant" && message.id > 0;
+}

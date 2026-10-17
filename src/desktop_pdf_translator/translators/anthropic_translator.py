@@ -8,12 +8,12 @@ placeholders), so this class plugs in the same way OpenAITranslator/GeminiTransl
 """
 
 import logging
-from typing import Any, Dict, FrozenSet, Optional, Sequence
+from typing import Any, Dict, FrozenSet, List, Optional, Sequence
 
 import anthropic
 
 from ..providers.registry import provider
-from .base import BaseTranslator, PageImage, TranslationCancelled
+from .base import BaseTranslator, OnText, PageImage, TranslationCancelled, deliver_stream
 from .translation_cache import llm_cache_get as _llm_cache_get, llm_cache_set as _llm_cache_set
 
 
@@ -158,6 +158,7 @@ class AnthropicTranslator(BaseTranslator):
         system: str | None = None,
         max_tokens: int = 1000,
         images: Optional[Sequence[PageImage]] = None,
+        on_text: Optional[OnText] = None,
     ) -> str | None:
         """Freeform generation used by the RAG chain.
 
@@ -167,6 +168,8 @@ class AnthropicTranslator(BaseTranslator):
         kwargs = {}
         if system:
             kwargs["system"] = system
+        if on_text is not None:
+            return self._generate_streaming(prompt, max_tokens, images, kwargs, on_text)
         response = self._call_adapting(
             lambda rejected: self.client.messages.create(
                 model=self.model,
@@ -188,6 +191,41 @@ class AnthropicTranslator(BaseTranslator):
             if getattr(block, "type", None) == "text"
         ).strip()
         return text or None
+
+    def _generate_streaming(self, prompt: str, max_tokens: int,
+                            images: Optional[Sequence[PageImage]], kwargs: Dict[str, Any],
+                            on_text: OnText) -> Optional[str]:
+        def send(rejected: FrozenSet[str]):
+            # Sent and read to its end inside one retried request; see
+            # `OpenAITranslator._generate_streaming`.
+            events = self.client.messages.create(
+                model=self.model,
+                max_tokens=max_tokens,
+                messages=[{"role": "user", "content": self._user_content(prompt, images)}],
+                timeout=60,
+                stream=True,
+                **kwargs,
+                **self._sampling_kwargs(rejected, 0.3),
+            )
+            stop: List[Optional[str]] = [None]
+
+            def pieces():
+                for event in events:
+                    kind = getattr(event, "type", None)
+                    if kind == "content_block_delta":
+                        delta = event.delta
+                        # Thinking is the model's working, not the answer.
+                        if getattr(delta, "type", None) == "text_delta":
+                            yield delta.text
+                    elif kind == "message_delta":
+                        stop[0] = getattr(event.delta, "stop_reason", None) or stop[0]
+
+            return deliver_stream(pieces(), on_text), stop[0]
+
+        text, stop = self._call_adapting(send, self._ADAPTABLE_PARAMS)
+        if stop in _CUT_SHORT:
+            raise RuntimeError(f"Claude stopped early ({stop})")
+        return text.strip() or None
 
     @staticmethod
     def _user_content(prompt: str, images: Optional[Sequence[PageImage]]) -> Any:

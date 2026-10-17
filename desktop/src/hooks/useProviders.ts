@@ -33,7 +33,7 @@ export function useProviders() {
  * The models a provider's saved key can use at its saved endpoint. Served
  * from the sidecar's catalog while fresh, so an open is usually free; a failed
  * listing still arrives as a 200 carrying `error`, which is kept stale so the
- * next open asks again (the cure — starting a local server, fixing a key —
+ * next open asks again (the cure — a server coming back, fixing a key —
  * happens outside this key).
  */
 export function useProviderModels(provider: ProviderInfo | undefined, enabled: boolean) {

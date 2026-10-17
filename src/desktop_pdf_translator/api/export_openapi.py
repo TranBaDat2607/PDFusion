@@ -41,6 +41,7 @@ from pydantic.json_schema import models_json_schema
 
 from .server import create_app
 from .sse_schemas import (
+    AnswerDeltaPayload,
     AskProgressPayload,
     AskResultPayload,
     CancelPayload,
@@ -73,6 +74,7 @@ _SSE_ROUTES: Dict[str, List[Type[BaseModel]]] = {
     ],
     "/rag/ask/{job_id}/events": [
         AskProgressPayload,
+        AnswerDeltaPayload,
         AskResultPayload,
         JobErrorPayload,
         EmptyPayload,  # cancelled

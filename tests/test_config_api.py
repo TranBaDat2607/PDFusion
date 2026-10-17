@@ -45,7 +45,7 @@ from provider_fakes import (
 TOKEN = "test-token-for-config-api"
 AUTH = {"Authorization": f"Bearer {TOKEN}"}
 KEY = "sk-test-0123456789abcdef"
-OLLAMA = "http://localhost:11434/v1"
+COMPATIBLE_SERVER = "https://llm.example.com/v1"
 
 
 @pytest.fixture(autouse=True)
@@ -166,7 +166,7 @@ SOME_LISTING = Listing(models=(ListedModel(id="gpt-4.1"),))
 
 
 def fill(store: ModelCatalog) -> None:
-    for provider_id, endpoint in (("openai", None), ("openai", OLLAMA), ("gemini", None)):
+    for provider_id, endpoint in (("openai", None), ("openai", COMPATIBLE_SERVER), ("gemini", None)):
         store.put(provider_id, endpoint, SOME_LISTING)
 
 
@@ -181,13 +181,13 @@ def fill(store: ModelCatalog) -> None:
 def test_a_save_that_changes_neither_keeps_the_catalog(
     client: TestClient, manager: ConfigManager, store: ModelCatalog, body: dict
 ):
-    seed(manager, preferred_service="openai", openai={"api_key": "ollama", "base_url": OLLAMA})
+    seed(manager, preferred_service="openai", openai={"api_key": "sk-llm", "base_url": COMPATIBLE_SERVER})
     fill(store)
 
     assert put(client, body).status_code == 200
 
     assert store.get("openai", None) is not None
-    assert store.get("openai", OLLAMA) is not None
+    assert store.get("openai", COMPATIBLE_SERVER) is not None
     assert store.get("gemini", None) is not None
 
 
@@ -204,6 +204,33 @@ def test_chat_is_on_until_it_is_turned_off(client: TestClient, manager: ConfigMa
     assert response.json()["rag"]["chat_enabled"] is False
     reloaded = ConfigManager(config_dir=manager.config_dir).load_settings()
     assert reloaded.rag.chat_enabled is False
+
+
+def test_short_documents_are_read_whole_up_to_a_budget_the_user_can_change(
+    client: TestClient, manager: ConfigManager
+):
+    """Reading a PDF whole beats retrieving from it when it fits, at several
+    times the tokens a question costs (`benchmarks/rag/README.md`): how much is
+    the user's call. The default is what was measured, ~40,000 characters."""
+    assert client.get("/config", headers=AUTH).json()["rag"]["whole_document_tokens"] == 11_500
+
+    response = put(client, {"whole_document_tokens": 50_000})
+
+    assert response.status_code == 200
+    assert response.json()["rag"]["whole_document_tokens"] == 50_000
+    reloaded = ConfigManager(config_dir=manager.config_dir).load_settings()
+    assert reloaded.rag.whole_document_tokens == 50_000
+
+
+# The cap keeps a whole read inside every offered model's window: DeepSeek's
+# is 128k tokens, and Vietnamese text runs ~1.4× the estimate (`_reading_length`).
+@pytest.mark.parametrize("budget", [-1, 100_001])
+def test_a_whole_document_budget_outside_its_range_is_refused(client: TestClient, budget):
+    assert put(client, {"whole_document_tokens": budget}).status_code == 422
+
+
+def test_a_zero_whole_document_budget_means_always_retrieve(client: TestClient):
+    assert put(client, {"whole_document_tokens": 0}).json()["rag"]["whole_document_tokens"] == 0
 
 
 # ---------------------------------------------------------------------------

@@ -97,9 +97,9 @@ ANTHROPIC_API_KEY=...     # optional
 You can also enter and validate keys later from the in-app **Settings** sheet
 (they're encrypted before being written to disk).
 
-Pointing PDFusion at a local or OpenAI-compatible model (Ollama, LM Studio, a
-proxy) is a runtime setting, not a build step —
-[the README covers it](../README.md#use-your-own-model).
+Pointing PDFusion at a proxy or another service compatible with OpenAI's or
+Anthropic's API is a runtime setting, not a build step —
+[the README covers it](../README.md#use-a-compatible-endpoint).
 
 ## Running
 
@@ -180,7 +180,7 @@ Notes:
 - **The bundles are large.** v1.1.1 shipped a 458 MB `.exe` and a 723 MB `.deb`;
   the staged sidecar tree alone is ~1.2 GB before compression. Most of the rest
   is the ~290 MB of engine assets it ships so the app works offline on first
-  run. The RAG embedding weights (~470 MB) are *not* in there — they download
+  run. The RAG embedding weights (118 MB) are *not* in there — they download
   lazily on first Chat use to `~/.cache/huggingface`.
 - **Installers are unsigned by default** — Windows SmartScreen warns on first
   install; the Linux bundles carry no signature either. See *Code signing*

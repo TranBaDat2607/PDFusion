@@ -15,7 +15,7 @@ import {
   type PickerProvider,
 } from "./model-choice";
 
-const OLLAMA = "http://localhost:11434/v1";
+const COMPATIBLE_SERVER = "https://llm.example.com/v1";
 
 type Overrides = Partial<PickerProvider>;
 
@@ -163,18 +163,18 @@ describe("modelGroups", () => {
   });
 
   it("marks no default on a custom endpoint", () => {
-    // The provider's default model is the provider's, not a local server's.
+    // The provider's default model is the provider's, not another server's.
     const list = providers({
       openai: {
         has_key: true,
-        base_url: OLLAMA,
+        base_url: COMPATIBLE_SERVER,
         enabled_models: ["gpt-4.1", "llama3.2:3b"],
       },
     });
 
     const openai = group(ARGOS, list, "openai");
 
-    expect(openai.endpoint).toBe(OLLAMA);
+    expect(openai.endpoint).toBe(COMPATIBLE_SERVER);
     expect(openai.models.every((m) => !m.isDefault)).toBe(true);
   });
 
@@ -262,7 +262,7 @@ describe("settingsTargetFor", () => {
 
   it("opens on the first provider that takes an endpoint from Argos", () => {
     // "Custom model or endpoint…" from Argos: a model of one's own needs a
-    // server, and OpenAI's API is the one local servers speak.
+    // server, and OpenAI's API is the one compatible servers speak.
     expect(settingsTargetFor(ARGOS, providers())).toBe("openai");
   });
 });
@@ -325,42 +325,6 @@ describe("chatModel", () => {
 
   it("is null with no key anywhere", () => {
     expect(chatModel(config("openai", "gpt-4.1"), providers())).toBeNull();
-  });
-
-  it("answers with a keyless LLM when it is the chat answer model (#88)", () => {
-    const list = providers({
-      openai: { requires_key: false, has_key: false, priority: null },
-    });
-    const c = config("argos", "argostranslate", { provider: "openai", model: "llama3.2" });
-
-    expect(chatModel(c, list)).toEqual({
-      provider: "openai",
-      label: "OpenAI",
-      model: "llama3.2",
-    });
-  });
-
-  it("answers with a keyless LLM when it is the translation model (#88)", () => {
-    const list = providers({
-      openai: { requires_key: false, has_key: false, priority: null },
-    });
-
-    expect(chatModel(config("openai", "llama3.2"), list)).toEqual({
-      provider: "openai",
-      label: "OpenAI",
-      model: "llama3.2",
-    });
-  });
-
-  it("never falls back to a keyless LLM by priority (#88)", () => {
-    // Not chosen anywhere — translation stays on Argos, and no provider has a
-    // key. A keyless local server may not even be running, unlike a keyed
-    // provider's "any LLM with a key" fallback.
-    const list = providers({
-      openai: { requires_key: false, has_key: false, priority: null },
-    });
-
-    expect(chatModel(ARGOS, list)).toBeNull();
   });
 
   it("never answers with the offline engine even when chosen as the answer model", () => {
@@ -484,11 +448,10 @@ describe("answeredBy", () => {
 
 describe("modelGroups: keyless", () => {
   it("marks a provider that takes no key, which a key can't vouch for", () => {
-    // Usable with no key — but that says nothing about whether a local
-    // server is running, so the heading mustn't call it ready (#88).
-    const list = [...providers(), { ...providers()[0], id: "local", requires_key: false, priority: null }];
+    // Argos needs no key, so its heading can't say a key was checked.
+    const list = providers();
 
-    expect(modelGroups(ARGOS, list).find((g) => g.id === "local")?.keyless).toBe(true);
+    expect(modelGroups(ARGOS, list).find((g) => g.id === "argos")?.keyless).toBe(true);
     expect(modelGroups(ARGOS, list).find((g) => g.id === "openai")?.keyless).toBe(false);
   });
 });

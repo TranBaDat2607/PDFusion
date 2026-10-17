@@ -144,9 +144,9 @@ def test_the_old_chat_switch_does_not_turn_chat_off(manager: ConfigManager):
 
 def test_an_endpoint_is_stored_without_its_trailing_slash(manager: ConfigManager):
     write_config(
-        manager, {"providers": {"openai": {"base_url": " http://localhost:11434/v1/ "}}}
+        manager, {"providers": {"openai": {"base_url": " https://llm.example.com/v1/ "}}}
     )
-    assert manager.load_settings().providers["openai"].base_url == "http://localhost:11434/v1"
+    assert manager.load_settings().providers["openai"].base_url == "https://llm.example.com/v1"
 
 
 def test_an_endpoint_that_is_not_a_web_url_is_dropped(manager: ConfigManager):
@@ -154,7 +154,7 @@ def test_an_endpoint_that_is_not_a_web_url_is_dropped(manager: ConfigManager):
         manager,
         {
             "providers": {
-                "openai": {"enabled_models": ["gpt-4o-mini"], "base_url": "localhost:11434"}
+                "openai": {"enabled_models": ["gpt-4o-mini"], "base_url": "llm.example.com"}
             }
         },
     )
@@ -217,8 +217,8 @@ def test_an_environment_key_is_not_used_with_a_saved_endpoint(
         manager,
         {
             "providers": {
-                "openai": {"api_key": "ollama", "base_url": "http://localhost:11434/v1"},
-                "anthropic": {"base_url": "http://localhost:11434"},
+                "openai": {"api_key": "sk-llm", "base_url": "https://llm.example.com/v1"},
+                "anthropic": {"base_url": "https://llm.example.com"},
             }
         },
     )
@@ -227,11 +227,11 @@ def test_an_environment_key_is_not_used_with_a_saved_endpoint(
     monkeypatch.setenv("OPENAI_MODEL", "llama3.2:3b")
     settings = manager.load_settings()
 
-    assert settings.providers["openai"].api_key == "ollama"
-    assert settings.providers["openai"].base_url == "http://localhost:11434/v1"
+    assert settings.providers["openai"].api_key == "sk-llm"
+    assert settings.providers["openai"].base_url == "https://llm.example.com/v1"
     assert settings.model_for("openai") == "llama3.2:3b"
     assert settings.providers["anthropic"].api_key is None
-    assert settings.providers["anthropic"].base_url == "http://localhost:11434"
+    assert settings.providers["anthropic"].base_url == "https://llm.example.com"
 
 
 def test_an_environment_key_is_used_when_the_saved_endpoint_is_dropped(
@@ -239,7 +239,7 @@ def test_an_environment_key_is_used_when_the_saved_endpoint_is_dropped(
 ):
     """An endpoint that fails validation is dropped, so requests go to the
     provider, and the provider's key goes with them."""
-    write_config(manager, {"providers": {"openai": {"base_url": "localhost:11434"}}})
+    write_config(manager, {"providers": {"openai": {"base_url": "llm.example.com"}}})
     monkeypatch.setenv("OPENAI_API_KEY", "sk-from-env")
     settings = manager.load_settings()
 
@@ -519,3 +519,26 @@ def test_an_unset_optional_field_does_not_break_the_save(manager: ConfigManager)
     assert "max_tokens" not in tomlkit.parse(
         manager.config_file.read_text(encoding="utf-8")
     )["providers"]["openai"]
+
+
+def test_a_config_saved_with_a_local_model_loads_without_it(manager: ConfigManager):
+    """Local models (Ollama) are no longer a provider. A file saved while one
+    was chosen still loads: its table is dropped, and a translation or answer
+    model that named it falls back to the defaults rather than failing."""
+    write_config(
+        manager,
+        {
+            "providers": {
+                "ollama": {"base_url": "http://localhost:11434/v1", "enabled_models": ["llama3.2"]},
+                "gemini": {"api_key": "", "enabled_models": ["gemini-2.5-flash-lite"]},
+            },
+            "translation": {"model": {"provider": "ollama", "model": "llama3.2"}},
+            "rag": {"answer_model": {"provider": "ollama", "model": "llama3.2"}},
+        },
+    )
+
+    settings = manager.load_settings()
+
+    assert "ollama" not in settings.providers
+    assert settings.translation.model == AppSettings().translation.model
+    assert settings.rag.answer_model is None

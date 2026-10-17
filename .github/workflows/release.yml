@@ -347,12 +347,12 @@ jobs:
             layout models, fonts and the offline English→Vietnamese pack), so
             the first translation works with no network and no API key.
 
-            Chat is the exception: its embedding model (~470 MB) downloads on
+            Chat is the exception: its embedding model (~120 MB) downloads on
             first use, into `~/.cache/huggingface`.
 
             Translating with OpenAI, Gemini or Anthropic needs your own API key,
             entered in Settings. Each service can also be pointed at a
-            compatible endpoint — Ollama, LM Studio, or a proxy.
+            compatible endpoint, such as a proxy.
 
             ## Where your data lives
 

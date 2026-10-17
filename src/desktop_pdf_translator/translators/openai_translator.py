@@ -8,7 +8,7 @@ from typing import Any, Dict, FrozenSet, List, Optional, Sequence
 from openai import OpenAI
 
 from ..providers.registry import provider
-from .base import BaseTranslator, PageImage, TranslationCancelled
+from .base import BaseTranslator, OnText, PageImage, TranslationCancelled, deliver_stream
 from .translation_cache import llm_cache_get as _llm_cache_get, llm_cache_set as _llm_cache_set
 
 
@@ -110,10 +110,10 @@ class OpenAITranslator(BaseTranslator):
                     RuntimeError("OpenAI returned an empty translation"), text
                 )
             result = self._postprocess_text(translated_text)
-            # The provider, not "openai": OpenRouter, DeepSeek and Ollama run
-            # this class too, and a model name alone doesn't say whose output a
-            # paragraph is — Ollama's `llama3.2` and one behind the OpenAI card
-            # pointed at LM Studio would serve each other's text.
+            # The provider, not "openai": OpenRouter and DeepSeek run this
+            # class too, and a model name alone doesn't say whose output a
+            # paragraph is — the same name behind two cards would serve each
+            # other's text.
             _llm_cache_set(
                 processed_text, result, self.lang_in, self.lang_out, self._SERVICE_NAME, self.model
             )
@@ -131,6 +131,7 @@ class OpenAITranslator(BaseTranslator):
         system: Optional[str] = None,
         max_tokens: int = 1000,
         images: Optional[Sequence[PageImage]] = None,
+        on_text: Optional[OnText] = None,
     ) -> Optional[str]:
         """Freeform generation used by the RAG chain.
 
@@ -142,6 +143,8 @@ class OpenAITranslator(BaseTranslator):
         if system:
             messages.append({"role": "system", "content": system})
         messages.append({"role": "user", "content": self._user_content(prompt, images)})
+        if on_text is not None:
+            return self._generate_streaming(messages, max_tokens, on_text)
         response = self._call_adapting(
             lambda rejected: self.client.chat.completions.create(
                 model=self.model,
@@ -156,6 +159,36 @@ class OpenAITranslator(BaseTranslator):
             raise RuntimeError("The model stopped at its token limit")
         content = response.choices[0].message.content
         return content.strip() if content else None
+
+    def _generate_streaming(self, messages: List[Dict[str, Any]], max_tokens: int,
+                            on_text: OnText) -> Optional[str]:
+        def send(rejected: FrozenSet[str]):
+            # Sent and read to its end inside one retried request: a stream
+            # that drops midway is asked for again from the start.
+            stream = self.client.chat.completions.create(
+                model=self.model,
+                messages=messages,
+                timeout=60,
+                stream=True,
+                **self._sampling_kwargs(rejected, 0.3, max_tokens),
+            )
+            finish: List[Optional[str]] = [None]
+
+            def pieces():
+                for chunk in stream:
+                    # The usage chunk some servers send last has no choices.
+                    if not chunk.choices:
+                        continue
+                    choice = chunk.choices[0]
+                    finish[0] = getattr(choice, "finish_reason", None) or finish[0]
+                    yield getattr(getattr(choice, "delta", None), "content", None)
+
+            return deliver_stream(pieces(), on_text), finish[0]
+
+        text, finish = self._call_adapting(send, self._ADAPTABLE_PARAMS)
+        if finish == "length":
+            raise RuntimeError("The model stopped at its token limit")
+        return text.strip() or None
 
     @staticmethod
     def _user_content(prompt: str, images: Optional[Sequence[PageImage]]) -> Any:

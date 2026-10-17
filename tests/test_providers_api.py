@@ -34,7 +34,7 @@ from desktop_pdf_translator.utils.encryption import KEYSTORE_PREFIX
 from provider_fakes import (
     ATTACKER,
     DEFAULT_LISTING,
-    OLLAMA,
+    COMPATIBLE_SERVER,
     FakeLister,
     GenerationGuard,
     ids_and_sources,
@@ -43,7 +43,6 @@ from provider_fakes import (
     install_full_guard,
     install_lister,
     listed,
-    make_keyless,
     seed,
 )
 
@@ -180,11 +179,11 @@ def test_every_provider_is_listed_in_registry_order_with_its_spec(client: TestCl
 def test_key_and_endpoint_come_from_the_saved_settings(
     client: TestClient, manager: ConfigManager
 ):
-    seed(manager, openai={"api_key": "ollama", "base_url": OLLAMA})
+    seed(manager, openai={"api_key": "sk-llm", "base_url": COMPATIBLE_SERVER})
 
     entries = providers(client)
 
-    assert (entries["openai"]["has_key"], entries["openai"]["base_url"]) == (True, OLLAMA)
+    assert (entries["openai"]["has_key"], entries["openai"]["base_url"]) == (True, COMPATIBLE_SERVER)
     assert (entries["gemini"]["has_key"], entries["gemini"]["base_url"]) == (False, None)
     assert entries["anthropic"]["has_key"] is False
 
@@ -250,13 +249,13 @@ def test_a_listing_older_than_the_ttl_is_not_fresh(
 def test_the_state_is_read_for_the_saved_endpoint(
     client: TestClient, manager: ConfigManager, store: ModelCatalog
 ):
-    """An Ollama endpoint and the provider's own are different rows: a key
+    """Another endpoint and the provider's own are different rows: a key
     refused by OpenAI says nothing about the local server."""
-    seed(manager, openai={"api_key": "ollama", "base_url": OLLAMA})
+    seed(manager, openai={"api_key": "sk-llm", "base_url": COMPATIBLE_SERVER})
     store.mark_invalid("openai", None)
     assert providers(client)["openai"]["key_state"] == "unverified"
 
-    store.put("openai", OLLAMA, OTHER_LISTING)
+    store.put("openai", COMPATIBLE_SERVER, OTHER_LISTING)
 
     assert providers(client)["openai"]["key_state"] == "valid"
 
@@ -330,7 +329,7 @@ def test_a_custom_endpoint_without_a_key_offers_only_the_saved_model(
     client: TestClient, manager: ConfigManager, lister: FakeLister
 ):
     """OpenAI's suggestions mean nothing to a local server."""
-    seed(manager, openai={"base_url": OLLAMA, "model": "mistral-nemo:12b"})
+    seed(manager, openai={"base_url": COMPATIBLE_SERVER, "model": "mistral-nemo:12b"})
 
     body = models(client, "openai").json()
 
@@ -383,13 +382,13 @@ def test_a_stale_entry_is_listed_again(
 def test_the_saved_key_is_listed_at_the_saved_endpoint(
     client: TestClient, manager: ConfigManager, lister: FakeLister
 ):
-    seed(manager, openai={"api_key": "ollama", "base_url": OLLAMA, "model": "qwen3"})
+    seed(manager, openai={"api_key": "sk-llm", "base_url": COMPATIBLE_SERVER, "model": "qwen3"})
 
     response = models(client, "openai")
 
     assert response.status_code == 200
     body = response.json()
-    assert lister.calls == [("openai", "ollama", OLLAMA)]
+    assert lister.calls == [("openai", "sk-llm", COMPATIBLE_SERVER)]
     assert ids_and_sources(body["models"]) == listed(DEFAULT_LISTING.models)
     assert ids_and_sources(body["hidden"]) == listed(DEFAULT_LISTING.hidden)
     assert body["key_state"] == "valid"
@@ -422,11 +421,11 @@ def test_gemini_is_listed_with_no_endpoint(
 def test_a_successful_listing_is_stored(
     client: TestClient, manager: ConfigManager, store: ModelCatalog
 ):
-    seed(manager, openai={"api_key": "ollama", "base_url": OLLAMA})
+    seed(manager, openai={"api_key": "sk-llm", "base_url": COMPATIBLE_SERVER})
 
     models(client, "openai")
 
-    entry = store.get("openai", OLLAMA)
+    entry = store.get("openai", COMPATIBLE_SERVER)
     assert entry is not None
     assert entry.key_state == "valid"
     assert entry.listing == DEFAULT_LISTING
@@ -484,7 +483,7 @@ def test_a_refused_key_is_recorded_invalid(
 def test_a_refused_key_on_a_custom_endpoint_offers_only_the_saved_model(
     client: TestClient, manager: ConfigManager, lister: FakeLister
 ):
-    seed(manager, anthropic={"api_key": "ollama", "base_url": "http://localhost:11434", "model": "qwen3"})
+    seed(manager, anthropic={"api_key": "sk-llm", "base_url": "https://llm.example.com", "model": "qwen3"})
     lister.result = catalog.KeyRejected("403 Forbidden")
 
     body = models(client, "anthropic").json()
@@ -496,7 +495,7 @@ def test_a_refused_key_on_a_custom_endpoint_offers_only_the_saved_model(
 def test_a_server_that_is_down_is_an_error_not_a_failure(
     client: TestClient, manager: ConfigManager, lister: FakeLister
 ):
-    seed(manager, openai={"api_key": "ollama", "base_url": OLLAMA, "model": "qwen3"})
+    seed(manager, openai={"api_key": "sk-llm", "base_url": COMPATIBLE_SERVER, "model": "qwen3"})
     lister.result = catalog.ListingFailed("Connection refused")
 
     response = models(client, "openai")
@@ -521,13 +520,13 @@ def test_a_down_server_on_the_providers_own_endpoint_offers_the_saved_model(
 def test_a_stale_listing_beats_none_when_the_server_is_down(
     client: TestClient, manager: ConfigManager, store: ModelCatalog, lister: FakeLister
 ):
-    seed(manager, openai={"api_key": "ollama", "base_url": OLLAMA, "model": "llama3.1:8b"})
-    store.put("openai", OLLAMA, OTHER_LISTING, now=stale())
+    seed(manager, openai={"api_key": "sk-llm", "base_url": COMPATIBLE_SERVER, "model": "llama3.1:8b"})
+    store.put("openai", COMPATIBLE_SERVER, OTHER_LISTING, now=stale())
     lister.result = catalog.ListingFailed("Connection refused")
 
     body = models(client, "openai").json()
 
-    assert lister.calls == [("openai", "ollama", OLLAMA)]
+    assert lister.calls == [("openai", "sk-llm", COMPATIBLE_SERVER)]
     assert body["error"] == "Connection refused"
     assert ids_and_sources(body["models"]) == [("llama3.1:8b", "listed")]
 
@@ -544,7 +543,7 @@ def test_an_unknown_provider_has_no_models(client: TestClient):
 @pytest.mark.parametrize(
     "body",
     [
-        {"api_key": "sk-typed", "base_url": OLLAMA, "model": "qwen3"},
+        {"api_key": "sk-typed", "base_url": COMPATIBLE_SERVER, "model": "qwen3"},
         {},
     ],
 )
@@ -561,27 +560,27 @@ def test_verify_lists_a_typed_key_at_the_named_endpoint(
     client: TestClient, lister: FakeLister
 ):
     response = verify(
-        client, "anthropic", {"api_key": "ollama", "base_url": "http://localhost:11434"}
+        client, "anthropic", {"api_key": "sk-llm", "base_url": "https://llm.example.com"}
     )
 
     assert response.status_code == 200
-    assert lister.calls == [("anthropic", "ollama", "http://localhost:11434")]
+    assert lister.calls == [("anthropic", "sk-llm", "https://llm.example.com")]
 
 
 def test_a_typed_key_with_no_endpoint_goes_to_the_saved_endpoint(
     client: TestClient, manager: ConfigManager, lister: FakeLister
 ):
-    seed(manager, openai={"base_url": OLLAMA})
+    seed(manager, openai={"base_url": COMPATIBLE_SERVER})
 
     verify(client, "openai", {"api_key": "sk-typed"})
 
-    assert lister.calls == [("openai", "sk-typed", OLLAMA)]
+    assert lister.calls == [("openai", "sk-typed", COMPATIBLE_SERVER)]
 
 
 def test_a_blank_endpoint_is_the_providers_own(
     client: TestClient, manager: ConfigManager, lister: FakeLister
 ):
-    seed(manager, openai={"base_url": OLLAMA})
+    seed(manager, openai={"base_url": COMPATIBLE_SERVER})
 
     verify(client, "openai", {"api_key": "sk-typed", "base_url": ""})
 
@@ -590,7 +589,7 @@ def test_a_blank_endpoint_is_the_providers_own(
 
 @pytest.mark.parametrize(
     "saved_endpoint, requested",
-    [(None, ATTACKER), (OLLAMA, ATTACKER), (OLLAMA, "")],
+    [(None, ATTACKER), (COMPATIBLE_SERVER, ATTACKER), (COMPATIBLE_SERVER, "")],
 )
 def test_verify_never_sends_the_saved_key_to_another_endpoint(
     client: TestClient,
@@ -607,18 +606,18 @@ def test_verify_never_sends_the_saved_key_to_another_endpoint(
     assert lister.calls == []
 
 
-@pytest.mark.parametrize("requested", [None, f"  {OLLAMA}/ "])
+@pytest.mark.parametrize("requested", [None, f"  {COMPATIBLE_SERVER}/ "])
 def test_verify_checks_the_saved_key_at_the_saved_endpoint(
     client: TestClient, manager: ConfigManager, lister: FakeLister, requested
 ):
     """The same endpoint typed again is not a change."""
-    seed(manager, openai={"api_key": "ollama", "base_url": OLLAMA})
+    seed(manager, openai={"api_key": "sk-llm", "base_url": COMPATIBLE_SERVER})
     body = {} if requested is None else {"base_url": requested}
 
     response = verify(client, "openai", body)
 
     assert response.status_code == 200
-    assert lister.calls == [("openai", "ollama", OLLAMA)]
+    assert lister.calls == [("openai", "sk-llm", COMPATIBLE_SERVER)]
 
 
 def test_verify_with_a_key_that_could_not_be_read(
@@ -744,7 +743,7 @@ def test_a_refused_key_does_not_verify(client: TestClient, lister: FakeLister):
 def test_a_listing_failure_says_why(client: TestClient, lister: FakeLister):
     lister.result = catalog.ListingFailed("Connection refused")
 
-    body = verify(client, "openai", {"api_key": "ollama", "base_url": OLLAMA}).json()
+    body = verify(client, "openai", {"api_key": "sk-llm", "base_url": COMPATIBLE_SERVER}).json()
 
     assert body["valid"] is False
     assert body["key_state"] == "unverified"
@@ -754,11 +753,11 @@ def test_a_listing_failure_says_why(client: TestClient, lister: FakeLister):
 def test_verifying_the_saved_pair_stores_the_listing(
     client: TestClient, manager: ConfigManager, store: ModelCatalog
 ):
-    seed(manager, openai={"api_key": "ollama", "base_url": OLLAMA})
+    seed(manager, openai={"api_key": "sk-llm", "base_url": COMPATIBLE_SERVER})
 
     verify(client, "openai", {})
 
-    entry = store.get("openai", OLLAMA)
+    entry = store.get("openai", COMPATIBLE_SERVER)
     assert entry is not None
     assert entry.key_state == "valid"
     assert entry.listing == DEFAULT_LISTING
@@ -783,7 +782,7 @@ def test_a_refusal_of_the_saved_pair_is_recorded(
         # A key the user is trying out says nothing about the saved one.
         {"api_key": "sk-other"},
         # Nor does another endpoint.
-        {"api_key": KEY, "base_url": OLLAMA},
+        {"api_key": KEY, "base_url": COMPATIBLE_SERVER},
     ],
 )
 @pytest.mark.parametrize(
@@ -810,7 +809,7 @@ def test_verifying_anything_else_leaves_the_catalog_alone(
     entry = store.get("openai", None)
     assert entry is not None
     assert (entry.key_state, entry.listing, entry.fetched_at) == ("valid", OTHER_LISTING, at)
-    assert store.get("openai", OLLAMA) is None
+    assert store.get("openai", COMPATIBLE_SERVER) is None
 
 
 # ---------------------------------------------------------------------------
@@ -819,108 +818,20 @@ def test_verifying_anything_else_leaves_the_catalog_alone(
 
 
 # ---------------------------------------------------------------------------
-# a keyless local server (#88) — swap "openai" for one with `make_keyless`
+# a provider that takes no key (Argos)
 # ---------------------------------------------------------------------------
 
 
-def test_verify_lists_a_keyless_provider_even_with_no_key_saved(
-    client: TestClient, monkeypatch: pytest.MonkeyPatch, lister: FakeLister
-):
-    make_keyless(monkeypatch, "openai")
-
-    response = verify(client, "openai", {})
-
-    assert response.status_code == 200
-    body = response.json()
-    assert lister.calls == [("openai", None, None)]
-    assert body["valid"] is True
-
-
-def test_verify_keyless_at_a_new_endpoint_needs_no_key(
-    client: TestClient, monkeypatch: pytest.MonkeyPatch, lister: FakeLister
-):
-    """Naming a different endpoint ordinarily needs the key typed alongside it
-    (#32) — but there is no key for a keyless provider to protect."""
-    make_keyless(monkeypatch, "openai")
-
-    response = verify(client, "openai", {"base_url": OLLAMA})
-
-    assert response.status_code == 200
-    assert lister.calls == [("openai", None, OLLAMA)]
-
-
-def test_verify_keyless_rejects_a_typed_key(
-    client: TestClient, monkeypatch: pytest.MonkeyPatch, lister: FakeLister
-):
-    make_keyless(monkeypatch, "openai")
-
-    response = verify(client, "openai", {"api_key": "sk-anything"})
+def test_verify_keyless_rejects_a_typed_key(client: TestClient, lister: FakeLister):
+    response = verify(client, "argos", {"api_key": "sk-anything"})
 
     assert response.status_code == 422
     assert lister.calls == []
 
 
-def test_models_lists_a_keyless_provider_with_no_key(
-    client: TestClient, monkeypatch: pytest.MonkeyPatch, lister: FakeLister
-):
-    make_keyless(monkeypatch, "openai")
-
-    body = models(client, "openai").json()
-
-    assert lister.calls == [("openai", None, None)]
-    assert ids_and_sources(body["models"]) == listed(DEFAULT_LISTING.models)
-
-
-def test_models_of_a_keyless_provider_report_a_listing_failure_as_an_error(
-    client: TestClient, monkeypatch: pytest.MonkeyPatch, lister: FakeLister
-):
-    make_keyless(monkeypatch, "openai")
-    lister.result = catalog.ListingFailed("Connection refused")
-
-    response = models(client, "openai")
-
-    assert response.status_code == 200
-    assert response.json()["error"] == "Connection refused"
-
-
-def test_providers_row_for_a_keyless_provider(
-    client: TestClient, monkeypatch: pytest.MonkeyPatch
-):
-    make_keyless(monkeypatch, "openai")
-
-    entry = providers(client)["openai"]
-
-    assert entry["requires_key"] is False
-    assert entry["has_key"] is False
-    assert entry["key_state"] == "unverified"
-
-
-def test_a_keyless_provider_becomes_valid_after_listing_its_models(
-    client: TestClient, monkeypatch: pytest.MonkeyPatch
-):
-    make_keyless(monkeypatch, "openai")
-
-    assert models(client, "openai").status_code == 200
-
-    assert providers(client)["openai"]["key_state"] == "valid"
-
-
-def test_put_keyless_provider_endpoint_needs_no_key(
-    client: TestClient, monkeypatch: pytest.MonkeyPatch
-):
-    make_keyless(monkeypatch, "openai")
-
-    response = client.put("/providers/openai", json={"base_url": OLLAMA}, headers=AUTH)
-
-    assert response.status_code == 200
-
-
-def test_put_keyless_provider_refuses_a_typed_key(
-    client: TestClient, monkeypatch: pytest.MonkeyPatch
-):
-    make_keyless(monkeypatch, "openai")
-
-    response = client.put("/providers/openai", json={"api_key": "x"}, headers=AUTH)
+def test_put_keyless_provider_refuses_a_typed_key(client: TestClient):
+    """Argos takes no key: one typed for it is a mistake, not one to save."""
+    response = client.put("/providers/argos", json={"api_key": "x"}, headers=AUTH)
 
     assert response.status_code == 422
 

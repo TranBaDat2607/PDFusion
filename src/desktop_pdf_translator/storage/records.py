@@ -116,10 +116,20 @@ def _v3_answer_model(conn: sqlite3.Connection) -> None:
     conn.execute("ALTER TABLE chat_messages ADD COLUMN model TEXT")
 
 
+def _v4_answer_rating(conn: sqlite3.Connection) -> None:
+    # The user's verdict on an answer: 1 (helpful), -1 (wrong), NULL (none).
+    # The one signal from real documents and questions, not the benchmark's;
+    # a thumbs-down is where the next benchmark question comes from.
+    conn.execute(
+        "ALTER TABLE chat_messages ADD COLUMN rating INTEGER CHECK (rating IN (-1, 1))"
+    )
+
+
 _MIGRATIONS = (
     Migration(1, "documents and chat indexes", _v1_documents_and_chat_indexes),
     Migration(2, "chat history", _v2_chat_messages),
     Migration(3, "the model that wrote each answer", _v3_answer_model),
+    Migration(4, "the user's rating of each answer", _v4_answer_rating),
 )
 
 
@@ -148,6 +158,8 @@ class ChatMessageRecord:
     # Assistant only: the provider and model that wrote the answer (#87).
     provider: Optional[str] = None
     model: Optional[str] = None
+    # Assistant only: 1 or -1 when the user rated the answer.
+    rating: Optional[int] = None
 
 
 @dataclass(frozen=True)
@@ -307,12 +319,20 @@ class RecordsStore:
                 ),
             )
 
-    def messages(self, document_id: str) -> List[ChatMessageRecord]:
-        """A document's chat history, oldest first."""
-        rows = self._conn().execute(
-            "SELECT * FROM chat_messages WHERE document_id = ? ORDER BY id",
-            (document_id,),
-        ).fetchall()
+    def messages(self, document_id: str, last: Optional[int] = None) -> List[ChatMessageRecord]:
+        """A document's chat history, oldest first; only its `last` messages
+        when given, so a question's context doesn't decode the whole chat."""
+        if last is None:
+            rows = self._conn().execute(
+                "SELECT * FROM chat_messages WHERE document_id = ? ORDER BY id",
+                (document_id,),
+            ).fetchall()
+        else:
+            rows = self._conn().execute(
+                "SELECT * FROM (SELECT * FROM chat_messages WHERE document_id = ? "
+                "ORDER BY id DESC LIMIT ?) ORDER BY id",
+                (document_id, last),
+            ).fetchall()
         return [
             ChatMessageRecord(
                 id=row["id"],
@@ -323,9 +343,25 @@ class RecordsStore:
                 created_at=row["created_at"],
                 provider=row["provider"],
                 model=row["model"],
+                rating=row["rating"],
             )
             for row in rows
         ]
+
+    def rate_answer(self, document_id: str, message_id: int, rating: Optional[int]) -> bool:
+        """Set or clear the user's rating of one of the document's answers.
+
+        False when the message is not an answer of that document: a question,
+        another document's message, or none at all.
+        """
+        conn = self._conn()
+        with self._write_lock, conn:
+            updated = conn.execute(
+                "UPDATE chat_messages SET rating = ? "
+                "WHERE id = ? AND document_id = ? AND role = 'assistant'",
+                (rating, message_id, document_id),
+            ).rowcount
+        return updated == 1
 
     def clear_messages(self, document_id: str) -> int:
         """Delete a document's chat history; return how many messages went."""

@@ -56,8 +56,8 @@ def test_a_new_database_starts_at_the_current_schema_with_foreign_keys_on(
     records: RecordsStore,
 ):
     conn = records._conn()
-    # 3: the model that wrote each answer (#87).
-    assert conn.execute("PRAGMA user_version").fetchone()[0] == 3
+    # 4: the user's rating of each answer.
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == 4
     assert conn.execute("PRAGMA foreign_keys").fetchone()[0] == 1
 
 
@@ -252,7 +252,8 @@ def test_a_version_1_database_gains_chat_history_and_keeps_its_records(tmp_path:
     records = RecordsStore(db)
 
     assert records.ready_index("doc-a", MODEL, CHUNKER).id == "index-a"
-    assert records._conn().execute("PRAGMA user_version").fetchone()[0] == 3
+    # Migrated through to the current schema (4: answer ratings).
+    assert records._conn().execute("PRAGMA user_version").fetchone()[0] == 4
     records.add_exchange("doc-a", "What is measured?", ANSWER)
     assert [m.role for m in records.messages("doc-a")] == ["user", "assistant"]
 
@@ -366,3 +367,78 @@ def test_the_document_list_says_what_is_stored_for_each(records: RecordsStore):
         2,
     )
     assert (old.path, old.chunk_count, old.question_count) == ("C:/papers/old.pdf", None, 0)
+
+
+# ---------------------------------------------------------------------------
+# rating an answer
+# ---------------------------------------------------------------------------
+#
+# A thumbs-down is the one signal that comes from real documents and real
+# questions rather than the benchmark's; kept in the records, it is what the
+# next benchmark questions are drawn from.
+
+
+def test_an_answer_starts_unrated(records: RecordsStore):
+    doc = _document(records)
+    records.add_exchange(doc, "What is measured?", ANSWER)
+
+    _question, answer = records.messages(doc)
+
+    assert answer.rating is None
+
+
+def test_an_answer_can_be_rated_up_down_and_unrated(records: RecordsStore):
+    doc = _document(records)
+    records.add_exchange(doc, "What is measured?", ANSWER)
+    _question, answer = records.messages(doc)
+
+    assert records.rate_answer(doc, answer.id, -1) is True
+    assert records.messages(doc)[1].rating == -1
+    assert records.rate_answer(doc, answer.id, 1) is True
+    assert records.messages(doc)[1].rating == 1
+    assert records.rate_answer(doc, answer.id, None) is True
+    assert records.messages(doc)[1].rating is None
+
+
+def test_only_an_answer_of_that_document_can_be_rated(records: RecordsStore):
+    doc = _document(records)
+    other = _document(records, "doc-b", "C:/papers/other.pdf")
+    records.add_exchange(doc, "What is measured?", ANSWER)
+    records.add_exchange(other, "And here?", ANSWER)
+    question, _answer = records.messages(doc)
+    _other_question, other_answer = records.messages(other)
+
+    assert records.rate_answer(doc, question.id, 1) is False  # a question, not an answer
+    assert records.rate_answer(doc, other_answer.id, 1) is False  # another document's
+    assert records.rate_answer(doc, 999_999, 1) is False
+    assert records.messages(other)[1].rating is None
+
+
+def test_a_version_3_database_gains_ratings_and_keeps_its_conversations(tmp_path: Path):
+    path = tmp_path / "pdfusion.db"
+    from desktop_pdf_translator.storage import records as records_module
+
+    migrate(path, records_module._MIGRATIONS[:3], on_too_new="raise")
+    old = RecordsStore(path)
+    old._schema_ready = True  # already at v3: stop it migrating further
+    doc = _document(old)
+    old.add_exchange(doc, "What is measured?", ANSWER)
+
+    store = RecordsStore(path)
+    _question, answer = store.messages(doc)
+
+    assert answer.content == ANSWER["answer"]
+    assert answer.rating is None
+    assert store._conn().execute("PRAGMA user_version").fetchone()[0] == 4
+
+
+def test_the_last_messages_can_be_read_without_the_whole_conversation(records: RecordsStore):
+    """A question is read with its last few exchanges; a long chat shouldn't
+    be decoded whole to find them."""
+    doc = _document(records)
+    for n in range(4):
+        records.add_exchange(doc, f"question {n}", {"answer": f"answer {n}"})
+
+    last = records.messages(doc, last=4)
+
+    assert [m.content for m in last] == ["question 2", "answer 2", "question 3", "answer 3"]

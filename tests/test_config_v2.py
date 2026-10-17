@@ -33,7 +33,7 @@ from desktop_pdf_translator.providers.registry import PROVIDERS, provider
 from desktop_pdf_translator.utils import encryption
 from desktop_pdf_translator.utils.encryption import KEYSTORE_PREFIX, encrypt_api_key
 
-OLLAMA = "http://localhost:11434/v1"
+COMPATIBLE_SERVER = "https://llm.example.com/v1"
 # Every registry entry, not a list of its own: a provider added to the
 # registry must need no test edited (#88).
 PROVIDER_IDS = {spec.id for spec in PROVIDERS}
@@ -191,7 +191,7 @@ preferred_service = "openai"
 
 V1_FILE = f'''[openai]
 model = "llama3.2:3b"
-base_url = "{OLLAMA}"
+base_url = "{COMPATIBLE_SERVER}"
 temperature = 1.5
 max_tokens = 2048
 max_qps = 2.0
@@ -217,7 +217,7 @@ default_target_lang = "ja"
 def _assert_converted(settings) -> None:
     openai = settings.providers["openai"]
     assert openai.enabled_models == ["llama3.2:3b"]
-    assert openai.base_url == OLLAMA
+    assert openai.base_url == COMPATIBLE_SERVER
     assert openai.temperature == 1.5
     assert openai.max_tokens == 2048
     assert openai.max_qps == 2.0
@@ -257,7 +257,7 @@ def test_the_save_after_a_v1_load_writes_v2(manager: ConfigManager):
         "model": "claude-haiku-4-5-20251001",
     }
     assert document["providers"]["openai"]["enabled_models"] == ["llama3.2:3b"]
-    assert document["providers"]["openai"]["base_url"] == OLLAMA
+    assert document["providers"]["openai"]["base_url"] == COMPATIBLE_SERVER
     _assert_converted(fresh(manager).load_settings())
 
 
@@ -409,11 +409,11 @@ def test_an_environment_key_never_reaches_a_saved_custom_endpoint(
     write(
         manager,
         f'''[providers.openai]
-api_key = "ollama"
-base_url = "{OLLAMA}"
+api_key = "sk-llm"
+base_url = "{COMPATIBLE_SERVER}"
 
 [providers.anthropic]
-base_url = "http://localhost:11434"
+base_url = "https://llm.example.com"
 ''',
     )
     monkeypatch.setenv("OPENAI_API_KEY", "sk-from-env")
@@ -421,10 +421,10 @@ base_url = "http://localhost:11434"
 
     settings = manager.load_settings()
 
-    assert settings.providers["openai"].api_key == "ollama"
-    assert settings.providers["openai"].base_url == OLLAMA
+    assert settings.providers["openai"].api_key == "sk-llm"
+    assert settings.providers["openai"].base_url == COMPATIBLE_SERVER
     assert settings.providers["anthropic"].api_key is None
-    assert settings.providers["anthropic"].base_url == "http://localhost:11434"
+    assert settings.providers["anthropic"].base_url == "https://llm.example.com"
 
 
 def test_an_environment_key_is_used_with_the_providers_own_endpoint(
@@ -485,13 +485,13 @@ def test_provider_settings_defaults():
 
 
 def test_a_provider_endpoint_is_normalized():
-    assert ProviderSettings(base_url=f" {OLLAMA}/ ").base_url == OLLAMA
+    assert ProviderSettings(base_url=f" {COMPATIBLE_SERVER}/ ").base_url == COMPATIBLE_SERVER
     assert ProviderSettings(base_url="").base_url is None
 
 
 def test_a_provider_endpoint_must_be_a_web_url():
     with pytest.raises(ValidationError):
-        ProviderSettings(base_url="localhost:11434")
+        ProviderSettings(base_url="llm.example.com")
 
 
 def test_every_registry_provider_has_settings():
@@ -639,10 +639,8 @@ def test_a_legacy_key_is_kept_when_the_new_table_has_none(manager: ConfigManager
 
 
 def test_a_provider_that_takes_no_key_keeps_none():
-    """A key hand-edited into a keyless provider's table (Ollama's) would be
-    sent in place of its placeholder, and could never be cleared: the API
-    refuses a key for it both ways, while the endpoint rule treats a saved key
-    as one to guard (#88)."""
-    settings = AppSettings(providers={"ollama": {"api_key": "sk-hand-edited"}})
+    """A key hand-edited into a keyless provider's table (Argos's) could
+    never be cleared: the API refuses a key for it both ways (#88)."""
+    settings = AppSettings(providers={"argos": {"api_key": "sk-hand-edited"}})
 
-    assert settings.providers["ollama"].api_key is None
+    assert settings.providers["argos"].api_key is None
