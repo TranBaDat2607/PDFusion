@@ -97,7 +97,7 @@ routes, its docstring (served as the operation's `description`).
 
 - **`POST /translate` refuses before it creates a job**, in this order: an
   unsupported language pair (checked against the *effective* service), then a
-  file or page selection over the limits or past the end of the document —
+  file that can't be opened or a page selection past the end of the document —
   all **422** — and then a missing engine, **409**. `source_lang`,
   `target_lang` and `service` are `None`-defaulted so config applies (see
   "Language selection and backend capabilities" in
@@ -106,9 +106,8 @@ routes, its docstring (served as the operation's `description`).
 - **`total_chunks` is not a page count** — a chunk can span several pages —
   and `total_pages` is the whole document's; progress is
   `pages_to_translate`.
-- **`POST /translate/estimate` ignores the page limit**: over it, Translate
-  offers the pages that fit, so the estimate must still answer. A file over
-  the size limit is a 422 and is never read.
+- **`POST /translate/estimate` reads the pages it is asked about**, whatever the
+  file's size; a file that can't be opened or a selection past the end is a 422.
 - **A document's id used to be the file name stem**, so two different
   `paper.pdf`s shared one index (#59); hence the SHA-256. The first
   `progress` event of `/rag/index` carries `document_id`, sent before the

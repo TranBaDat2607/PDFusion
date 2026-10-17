@@ -247,8 +247,10 @@ rule has, unless noted, a test. They are the things most easily undone by
   `providers.md`'s "Adding a provider" and fix the design, not the checklist,
   if it needs more. `default_base_url` is *sent* when no endpoint is saved
   (`registry.endpoint_for`), which is what lets OpenRouter reuse OpenAI's SDK.
-- `max_pages` limits the **selected** pages, not the document; the output is
-  always the whole document, with unselected pages copied from the original.
+- Translation has **no page or file-size limit** (`max_pages` / `max_file_size_mb`
+  are gone; a `config.toml` that still holds them is ignored and loses them on
+  the next save). The Pages box only chooses *which* pages; the output is always
+  the whole document, with unselected pages copied from the original.
 - Two caches (whole-PDF, paragraph), both SQLite, content-addressed, versioned
   via `storage/migrations.py`. `is_cacheable_artifact` decides what may be
   written.
@@ -262,14 +264,16 @@ rule has, unless noted, a test. They are the things most easily undone by
   only once whole; `_recover` repairs what a dead process left. Never rebuild
   the chain or rerun `_recover` to pick up settings.
 - A failure is an `error` event, never a fallback answer; retrieval that finds
-  nothing never reaches the model.
+  nothing never reaches the model. The one retry is a
+  whole read a provider refuses as too long, asked again once from the retrieved
+  pages (#106) — still the model's answer, never a template.
 - **Retrieve by text, read by vision.** Indexing and search are local and
   make no model call. The paid requests are the answer and, for a follow-up
   only, one short rewrite of it into a standalone question. The answer sees images
   of at most `DEFAULT_MAX_IMAGES` pages, the best-ranked visual/table/scanned
   ones (`retrieval.select_image_pages`) — never every page.
   Evidence is **pages**: `max_pdf_sources` counts pages, references are one per
-  page, cited first. A document whose text fits `rag.whole_document_tokens` is read
+  page, cited first. A document whose text fits `rag.whole_document_tokens` (at most 80,000, #106) is read
   whole, but its images stay the retrieved pages', and its sources too, plus
   any other page the answer cites. A longer one is never read whole: a second, whole read on
   a retrieval miss (Self-Route) was measured and lost. It gets its outline

@@ -125,34 +125,33 @@ usually loses that race and just logs, which is what makes the symptom
 intermittent rather than absent — do not read "it works here" as "the ordering
 is safe".)
 
-## Page ranges and limits
+## Page ranges
 
 A translation covers the pages the toolbar's Pages box names (#33) — `1-20, 35`,
-blank for all of them — and `translation.max_pages` limits **those pages**, not
-the document's length. A 500-page book is translated 50 pages at a time; before
-this, anything past 50 pages opened the progress overlay and then failed with
-"Too many pages: 120 > 50". `max_file_size_mb` still applies to the file,
-whichever pages are chosen. Both limits are in Settings → Cache → Performance,
-bounded by `config/models.py:MaxPages` / `MaxFileSizeMB`, which `PUT /config`
-shares so an out-of-range value is a 422 rather than a 500.
+blank for all of them. There is **no limit** on how many pages, or how large a
+file: `translation.max_pages` (50) and `max_file_size_mb` (50) existed until
+then, capped at 100 pages and 200 MB, and are gone. Their cost was real —
+BabelDOC takes ~6 s a page and the rolling PDF is rewritten after every chunk —
+but it is time, which the user can read off the progress overlay and cancel,
+not a reason to refuse. A `config.toml` that still holds either key loads, and
+the next save drops it; `PUT /config` answers 422 to them.
 
-- **One check, made twice.** `page_selection.validate_selection` is what
+- **One check, made twice.** `page_selection.selected_pages` is what
   `POST /translate` runs before creating the job (off the event loop, since it
   opens the PDF — and `page_selection.py` is stdlib-only, while
   `pdf_pages.py` imports `fitz` inside each function, because the pre-flight
-  is on the request path) and what `PDFProcessor._validate_file` runs again inside it.
-  The frontend has its own copy of the page half (`lib/page-range.ts:
-  checkPageLimit`) only to turn a request over the limit into an offer —
-  `PageLimitDialog`'s "Translate pages 1–50" — instead of a toast. When the page
-  count isn't known yet, it skips that and the sidecar's 422 applies.
+  is on the request path) and what `PDFProcessor._validate_file` runs again
+  inside it. It refuses an empty selection, a reversed range and a page past
+  the end of the document.
 - **The output is always the whole document.** Only the selected pages are
   split into chunks, but `rolling_segments` fills every other page from the
   original, so the viewer's page count never changes and pages outside the
   selection stay readable. Neighbouring original pages are inserted as one run.
   The rebuild is cheap next to BabelDOC's ~6 s per page: measured at 0.4 s per
   rebuild for a 300-page, 77 MB PDF (0.23 s with a 10-page selection). It is
-  per chunk, though, and it writes a full copy each time — which is why the
-  size limit still exists.
+  per chunk, though, and it writes a full copy each time, so a very large file
+  costs disk (two copies are kept while a run goes) and a little more per page
+  than a small one.
 - **Scheduling is by page, not chunk index.** `pick_next` measures a pending
   chunk's distance from the reader's page by its first page; with a selection,
   chunk 0 can be page 40.

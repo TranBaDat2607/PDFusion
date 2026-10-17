@@ -299,7 +299,20 @@ there:
   direction, not proof; one of the three had flipped between earlier runs),
   for +79% input tokens a question (11k on the Attention paper) and +0.25 s at
   p50. The budget is in English-equivalent characters (`retrieval.reading_length`: a
-  CJK character counts as a token's worth). No model, no whole document: the extractive answer quotes retrieved
+  CJK character counts as a token's worth), and Vietnamese still runs ~1.4× it.
+  Hence the **80,000 maximum** (`config.models.WHOLE_DOCUMENT_MAX_TOKENS`): ×1.4 is
+  112k, plus 4k of answer, ~3k of page images, ~1.5k of conversation and the
+  prompt, ~121k, inside a 128k window (#106). A saved 90,000 or 100,000 — earlier
+  versions offered and allowed them — loads as 80,000, not as the default.
+  The estimate is still an estimate: a provider that refuses a whole read as
+  too long (`rag_chain.is_context_overflow`: 413, or a 400/422 naming the
+  context length) is asked again, once, with the retrieved pages and the
+  outline. That is still the model answering, from pages it was shown (citations
+  are checked against what the second request carried), so it is not the
+  template answer "a failure is an `error`" forbids; a retrieved read that
+  overflows is an error as before. A rate limit's "request too large" (429) is not
+  an overflow. `rag_answer` records `whole_read_refused`; the refused request is
+  made again for each question on that document. No model, no whole document: the extractive answer quotes retrieved
   passages. `quality_metrics.pages_read` says how many pages the answer read.
 - **A longer document comes with its outline.** Read from retrieved pages,
   the answer also gets the document's section headings with the page each
