@@ -73,7 +73,7 @@ the baseline, which cites nothing, the references it lists are its citations.
 
 ### Answers (Gemini 2.5 Flash-Lite, 43 questions)
 
-v2 is the branch's final code (`results/v2-final-answers.json`); a run on the code
+v2 is the branch's final code (label `v2-final-answers`); a run on the code
 before the review fixes scored the same. The ablation rows are from that earlier code.
 
 | | correct | text | table | chart | figure | scan | multilingual | negative | cites a gold page | citation precision |
