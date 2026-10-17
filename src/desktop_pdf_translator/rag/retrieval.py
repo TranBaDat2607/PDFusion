@@ -196,3 +196,29 @@ def whole_document(chunks: Sequence[Dict[str, Any]],
             )
         )
     return pages
+
+
+def outline(chunks: Sequence[Dict[str, Any]], max_chars: int) -> List[Tuple[int, str]]:
+    """The document's table of contents from its chunks' headings: each
+    heading once, with the 1-indexed page it starts on, in page order.
+
+    What an answer from five retrieved pages knows of the rest of a long
+    document. Cut at `max_chars` (each entry costing its heading plus a few
+    characters for the page), at the end: a contents page is read from the top.
+    """
+    first_page: Dict[str, int] = {}
+    order: List[Tuple[int, int, str]] = []
+    for chunk in sorted(chunks, key=lambda c: (_page(c), _index(c))):
+        heading = (chunk.get("metadata", {}).get("heading") or "").strip()
+        if heading and heading not in first_page:
+            first_page[heading] = _page(chunk)
+            order.append((_page(chunk), len(order), heading))
+    entries: List[Tuple[int, str]] = []
+    used = 0
+    for page, _seen, heading in sorted(order):
+        cost = len(heading) + 8
+        if used + cost > max_chars:
+            break
+        entries.append((page + 1, heading))
+        used += cost
+    return entries

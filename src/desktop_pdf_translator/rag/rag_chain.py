@@ -56,6 +56,7 @@ from .retrieval import (
     chunk_map,
     contextual_text,
     group_by_page,
+    outline,
     reciprocal_rank_fusion,
     select_image_pages,
     whole_document,
@@ -162,6 +163,11 @@ ANSWER_MAX_TOKENS = 4000
 # in English-equivalent characters (`_reading_length`) against it.
 # English runs ~3.5-4 characters a token; a CJK character is about a token.
 _CHARS_PER_TOKEN = 3.5
+# The outline a long document's answer gets (`retrieval.outline`): its section
+# headings with their pages, so a question about the whole of it — what it
+# contains, its sections, every benchmark — isn't answered from five pages
+# alone. ~1k tokens at most; a 57-page, four-paper PDF needs ~2,000 characters.
+OUTLINE_CHARS = 3_000
 
 # A status that, with "image" in the message, is a model saying it takes no
 # images rather than a broken request: 400 (OpenAI, Anthropic, Gemini), 404
@@ -335,8 +341,12 @@ class EnhancedRAGChain:
         if model is not None and evidence and self._reads_whole(chunks):
             read = await asyncio.to_thread(whole_document, chunks, evidence)
         written_at = datetime.now()
+        # Read whole, the pages are the outline; read from retrieval, the
+        # outline is what the answer knows of the pages it wasn't given.
+        contents = outline(chunks, OUTLINE_CHARS) if read is evidence else []
         answer, images_sent = await self._generate_answer(
-            question, evidence, model, answer_lang, document_path, history, on_text, read
+            question, evidence, model, answer_lang, document_path, history, on_text, read,
+            contents,
         )
         finished_at = datetime.now()
 
@@ -574,7 +584,8 @@ Question: {question}"""
                                document_path: Optional[str] = None,
                                history: Sequence[ChatTurn] = (),
                                on_text: Optional[Callable[[int, str], None]] = None,
-                               read: Optional[Sequence[PageEvidence]] = None) -> Tuple[str, int]:
+                               read: Optional[Sequence[PageEvidence]] = None,
+                               contents: Sequence[Tuple[int, str]] = ()) -> Tuple[str, int]:
         """The answer, before its citations are checked, and how many page
         images the model was shown to write it.
 
@@ -603,7 +614,7 @@ Question: {question}"""
         fence = f"document-{secrets.token_hex(6)}"
         read = evidence if read is None else read
         prompt = self._create_answer_prompt(
-            question, read, answer_lang, images, fence=fence, history=history
+            question, read, answer_lang, images, fence=fence, history=history, contents=contents
         )
         try:
             answer = await self._generate_with_llm(model, prompt, answer_lang, images, fence, on_text)
@@ -615,7 +626,8 @@ Question: {question}"""
             self._text_only.add((model.service.value, model.model))
             images = []
             prompt = self._create_answer_prompt(
-                question, read, answer_lang, images, fence=fence, history=history
+                question, read, answer_lang, images, fence=fence, history=history,
+                contents=contents,
             )
             # Streams again from offset 0, replacing the refused attempt's text.
             answer = await self._generate_with_llm(model, prompt, answer_lang, images, fence, on_text)
@@ -631,7 +643,8 @@ Question: {question}"""
                               answer_lang: str = "auto",
                               images: Sequence[PageImage] = (),
                               fence: str = "document",
-                              history: Sequence[ChatTurn] = ()) -> str:
+                              history: Sequence[ChatTurn] = (),
+                              contents: Sequence[Tuple[int, str]] = ()) -> str:
         """The prompt for one answer.
 
         Every evidence page, whole, under its page number: the chat lists each
@@ -659,6 +672,14 @@ Question: {question}"""
                 "text above may be incomplete or garbled."
             )
         pages = "\n\n".join(blocks)
+        if contents:
+            # Inside the fence: headings are the document's words. Before the
+            # pages, as a contents page is; cited from only through the pages.
+            listing = "\n".join(f"p. {page}: {heading}" for page, heading in contents)
+            pages = (
+                "The document's outline — each section heading and the page it starts on. "
+                "Only the pages below are given in full:\n" + listing + "\n\n" + pages
+            )
         conversation = ""
         if history:
             # Outside the fence: the user's own conversation, not the

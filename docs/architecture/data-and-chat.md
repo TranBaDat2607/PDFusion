@@ -301,6 +301,17 @@ there:
   p50. The budget is in English-equivalent characters (`_reading_length`: a
   CJK character counts as a token's worth). No model, no whole document: the extractive answer quotes retrieved
   passages. `quality_metrics.pages_read` says how many pages the answer read.
+- **A longer document comes with its outline.** Read from retrieved pages,
+  the answer also gets the document's section headings with the page each
+  starts on (`retrieval.outline`, at most `OUTLINE_CHARS`, ~1k tokens): what
+  the five pages can't say about the rest — what papers a PDF holds, its
+  sections, where each topic is. Ingest keeps those headings already, so it
+  costs no model call. It goes inside the fence (headings are the document's
+  words), and a page known only from the outline can't be cited: the model
+  saw a heading there, not the text. On the whole-document questions about
+  PDFs too long to read whole it took 3/6 to 4/6. It is only as good as
+  heading detection: a paper whose subsections ingest doesn't recognise as
+  headings outlines as its top-level sections alone.
 - **A longer document is not given a second, whole read.** "Self-Route"
   (Li et al.) — answer from retrieved pages, and re-answer from the whole
   document when the model says they miss the answer — was built and measured,

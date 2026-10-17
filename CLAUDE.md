@@ -272,7 +272,9 @@ rule has, unless noted, a test. They are the things most easily undone by
   page, cited first. A document whose text fits `rag.whole_document_tokens` is read
   whole, but its images stay the retrieved pages', and its sources too, plus
   any other page the answer cites. A longer one is never read whole: a second, whole read on
-  a retrieval miss (Self-Route) was measured and lost.
+  a retrieval miss (Self-Route) was measured and lost. It gets its outline
+  instead (`retrieval.outline`), inside the fence, and a page known only from
+  the outline is never a valid citation.
 - **Nothing logged at INFO or above carries the question or the document's
   text**; `rag_answer` is the per-answer record.
 - `generate()` gets `images=` only when there are some (older backends take

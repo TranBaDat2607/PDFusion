@@ -1775,6 +1775,69 @@
    "pages": [],
    "answer": [],
    "split": "dev"
+  },
+  {
+   "kind": "global",
+   "pages": [],
+   "id": "g12",
+   "doc": "long.pdf",
+   "q": "What separate documents or papers does this PDF contain?",
+   "answer": [
+    "attention|transformer",
+    "annual report|northwind",
+    "\\bBERT\\b",
+    "residual|ResNet"
+   ],
+   "min_match": 4,
+   "split": "dev"
+  },
+  {
+   "kind": "global",
+   "pages": [],
+   "id": "g13",
+   "doc": "bert.pdf",
+   "q": "List the main sections of this paper.",
+   "answer": [
+    "introduction",
+    "related work",
+    "experiment",
+    "ablation",
+    "conclusion",
+    "pre-?train|fine-?tun"
+   ],
+   "min_match": 5,
+   "split": "test"
+  },
+  {
+   "kind": "global",
+   "pages": [],
+   "id": "g14",
+   "doc": "resnet.pdf",
+   "q": "Which datasets does the paper report experiments on?",
+   "answer": [
+    "ImageNet",
+    "CIFAR",
+    "PASCAL|VOC",
+    "COCO"
+   ],
+   "min_match": 4,
+   "split": "dev"
+  },
+  {
+   "kind": "global",
+   "pages": [],
+   "id": "g15",
+   "doc": "bert.pdf",
+   "q": "Which benchmarks or tasks is BERT evaluated on?",
+   "answer": [
+    "GLUE",
+    "SQuAD v1|SQuAD 1|SQuAD v1\\.1",
+    "SQuAD v2|SQuAD 2",
+    "SWAG",
+    "NER|CoNLL|named entity"
+   ],
+   "min_match": 4,
+   "split": "dev"
   }
  ]
 }

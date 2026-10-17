@@ -1,0 +1,272 @@
+{
+ "system": "v2",
+ "src": "/home/nammovuivui/PDFusion-industrial-rag/src",
+ "answers": true,
+ "model": "gemini:gemini-2.5-flash-lite",
+ "whole_document_tokens": 11500,
+ "options": "{\"full_document_chars\": 40250}",
+ "indexing": {
+  "bert.pdf": {
+   "seconds": 15.15,
+   "chunks": 144,
+   "pages": 16,
+   "text_pages": 7,
+   "visual_pages": 9,
+   "scanned_pages": 0,
+   "ocr_pages": 0,
+   "ocr_failed_pages": 0,
+   "tables": 4,
+   "llm_input_tokens": 0,
+   "llm_output_tokens": 0
+  },
+  "long.pdf": {
+   "seconds": 63.56,
+   "chunks": 376,
+   "pages": 57,
+   "text_pages": 24,
+   "visual_pages": 31,
+   "scanned_pages": 2,
+   "ocr_pages": 2,
+   "ocr_failed_pages": 0,
+   "tables": 21,
+   "llm_input_tokens": 0,
+   "llm_output_tokens": 0
+  },
+  "resnet.pdf": {
+   "seconds": 20.66,
+   "chunks": 121,
+   "pages": 12,
+   "text_pages": 3,
+   "visual_pages": 9,
+   "scanned_pages": 0,
+   "ocr_pages": 0,
+   "ocr_failed_pages": 0,
+   "tables": 13,
+   "llm_input_tokens": 0,
+   "llm_output_tokens": 0
+  }
+ },
+ "questions": [
+  {
+   "id": "g05",
+   "doc": "bert.pdf",
+   "kind": "global",
+   "split": "test",
+   "q": "What are the main ideas of this paper?",
+   "answer_seconds": 3.266,
+   "answer": {
+    "text": "The paper introduces BERT (Bidirectional Encoder Representations from Transformers), a new language representation model that aims to improve fine-tuning based approaches for downstream NLP tasks [p. 1](#page=1). BERT alleviates the unidirectionality constraint of previous models by using a \"masked language model\" (MLM) pre-training objective, inspired by the Cloze task [p. 1](#page=1). This MLM objective randomly masks tokens and trains the model to predict the original vocabulary ID of these masked tokens [p. 1](#page=1). The paper argues that existing language model pre-training strategies, particularly for fine-tuning approaches, have limitations due to unidirectionality, which can be harmful for token-level tasks like question answering where bidirectional context is crucial [p. 1](#page=1). BERT's bidirectional nature is achieved through the MLM pre-training objective [p. 1](#page=1). The paper also presents experimental results on various downstream tasks, including SQuAD 1.1, SWAG, and others like RTE, CoLA, WNLI, STS-B, and MRPC, demonstrating BERT's effectiveness [p. 7](#page=7), [p. 15](#page=15).",
+    "cited_pages": [
+     1,
+     7,
+     15
+    ],
+    "images_sent": 2
+   },
+   "answer_score": {
+    "correct": 1.0,
+    "coverage": 1.0
+   },
+   "llm_input_tokens": 4619,
+   "llm_output_tokens": 230,
+   "llm_calls": 1
+  },
+  {
+   "id": "g06",
+   "doc": "resnet.pdf",
+   "kind": "global",
+   "split": "dev",
+   "q": "Give an overview of this paper.",
+   "answer_seconds": 3.373,
+   "answer": {
+    "text": "This paper introduces a deep residual learning framework to ease the training of networks that are substantially deeper than those previously used [p. 1](#page=1). The authors reformulate layers to learn residual functions with reference to layer inputs, rather than learning unreferenced functions [p. 1](#page=1). This approach has shown to be easier to optimize and can achieve higher accuracy with increased depth [p. 1](#page=1). The framework has demonstrated success on ImageNet, leading to wins in various competitions, including ImageNet detection, localization, COCO detection, and segmentation [p. 2](#page=2). The residual learning principle is presented as generic and applicable to other vision and non-vision problems [p. 2](#page=2). The paper also discusses network architectures, including a 34-layer baseline with fewer filters and lower complexity than VGG nets [p. 3](#page=3). Experiments on CIFAR-10 with networks up to 1000 layers are presented, showing that deeper networks can be trained without optimization difficulties [p. 8](#page=8). The paper also explores object detection on PASCAL and MS COCO datasets, achieving significant improvements [p. 8](#page=8).",
+    "cited_pages": [
+     1,
+     2,
+     3,
+     8
+    ],
+    "images_sent": 3
+   },
+   "answer_score": {
+    "correct": 1.0,
+    "coverage": 0.8
+   },
+   "llm_input_tokens": 6723,
+   "llm_output_tokens": 229,
+   "llm_calls": 1
+  },
+  {
+   "id": "g12",
+   "doc": "long.pdf",
+   "kind": "global",
+   "split": "dev",
+   "q": "What separate documents or papers does this PDF contain?",
+   "answer_seconds": 2.598,
+   "answer": {
+    "text": "This PDF contains the following documents:\n* Attention Is All You Need [p. 1](#page=1)\n* BERT: Pre-training of Deep Bidirectional Transformers for Language Understanding\n* Deep Residual Learning for Image Recognition",
+    "cited_pages": [
+     1
+    ],
+    "images_sent": 1
+   },
+   "answer_score": {
+    "correct": 0.0,
+    "coverage": 0.75
+   },
+   "llm_input_tokens": 4312,
+   "llm_output_tokens": 57,
+   "llm_calls": 1
+  },
+  {
+   "id": "g13",
+   "doc": "bert.pdf",
+   "kind": "global",
+   "split": "test",
+   "q": "List the main sections of this paper.",
+   "answer_seconds": 2.879,
+   "answer": {
+    "text": "The main sections of the paper are:\n* Abstract [p. 1](#page=1)\n* 1 Introduction [p. 1](#page=1)\n* 2 Related Work\n* 3 BERT [p. 3](#page=3)\n* 4 Experiments [p. 7](#page=7)\n* 5 Ablation Studies [p. 7](#page=7)\n* 6 Conclusion\n* References\n* A Additional Details for BERT [p. 12](#page=12)\n* B Detailed Experimental Setup [p. 15](#page=15)\n* C Additional Ablation Studies",
+    "cited_pages": [
+     1,
+     3,
+     7,
+     12,
+     15
+    ],
+    "images_sent": 3
+   },
+   "answer_score": {
+    "correct": 1.0,
+    "coverage": 0.8333333333333334
+   },
+   "llm_input_tokens": 4431,
+   "llm_output_tokens": 137,
+   "llm_calls": 1
+  },
+  {
+   "id": "g14",
+   "doc": "resnet.pdf",
+   "kind": "global",
+   "split": "dev",
+   "q": "Which datasets does the paper report experiments on?",
+   "answer_seconds": 2.505,
+   "answer": {
+    "text": "The paper reports experiments on ImageNet classification [p. 7](#page=7), CIFAR-10 [p. 7](#page=7), PASCAL VOC 2007/2012 [p. 8](#page=8), and MS COCO [p. 8](#page=8).",
+    "cited_pages": [
+     7,
+     8
+    ],
+    "images_sent": 2
+   },
+   "answer_score": {
+    "correct": 1.0,
+    "coverage": 1.0
+   },
+   "llm_input_tokens": 6331,
+   "llm_output_tokens": 55,
+   "llm_calls": 1
+  },
+  {
+   "id": "g15",
+   "doc": "bert.pdf",
+   "kind": "global",
+   "split": "dev",
+   "q": "Which benchmarks or tasks is BERT evaluated on?",
+   "answer_seconds": 4.2,
+   "answer": {
+    "text": "BERT is evaluated on the GLUE benchmark, which includes tasks such as MNLI, QQP, QNLI, SST-2, CoLA, STS-B, MRPC, and RTE [p. 6](#page=6). It is also evaluated on the SQuAD v1.1 dataset [p. 6](#page=6).",
+    "cited_pages": [
+     6
+    ],
+    "images_sent": 3
+   },
+   "answer_score": {
+    "correct": 0.0,
+    "coverage": 0.4
+   },
+   "llm_input_tokens": 5488,
+   "llm_output_tokens": 66,
+   "llm_calls": 1
+  }
+ ],
+ "summary": {
+  "all": {
+   "n": 6,
+   "hit@1": null,
+   "hit@3": null,
+   "hit@5": null,
+   "mrr@5": null,
+   "correct": 0.667,
+   "cites_gold": null,
+   "citation_precision": null,
+   "pages_cited": null,
+   "hijacked": null,
+   "coverage": 0.797,
+   "correct_ci": [
+    0.3,
+    0.903
+   ],
+   "answer_p50_s": 3.072
+  },
+  "global": {
+   "n": 6,
+   "hit@1": null,
+   "hit@3": null,
+   "hit@5": null,
+   "mrr@5": null,
+   "correct": 0.667,
+   "cites_gold": null,
+   "citation_precision": null,
+   "pages_cited": null,
+   "hijacked": null,
+   "coverage": 0.797,
+   "correct_ci": [
+    0.3,
+    0.903
+   ],
+   "answer_p50_s": 3.072
+  },
+  "split:test": {
+   "n": 2,
+   "hit@1": null,
+   "hit@3": null,
+   "hit@5": null,
+   "mrr@5": null,
+   "correct": 1.0,
+   "cites_gold": null,
+   "citation_precision": null,
+   "pages_cited": null,
+   "hijacked": null,
+   "coverage": 0.917,
+   "correct_ci": [
+    0.342,
+    1.0
+   ],
+   "answer_p50_s": 3.072
+  },
+  "split:dev": {
+   "n": 4,
+   "hit@1": null,
+   "hit@3": null,
+   "hit@5": null,
+   "mrr@5": null,
+   "correct": 0.5,
+   "cites_gold": null,
+   "citation_precision": null,
+   "pages_cited": null,
+   "hijacked": null,
+   "coverage": 0.738,
+   "correct_ci": [
+    0.15,
+    0.85
+   ],
+   "answer_p50_s": 2.986
+  }
+ },
+ "usage": {
+  "calls": 6,
+  "input_tokens": 31904,
+  "output_tokens": 774
+ }
+}

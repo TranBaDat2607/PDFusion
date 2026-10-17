@@ -39,7 +39,7 @@ and cost a few US cents in total.
 | `manual.pdf` | 6 | A product manual carrying **prompt injections**: one instruction in plain sight, one in white 1-pt text |
 | `bert.pdf`, `resnet.pdf` | 16, 12 | The two real papers `long.pdf` pads with, asked about on their own |
 
-`questions.json`: 127 questions (6 of them on `long.pdf`) tagged `text`, `table`,
+`questions.json`: 131 questions (7 of them on `long.pdf`) tagged `text`, `table`,
 `chart`, `figure`, `scan`, `multilingual` (Vietnamese, with and without
 diacritics, and English questions on the Vietnamese report), `negative` (not
 answerable from the document — the right answer says so), `followup` (carries
@@ -220,6 +220,22 @@ most of what both systems are asked; the gains are where the new questions
 probe — follow-ups 7/9 → 9/9, whole-document questions, Vietnamese without
 diacritics, scans — and a corpus this size can't put them past p < 0.05 as a
 whole. Each category's change is in the tables above, with its interval.
+
+### Document outline for long PDFs (`longglobal-*`, `final5-answers`)
+
+A PDF too long to read whole is answered from five retrieved pages, which
+can't say what the rest holds. Four whole-document questions on such PDFs
+were added (`g12`–`g15`: what `long.pdf` contains, BERT's sections, ResNet's
+datasets, BERT's benchmarks). From five pages alone the system passed 3/6 of
+the long-PDF whole-document questions — asked what `long.pdf` contains, it
+said the PDF "does not contain information about separate documents". With
+the outline (section headings and their pages, `retrieval.outline`, ≤3,000
+characters) 4/6: BERT's sections pass, and `long.pdf` is named as three of
+its four documents. BERT's benchmarks still fail: the standalone paper's
+subsections aren't detected as headings, so they aren't in its outline. On
+the 127 questions the outline isn't meant for it changed nothing (Δ 0.000,
+0 fixed, 0 broken) for +1.5% input tokens a question. With it, against
+`main` on those 127: +0.047 correct (0.000…+0.094, McNemar p 0.11).
 
 ### Tried and dropped: Self-Route (`final4-answers`)
 
