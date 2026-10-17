@@ -306,9 +306,9 @@ jobs:
         if: steps.scope.outputs.run == 'true'
         run: python benchmarks/rag/build_corpus.py
 
-      # The gate sits five questions under the 0.87 measured on these documents
-      # (`benchmarks/rag/README.md`, "CI gate"), so noise doesn't fail it and a
-      # real regression does.
+      # The gate sits about three questions under the 0.83 this runner measured
+      # (`benchmarks/rag/README.md`, "CI gate"): retrieval is deterministic
+      # here, so only a real regression fails it.
       - name: Retrieval benchmark
         if: steps.scope.outputs.run == 'true'
         working-directory: benchmarks/rag

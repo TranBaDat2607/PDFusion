@@ -289,10 +289,11 @@ hit@1, e5-small 0.87; e5 alone right on 8 questions, MiniLM alone on 3
   the short reports and the 15-page Attention paper, and keeps BERT and ResNet
   (~60k characters) on retrieval, where a question would cost ~15k tokens.
 - **CI gate.** `rag-quality` (`.github/workflows/ci.yml`) runs the retrieval
-  half on the corpus minus `long.pdf` with `--min-hit1 0.80`. `final` measures
-  0.87 on those 76 questions, and the grid's no-model runs, as the gate's is,
-  0.87 without the scanned paper. Five questions of margin: noise passes, a
-  real regression doesn't.
+  half on the corpus minus `long.pdf` with `--min-hit1 0.80`. This machine
+  measures 0.87 there; the GitHub Ubuntu runner measured 0.83 on the PR that
+  added the gate (its OCR reads the scans a little differently). Retrieval is
+  deterministic on one platform, so the gate doesn't flake; its margin on the
+  runner is about three questions.
 
 ## Limitations
 
