@@ -131,10 +131,11 @@ script after bumping babeldoc. A stale zip is not an error: it simply isn't the
 file `restore_offline_assets_package_async` looks for, and setup downloads
 instead.
 
-The HuggingFace embedding model for RAG chat (~470 MB) is still **not** bundled
-and still downloads on first use to `~/.cache/huggingface` — now as
-`onnx/model.onnx` + `tokenizer.json` fetched by `rag/onnx_embeddings.py`, rather
-than by sentence-transformers.
+The HuggingFace embedding model for RAG chat (118 MB, int8
+multilingual-e5-small) is still **not** bundled and still downloads on first use
+to `~/.cache/huggingface` — as the ONNX file its `index_spec.EmbeddingSpec` names
++ `tokenizer.json`, fetched by `rag/onnx_embeddings.py`, rather than by
+sentence-transformers.
 
 Releases are built by `.github/workflows/release.yml` on a `v*` tag, in two
 jobs — `windows-installer` and `linux-bundles` — each staging the offline
@@ -396,7 +397,9 @@ for Vietnamese) through onnxruntime + tokenizers, reimplementing the only two
 things sentence-transformers did here — tokenize, then mean-pool over the
 attention mask, per the model's `modules.json`. The feed is built from
 `session.get_inputs()` rather than hardcoded, so a re-export with a different
-signature still works. The ~470 MB first-use download is unchanged.
+signature still works. The ~470 MB first-use download was unchanged then; the
+switch to int8 multilingual-e5-small (`rag/index_spec.py`, measured in
+`benchmarks/rag/`) later cut it to 118 MB.
 
 ## Two dependency facts not worth re-deriving
 

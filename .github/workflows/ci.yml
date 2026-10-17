@@ -19,9 +19,15 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
+  # The chat-quality gate below, weekly: a dependency or model-cache change
+  # can move retrieval without any commit touching `rag/`.
+  schedule:
+    - cron: "17 3 * * 1"
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  # The weekly quality run gets a group of its own: sharing main's, it would
+  # cancel a push's CI, or be cancelled by one.
+  group: ${{ github.workflow }}-${{ github.ref }}${{ github.event_name == 'schedule' && '-schedule' || '' }}
   cancel-in-progress: true
 
 env:
@@ -31,6 +37,8 @@ env:
 jobs:
   python:
     name: ruff + pytest (${{ matrix.os }})
+    # The schedule is for `rag-quality` alone.
+    if: github.event_name != 'schedule'
     runs-on: ${{ matrix.os }}
     timeout-minutes: 45
     strategy:
@@ -92,6 +100,8 @@ jobs:
 
   desktop:
     name: tsc + vitest + cargo (${{ matrix.os }})
+    # The schedule is for `rag-quality` alone.
+    if: github.event_name != 'schedule'
     runs-on: ${{ matrix.os }}
     timeout-minutes: 45
     strategy:
@@ -239,3 +249,73 @@ jobs:
 
       - name: Smoke test the built binary
         run: python -m pytest tests -m smoke
+
+  # Chat retrieval quality (`benchmarks/rag/`), retrieval only: local, no API
+  # key, no cost. The unit tests hold the chat to its rules; this holds it to
+  # its numbers, so a change to `rag/` that finds the right page less often
+  # fails here instead of in a user's chat. Runs when `rag/` or the benchmark
+  # changed, on demand, and weekly. Linux only: retrieval has no platform half.
+  rag-quality:
+    name: Chat retrieval quality gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    if: github.event_name != 'push'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Did this change touch the chat?
+        id: scope
+        run: |
+          if [ "${{ github.event_name }}" != "pull_request" ]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          elif git diff --name-only "origin/${{ github.base_ref }}...HEAD" \
+              | grep -qE '^(src/desktop_pdf_translator/rag/|benchmarks/rag/)'; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/setup-python@v5
+        if: steps.scope.outputs.run == 'true'
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            pyproject.toml
+
+      # The embedding model and the downloaded papers, so a run fetches neither.
+      - uses: actions/cache@v4
+        if: steps.scope.outputs.run == 'true'
+        with:
+          path: |
+            ~/.cache/huggingface
+            benchmarks/rag/.data
+          key: rag-quality-${{ hashFiles('src/desktop_pdf_translator/rag/index_spec.py', 'benchmarks/rag/build_corpus.py') }}
+
+      - name: Install dependencies
+        if: steps.scope.outputs.run == 'true'
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install matplotlib
+
+      - name: Build the corpus
+        if: steps.scope.outputs.run == 'true'
+        run: python benchmarks/rag/build_corpus.py
+
+      # The gate sits about three questions under the 0.83 this runner measured
+      # (`benchmarks/rag/README.md`, "CI gate"): retrieval is deterministic
+      # here, so only a real regression fails it.
+      - name: Retrieval benchmark
+        if: steps.scope.outputs.run == 'true'
+        working-directory: benchmarks/rag
+        run: python run.py --system v2 --docs report.pdf bao_cao.pdf manual.pdf bert.pdf resnet.pdf attention.pdf attention_scanned.pdf --label ci-retrieval --min-hit1 0.80
+
+      - uses: actions/upload-artifact@v4
+        if: always() && steps.scope.outputs.run == 'true'
+        with:
+          name: rag-quality-results
+          path: benchmarks/rag/results/ci-retrieval.json

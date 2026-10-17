@@ -49,8 +49,11 @@ logger = logging.getLogger(__name__)
 # Renders a page image (PNG bytes) into its lines of text, in reading order.
 OcrEngine = Callable[[bytes], List[str]]
 
-# ~128 tokens of English, the embedding model's input limit, less room for
-# the heading `retrieval.contextual_text` puts in front.
+# ~128 tokens of English, the input limit of MiniLM, the first embedding
+# model, less room for the heading `retrieval.contextual_text` puts in front.
+# multilingual-e5-small reads 512, but 1200-character chunks retrieved worse
+# with it (hit@1 0.87 → 0.83, `benchmarks/rag/`): a smaller chunk is a sharper
+# match, and the answer reads its neighbours anyway (`rag_chain.NEIGHBOURS`).
 MAX_CHUNK_CHARS = 600
 # A table is kept whole up to here — its rows mean little apart from its
 # header — and split into header-repeating parts past it. Past ~500 characters
@@ -64,6 +67,14 @@ MAX_TABLE_CHARS = 2000
 # bold, this much (BERT's section headings: 12 pt bold over 10.9 pt, 1.10x).
 _HEADING_RATIO = 1.15
 _BOLD_HEADING_RATIO = 1.05
+# A block set wholly in bold at the body's own size is a subsection title:
+# papers set "4.1 GLUE" that way, on lines of its own. Only the whole block:
+# bold words that open a paragraph and run into it are emphasis, not a title.
+# Kept as a chunk's `subheading`, not its `heading`: headings are embedded with
+# every chunk under them, and taking these as headings cost retrieval three
+# questions in 99 (`benchmarks/rag/README.md`). The outline is what uses them.
+# Just under 1.0, for a heading font a hair smaller than the body's.
+_BOLD_BLOCK_RATIO = 0.98
 # ...and is short: at most two lines and this many characters. A longer run
 # of large text is a paragraph set large (the Attention paper's 12 pt
 # permission notice), and stays text.
@@ -276,6 +287,9 @@ class PdfIngestor:
         self.page_layouts: Dict[int, Dict[str, Any]] = {}
         self._stats: Dict[str, int] = {}
         self._ocr_failed = 0
+        # The subsection in force (`_is_subheading`), carried across pages as
+        # the heading is; a new heading ends it.
+        self._subheading = ""
 
     def process_pdf(self, path: Path) -> List[Dict[str, Any]]:
         counts = dict.fromkeys(
@@ -283,6 +297,7 @@ class PdfIngestor:
              "ocr_failed_pages", "tables", "chunks"), 0
         )
         self._ocr_failed = 0
+        self._subheading = ""
         chunks: List[Dict[str, Any]] = []
         with fitz.open(path) as doc:
             pages = [_read_page(page) for page in doc]
@@ -369,12 +384,15 @@ class PdfIngestor:
         chunks: List[Dict[str, Any]] = []
         pending: List[Tuple[str, Rect]] = []
 
+        def with_sub() -> Dict[str, Any]:
+            return {**meta, "subheading": self._subheading}
+
         def flush() -> None:
             if not pending:
                 return
             for text in _pack([p for p, _ in pending], self.max_chunk_chars):
                 chunks.append(self._chunk(text, page.number, "text", heading,
-                                          _clip(_union(r for _, r in pending), rect), meta))
+                                          _clip(_union(r for _, r in pending), rect), with_sub()))
             pending.clear()
 
         for _, what, item in items:
@@ -382,12 +400,20 @@ class PdfIngestor:
                 flush()
                 area, rows, caption = item
                 for text in self._table_texts(rows, caption):
-                    chunks.append(self._chunk(text, page.number, "table", heading, _clip(area, rect), meta))
+                    chunks.append(self._chunk(text, page.number, "table", heading, _clip(area, rect),
+                                              with_sub()))
                 continue
             lead = self._heading_lines(item, body)
             if lead:
                 flush()
                 heading = normalize_text(" ".join(line.text for line in item.lines[:lead]))
+                self._subheading = ""
+            elif self._is_subheading(item, body):
+                # Recorded, and nothing else: no flush, and its words stay in
+                # the text. Splitting chunks at subsections moved retrieval
+                # (two questions in 99 lost); this way the chunks are exactly
+                # what they were, and only the outline learns the subsection.
+                self._subheading = item.text
             body_lines = item.lines[lead:]
             if body_lines:
                 text = normalize_text(" ".join(x.text for x in body_lines))
@@ -419,6 +445,17 @@ class PdfIngestor:
         if count > _HEADING_MAX_LINES or not 0 < len(text) < _HEADING_MAX_CHARS:
             return 0
         return count
+
+    @staticmethod
+    def _is_subheading(block: _Block, body: float) -> bool:
+        """Whether the block is a subsection title: every line bold, at the
+        body's size, short — "4.1 GLUE" on lines of its own."""
+        if not body or not block.lines or len(block.lines) > _HEADING_MAX_LINES:
+            return False
+        if not all(line.horizontal and line.bold and line.size >= body * _BOLD_BLOCK_RATIO
+                   for line in block.lines):
+            return False
+        return 0 < len(block.text) < _HEADING_MAX_CHARS
 
     def _tables(self, page: fitz.Page) -> List[Tuple[Rect, List[List[Optional[str]]]]]:
         try:
@@ -472,7 +509,7 @@ class PdfIngestor:
         meta = {"page_kind": "scanned", "has_tables": False, "has_figures": False}
         bbox = (float(page.rect.x0), float(page.rect.y0), float(page.rect.x1), float(page.rect.y1))
         return [
-            self._chunk(piece, page.number, "ocr", heading, bbox, meta)
+            self._chunk(piece, page.number, "ocr", heading, bbox, {**meta, "subheading": self._subheading})
             for piece in _pack([text], self.max_chunk_chars)
         ]
 

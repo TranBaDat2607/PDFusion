@@ -167,3 +167,88 @@ def select_image_pages(evidence: Sequence[PageEvidence], max_images: int) -> Lis
             page.wants_image = True
             picked.append(page)
     return picked
+
+
+def whole_document(chunks: Sequence[Dict[str, Any]],
+                   ranked: Sequence[PageEvidence]) -> List[PageEvidence]:
+    """Every page of the index, in page order, each with all its chunks.
+
+    What a short document's answer reads instead of the retrieved pages. A
+    page retrieval ranked keeps its score and best chunk, which its reference
+    quotes; the others score 0 and quote their first chunk.
+    """
+    by_page = {page.page: page for page in ranked}
+    page_chunks: Dict[int, List[Dict[str, Any]]] = defaultdict(list)
+    for chunk in chunks:
+        page_chunks[_page(chunk)].append(chunk)
+    pages: List[PageEvidence] = []
+    for number in sorted(page_chunks):
+        members = sorted(page_chunks[number], key=_index)
+        found = by_page.get(number)
+        pages.append(
+            PageEvidence(
+                page=number,
+                score=found.score if found else 0.0,
+                chunks=members,
+                matched_ids=set(found.matched_ids) if found else set(),
+                page_kind=members[0].get("metadata", {}).get("page_kind", "text"),
+                best_chunk_id=found.best_chunk_id if found else members[0]["chunk_id"],
+            )
+        )
+    return pages
+
+
+
+# English runs ~3.5-4 characters a token; a CJK character is about a token.
+CHARS_PER_TOKEN = 3.5
+
+
+def reading_length(text: str) -> float:
+    """`text`'s length in English-equivalent characters: a character of a
+    script that takes about a token each (CJK, kana, hangul) counts as
+    `CHARS_PER_TOKEN` of them, so a budget in characters is a budget in
+    tokens whatever the document's language."""
+    wide = sum(1 for ch in text if ord(ch) >= 0x2E80)
+    return len(text) + wide * (CHARS_PER_TOKEN - 1)
+
+
+def outline_line(page: int, heading: str) -> str:
+    """One outline entry as the prompt shows it. Not `p. N:` — that reads as a
+    page on offer to cite, and a page known only from its heading never is."""
+    return f"{heading} (from page {page})"
+
+
+def outline(chunks: Sequence[Dict[str, Any]], max_chars: int) -> List[Tuple[int, str]]:
+    """The document's table of contents from its chunks' headings and
+    subheadings (`ingest.PdfIngestor._is_subheading`): an entry each time a new
+    section or subsection starts, with the 1-indexed page it starts on.
+
+    What an answer from five retrieved pages knows of the rest of a long
+    document. A heading seen before is listed again when it starts a section
+    again: a PDF of several papers repeats "Abstract" and "References", and
+    those repeats are where each paper begins and ends. Cut at `max_chars`, as
+    rendered (`outline_line`) and in English-equivalent characters, at the end:
+    a contents page is read from the top, and one with gaps would skip
+    sections without saying so.
+    """
+    entries: List[Tuple[int, str]] = []
+    used = 0.0
+    previous_heading = previous_sub = None
+    for chunk in sorted(chunks, key=lambda c: (_page(c), _index(c))):
+        metadata = chunk.get("metadata") or {}
+        heading = (metadata.get("heading") or "").strip()
+        sub = (metadata.get("subheading") or "").strip()
+        titles = []
+        if heading and heading != previous_heading:
+            titles.append(heading)
+        if sub and (sub != previous_sub or heading != previous_heading):
+            titles.append(sub)
+        previous_heading, previous_sub = heading, sub
+        page = _page(chunk) + 1
+        for title in titles:
+            cost = reading_length(outline_line(page, title)) + 1
+            if used + cost > max_chars:
+                return entries
+            entries.append((page, title))
+            used += cost
+    return entries

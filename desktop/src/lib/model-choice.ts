@@ -5,7 +5,7 @@
  *
  * The service used to be a toolbar Select and the model a field in Settings,
  * so changing the model was a trip through the sheet, and the toolbar went on
- * naming a keyless LLM while Argos ran in its place. Pure, so the rules run
+ * naming an LLM with no key while Argos ran in its place. Pure, so the rules run
  * under vitest's node environment like `translate-request.ts`.
  *
  * Every provider fact comes from `GET /providers`, which reads the registry
@@ -53,7 +53,7 @@ export interface ModelGroup {
   usable: boolean;
   /** Takes a key and has none: offers "Add an API key", not its models. */
   needsKey: boolean;
-  /** Takes no key: usable, though nothing says a local server is running. */
+  /** Takes no key (Argos): usable, with no key for a check to vouch for. */
   keyless: boolean;
   /** Its model is a fixed identifier (Argos): nothing to choose. */
   fixed: boolean;
@@ -184,8 +184,7 @@ export function chatModel(
   config: ChoiceConfig,
   providers: readonly PickerProvider[],
 ): AnsweringModel | null {
-  // Any LLM answers when chosen; only one with a priority is a fallback, so a
-  // keyless local server that may not be running is never tried unasked (#88).
+  // Any LLM answers when chosen; only one with a priority is a fallback.
   const llms = providers.filter((p) => p.is_llm);
   const byPriority = llms
     .filter((p) => p.priority !== null && p.priority !== undefined)

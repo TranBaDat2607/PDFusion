@@ -84,12 +84,6 @@ def pack_ready(monkeypatch):
     monkeypatch.setattr(engine_assets, "argos_pack_ready", lambda: True)
 
 
-def test_argos_is_not_warmed_while_a_keyless_local_server_translates(pack_ready):
-    """Ollama needs no key, so no key anywhere no longer means Argos runs:
-    loading its model then only costs RAM (#88)."""
-    assert server._should_prewarm_argos(_translating_with("ollama")) is False
-
-
 def test_argos_is_warmed_for_an_llm_whose_key_is_missing(pack_ready):
     """The sidecar runs Argos in its place — even when another LLM has a key."""
     settings = _translating_with("openai", gemini={"api_key": "sk-gemini"})

@@ -1,0 +1,269 @@
+{
+ "system": "v2",
+ "src": "/home/nammovuivui/PDFusion-industrial-rag/src",
+ "answers": true,
+ "model": "gemini:gemini-2.5-flash-lite",
+ "whole_document_tokens": 11500,
+ "options": "{\"full_document_chars\": 40250, \"outline_chars\": 0}",
+ "indexing": {
+  "bert.pdf": {
+   "seconds": 13.75,
+   "chunks": 144,
+   "pages": 16,
+   "text_pages": 7,
+   "visual_pages": 9,
+   "scanned_pages": 0,
+   "ocr_pages": 0,
+   "ocr_failed_pages": 0,
+   "tables": 4,
+   "llm_input_tokens": 0,
+   "llm_output_tokens": 0
+  },
+  "long.pdf": {
+   "seconds": 54.89,
+   "chunks": 376,
+   "pages": 57,
+   "text_pages": 24,
+   "visual_pages": 31,
+   "scanned_pages": 2,
+   "ocr_pages": 2,
+   "ocr_failed_pages": 0,
+   "tables": 21,
+   "llm_input_tokens": 0,
+   "llm_output_tokens": 0
+  },
+  "resnet.pdf": {
+   "seconds": 18.9,
+   "chunks": 121,
+   "pages": 12,
+   "text_pages": 3,
+   "visual_pages": 9,
+   "scanned_pages": 0,
+   "ocr_pages": 0,
+   "ocr_failed_pages": 0,
+   "tables": 13,
+   "llm_input_tokens": 0,
+   "llm_output_tokens": 0
+  }
+ },
+ "questions": [
+  {
+   "id": "g05",
+   "doc": "bert.pdf",
+   "kind": "global",
+   "split": "test",
+   "q": "What are the main ideas of this paper?",
+   "answer_seconds": 8.104,
+   "answer": {
+    "text": "The paper introduces BERT (Bidirectional Encoder Representations from Transformers), a new language representation model [p. 1](#page=1). BERT alleviates the unidirectionality constraint of previous language models by using a \"masked language model\" (MLM) pre-training objective, inspired by the Cloze task [p. 1](#page=1). This MLM objective randomly masks some input tokens and trains the model to predict the original vocabulary ID of these masked tokens [p. 1](#page=1). This approach allows for bidirectional context, which is beneficial for sentence-level tasks and crucial for token-level tasks like question answering [p. 1](#page=1). The paper also discusses two existing strategies for applying pre-trained language representations: feature-based and fine-tuning [p. 1](#page=1). BERT improves upon fine-tuning approaches by enabling the model to learn from context in both directions during pre-training [p. 1](#page=1). The paper also presents experimental results on various downstream tasks, including SQuAD, SWAG, CoLA, and STS-B, showing BERT's performance [p. 7](#page=7), [p. 15](#page=15).",
+    "cited_pages": [
+     1,
+     7,
+     15
+    ],
+    "images_sent": 2
+   },
+   "answer_score": {
+    "correct": 1.0,
+    "coverage": 1.0
+   },
+   "llm_input_tokens": 4471,
+   "llm_output_tokens": 221,
+   "llm_calls": 1
+  },
+  {
+   "id": "g06",
+   "doc": "resnet.pdf",
+   "kind": "global",
+   "split": "dev",
+   "q": "Give an overview of this paper.",
+   "answer_seconds": 3.94,
+   "answer": {
+    "text": "This paper introduces a deep residual learning framework to ease the training of networks that are substantially deeper than those used previously [p. 1](#page=1). The authors reformulate layers to learn residual functions with reference to the layer inputs, rather than learning unreferenced functions [p. 1](#page=1). This approach makes residual networks easier to optimize and allows them to gain accuracy from increased depth [p. 1](#page=1).\n\nThe framework is based on the idea that it is easier to optimize a residual mapping than an original mapping [p. 2](#page=2). If an identity mapping is optimal, it is easier to push the residual to zero than to fit an identity mapping with a stack of nonlinear layers [p. 2](#page=2). This residual learning is realized by feedforward neural networks with \"shortcut connections\" that perform identity mapping and add their outputs to the outputs of stacked layers [p. 2](#page=2). These shortcut connections add no extra parameters or computational complexity and can be trained end-to-end using SGD with backpropagation [p. 2](#page=2).\n\nThe paper presents experiments on ImageNet to demonstrate the effectiveness of this degradation problem solution [p. 2](#page=2). They evaluate residual nets with depths up to 152 layers, which are significantly deeper than VGG nets but have lower complexity [p. 1](#page=1). An ensemble of these residual nets achieved 3.57% error on the ImageNet test set, winning first place in the ILSVRC 2015 classification competition [p. 1](#page=1). The deep residual representations also led to wins in ImageNet detection, ImageNet localization, COCO detection, and COCO segmentation competitions [p. 1](#page=1).\n\nThe authors also explore networks with over 1000 layers, demonstrating that their method shows no optimization difficulty and can achieve low training error [p. 8](#page=8). However, the testing result for the 1202-layer network was worse than that of their 110-layer network [p. 8](#page=8). Analysis of layer responses suggests that learned residual functions generally have small responses, indicating that identity mappings provide reasonable preconditioning [p. 3](#page=3), [p. 8](#page=8). The paper also notes that while the residual function F can be flexible, a single-layer F does not offer advantages [p. 3](#page=3).",
+    "cited_pages": [
+     1,
+     2,
+     8,
+     3
+    ],
+    "images_sent": 3
+   },
+   "answer_score": {
+    "correct": 1.0,
+    "coverage": 1.0
+   },
+   "llm_input_tokens": 6510,
+   "llm_output_tokens": 463,
+   "llm_calls": 1
+  },
+  {
+   "id": "g12",
+   "doc": "long.pdf",
+   "kind": "global",
+   "split": "dev",
+   "q": "What separate documents or papers does this PDF contain?",
+   "answer_seconds": 2.412,
+   "answer": {
+    "text": "This PDF does not contain information about separate documents or papers it includes.",
+    "cited_pages": [],
+    "images_sent": 1
+   },
+   "answer_score": {
+    "correct": 0.0,
+    "coverage": 0.0
+   },
+   "llm_input_tokens": 3382,
+   "llm_output_tokens": 14,
+   "llm_calls": 1
+  },
+  {
+   "id": "g13",
+   "doc": "bert.pdf",
+   "kind": "global",
+   "split": "test",
+   "q": "List the main sections of this paper.",
+   "answer_seconds": 2.54,
+   "answer": {
+    "text": "* Abstract [p. 1](#page=1)\n* Related Work [p. 3](#page=3)\n* Experiments [p. 7](#page=7)\n* References [p. 12](#page=12)",
+    "cited_pages": [
+     1,
+     3,
+     7,
+     12
+    ],
+    "images_sent": 3
+   },
+   "answer_score": {
+    "correct": 0.0,
+    "coverage": 0.3333333333333333
+   },
+   "llm_input_tokens": 4275,
+   "llm_output_tokens": 37,
+   "llm_calls": 1
+  },
+  {
+   "id": "g14",
+   "doc": "resnet.pdf",
+   "kind": "global",
+   "split": "dev",
+   "q": "Which datasets does the paper report experiments on?",
+   "answer_seconds": 2.408,
+   "answer": {
+    "text": "The paper reports experiments on ImageNet [p. 7](#page=7), CIFAR-10 [p. 7](#page=7), PASCAL VOC 2007/2012 [p. 8](#page=8), and COCO [p. 8](#page=8).",
+    "cited_pages": [
+     7,
+     8
+    ],
+    "images_sent": 2
+   },
+   "answer_score": {
+    "correct": 1.0,
+    "coverage": 1.0
+   },
+   "llm_input_tokens": 6102,
+   "llm_output_tokens": 53,
+   "llm_calls": 1
+  },
+  {
+   "id": "g15",
+   "doc": "bert.pdf",
+   "kind": "global",
+   "split": "dev",
+   "q": "Which benchmarks or tasks is BERT evaluated on?",
+   "answer_seconds": 2.831,
+   "answer": {
+    "text": "BERT is evaluated on the GLUE benchmark, which includes tasks such as MNLI, QQP, QNLI, SST-2, CoLA, STS-B, MRPC, and RTE [p. 6](#page=6). It is also evaluated on the SQuAD v1.1 dataset [p. 6](#page=6).",
+    "cited_pages": [
+     6
+    ],
+    "images_sent": 3
+   },
+   "answer_score": {
+    "correct": 0.0,
+    "coverage": 0.4
+   },
+   "llm_input_tokens": 5340,
+   "llm_output_tokens": 66,
+   "llm_calls": 1
+  }
+ ],
+ "summary": {
+  "all": {
+   "n": 6,
+   "hit@1": null,
+   "hit@3": null,
+   "hit@5": null,
+   "mrr@5": null,
+   "correct": 0.5,
+   "cites_gold": null,
+   "citation_precision": null,
+   "pages_cited": null,
+   "hijacked": null,
+   "coverage": 0.622,
+   "correct_ci": [
+    0.188,
+    0.812
+   ],
+   "answer_p50_s": 2.686
+  },
+  "global": {
+   "n": 6,
+   "hit@1": null,
+   "hit@3": null,
+   "hit@5": null,
+   "mrr@5": null,
+   "correct": 0.5,
+   "cites_gold": null,
+   "citation_precision": null,
+   "pages_cited": null,
+   "hijacked": null,
+   "coverage": 0.622,
+   "correct_ci": [
+    0.188,
+    0.812
+   ],
+   "answer_p50_s": 2.686
+  },
+  "split:test": {
+   "n": 2,
+   "hit@1": null,
+   "hit@3": null,
+   "hit@5": null,
+   "mrr@5": null,
+   "correct": 0.5,
+   "cites_gold": null,
+   "citation_precision": null,
+   "pages_cited": null,
+   "hijacked": null,
+   "coverage": 0.667,
+   "correct_ci": [
+    0.095,
+    0.905
+   ],
+   "answer_p50_s": 5.322
+  },
+  "split:dev": {
+   "n": 4,
+   "hit@1": null,
+   "hit@3": null,
+   "hit@5": null,
+   "mrr@5": null,
+   "correct": 0.5,
+   "cites_gold": null,
+   "citation_precision": null,
+   "pages_cited": null,
+   "hijacked": null,
+   "coverage": 0.6,
+   "correct_ci": [
+    0.15,
+    0.85
+   ],
+   "answer_p50_s": 2.622
+  }
+ },
+ "usage": {
+  "calls": 6,
+  "input_tokens": 30080,
+  "output_tokens": 854
+ }
+}

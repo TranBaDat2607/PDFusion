@@ -46,6 +46,9 @@ export interface AskState {
   message: string;
   progress: number;
   answer: RagAnswer | null;
+  /** The answer as the model is writing it (`answer_delta`), shown until the
+   *  checked `answer` replaces it. Its citations are not checked yet. */
+  draft: string;
   error?: string;
   /** Set when the chat panel should act on a failure rather than only show
    *  `error`: `NOT_INDEXED` or `INDEX_UNAVAILABLE`. */
@@ -65,6 +68,7 @@ export const IDLE_ASK: AskState = {
   message: "",
   progress: 0,
   answer: null,
+  draft: "",
 };
 
 export function startAsk(documentId: string): AskState {
@@ -76,9 +80,10 @@ export function failAsk(
   error: string,
   errorCode?: string | null,
 ): AskState {
+  // Half an answer would read as the answer; the error says what happened.
   return errorCode
-    ? { ...state, status: "error", error, errorCode }
-    : { ...state, status: "error", error };
+    ? { ...state, status: "error", error, errorCode, draft: "" }
+    : { ...state, status: "error", error, draft: "" };
 }
 
 /** Fold one event from `/rag/ask/{job_id}/events` into the state. */
@@ -102,12 +107,22 @@ export function reduceAskEvent(state: AskState, event: AskEvent): AskState {
           : state.actions,
       };
     }
+    case "answer_delta": {
+      // Placed at its offset, not appended: a retried request starts again
+      // at 0, and its text must replace the failed attempt's.
+      // After the end it belongs to an answer already settled — a cancelled
+      // one's worker streaming on, replayed from `last_seq`.
+      if (state.status !== "asking") return state;
+      const d = event.data as components["schemas"]["AnswerDeltaPayload"];
+      return { ...state, draft: state.draft.slice(0, d.offset) + d.text };
+    }
     case "answer":
       return {
         ...state,
         status: "done",
         progress: 100,
         answer: event.data as RagAnswer,
+        draft: "",
       };
     case "done":
       // `done` repeats the answer (plus `elapsed_seconds`); the `answer` event
@@ -119,6 +134,7 @@ export function reduceAskEvent(state: AskState, event: AskEvent): AskState {
         message: state.message,
         progress: 100,
         answer: state.answer ?? (event.data as RagAnswer),
+        draft: "",
       };
     case "error": {
       const e = event.data as components["schemas"]["JobErrorPayload"];

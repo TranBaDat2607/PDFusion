@@ -37,6 +37,7 @@ function makeAnswer(overrides: Partial<RagAnswer> = {}): RagAnswer {
     timestamp: "2026-09-09T00:00:00",
     provider: null,
     model: null,
+    search_query: null,
     ...overrides,
   };
 }

@@ -1,6 +1,13 @@
 import { describe, expect, it } from "vitest";
 
-import { appendExchange, chatHistoryKey, type ChatHistory } from "./chat-history";
+import {
+  appendExchange,
+  canRate,
+  chatHistoryKey,
+  nextRating,
+  withRating,
+  type ChatHistory,
+} from "./chat-history";
 import type { RagAnswer } from "./rag-ask";
 
 function makeAnswer(answer: string): RagAnswer {
@@ -12,6 +19,7 @@ function makeAnswer(answer: string): RagAnswer {
     timestamp: "2026-09-12T00:00:00",
     provider: null,
     model: null,
+    search_query: null,
   };
 }
 
@@ -66,5 +74,35 @@ describe("chatHistoryKey", () => {
   it("is one key per document", () => {
     expect(chatHistoryKey("doc-a")).toEqual(chatHistoryKey("doc-a"));
     expect(chatHistoryKey("doc-a")).not.toEqual(chatHistoryKey("doc-b"));
+  });
+});
+
+describe("rating an answer", () => {
+  const history: ChatHistory = {
+    messages: [
+      { id: 1, role: "user", text: "q", answer: null, created_at: "t" },
+      { id: 2, role: "assistant", text: "a", answer: null, created_at: "t", rating: null },
+      { id: 4, role: "assistant", text: "b", answer: null, created_at: "t", rating: 1 },
+    ],
+  };
+
+  it("sets the rating of that answer and no other", () => {
+    const rated = withRating(history, 2, -1);
+
+    expect(rated.messages.map((m) => m.rating ?? null)).toEqual([null, -1, 1]);
+    expect(history.messages[1].rating).toBeNull();
+  });
+
+  it("clicking the thumb already chosen takes the rating back", () => {
+    expect(nextRating(null, 1)).toBe(1);
+    expect(nextRating(1, -1)).toBe(-1);
+    expect(nextRating(-1, -1)).toBeNull();
+  });
+
+  it("an answer not saved yet can't be rated", () => {
+    // `appendExchange`'s stand-ins have negative ids until the refetch.
+    expect(canRate({ id: -2, role: "assistant" })).toBe(false);
+    expect(canRate({ id: 2, role: "assistant" })).toBe(true);
+    expect(canRate({ id: 1, role: "user" })).toBe(false);
   });
 });

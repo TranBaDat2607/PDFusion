@@ -114,6 +114,8 @@ class ChromaDBManager:
                 'page': chunk.get('page', 0),
                 'kind': section.get('kind', 'text'),
                 'heading': section.get('heading', ''),
+                # The outline's subsections (`retrieval.outline`); never embedded.
+                'subheading': section.get('subheading', ''),
                 'page_kind': section.get('page_kind', 'text'),
                 'has_equations': bool(section.get('has_equations', False)),
                 'has_tables': bool(section.get('has_tables', False)),
@@ -207,7 +209,8 @@ class ChromaDBManager:
             }
             for i in range(len(results['documents'][0]))
         ]
-        logger.info(f"Found {len(formatted_results)} similar chunks for query: {query[:50]}...")
+        # The query is the user's question: DEBUG only, out of a shared app.log.
+        logger.debug("Found %d similar chunks for query: %s", len(formatted_results), query[:50])
         return formatted_results
 
     def has_index(self, index_id: str) -> bool:

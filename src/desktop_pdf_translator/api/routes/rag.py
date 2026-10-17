@@ -17,6 +17,7 @@ too, and `/rag/documents`, Remove and Reset manage what is stored.
 from __future__ import annotations
 
 import asyncio
+import concurrent.futures
 import functools
 import logging
 import shutil
@@ -30,6 +31,7 @@ from sse_starlette.sse import EventSourceResponse
 
 from ...config import get_settings
 from ...processors.pdf_cache import compute_file_hash
+from ...rag.conversation import MAX_HISTORY_TURNS, ChatTurn
 from ...rag.errors import IndexUnavailableError
 from ...rag.index_spec import CHUNKER_VERSION, EMBEDDING_DIMENSIONS, EMBEDDING_MODEL
 from ...storage.records import IndexRecord, RecordsStore, get_records_store
@@ -46,6 +48,7 @@ from ..schemas import (
     DocumentSummaryResponse,
     IndexRequest,
     JobAccepted,
+    RateAnswerRequest,
     ResetIndexesResponse,
 )
 
@@ -406,6 +409,24 @@ async def _save_exchange(document_id: str, question: str, answer: Dict[str, Any]
         )
 
 
+def _conversation(document_id: str) -> List[ChatTurn]:
+    """The document's latest saved exchanges, oldest first: what a follow-up
+    is read with. From the records, keyed by the document the question was
+    accepted for, so it is never another document's. Best-effort: a question
+    is still answered, on its own, when the history can't be read."""
+    try:
+        # Each exchange is two rows, saved together (`add_exchange`).
+        messages = get_records_store().messages(document_id, last=2 * MAX_HISTORY_TURNS)
+    except Exception:  # noqa: BLE001
+        logger.warning("Could not read the chat history of document %s", document_id, exc_info=True)
+        return []
+    turns: List[ChatTurn] = []
+    for asked, answered in zip(messages, messages[1:]):
+        if asked.role == "user" and answered.role == "assistant":
+            turns.append(ChatTurn(question=asked.content, answer=answered.content))
+    return turns[-MAX_HISTORY_TURNS:]
+
+
 async def _run_ask(
     job: Job,
     payload: AskRequest,
@@ -425,6 +446,19 @@ async def _run_ask(
                 job.emit("progress", {"message": message, "progress": progress}), loop
             )
 
+        streamed: List[concurrent.futures.Future] = []
+
+        async def emit_piece(offset: int, text: str) -> None:
+            # A cancelled question's worker thread streams on to its end; its
+            # pieces must not follow the `cancelled` that closed the stream.
+            if not job.finished:
+                await job.emit("answer_delta", {"offset": offset, "text": text})
+
+        def on_text(offset: int, text: str) -> None:
+            # Called from the thread the SDK streams in.
+            streamed.append(asyncio.run_coroutine_threadsafe(emit_piece(offset, text), loop))
+
+        history = await asyncio.to_thread(_conversation, index.document_id)
         result = await chain.answer_question(
             question=payload.question,
             index_id=index.id,
@@ -433,7 +467,12 @@ async def _run_ask(
             answer_lang=answer_lang,
             max_pdf_sources=payload.max_pdf_sources,
             progress_callback=progress_callback,
+            history=history,
+            on_text=on_text,
         )
+        # Every piece is in the job's history before the answer that ends
+        # them, so a client never sees a piece arrive after the final text.
+        await asyncio.gather(*(asyncio.wrap_future(f) for f in streamed))
 
         # Saved before the answer is sent, so a chat panel that refetches the
         # history on `answer` finds it there.
@@ -571,10 +610,24 @@ async def get_chat_history(document_id: str) -> ChatHistoryResponse:
                 created_at=ms_to_iso(message.created_at),
                 provider=message.provider,
                 model=message.model,
+                rating=message.rating,
             )
             for message in messages
         ]
     )
+
+
+@router.put(
+    "/document/{document_id}/messages/{message_id}/rating",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+async def rate_answer(document_id: str, message_id: int, payload: RateAnswerRequest) -> None:
+    """Rate one of a document's answers, or take the rating back."""
+    rated = await asyncio.to_thread(
+        get_records_store().rate_answer, document_id, message_id, payload.rating
+    )
+    if not rated:
+        raise HTTPException(status_code=404, detail="No such answer in this document's chat")
 
 
 @router.delete(

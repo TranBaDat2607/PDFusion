@@ -71,3 +71,14 @@ def test_of_two_chunks_with_the_same_hit_the_shorter_ranks_higher():
 
     assert shorter == 1.0
     assert 0 < longer < shorter
+
+
+def test_marks_the_text_lost_still_match():
+    """OCR of a Vietnamese scan often drops the marks; a question typed with
+    them must still find it."""
+    index = Bm25Index(["Hoi dong quan tri thong qua co tuc 1.500 dong", "Bao cao tai chinh"])
+
+    found, other = index.scores("cổ tức")
+
+    assert found == 1.0
+    assert other == 0.0

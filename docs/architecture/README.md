@@ -57,7 +57,7 @@ For a later phase:
 - **More Argos language pairs** — the offline backend ships en→vi only. Adding
   a pair means shipping/downloading its pack, then extending Argos's
   `supported_pairs` in `providers/registry.py`.
-- **Pre-bundled ML assets for RAG** — the HuggingFace embedding model (~470 MB)
+- **Pre-bundled ML assets for RAG** — the HuggingFace embedding model (118 MB)
   still downloads on first Chat use, with no progress and no preflight. The
   translation side of that problem is solved (see "First-run engine setup" in
   [startup-and-shell.md](startup-and-shell.md)); Chat's half of issue #21 is

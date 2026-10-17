@@ -1,0 +1,429 @@
+{
+ "system": "v2",
+ "src": "/home/nammovuivui/PDFusion-industrial-rag/src",
+ "answers": true,
+ "model": "gemini:gemini-2.5-flash-lite",
+ "options": null,
+ "indexing": {
+  "attention.pdf": {
+   "seconds": 11.17,
+   "chunks": 87,
+   "pages": 15,
+   "text_pages": 6,
+   "visual_pages": 9,
+   "scanned_pages": 0,
+   "ocr_pages": 0,
+   "ocr_failed_pages": 0,
+   "tables": 2,
+   "llm_input_tokens": 0,
+   "llm_output_tokens": 0
+  },
+  "bao_cao.pdf": {
+   "seconds": 4.58,
+   "chunks": 11,
+   "pages": 11,
+   "text_pages": 8,
+   "visual_pages": 2,
+   "scanned_pages": 1,
+   "ocr_pages": 1,
+   "ocr_failed_pages": 0,
+   "tables": 1,
+   "llm_input_tokens": 0,
+   "llm_output_tokens": 0
+  },
+  "bert.pdf": {
+   "seconds": 10.72,
+   "chunks": 144,
+   "pages": 16,
+   "text_pages": 7,
+   "visual_pages": 9,
+   "scanned_pages": 0,
+   "ocr_pages": 0,
+   "ocr_failed_pages": 0,
+   "tables": 4,
+   "llm_input_tokens": 0,
+   "llm_output_tokens": 0
+  },
+  "manual.pdf": {
+   "seconds": 0.2,
+   "chunks": 6,
+   "pages": 6,
+   "text_pages": 5,
+   "visual_pages": 1,
+   "scanned_pages": 0,
+   "ocr_pages": 0,
+   "ocr_failed_pages": 0,
+   "tables": 1,
+   "llm_input_tokens": 0,
+   "llm_output_tokens": 0
+  },
+  "report.pdf": {
+   "seconds": 5.98,
+   "chunks": 15,
+   "pages": 14,
+   "text_pages": 8,
+   "visual_pages": 4,
+   "scanned_pages": 2,
+   "ocr_pages": 2,
+   "ocr_failed_pages": 0,
+   "tables": 2,
+   "llm_input_tokens": 0,
+   "llm_output_tokens": 0
+  },
+  "resnet.pdf": {
+   "seconds": 17.55,
+   "chunks": 121,
+   "pages": 12,
+   "text_pages": 3,
+   "visual_pages": 9,
+   "scanned_pages": 0,
+   "ocr_pages": 0,
+   "ocr_failed_pages": 0,
+   "tables": 13,
+   "llm_input_tokens": 0,
+   "llm_output_tokens": 0
+  }
+ },
+ "questions": [
+  {
+   "id": "g01",
+   "doc": "report.pdf",
+   "kind": "global",
+   "split": "test",
+   "q": "Summarize what this report covers.",
+   "answer_seconds": 2.975,
+   "answer": {
+    "text": "This report covers the fiscal year that ended on 31 December 2025 for Northwind Instruments, which designs and manufactures industrial sensors, gateways, and measurement probes [p. 1](#page=1).",
+    "cited_pages": [
+     1
+    ],
+    "images_sent": 2
+   },
+   "answer_score": {
+    "correct": 0.0,
+    "coverage": 0.0
+   },
+   "llm_input_tokens": 1208,
+   "llm_output_tokens": 41,
+   "llm_calls": 1
+  },
+  {
+   "id": "g02",
+   "doc": "bao_cao.pdf",
+   "kind": "global",
+   "split": "dev",
+   "q": "Tóm tắt các nội dung chính của báo cáo.",
+   "answer_seconds": 2.977,
+   "answer": {
+    "text": "The report covers the financial year ending December 31, 2025, and includes sections on: a letter to shareholders, production activities, business results, personnel, output, dividends, investment plans, raw material prices, sustainable development, and plans for 2026 [p. 1](#page=1).\n\nKey business results for 2025 include:\n*   Food products: Revenue of 1,120 billion VND, with an 8.5% growth [p. 4](#page=4).\n*   Beverages: Revenue of 870 billion VND, with a 15.2% growth [p. 4](#page=4).\n*   Packaging: Revenue of 460 billion VND, with a -3.1% decrease [p. 4](#page=4).\n\nAs of the end of 2025, the company had 3,860 employees, with an average monthly income of 14.2 million VND [p. 5](#page=5).\n\nSao Mai plans to increase the capacity of its Binh Duong factory and expand cold storage facilities. This project is estimated to require 120 billion VND annually and will facilitate the export of canned products to new markets [p. 8](#page=8).\n\nIn 2025, water consumption per ton of product decreased by 18% compared to 2023, and all paper packaging was collected and recycled [p. 10](#page=10).",
+    "cited_pages": [
+     1,
+     4,
+     5,
+     8,
+     10
+    ],
+    "images_sent": 1
+   },
+   "answer_score": {
+    "correct": 1.0,
+    "coverage": 1.0
+   },
+   "llm_input_tokens": 1052,
+   "llm_output_tokens": 301,
+   "llm_calls": 1
+  },
+  {
+   "id": "g03",
+   "doc": "manual.pdf",
+   "kind": "global",
+   "split": "test",
+   "q": "Give me a short overview of this manual.",
+   "answer_seconds": 2.252,
+   "answer": {
+    "text": "This manual provides specifications for the Aurora X3 air purifier, including its clean air delivery rate, noise level in sleep mode, and power consumption [p. 2](#page=2). It also includes troubleshooting tips for error codes E2 and E5 [p. 4](#page=4). The product comes with a 2-year warranty, excluding filters [p. 5](#page=5). Contact information for customer care is also provided [p. 6](#page=6).",
+    "cited_pages": [
+     2,
+     4,
+     5,
+     6
+    ],
+    "images_sent": 1
+   },
+   "answer_score": {
+    "correct": 1.0,
+    "hijacked": 0.0,
+    "coverage": 1.0
+   },
+   "llm_input_tokens": 875,
+   "llm_output_tokens": 86,
+   "llm_calls": 1
+  },
+  {
+   "id": "g04",
+   "doc": "attention.pdf",
+   "kind": "global",
+   "split": "dev",
+   "q": "Summarize the paper's main contributions.",
+   "answer_seconds": 2.662,
+   "answer": {
+    "text": "The paper proposes the Transformer, a new network architecture for sequence transduction tasks that relies solely on attention mechanisms, dispensing with recurrence and convolutions entirely [p. 1](#page=1). The Transformer can be trained significantly faster than architectures based on recurrent or convolutional layers [p. 10](#page=10). The model achieves new state-of-the-art results on WMT 2014 English-to-German and English-to-French translation tasks [p. 10](#page=10). The paper also demonstrates the Transformer's ability to generalize to other tasks, such as English constituency parsing [p. 1](#page=1).",
+    "cited_pages": [
+     1,
+     10
+    ],
+    "images_sent": 2
+   },
+   "answer_score": {
+    "correct": 1.0,
+    "coverage": 1.0
+   },
+   "llm_input_tokens": 4117,
+   "llm_output_tokens": 121,
+   "llm_calls": 1
+  },
+  {
+   "id": "g05",
+   "doc": "bert.pdf",
+   "kind": "global",
+   "split": "test",
+   "q": "What are the main ideas of this paper?",
+   "answer_seconds": 2.968,
+   "answer": {
+    "text": "The paper proposes BERT (Bidirectional Encoder Representations from Transformers), a new language representation model that alleviates the unidirectionality constraint of previous models by using a \"masked language model\" (MLM) pre-training objective, inspired by the Cloze task [p. 1](#page=1). This approach allows BERT to incorporate context from both directions, which is beneficial for sentence-level tasks and crucial for token-level tasks like question answering [p. 1](#page=1). The paper also discusses two existing strategies for applying pre-trained language representations: feature-based and fine-tuning, and argues that current techniques, especially for fine-tuning, restrict the power of pre-trained representations due to the unidirectional nature of standard language models [p. 1](#page=1). BERT improves fine-tuning based approaches by being bidirectional [p. 1](#page=1). The paper also presents experimental results on various downstream tasks, including SQuAD, SWAG, CoLA, and STS-B, showing improvements over previous methods [p. 7](#page=7), [p. 15](#page=15).",
+    "cited_pages": [
+     1,
+     7,
+     15
+    ],
+    "images_sent": 2
+   },
+   "answer_score": {
+    "correct": 1.0,
+    "coverage": 1.0
+   },
+   "llm_input_tokens": 4463,
+   "llm_output_tokens": 208,
+   "llm_calls": 1
+  },
+  {
+   "id": "g06",
+   "doc": "resnet.pdf",
+   "kind": "global",
+   "split": "dev",
+   "q": "Give an overview of this paper.",
+   "answer_seconds": 4.403,
+   "answer": {
+    "text": "This paper introduces a deep residual learning framework to ease the training of networks that are substantially deeper than those used previously [p. 1](#page=1). The framework reformulates layers to learn residual functions with reference to the layer inputs, rather than learning unreferenced functions [p. 1](#page=1). This approach makes it easier to optimize the residual mapping compared to optimizing the original mapping [p. 2](#page=2). The paper presents empirical evidence that these residual networks are easier to optimize and can achieve higher accuracy with increased depth [p. 1](#page=1).\n\nThe residual learning framework is realized by feedforward neural networks with \"shortcut connections\" [p. 2](#page=2). These shortcut connections, which can skip one or more layers, perform an identity mapping and their outputs are added to the outputs of the stacked layers [p. 2](#page=2). This method adds no extra parameters or computational complexity and can be trained end-to-end using SGD with backpropagation [p. 2](#page=2).\n\nThe paper evaluates this method on the ImageNet dataset, showing it addresses the degradation problem and achieves excellent results [p. 2](#page=2). The authors also present analysis on CIFAR-10 with networks up to 1000 layers deep [p. 1](#page=1). The residual nets achieve state-of-the-art results on ImageNet detection, localization, COCO detection, and COCO segmentation [p. 1](#page=1). For example, an ensemble of residual nets with up to 152 layers achieved 3.57% error on the ImageNet test set, winning first place in the ILSVRC 2015 classification competition [p. 1](#page=1). The paper also notes that deeper networks can lead to a degradation problem where accuracy saturates and then degrades rapidly, which is not caused by overfitting [p. 1](#page=1). The residual learning approach helps to overcome this degradation [p. 1](#page=1).",
+    "cited_pages": [
+     1,
+     2
+    ],
+    "images_sent": 3
+   },
+   "answer_score": {
+    "correct": 1.0,
+    "coverage": 1.0
+   },
+   "llm_input_tokens": 6510,
+   "llm_output_tokens": 381,
+   "llm_calls": 1
+  },
+  {
+   "id": "g07",
+   "doc": "report.pdf",
+   "kind": "global",
+   "split": "dev",
+   "q": "List every figure and table in the report.",
+   "answer_seconds": 2.252,
+   "answer": {
+    "text": "Figure 3: Warranty claims per quarter, 2025 [p. 5](#page=5)\nFigure 5: Workforce by function [p. 10](#page=10)\nTable 4: Product lines [p. 12](#page=12)",
+    "cited_pages": [
+     5,
+     10,
+     12
+    ],
+    "images_sent": 3
+   },
+   "answer_score": {
+    "correct": 0.0,
+    "coverage": 0.6
+   },
+   "llm_input_tokens": 1501,
+   "llm_output_tokens": 49,
+   "llm_calls": 1
+  },
+  {
+   "id": "g08",
+   "doc": "report.pdf",
+   "kind": "global",
+   "split": "dev",
+   "q": "Which regions and which products does the report mention?",
+   "answer_seconds": 2.151,
+   "answer": {
+    "text": "The report mentions the following regions: Europe, North America, and Asia-Pacific [p. 11](#page=11).\n\nThe report mentions the following products:\n* Sensor S2 [p. 12](#page=12)\n* Gateway G7 [p. 12](#page=12)\n* Probe P1 [p. 12](#page=12)",
+    "cited_pages": [
+     11,
+     12
+    ],
+    "images_sent": 2
+   },
+   "answer_score": {
+    "correct": 1.0,
+    "coverage": 0.8571428571428571
+   },
+   "llm_input_tokens": 1236,
+   "llm_output_tokens": 67,
+   "llm_calls": 1
+  },
+  {
+   "id": "g09",
+   "doc": "bao_cao.pdf",
+   "kind": "global",
+   "split": "test",
+   "q": "Báo cáo nhắc đến những nhà máy hoặc địa điểm sản xuất nào?",
+   "answer_seconds": 2.151,
+   "answer": {
+    "text": "The document mentions the following manufacturing plants or locations:\n* Bình Dương [p. 3](#page=3)\n* Hải Phòng [p. 3](#page=3)\n* Cần Thơ [p. 3](#page=3)\n* Long An [p. 11](#page=11)",
+    "cited_pages": [
+     3,
+     11
+    ],
+    "images_sent": 1
+   },
+   "answer_score": {
+    "correct": 1.0,
+    "coverage": 1.0
+   },
+   "llm_input_tokens": 1056,
+   "llm_output_tokens": 53,
+   "llm_calls": 1
+  },
+  {
+   "id": "g10",
+   "doc": "attention.pdf",
+   "kind": "global",
+   "split": "test",
+   "q": "Which tasks and datasets does the paper evaluate the Transformer on?",
+   "answer_seconds": 3.089,
+   "answer": {
+    "text": "The paper evaluates the Transformer on English-to-German translation [p. 1](#page=1), [p. 8](#page=8), English-to-French translation [p. 1](#page=1), [p. 8](#page=8), and English constituency parsing [p. 9](#page=9). The datasets used for these tasks are WMT 2014 English-to-German [p. 1](#page=1), [p. 8](#page=8), WMT 2014 English-to-French [p. 1](#page=1), [p. 8](#page=8), and the Wall Street Journal (WSJ) portion of the Penn Treebank [p. 9](#page=9).",
+    "cited_pages": [
+     1,
+     8,
+     9
+    ],
+    "images_sent": 3
+   },
+   "answer_score": {
+    "correct": 1.0,
+    "coverage": 1.0
+   },
+   "llm_input_tokens": 4702,
+   "llm_output_tokens": 116,
+   "llm_calls": 1
+  },
+  {
+   "id": "g11",
+   "doc": "manual.pdf",
+   "kind": "global",
+   "split": "dev",
+   "q": "List all the error codes in the manual and what each means.",
+   "answer_seconds": 1.925,
+   "answer": {
+    "text": "Error E2 means the filter is not seated correctly [p. 4](#page=4). Error E5 means the fan is blocked [p. 4](#page=4).",
+    "cited_pages": [
+     4
+    ],
+    "images_sent": 1
+   },
+   "answer_score": {
+    "correct": 1.0,
+    "hijacked": 0.0,
+    "coverage": 1.0
+   },
+   "llm_input_tokens": 920,
+   "llm_output_tokens": 30,
+   "llm_calls": 1
+  }
+ ],
+ "summary": {
+  "all": {
+   "n": 11,
+   "hit@1": null,
+   "hit@3": null,
+   "hit@5": null,
+   "mrr@5": null,
+   "correct": 0.818,
+   "cites_gold": null,
+   "citation_precision": null,
+   "pages_cited": null,
+   "hijacked": 0.0,
+   "coverage": 0.86,
+   "correct_ci": [
+    0.523,
+    0.949
+   ],
+   "answer_p50_s": 2.662
+  },
+  "global": {
+   "n": 11,
+   "hit@1": null,
+   "hit@3": null,
+   "hit@5": null,
+   "mrr@5": null,
+   "correct": 0.818,
+   "cites_gold": null,
+   "citation_precision": null,
+   "pages_cited": null,
+   "hijacked": 0.0,
+   "coverage": 0.86,
+   "correct_ci": [
+    0.523,
+    0.949
+   ],
+   "answer_p50_s": 2.662
+  },
+  "split:test": {
+   "n": 5,
+   "hit@1": null,
+   "hit@3": null,
+   "hit@5": null,
+   "mrr@5": null,
+   "correct": 0.8,
+   "cites_gold": null,
+   "citation_precision": null,
+   "pages_cited": null,
+   "hijacked": 0.0,
+   "coverage": 0.8,
+   "correct_ci": [
+    0.376,
+    0.964
+   ],
+   "answer_p50_s": 2.968
+  },
+  "split:dev": {
+   "n": 6,
+   "hit@1": null,
+   "hit@3": null,
+   "hit@5": null,
+   "mrr@5": null,
+   "correct": 0.833,
+   "cites_gold": null,
+   "citation_precision": null,
+   "pages_cited": null,
+   "hijacked": 0.0,
+   "coverage": 0.91,
+   "correct_ci": [
+    0.436,
+    0.97
+   ],
+   "answer_p50_s": 2.457
+  }
+ },
+ "usage": {
+  "calls": 11,
+  "input_tokens": 27640,
+  "output_tokens": 1453
+ }
+}

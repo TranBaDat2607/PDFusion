@@ -169,6 +169,17 @@ class AskProgressPayload(BaseModel):
     progress: int
 
 
+class AnswerDeltaPayload(BaseModel):
+    """An `answer_delta` event: a piece of the answer as the model writes it,
+    before its citations are checked. `offset` is where the piece starts in
+    the answer; a retried request starts again at 0, so a client places each
+    piece at its offset rather than appending it. The `answer` event that
+    follows carries the checked answer, which replaces the streamed text."""
+
+    offset: int
+    text: str
+
+
 class PdfReferencePayload(BaseModel):
     """One page of the evidence an answer was written from
     (`rag_chain._create_pdf_references`): cited pages first, in the order the
@@ -222,3 +233,6 @@ class AskResultPayload(BaseModel):
     # (the template answer, or nothing found to answer from) (#87).
     provider: Optional[str] = None
     model: Optional[str] = None
+    # The question the search used when it wasn't the one asked: a follow-up
+    # rewritten to stand on its own (`rag_chain._standalone_question`).
+    search_query: Optional[str] = None
