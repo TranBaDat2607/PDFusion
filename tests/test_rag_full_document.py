@@ -598,3 +598,90 @@ def test_the_answer_record_says_whether_the_whole_read_was_refused(
     (record,) = [r.getMessage() for r in caplog.records if r.getMessage().startswith("rag_answer ")]
     assert len(translator.calls) == calls
     assert json.loads(record.removeprefix("rag_answer "))["whole_read_refused"] is refused
+
+
+# ---------------------------------------------------------------------------
+# deciding costs no more than the decision needs (#107)
+# ---------------------------------------------------------------------------
+#
+# `reading_length` walks every character in Python, and the answer asks per
+# question. Over a 300-page PDF that was ~100 ms of work on the event loop,
+# freezing every SSE stream, and it kept counting after the answer was known.
+
+
+def _spy_on_reading_length(monkeypatch: pytest.MonkeyPatch) -> List[str]:
+    measured: List[str] = []
+    real = rag_chain_module.reading_length
+
+    def spy(text: str) -> float:
+        measured.append(text)
+        return real(text)
+
+    monkeypatch.setattr(rag_chain_module, "reading_length", spy)
+    return measured
+
+
+def test_a_budget_of_zero_measures_nothing(store, monkeypatch):
+    """"Off" is known before any chunk is read."""
+    measured = _spy_on_reading_length(monkeypatch)
+    chain = make_chain(store, _Translator("ok"), full_document_chars=0)
+
+    assert chain._reads_whole([{"text": "short"}] * 100) is False
+    assert measured == []
+
+
+def test_a_saved_budget_of_zero_measures_nothing(store, monkeypatch):
+    monkeypatch.setattr(rag_chain_module, "get_settings", lambda: _settings_with_budget(0))
+    measured = _spy_on_reading_length(monkeypatch)
+    chain = make_chain(store, _Translator("ok"))
+
+    assert chain._reads_whole([{"text": "short"}] * 100) is False
+    assert measured == []
+
+
+def test_measuring_stops_at_the_chunk_that_passes_the_limit(store, monkeypatch):
+    """Ten characters a chunk against a limit of 25: the third chunk brings the
+    total to 30, and the answer is no however many chunks follow."""
+    measured = _spy_on_reading_length(monkeypatch)
+    chain = make_chain(store, _Translator("ok"), full_document_chars=25)
+
+    assert chain._reads_whole([{"text": "x" * 10}] * 1_000) is False
+    assert len(measured) == 3
+
+
+def test_a_document_that_just_fits_is_still_measured_to_its_last_chunk(store, monkeypatch):
+    measured = _spy_on_reading_length(monkeypatch)
+    chain = make_chain(store, _Translator("ok"), full_document_chars=30)
+
+    assert chain._reads_whole([{"text": "x" * 10}] * 3) is True
+    assert len(measured) == 3
+
+
+def test_a_document_with_no_text_is_not_read_whole(store):
+    chain = make_chain(store, _Translator("ok"), full_document_chars=1_000)
+
+    assert chain._reads_whole([]) is False
+    assert chain._reads_whole([{"text": ""}]) is False
+
+
+def test_the_decision_is_made_off_the_event_loop(tmp_path, store):
+    """A blocking call on the loop freezes every stream (CLAUDE.md, Startup)."""
+    import threading
+
+    pages = eight_pages()
+    index, path = build_document(tmp_path, store, pages)
+    chain = make_chain(store, _Translator("ok"), full_document_chars=total_chars(pages) + 100)
+    loop_thread = threading.get_ident()
+    ran_on: List[int] = []
+    decide = chain._reads_whole
+
+    def recording(chunks):
+        ran_on.append(threading.get_ident())
+        return decide(chunks)
+
+    chain._reads_whole = recording
+
+    ask(chain, index, path, max_pdf_sources=2)
+
+    assert ran_on, "the chain never decided"
+    assert loop_thread not in ran_on
