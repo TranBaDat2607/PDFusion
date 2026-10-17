@@ -6,7 +6,7 @@ How to build and run PDFusion from source. If you just want to use the app,
 PDFusion is a **Tauri 2 (Rust shell) + React + TypeScript + Tailwind + shadcn/ui**
 desktop app. The Python translation/RAG backend runs as a **FastAPI sidecar**
 that the Tauri shell spawns on app start. For why the pieces fit together the
-way they do, see [architecture notes](architecture-notes.md).
+way they do, see the [architecture notes](architecture/README.md).
 
 Windows and Linux are supported and built by CI; macOS builds from source but is
 not packaged yet (see [Platform support](#platform-support)).
@@ -174,7 +174,7 @@ Notes:
 - **The `.deb` depends on `libwebkit2gtk-4.1-0` and `libgtk-3-0`**, derived by
   the bundler rather than hand-listed, and takes the webview from the system.
   **There is no AppImage** — see *Why there is no AppImage* in the
-  [architecture notes](architecture-notes.md).
+  [packaging notes](architecture/packaging.md).
 - **First build is slow** — ~10–20 min, because PyInstaller bundles the full
   chromadb + babeldoc stack.
 - **The bundles are large.** v1.1.1 shipped a 458 MB `.exe` and a 723 MB `.deb`;
@@ -228,7 +228,7 @@ PDFusion/
 │   └── utils/                        ← API key encryption, paths, logging
 ├── scripts/                          ← build_sidecar, fetch_offline_assets, render_icon
 ├── assets/branding/                  ← icon source of truth (see render_icon.py)
-├── docs/                             ← this file + architecture-notes.md
+├── docs/                             ← this file + architecture/ (the why, per area)
 ├── pdfusion-sidecar.spec             ← PyInstaller spec
 ├── main.py                           ← Standalone sidecar runner
 └── requirements.txt

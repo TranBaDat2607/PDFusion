@@ -4,8 +4,8 @@ Guidance for Claude Code (claude.ai/code) working in this repository.
 
 **The reasoning behind every rule below — the bugs that produced it, the
 measurements behind each constant — lives in
-[`docs/architecture-notes.md`](docs/architecture-notes.md). Read the relevant
-section there before changing anything this file flags.**
+[`docs/architecture/`](docs/architecture/README.md), one file per area. Read
+the relevant file before changing anything this file flags.**
 
 ## Project overview
 
@@ -157,10 +157,11 @@ Non-obvious bits of the contract:
 
 ## Invariants
 
-Each of these has a section in `docs/architecture-notes.md` and, unless noted,
-a test. They are the things most easily undone by "simplifying".
+Each group names the file in `docs/architecture/` that explains it, and each
+rule has, unless noted, a test. They are the things most easily undone by
+"simplifying".
 
-**Startup**
+**Startup** → `startup-and-shell.md`
 - **A package `__init__.py` re-exports only names that are free to import.**
   Importing a submodule runs its parent's `__init__`; this rule took
   `import api.server` from 16.3 s to 0.7 s. `api/` and `rag/` re-export nothing.
@@ -173,7 +174,7 @@ a test. They are the things most easily undone by "simplifying".
 - The sidecar prints READY before `create_app()`, so `main()` must repeat
   uvicorn's `if not server.started: sys.exit(...)` tail.
 
-**Cross-platform** (#69)
+**Cross-platform** (#69) → `cross-platform.md`
 - The data root is the platform's (`%LOCALAPPDATA%` / `~/Library/Application
   Support` / XDG). Two implementations exist (`utils/paths.py`,
   `sidecar.rs`); what keeps them in step is the shell exporting
@@ -185,7 +186,7 @@ a test. They are the things most easily undone by "simplifying".
   interpreter. `windows-sys` is target-gated, so there is **no Job Object
   equivalent off Windows** — a `SIGKILL` of the shell orphans the sidecar.
 
-**Config and keys**
+**Config and keys** → `config-and-keys.md`, `providers.md`
 - **Config v2** (#85): keys and parameters under `[providers.<id>]`, one
   `ProviderSettings` class for all; the models chosen are
   `translation.model` / `rag.answer_model` (`ModelRef`). A provider's own
@@ -213,7 +214,7 @@ a test. They are the things most easily undone by "simplifying".
   (`param_compat.py`). Model suggestions are not a whitelist; retired ids are
   swapped on load (`RETIRED_MODELS`).
 
-**Translation**
+**Translation** → `translation-pipeline.md`, `translators.md`, `providers.md`
 - **Nothing the pipeline writes is permanent.** Only `POST /pdf/export`
   produces a durable copy, so never label an unexported path "Saved to" —
   `translatedPdfPath` (ephemeral) and `exportedPdfPath` (permanent) stay apart.
@@ -240,9 +241,9 @@ a test. They are the things most easily undone by "simplifying".
   can't see string imports), and provider ids are frozen (cache keys and
   `config.toml` sections use them). **Adding a provider** that speaks an API
   PDFusion already has is a registry entry plus a recorded listing fixture,
-  and nothing in the frontend or `schemas.py` — follow the checklist in the
-  notes' "Adding a provider" and fix the design, not the checklist, if it
-  needs more. `default_base_url` is *sent* when no endpoint is saved
+  and nothing in the frontend or `schemas.py` — follow the checklist in
+  `providers.md`'s "Adding a provider" and fix the design, not the checklist,
+  if it needs more. `default_base_url` is *sent* when no endpoint is saved
   (`registry.endpoint_for`), which is what lets OpenRouter reuse OpenAI's SDK.
 - `max_pages` limits the **selected** pages, not the document; the output is
   always the whole document, with unselected pages copied from the original.
@@ -250,7 +251,7 @@ a test. They are the things most easily undone by "simplifying".
   via `storage/migrations.py`. `is_cacheable_artifact` decides what may be
   written.
 
-**Data and chat**
+**Data and chat** → `data-and-chat.md`
 - Three stores under one root: `pdfusion.db` (system of record), `vectors/`
   (derived, rebuildable), the caches (disposable). All SQLite goes through
   `storage/sqlite.py`; schema changes are appended `Migration`s, never edits to
@@ -277,7 +278,7 @@ a test. They are the things most easily undone by "simplifying".
 - Changing the embedding model, the chunker, or what `vector_store.add_chunks`
   embeds means editing `rag/index_spec.py`.
 
-**PDF viewer** (#30)
+**PDF viewer** (#30) → `pdf-viewer.md`
 - A slot's size comes from `lib/pdf-viewer/layout.ts`, never from a canvas;
   only visible pages ±3 hold one.
 - A canvas is only ever replaced by a finished one; the translated pane swaps
@@ -310,7 +311,7 @@ a test. They are the things most easily undone by "simplifying".
 - Shortcuts are owned by `MainLayout`'s capture-phase handler and are always
   `preventDefault`ed.
 
-**Shell**
+**Shell** → `startup-and-shell.md`
 - `single-instance` is registered **first**, before every other plugin.
 - Don't add Tauri plugins "just in case"; the capability grants are
   deliberately narrower than the plugin defaults.
@@ -322,14 +323,14 @@ a test. They are the things most easily undone by "simplifying".
 - CSP applies to the bundled app only, so **a CSP break first appears in
   `pnpm tauri build`**, not in dev.
 
-**Argos ships without torch.** Three changes hold it: the repacked pack carries
-MiniSBD, `chunk_type` is pinned by assignment, and `_sbd_compat` stubs
-`stanza`. `pdfusion-sidecar.spec` then excludes stanza/torch/transformers;
+**Argos ships without torch** (`packaging.md`). Three changes hold it: the
+repacked pack carries MiniSBD, `chunk_type` is pinned by assignment, and
+`_sbd_compat` stubs `stanza`. `pdfusion-sidecar.spec` then excludes stanza/torch/transformers;
 the frozen half of `test_sidecar_smoke.py` is the only check that catches an
 over-exclusion.
 
-**The spec also prunes inside packages it keeps** (`_prune`). Two things there
-look like dead weight and are not: `.pyi` stubs (skimage's `lazy_loader` parses
+**The spec also prunes inside packages it keeps** (`_prune`, `packaging.md`).
+Two things there look like dead weight and are not: `.pyi` stubs (skimage's `lazy_loader` parses
 `skimage/__init__.pyi` at import) and hyperscan's sibling `hyperscan.libs/`.
 Both fail as a *non-fatal* warm-up warning plus `cannot import name
 'PDFProcessor'` on the first translate, and the smoke suite stays green through
@@ -393,10 +394,10 @@ PyInstaller symlink out as a second copy and gzips the result; the repack puts
 the links back, stores the already-deflated engine-assets zip uncompressed, and
 recompresses with xz. Together with stripping the `.so`
 files (in `build_sidecar.py`) that is most of why the `.deb` was ~290 MB larger
-than the Windows installer — see "Why the Linux .deb was larger" in the notes.
+than the Windows installer — see "Why the Linux .deb was larger" in `packaging.md`.
 
 Targets: NSIS per-user on Windows, `deb` on Linux (**no AppImage** — linuxdeploy
-cannot walk the PyInstaller tree; see the notes), `dmg`/`app` on macOS
+cannot walk the PyInstaller tree; see `packaging.md`), `dmg`/`app` on macOS
 (unverified). Releases are built by `.github/workflows/release.yml` on a `v*`
 tag into a draft release.
 

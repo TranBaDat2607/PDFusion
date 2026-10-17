@@ -4,7 +4,8 @@ A key is verified, and its models discovered, by *listing* them — never by
 generating text. Every provider serves its list for free to any valid key, so
 a 401/403 there says the key is wrong without a completion being paid for.
 What a listing cannot see (a key with no credit, a model the account may not
-run) is in architecture-notes § "LLM endpoints and models".
+run) is in docs/architecture/providers.md § "Verifying keys and discovering
+models".
 
 This is the only place a key or an endpoint changes. `PUT /config` carried a
 block per provider, and `/config/validate` and `/config/models/{service}`
