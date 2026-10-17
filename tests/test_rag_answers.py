@@ -712,6 +712,56 @@ def test_a_model_that_refuses_to_stream_is_asked_again_without_and_remembered(tm
     assert streamed == [True, False, False]
 
 
+_UPSTREAM_ERRORS = [
+    "Provider returned error: upstream provider error",
+    "Upstream request failed",
+    "downstream connection reset",
+]
+
+
+@pytest.mark.parametrize("message", _UPSTREAM_ERRORS)
+def test_an_upstream_error_is_not_a_refusal_to_stream_and_is_not_asked_again(tmp_path, store, message):
+    """A proxy says "upstream" of its own provider failing. Read as a refusal it
+    pays for a second request that fixes nothing (#108)."""
+    translator = _StreamingTranslator(_SdkError(400, message), "It drifts [p. 1].")
+    index, path = build_document(tmp_path, store, ranked())
+
+    with pytest.raises(AnswerGenerationError):
+        ask(make_chain(store, translator), index, path, on_text=lambda o, t: None)
+
+    assert len(translator.calls) == 1
+
+
+def test_an_upstream_error_does_not_stop_the_model_streaming(tmp_path, store):
+    translator = _StreamingTranslator(
+        _SdkError(400, "Provider returned error: upstream provider error"), "It drifts [p. 1].",
+    )
+    index, path = build_document(tmp_path, store, ranked())
+    chain = make_chain(store, translator)
+
+    with pytest.raises(AnswerGenerationError):
+        ask(chain, index, path, on_text=lambda o, t: None)
+    ask(chain, index, path, on_text=lambda o, t: None)
+
+    streamed = [kwargs["on_text"] is not None for _, _, kwargs in translator.calls]
+    assert streamed == [True, True]
+
+
+def test_a_proxys_own_wording_of_a_streaming_refusal_still_counts(tmp_path, store):
+    """Guard against narrowing the match until only OpenAI's sentence passes."""
+    translator = _StreamingTranslator(
+        _SdkError(400, "Streaming is not supported for this model"), "It drifts [p. 1]."
+    )
+    index, path = build_document(tmp_path, store, ranked())
+    chain = make_chain(store, translator)
+
+    ask(chain, index, path, on_text=lambda o, t: None)
+    ask(chain, index, path, on_text=lambda o, t: None)
+
+    streamed = [kwargs["on_text"] is not None for _, _, kwargs in translator.calls]
+    assert streamed == [True, False, False]
+
+
 def test_a_rejected_key_while_streaming_is_not_retried_without_streaming(tmp_path, store):
     translator = _StreamingTranslator(_SdkError(401, "Incorrect API key provided"))
     index, path = build_document(tmp_path, store, ranked())
