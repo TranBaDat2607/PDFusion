@@ -83,7 +83,7 @@ class TranslatorFactory:
         config = settings.providers[provider_id].model_dump(exclude={"enabled_models"})
         config["model"] = settings.model_for(provider_id)
         # What the SDK is handed: the provider's own endpoint when none is
-        # saved, and a keyless server's placeholder key (#88).
+        # saved (#88).
         config["base_url"] = endpoint_for(spec, config.get("base_url"))
         config["api_key"] = request_key(spec, config.get("api_key"))
         # Names its rate limiter: a class can serve several providers.

@@ -167,3 +167,32 @@ def select_image_pages(evidence: Sequence[PageEvidence], max_images: int) -> Lis
             page.wants_image = True
             picked.append(page)
     return picked
+
+
+def whole_document(chunks: Sequence[Dict[str, Any]],
+                   ranked: Sequence[PageEvidence]) -> List[PageEvidence]:
+    """Every page of the index, in page order, each with all its chunks.
+
+    What a short document's answer reads instead of the retrieved pages. A
+    page retrieval ranked keeps its score and best chunk, which its reference
+    quotes; the others score 0 and quote their first chunk.
+    """
+    by_page = {page.page: page for page in ranked}
+    page_chunks: Dict[int, List[Dict[str, Any]]] = defaultdict(list)
+    for chunk in chunks:
+        page_chunks[_page(chunk)].append(chunk)
+    pages: List[PageEvidence] = []
+    for number in sorted(page_chunks):
+        members = sorted(page_chunks[number], key=_index)
+        found = by_page.get(number)
+        pages.append(
+            PageEvidence(
+                page=number,
+                score=found.score if found else 0.0,
+                chunks=members,
+                matched_ids=set(found.matched_ids) if found else set(),
+                page_kind=members[0].get("metadata", {}).get("page_kind", "text"),
+                best_chunk_id=found.best_chunk_id if found else members[0]["chunk_id"],
+            )
+        )
+    return pages

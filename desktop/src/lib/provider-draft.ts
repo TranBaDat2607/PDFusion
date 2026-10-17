@@ -135,8 +135,8 @@ export function providerUpdate(draft: ProviderDraft, provider: ProviderInfo): Pr
  *  switching them needs no check; and a cleared key leaves nothing to check
  *  with, nor any key to send to a new endpoint. */
 export function needsVerify(draft: ProviderDraft, provider: ProviderInfo): boolean {
-  // A keyless server has no key to type; only a new endpoint is news.
-  if (!provider.requires_key) return endpointChanged(draft, provider);
+  // A provider that takes no key (Argos) has nothing a check could vouch for.
+  if (!provider.requires_key) return false;
   if (draft.clearKey) return false;
   return typedKey(draft) !== "" || endpointChanged(draft, provider);
 }
@@ -144,7 +144,7 @@ export function needsVerify(draft: ProviderDraft, provider: ProviderInfo): boole
 /**
  * The `POST /providers/{id}/verify` body for a draft: the typed key when there
  * is one, otherwise none, and the sidecar uses the saved key. `null` when
- * there is no key to check with — never for a keyless server.
+ * there is no key to check with — never for a provider that takes no key.
  */
 export function verifyRequest(
   draft: ProviderDraft,
@@ -153,7 +153,8 @@ export function verifyRequest(
   const endpoint = provider.takes_endpoint
     ? { base_url: normalizeEndpoint(draft.baseUrl) }
     : {};
-  // A keyless server is always checkable: listing it needs no key (#88).
+  // A provider that takes no key is checked as it is: Argos's verify checks
+  // its install.
   if (!provider.requires_key) return endpoint;
   const apiKey = draft.apiKey.trim();
   if (draft.clearKey || (!apiKey && !hasSavedKey(provider))) return null;
@@ -218,7 +219,7 @@ export function toggleModel(draft: ProviderDraft, model: string, on: boolean): P
   return { ...draft, enabled: [...draft.enabled, model] };
 }
 
-/** A model the endpoint doesn't list — a local server's, one the filter hid
+/** A model the endpoint doesn't list — another server's, one the filter hid
  *  wrongly — added by name. */
 export function addCustomModel(draft: ProviderDraft, name: string): ProviderDraft {
   const model = name.trim();
@@ -301,12 +302,8 @@ export function statusLine(
   catalog: ModelCatalog | undefined,
   now: number,
 ): StatusLine {
-  if (!provider.requires_key) {
-    // A keyless server's listing says whether it is up (#88).
-    if (catalog?.error) return { tone: "error", text: catalog.error };
-    if (catalog) return { tone: "ok", text: countModels(catalog) };
-    return { tone: "ok", text: "No key needed" };
-  }
+  // Argos: no key to state, and no listing to report.
+  if (!provider.requires_key) return { tone: "ok", text: "No key needed" };
   if (provider.key_state === "unreadable") {
     return {
       tone: "error",
@@ -347,7 +344,7 @@ interface SelectionInput {
 
 /** Whether a model name is one of the listed ids, allowing for aliases, as
  *  `providers/listing.py:model_matches` does: Anthropic lists only
- *  `claude-haiku-4-5-20251001` for the alias `claude-haiku-4-5`, and Ollama
+ *  `claude-haiku-4-5-20251001` for the alias `claude-haiku-4-5`, and a server
  *  `llama3.2:latest` for `llama3.2`. An exact match missed those and left an
  *  upgraded user on Argos after saving a key that works. */
 function modelListed(model: string, listed: readonly string[]): boolean {

@@ -112,7 +112,7 @@ def test_the_refusal_is_remembered_for_that_model_on_that_endpoint():
     "other",
     [
         {"model": "another"},
-        {"model": "reasoner", "base_url": "http://localhost:11434/v1"},
+        {"model": "reasoner", "base_url": "https://llm.example.com/v1"},
     ],
 )
 def test_another_model_or_endpoint_is_asked_afresh(other: dict):

@@ -190,16 +190,16 @@ def test_openai_hides_nothing_at_another_providers_own_endpoint():
 
 
 def test_openai_custom_endpoint_hides_nothing():
-    """Ollama / LM Studio name models freely — `nomic-embed-text` or a
-    `whisper-*` there may be exactly what the user loaded — so a custom
+    """A compatible server names models freely — `nomic-embed-text` or a
+    `whisper-*` there may be exactly what the user wants — so a custom
     endpoint gets no filter at all, and the request goes to that host."""
     seen: List[httpx.Request] = []
     client = _mock_client(
-        _openai_handler(_fixture("openai_custom.json"), "localhost", "/v1/models"), seen
+        _openai_handler(_fixture("openai_custom.json"), "llm.example.com", "/v1/models"), seen
     )
 
     listing = list_openai_models(
-        "ollama", "http://localhost:11434/v1", http_client=client
+        "sk-llm", "https://llm.example.com/v1", http_client=client
     )
 
     assert [m.id for m in listing.models] == [
@@ -211,10 +211,9 @@ def test_openai_custom_endpoint_hides_nothing():
     ]
     assert listing.hidden == ()
     assert len(seen) == 1
-    assert seen[0].url.host == "localhost"
-    assert seen[0].url.port == 11434
+    assert seen[0].url.host == "llm.example.com"
     assert seen[0].url.path == "/v1/models"
-    assert seen[0].headers["authorization"] == "Bearer ollama"
+    assert seen[0].headers["authorization"] == "Bearer sk-llm"
 
 
 def test_openai_created_seconds_become_milliseconds():
@@ -392,13 +391,13 @@ def test_openai_hidden_keeps_the_providers_order_across_both_rules():
 
 @pytest.mark.parametrize(
     "base_url",
-    ["https://openrouter.ai/api/v1", "http://localhost:11434/v1"],
-    ids=["openrouter", "ollama"],
+    ["https://openrouter.ai/api/v1", "https://llm.example.com/v1"],
+    ids=["openrouter", "sk-llm"],
 )
 def test_openai_release_date_rule_does_not_apply_at_another_endpoint(base_url):
-    """Ollama's `created` is when the model was pulled and OpenRouter serves
-    other vendors' models, so an old `created` there says nothing about
-    release."""
+    """A compatible server may stamp `created` with when it loaded a model,
+    and OpenRouter serves other vendors' models, so an old `created` there
+    says nothing about release."""
     client = _mock_client(_openai_list_of(["llama3.2:latest", "qwen2.5"], created=1), [])
 
     listing = list_openai_models("key", base_url, http_client=client)
@@ -810,7 +809,7 @@ def test_a_refused_key_propagates_with_its_status(lister, body, error_type, stat
         ("gpt-4.1-mini", ["gpt-4.1-mini"], True),
         # An alias resolves to a dated id...
         ("claude-haiku-4-5", ["claude-haiku-4-5-20251001"], True),
-        # ...and an Ollama name to its tagged one.
+        # ...and a bare name to its tagged one.
         ("llama3.2", ["llama3.2:latest"], True),
         ("gpt-4", ["gpt-4-turbo"], True),
         ("gpt-4o", ["o3", "gpt-4o-mini"], True),

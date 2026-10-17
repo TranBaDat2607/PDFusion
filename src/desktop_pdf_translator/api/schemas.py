@@ -82,6 +82,7 @@ class ConfigUpdateRequest(BaseModel):
     default_source_lang: Optional[LanguageCode] = None
     default_target_lang: Optional[LanguageCode] = None
     chat_enabled: Optional[bool] = None
+    whole_document_tokens: Optional[int] = Field(None, ge=0, le=100_000)
     # Performance / cache toggles
     max_parallel_chunks: Optional[int] = Field(None, ge=0, le=16)
     max_pages: Optional[MaxPages] = None
@@ -345,6 +346,14 @@ class ChatMessageResponse(BaseModel):
     # `None` for an answer no model wrote, and for one saved before #87.
     provider: Optional[str] = None
     model: Optional[str] = None
+    # Assistant messages only: 1 or -1 when the user rated the answer.
+    rating: Optional[Literal[-1, 1]] = None
+
+
+class RateAnswerRequest(BaseModel):
+    """The user's verdict on an answer; `None` takes a rating back."""
+
+    rating: Optional[Literal[-1, 1]] = None
 
 
 class ChatHistoryResponse(BaseModel):
@@ -485,7 +494,7 @@ class ProvidersResponse(BaseModel):
 class ModelCatalogResponse(BaseModel):
     """The models the saved key can use at the saved endpoint.
 
-    A failure is `error` in a 200: a local server that isn't up yet is ordinary, and `models` still carries the saved
+    A failure is `error` in a 200: an endpoint that is briefly down is ordinary, and `models` still carries the saved
     model (and, on the provider's own endpoint, the suggestions).
     """
 

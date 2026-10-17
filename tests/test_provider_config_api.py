@@ -36,7 +36,7 @@ from desktop_pdf_translator.utils.encryption import KEYSTORE_PREFIX
 
 from provider_fakes import (
     ATTACKER,
-    OLLAMA,
+    COMPATIBLE_SERVER,
     FakeLister,
     GenerationGuard,
     install_catalog,
@@ -150,7 +150,7 @@ def provider_rows(client: TestClient) -> dict:
 
 
 def fill(store: ModelCatalog) -> None:
-    for provider_id, endpoint in (("openai", None), ("openai", OLLAMA), ("gemini", None)):
+    for provider_id, endpoint in (("openai", None), ("openai", COMPATIBLE_SERVER), ("gemini", None)):
         store.put(provider_id, endpoint, SOME_LISTING)
 
 
@@ -164,8 +164,8 @@ def test_put_provider_saves_every_field(client: TestClient, manager: ConfigManag
         client,
         "openai",
         {
-            "api_key": "ollama",
-            "base_url": f"{OLLAMA}/",
+            "api_key": "sk-llm",
+            "base_url": f"{COMPATIBLE_SERVER}/",
             "enabled_models": ["llama3.2:3b", "qwen3"],
             "temperature": 1.2,
             "max_tokens": 2048,
@@ -175,8 +175,8 @@ def test_put_provider_saves_every_field(client: TestClient, manager: ConfigManag
 
     assert response.status_code == 200
     saved = reloaded(manager).providers["openai"]
-    assert saved.api_key == "ollama"
-    assert saved.base_url == OLLAMA
+    assert saved.api_key == "sk-llm"
+    assert saved.base_url == COMPATIBLE_SERVER
     assert saved.enabled_models == ["llama3.2:3b", "qwen3"]
     assert saved.temperature == 1.2
     assert saved.max_tokens == 2048
@@ -188,8 +188,8 @@ def test_put_provider_answers_with_its_provider_row(client: TestClient):
         client,
         "openai",
         {
-            "api_key": "ollama",
-            "base_url": OLLAMA,
+            "api_key": "sk-llm",
+            "base_url": COMPATIBLE_SERVER,
             "enabled_models": ["llama3.2:3b"],
             "temperature": 1.2,
             "max_tokens": 2048,
@@ -201,7 +201,7 @@ def test_put_provider_answers_with_its_provider_row(client: TestClient):
     body = response.json()
     assert body["id"] == "openai"
     assert body["has_key"] is True
-    assert body["base_url"] == OLLAMA
+    assert body["base_url"] == COMPATIBLE_SERVER
     assert body["enabled_models"] == ["llama3.2:3b"]
     assert body["temperature"] == 1.2
     assert body["max_tokens"] == 2048
@@ -248,7 +248,7 @@ def test_an_absent_key_is_left_as_it_is(client: TestClient, manager: ConfigManag
 
 
 def test_an_empty_endpoint_is_the_providers_own(client: TestClient, manager: ConfigManager):
-    seed(manager, providers={"openai": {"api_key": "ollama", "base_url": OLLAMA}})
+    seed(manager, providers={"openai": {"api_key": "sk-llm", "base_url": COMPATIBLE_SERVER}})
 
     response = put_provider(client, "openai", {"api_key": KEY, "base_url": ""})
 
@@ -275,7 +275,7 @@ def test_changing_the_endpoint_needs_the_key_again(client: TestClient, manager: 
 # were retired (#88): each rule held there, and holds here.
 
 
-@pytest.mark.parametrize("typed_key, saved_key", [("ollama", "ollama"), ("", None)])
+@pytest.mark.parametrize("typed_key, saved_key", [("sk-llm", "sk-llm"), ("", None)])
 def test_a_key_from_the_environment_never_reaches_a_new_endpoint(
     client: TestClient,
     manager: ConfigManager,
@@ -300,28 +300,28 @@ def test_returning_to_the_providers_own_endpoint_needs_the_key_too(
     client: TestClient, manager: ConfigManager
 ):
     assert put_provider(
-        client, "anthropic", {"api_key": "ollama", "base_url": "http://localhost:11434"}
+        client, "anthropic", {"api_key": "sk-llm", "base_url": "https://llm.example.com"}
     ).status_code == 200
 
     assert put_provider(client, "anthropic", {"base_url": ""}).status_code == 422
-    assert manager.settings.providers["anthropic"].base_url == "http://localhost:11434"
+    assert manager.settings.providers["anthropic"].base_url == "https://llm.example.com"
 
 
 def test_the_same_endpoint_typed_again_is_not_a_change(client: TestClient):
-    put_provider(client, "openai", {"api_key": "ollama", "base_url": OLLAMA})
+    put_provider(client, "openai", {"api_key": "sk-llm", "base_url": COMPATIBLE_SERVER})
 
-    assert put_provider(client, "openai", {"base_url": f"  {OLLAMA}/ "}).status_code == 200
+    assert put_provider(client, "openai", {"base_url": f"  {COMPATIBLE_SERVER}/ "}).status_code == 200
 
 
 def test_an_endpoint_needs_no_key_when_none_is_saved(
     client: TestClient, manager: ConfigManager
 ):
-    assert put_provider(client, "openai", {"base_url": OLLAMA}).status_code == 200
-    assert manager.settings.providers["openai"].base_url == OLLAMA
+    assert put_provider(client, "openai", {"base_url": COMPATIBLE_SERVER}).status_code == 200
+    assert manager.settings.providers["openai"].base_url == COMPATIBLE_SERVER
 
 
 @pytest.mark.parametrize(
-    "base_url", ["localhost:11434", "ftp://example.com", "http://", "/"]
+    "base_url", ["llm.example.com", "ftp://example.com", "http://", "/"]
 )
 def test_an_endpoint_must_be_a_web_url(client: TestClient, base_url: str):
     assert put_provider(client, "openai", {"base_url": base_url}).status_code == 422
@@ -408,7 +408,7 @@ def test_setting_or_clearing_a_key_forgets_one_that_could_not_be_read(
     [
         ({}, {"api_key": "sk-new"}),
         ({"api_key": KEY}, {"api_key": ""}),
-        ({}, {"base_url": OLLAMA}),
+        ({}, {"base_url": COMPATIBLE_SERVER}),
     ],
     ids=["key-set", "key-cleared", "endpoint-changed"],
 )
@@ -421,7 +421,7 @@ def test_a_key_or_endpoint_change_drops_that_providers_catalog_rows(
     assert put_provider(client, "openai", body).status_code == 200
 
     assert store.get("openai", None) is None
-    assert store.get("openai", OLLAMA) is None
+    assert store.get("openai", COMPATIBLE_SERVER) is None
     assert store.get("gemini", None) is not None
 
 
@@ -492,7 +492,7 @@ def test_deleting_a_key_drops_its_catalog_rows(
     assert delete_key(client, "openai").status_code == 200
 
     assert store.get("openai", None) is None
-    assert store.get("openai", OLLAMA) is None
+    assert store.get("openai", COMPATIBLE_SERVER) is None
     assert store.get("gemini", None) is not None
 
 
@@ -520,7 +520,7 @@ def test_the_translation_model_is_saved(client: TestClient, manager: ConfigManag
     "body",
     [
         {"openai": {"api_key": "sk-new"}},
-        {"anthropic": {"base_url": "http://localhost:11434"}},
+        {"anthropic": {"base_url": "https://llm.example.com"}},
         {"preferred_service": "gemini"},
     ],
     ids=["key-block", "endpoint-block", "preferred-service"],

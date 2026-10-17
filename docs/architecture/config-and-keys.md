@@ -99,7 +99,7 @@ Pydantic class plus fields on the config API. Now:
 ```toml
 [providers.openai]            # one table per registry id, all the same class
 api_key = "…encrypted…"
-base_url = "http://localhost:11434/v1"   # absent = the provider's own
+base_url = "https://llm.example.com/v1"  # absent = the provider's own
 enabled_models = ["gpt-4.1", "gpt-5.6-sol"]
 temperature = 0.3
 

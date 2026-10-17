@@ -29,12 +29,11 @@ from desktop_pdf_translator.providers.catalog import (
 )
 from desktop_pdf_translator.providers.listing import ListedModel, Listing
 
-from provider_fakes import make_keyless
 
 # An arbitrary fixed instant (2026, Unix ms): tests never read the clock.
 T0 = 1_780_000_000_000
 
-LOCAL_BASE_URL = "http://localhost:11434/v1"
+OTHER_BASE_URL = "https://llm.example.com/v1"
 
 FULL_LISTING = Listing(
     models=(
@@ -107,15 +106,15 @@ def test_each_base_url_has_its_own_row(catalog: ModelCatalog):
     """One provider id serves both its own endpoint and any OpenAI-compatible
     server the user points it at; their model lists have nothing in common."""
     catalog.put("openai", None, FULL_LISTING, now=T0)
-    catalog.put("openai", LOCAL_BASE_URL, OTHER_LISTING, now=T0 + 5)
+    catalog.put("openai", OTHER_BASE_URL, OTHER_LISTING, now=T0 + 5)
 
     own = catalog.get("openai", None)
-    local = catalog.get("openai", LOCAL_BASE_URL)
+    local = catalog.get("openai", OTHER_BASE_URL)
 
     assert own is not None and own.listing == FULL_LISTING
     assert own.fetched_at == T0
     assert local is not None and local.listing == OTHER_LISTING
-    assert local.base_url == LOCAL_BASE_URL
+    assert local.base_url == OTHER_BASE_URL
     assert local.fetched_at == T0 + 5
     assert catalog.get("openai", "http://localhost:8080/v1") is None
 
@@ -193,13 +192,13 @@ def test_invalidating_a_provider_drops_every_endpoint_of_it_and_nothing_else(
     key), and the old key's lists are wrong for every base_url it was used
     with."""
     catalog.put("openai", None, FULL_LISTING, now=T0)
-    catalog.mark_invalid("openai", LOCAL_BASE_URL, now=T0)
+    catalog.mark_invalid("openai", OTHER_BASE_URL, now=T0)
     catalog.put("gemini", None, OTHER_LISTING, now=T0)
 
     assert catalog.invalidate("openai") == 2
 
     assert catalog.get("openai", None) is None
-    assert catalog.get("openai", LOCAL_BASE_URL) is None
+    assert catalog.get("openai", OTHER_BASE_URL) is None
     gemini = catalog.get("gemini", None)
     assert gemini is not None and gemini.listing == OTHER_LISTING
     assert catalog.invalidate("openai") == 0
@@ -351,10 +350,10 @@ def _patch_openai_lister(monkeypatch: pytest.MonkeyPatch, behaviour):
 def test_list_models_asks_the_providers_lister(monkeypatch: pytest.MonkeyPatch):
     calls = _patch_openai_lister(monkeypatch, lambda: OTHER_LISTING)
 
-    listing = asyncio.run(catalog_module.list_models("openai", "ollama", LOCAL_BASE_URL))
+    listing = asyncio.run(catalog_module.list_models("openai", "sk-llm", OTHER_BASE_URL))
 
     assert listing == OTHER_LISTING
-    assert calls == [("ollama", LOCAL_BASE_URL)]
+    assert calls == [("sk-llm", OTHER_BASE_URL)]
 
 
 def test_list_models_resolves_the_endpoint_through_the_registry(
@@ -368,20 +367,6 @@ def test_list_models_resolves_the_endpoint_through_the_registry(
     asyncio.run(catalog_module.list_models("openai", "sk-x", None))
 
     assert calls == [("sk-x", "https://api.openai.com/v1")]
-
-
-def test_list_models_sends_a_keyless_providers_placeholder_key(
-    monkeypatch: pytest.MonkeyPatch,
-):
-    """A keyless local server (Ollama, #88) is asked with its placeholder key,
-    never `None` — the SDK a lister builds on may refuse to construct a client
-    with no key at all."""
-    make_keyless(monkeypatch, "openai")
-    calls = _patch_openai_lister(monkeypatch, lambda: OTHER_LISTING)
-
-    asyncio.run(catalog_module.list_models("openai", None, LOCAL_BASE_URL))
-
-    assert calls == [("unused", LOCAL_BASE_URL)]
 
 
 @pytest.mark.parametrize(
@@ -410,7 +395,7 @@ def test_a_server_that_is_down_is_listing_failed(monkeypatch: pytest.MonkeyPatch
     _patch_openai_lister(monkeypatch, down)
 
     with pytest.raises(catalog_module.ListingFailed, match="Connection refused"):
-        asyncio.run(catalog_module.list_models("openai", "ollama", LOCAL_BASE_URL))
+        asyncio.run(catalog_module.list_models("openai", "sk-llm", OTHER_BASE_URL))
 
 
 def test_a_failure_names_the_server_it_could_not_reach(monkeypatch: pytest.MonkeyPatch):
@@ -423,8 +408,8 @@ def test_a_failure_names_the_server_it_could_not_reach(monkeypatch: pytest.Monke
     _patch_openai_lister(monkeypatch, down)
 
     with pytest.raises(catalog_module.ListingFailed) as failure:
-        asyncio.run(catalog_module.list_models("openai", "ollama", LOCAL_BASE_URL))
-    assert LOCAL_BASE_URL in str(failure.value)
+        asyncio.run(catalog_module.list_models("openai", "sk-llm", OTHER_BASE_URL))
+    assert OTHER_BASE_URL in str(failure.value)
     assert "Connection error." in str(failure.value)
 
 
@@ -447,4 +432,4 @@ def test_a_listing_past_the_deadline_is_listing_failed(monkeypatch: pytest.Monke
     monkeypatch.setattr(catalog_module, "PROBE_TIMEOUT_S", 0.05)
 
     with pytest.raises(catalog_module.ListingFailed, match="[Tt]imed out"):
-        asyncio.run(catalog_module.list_models("openai", "ollama", LOCAL_BASE_URL))
+        asyncio.run(catalog_module.list_models("openai", "sk-llm", OTHER_BASE_URL))

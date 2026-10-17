@@ -55,8 +55,8 @@ runs to 2, the others' to 1) and `default_max_tokens` (Anthropic requires one).
 ## Adding a provider
 
 Phases 1–5 of the provider work (#83–#87) were meant to make a new provider a
-small, predictable change; #88 proved it with OpenRouter, DeepSeek and Ollama,
-each added in a commit touching only the registry and one test fixture. For a
+small, predictable change; #88 proved it with OpenRouter and DeepSeek, each
+added in a commit touching only the registry and one test fixture. For a
 provider speaking an API PDFusion already speaks (OpenAI's, Anthropic's,
 Gemini's):
 
@@ -64,12 +64,13 @@ Gemini's):
    (never inserted: ids are frozen, and order is the Models page's). Reuse the
    protocol's `translator` and `lister`. Set `default_base_url` — it is *sent*
    when no endpoint is saved (`endpoint_for`), which is how OpenRouter reaches
-   its own URL through OpenAI's SDK. A keyed provider takes `env_prefix`,
-   `signup_url` and a `priority` (its place in chat's fallback); a keyless
-   local server takes `requires_key=False`, a `placeholder_key` if its SDK
-   insists on one, `priority=None`, and usually `takes_endpoint` with an
-   `endpoint_hint`. Only a **new protocol** needs code: a `BaseTranslator`
-   subclass and a lister in `providers/listing.py`.
+   its own URL through OpenAI's SDK. A provider takes `env_prefix`,
+   `signup_url` and a `priority` (its place in chat's fallback). Only a **new
+   protocol** needs code: a `BaseTranslator` subclass and a lister in
+   `providers/listing.py`. Local model servers (Ollama and the like) are not
+   offered: PDFusion stays a lightweight client of hosted models, and the
+   keyless-LLM machinery they needed (`placeholder_key`, small context
+   windows) was removed with them.
 2. **A recorded list response**, `tests/fixtures/model_lists/<id>.json`, in the
    provider's documented shape. `tests/test_provider_listings.py` lists every
    provider that borrows OpenAI's API from its fixture and checks the request
@@ -84,21 +85,19 @@ Gemini's):
 If a provider needs more than that, fix the design, not the checklist.
 
 Two things that make that hold, both easy to undo: a translator class serves
-several providers (OpenRouter, DeepSeek and Ollama all build
-`OpenAITranslator`), so the factory passes `provider_id` and the rate limiter
-is named after the provider, not the class — keyed on the class, all four
-drew on OpenAI's budget and the others' `default_qps` was never read. And a
-keyless provider never holds a key: `ProviderSettings` drops one hand-edited
-into its table, which would otherwise go out in place of the placeholder and
-could never be cleared, since the API refuses a key for it both ways. Argos
-is pre-warmed only when it is what a translation would run
-(`resolve_effective_service`), not whenever no key is saved: Ollama needs
-none.
+several providers (OpenRouter and DeepSeek both build `OpenAITranslator`),
+so the factory passes `provider_id` and the rate limiter is named after the
+provider, not the class — keyed on the class, all three drew on OpenAI's
+budget and the others' `default_qps` was never read. And the keyless provider
+(Argos) never holds a key: `ProviderSettings` drops one hand-edited into its
+table, which could never be cleared, since the API refuses a key for it both
+ways. Argos is pre-warmed only when it is what a translation would run
+(`resolve_effective_service`).
 
 What listing can and can't tell, per provider: OpenRouter serves its model list
 without a key, so Verify can't tell a bad OpenRouter key from a good one — the
 first paragraph's 401 aborts the job instead. DeepSeek answers a bad key with
-401, like OpenAI. Ollama has no key; listing tells only whether it is running.
+401, like OpenAI.
 
 ## Verifying keys and discovering models
 
@@ -123,8 +122,8 @@ pickers offer only what Settings → Models switched on from the key's own
 listing. A name added there by hand, for a model no list has, is the user's to
 vouch for. `verify` still looks a named model up in the list
 (`listing.model_matches`, `model_found`), allowing Anthropic's undated aliases
-(`claude-haiku-4-5` for `claude-haiku-4-5-20251001`) and Ollama's implicit tag
-(`llama3.2` for `llama3.2:latest`).
+(`claude-haiku-4-5` for `claude-haiku-4-5-20251001`) and a compatible server's
+implicit tag (`name` for `name:latest`).
 
 **What listing alone can't catch**, and a translation will report as failed
 paragraphs (or, for a 401/403, abort on):
@@ -152,7 +151,7 @@ inside the function and reached through `ProviderSpec.lister`:
   `computer-use`, `deep-research`). The issue's prefix list let those through,
   and the toolbar saves a listed model unchecked, so each would have 404ed on
   every paragraph of a job that then ran to the end on source text. On a
-  custom endpoint nothing is filtered: Ollama or LM Studio can call a chat
+  custom endpoint nothing is filtered: a compatible server can call a chat
   model anything.
 - **Anthropic** (`GET /v1/models`) is walked page by page on
   `has_more`/`last_id`. The old code asked for 100 and never fetched a second
@@ -173,7 +172,8 @@ reaches them and a model already switched on stays on. A picker full of
 `gpt-3.5-turbo`, `gpt-4-0613` and Gemini 1.5 buried the models anyone would
 choose. OpenAI and Anthropic are dated by the listing's own `created` /
 `created_at`. OpenAI's rule applies only at its own endpoint, like the id
-filter: Ollama's `created` is when the model was pulled, not released.
+filter: another server's `created` may be when it loaded the model, not when
+it was released.
 Gemini's listing carries no date, so its family version stands in —
 `gemini-` below 2.0 (2.0 went GA in Feb 2025) and `gemma-` below 3 (March
 2025) are hidden (Gemma 1's `gemma-7b` is a size, not a version), and an id
@@ -209,8 +209,8 @@ key's state (`valid` after a listing, `invalid` after a refusal). Three rules:
 ## LLM endpoints and models
 
 Settings takes any model name, and OpenAI and Anthropic each take an endpoint
-(`base_url`), which is what lets Ollama, LM Studio or a proxy stand in for the
-provider (#32). README has the recipe. Four rules hold that together:
+(`base_url`), which is what lets a proxy or a compatible hosted service stand
+in for the provider (#32). Four rules hold that together:
 
 - **A saved key is only ever sent to the endpoint it was saved for.** `GET
   /config` never reveals a key, but `base_url` decides where the next request
@@ -274,7 +274,7 @@ provider (#32). README has the recipe. Four rules hold that together:
   `ConfigManager._replace_retired_models` swaps any ID in
   `config/models.py:RETIRED_MODELS` for the service's current default. Add an
   ID there when its provider shuts it down. A model not on the list is left
-  alone, since a local server can call its models anything.
+  alone, since another endpoint can call its models anything.
 
 Two smaller consequences. The chat answer model is rebuilt when the endpoint
 changes (`rag_chain._answer_model` keys on it). And every listing names its
@@ -282,17 +282,13 @@ endpoint explicitly, `None` (the provider's own) included
 (`routes/providers.py:resolve_probe_target`), so a check of a typed endpoint
 can never fall through to the saved one.
 
-**A keyless local server is a provider of its own** (#88). Pointed at Ollama,
-the OpenAI card still needs *some* key typed: it is a keyed provider, and
-without one it falls back to Argos (`capabilities.resolve_effective_service`),
-the rule #32 left as it was. The Ollama entry instead has `requires_key=False`:
-`has_api_key` counts it as usable with none, verify and the model list work
-with no key, and its SDK is handed `placeholder_key` (OpenAI's refuses to
-build a client without one; Ollama ignores it). There is no key, so the
-endpoint rule has nothing to guard, and the registry refuses a key for it.
-It is never a chat fallback (`priority` is `None`): a local server may not be
-running, and "any LLM with a key" should mean one that answers. Chosen as the
-answer or translation model, it answers like any other (`ProviderSpec.is_llm`).
+**There is no local-model provider.** The Ollama entry #88 added — keyless,
+with a placeholder key for OpenAI's SDK and no place in chat's fallback — was
+removed to keep PDFusion a lightweight client of hosted models. A
+`config.toml` saved with it still loads: its table is dropped as an unknown
+provider (`ConfigManager._drop_unknown_providers`), and a translation or
+answer model that named it falls back to the defaults
+(`test_a_config_saved_with_a_local_model_loads_without_it`).
 
 **Picking a model happens in the toolbar** (`components/translation/ModelPicker.tsx`,
 rules in `lib/model-choice.ts`). The service used to be a toolbar Select and the
@@ -358,8 +354,8 @@ under vitest; `components/settings/ModelsTab.tsx` only draws them.
   matched to the draft by the request it sent (`currentCheck`), not cleared
   per keystroke: a trailing space or slash sends the same request, starts no
   new check, and a cleared one left Save on "Checking…" for good. When the check fails
-  the button becomes **Save anyway** straight away, since a local server may
-  simply not be running. Switching models on and off needs no check — they come from the
+  the button becomes **Save anyway** straight away, since the endpoint may
+  simply be down for now. Switching models on and off needs no check — they come from the
   provider's own list. Cache and Chat keep their own immediate switches.
 - **The endpoint rule is met before the 422.** `endpointNeedsKey` warns under
   the base URL when a saved key — an unreadable one included

@@ -10,7 +10,7 @@ import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from functools import partial
-from typing import Callable, Dict, FrozenSet, Optional, Any, Sequence
+from typing import Callable, Dict, FrozenSet, Iterable, Optional, Any, Sequence
 
 from ..config import LanguageCode
 from . import param_compat
@@ -74,6 +74,32 @@ def _status_code_of(error: BaseException) -> Optional[int]:
     return status if isinstance(status, int) else None
 
 
+# Receives a streamed answer: `(offset, piece)`, `offset` being how many
+# characters of text this attempt delivered before `piece`.
+OnText = Callable[[int, str], None]
+
+
+def deliver_stream(pieces: Iterable[Optional[str]], on_text: OnText) -> str:
+    """Hand each non-empty piece to `on_text` at its offset; return the whole
+    text. Called inside the request `_call_with_backoff` retries, so a retry
+    counts from 0 again and a consumer placing pieces at their offsets ends
+    with the retry's text, not the failed attempt's prefix twice."""
+    text = ""
+    try:
+        for piece in pieces:
+            if piece:
+                on_text(len(text), piece)
+                text += piece
+    except Exception as error:
+        # Only an SDK's API error is the provider speaking; anything else is a
+        # bug or a parse failure, and retrying would only repeat it.
+        sdk_error = any(cls.__name__ == "APIError" for cls in type(error).__mro__)
+        if sdk_error and not is_fatal_translation_error(error) and not is_retryable_translation_error(error):
+            raise StreamInterrupted(str(error)) from error
+        raise
+    return text
+
+
 def is_fatal_translation_error(error: BaseException) -> bool:
     """Whether this failure means every later paragraph will fail the same way.
 
@@ -108,7 +134,17 @@ def is_fatal_translation_error(error: BaseException) -> bool:
 # Listing the leaf names instead missed the five httpx classes with no
 # "Timeout"/"Connect" in their name, which on Gemini meant a socket-level
 # read failure was still an immediately-lost paragraph.
-_RETRYABLE_ERROR_NAMES = frozenset({"APIConnectionError", "TransportError"})
+_RETRYABLE_ERROR_NAMES = frozenset({"APIConnectionError", "TransportError", "StreamInterrupted"})
+
+
+class StreamInterrupted(Exception):
+    """The provider reported an error inside a stream it had already accepted.
+
+    Anthropic sends an overload as an `error` event after the 200 that opened
+    the stream, so the SDK's exception carries status 200; OpenAI-compatible
+    servers send an `{"error": ...}` chunk, raised with no status at all.
+    Either way it is the transient failure a 529 or 503 before the stream
+    would have been, and is retried like one."""
 
 
 def is_retryable_translation_error(error: BaseException) -> bool:
@@ -219,7 +255,7 @@ class BaseTranslator(ABC):
                   provider_id: Optional[str]
                     The registry provider this instance serves, which names
                     its rate limiter. One class serves several providers —
-                    OpenRouter, DeepSeek and Ollama all build
+                    OpenRouter and DeepSeek both build
                     `OpenAITranslator` — and keyed on the class's own name
                     they drew on OpenAI's budget (#88).
         """
@@ -461,12 +497,15 @@ class BaseTranslator(ABC):
         system: Optional[str] = None,
         max_tokens: int = 1000,
         images: Optional[Sequence[PageImage]] = None,
+        on_text: Optional[OnText] = None,
     ) -> Optional[str]:
         """Freeform text generation for RAG answer synthesis.
 
         LLM backends override this. The base implementation returns None,
         meaning the backend (e.g. Argos NMT) cannot follow instructions —
-        callers must fall back to a non-LLM path.
+        callers must fall back to a non-LLM path. With `on_text`, an LLM
+        backend streams, handing over the text as it is written
+        (`deliver_stream`); the return value is the same either way.
         """
         return None
 

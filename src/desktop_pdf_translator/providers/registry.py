@@ -57,8 +57,8 @@ class ProviderSpec:
     requires_key: bool = True
     # `OPENAI` → `OPENAI_API_KEY` / `OPENAI_MODEL` in the environment or `.env`.
     env_prefix: Optional[str] = None
-    # Whether it can be pointed at another server speaking its API: Ollama,
-    # LM Studio, a proxy (#32).
+    # Whether it can be pointed at another server speaking its API: a proxy,
+    # or a hosted service compatible with it (#32).
     takes_endpoint: bool = False
     # Where requests go with no endpoint of the user's own. Sent to the SDK
     # (`endpoint_for`), not left to its default: that is what lets OpenRouter
@@ -66,7 +66,7 @@ class ProviderSpec:
     # `OPENAI_BASE_URL` in the user's environment from redirecting a saved
     # key. Also the Models page's placeholder (#86).
     default_base_url: Optional[str] = None
-    # Under the Models page's "Override base URL": what a local server's
+    # Under the Models page's "Override base URL": what another server's
     # endpoint looks like. Required when `takes_endpoint`.
     endpoint_hint: Optional[str] = None
     # Returns `list(api_key, base_url) -> Listing`: the models a key can use.
@@ -95,10 +95,6 @@ class ProviderSpec:
     retired_models: FrozenSet[str] = field(default_factory=frozenset)
     # The model is a fixed identifier, not a choice (Argos).
     model_is_fixed: bool = False
-    # What to send as the key to a server that takes none (`requires_key`
-    # False) but whose SDK won't build a client without one: OpenAI's refuses
-    # an empty key, and Ollama ignores whatever it is sent (#88).
-    placeholder_key: Optional[str] = None
     # Where to get a key, linked from the Models page (#86).
     signup_url: Optional[str] = None
     # The highest `temperature` its API takes. OpenAI's scale runs to 2; the
@@ -180,9 +176,8 @@ PROVIDERS: Tuple[ProviderSpec, ...] = (
         takes_endpoint=True,
         default_base_url="https://api.openai.com/v1",
         endpoint_hint=(
-            "Leave blank for OpenAI. For another server speaking its API, such as "
-            "LM Studio at http://localhost:1234/v1, use any API key. Ollama has a "
-            "card of its own, with no key."
+            "Leave blank for OpenAI. For another hosted service speaking its API, "
+            "use its base URL and its API key."
         ),
         lister=_openai_lister,
         default_qps=5.0,
@@ -225,8 +220,8 @@ PROVIDERS: Tuple[ProviderSpec, ...] = (
         takes_endpoint=True,
         default_base_url="https://api.anthropic.com",
         endpoint_hint=(
-            "Leave blank for Anthropic. For a local model, use Ollama at "
-            "http://localhost:11434, with any API key."
+            "Leave blank for Anthropic. For a proxy speaking its API, use the "
+            "proxy's base URL."
         ),
         lister=_anthropic_lister,
         # Anthropic's entry tier is ~0.83 QPS.
@@ -304,31 +299,6 @@ PROVIDERS: Tuple[ProviderSpec, ...] = (
         # Its OpenAI-compatible API has no image input: an image part is a 400.
         accepts_images=False,
     ),
-    ProviderSpec(
-        id="ollama",
-        label="Ollama (local)",
-        short_label="Ollama",
-        description="Models running on this computer, or another on your network. No key.",
-        protocol="openai",
-        default_model="llama3.2",
-        translator=_openai_translator,
-        requires_key=False,
-        # OpenAI's SDK won't build a client without a key; Ollama ignores it.
-        placeholder_key="ollama",
-        takes_endpoint=True,
-        default_base_url="http://localhost:11434/v1",
-        endpoint_hint=(
-            "Leave blank for Ollama on this computer. For another machine, use "
-            "its address, as http://192.168.1.20:11434/v1."
-        ),
-        lister=_openai_lister,
-        # One local model serves few requests at once.
-        default_qps=2.0,
-        # Never a chat fallback: a local server may not be running.
-        priority=None,
-        signup_url="https://ollama.com/download",
-        max_temperature=2.0,
-    ),
 )
 
 _BY_ID = {spec.id: spec for spec in PROVIDERS}
@@ -346,12 +316,9 @@ def endpoint_for(spec: ProviderSpec, base_url: Optional[str]) -> Optional[str]:
 
 
 def request_key(spec: ProviderSpec, api_key: Optional[str]) -> Optional[str]:
-    """The key a request carries: the saved one, or — for a server that takes
-    none — its placeholder. A keyed provider with no key gets `None`, never a
-    placeholder: that is how it falls back to Argos rather than failing."""
-    if api_key:
-        return api_key
-    return spec.placeholder_key if not spec.requires_key else None
+    """The key a request carries: the saved one, or `None` — which is how a
+    provider with no key falls back to Argos rather than failing."""
+    return api_key or None
 
 
 def provider(provider_id: str) -> ProviderSpec:

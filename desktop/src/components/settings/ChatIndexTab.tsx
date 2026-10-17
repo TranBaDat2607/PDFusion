@@ -19,6 +19,13 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { useConfig, useUpdateConfig } from "@/hooks/useConfig";
 import { api } from "@/lib/api-client";
@@ -30,6 +37,7 @@ import {
   type ChatHistory,
 } from "@/lib/chat-history";
 import { useAppStore } from "@/lib/store";
+import { WHOLE_DOCUMENT_CHOICES, wholeDocumentChoice } from "@/lib/whole-document";
 
 type DocumentList = components["schemas"]["DocumentListResponse"];
 type ResetResult = components["schemas"]["ResetIndexesResponse"];
@@ -138,6 +146,51 @@ export function ChatIndexTab({ open }: { open: boolean }) {
           button and stops indexing PDFs. Saved conversations are kept.
         </p>
       </div>
+
+      {config && (
+        <div className="space-y-2">
+          <Label htmlFor="whole-document" className="text-sm">
+            Read a PDF whole
+          </Label>
+          <Select
+            value={String(config.rag.whole_document_tokens)}
+            disabled={update.isPending}
+            onValueChange={(value) =>
+              update.mutate(
+                { whole_document_tokens: Number(value) },
+                {
+                  onError: (e) =>
+                    toast.error("Could not change the setting", {
+                      description: (e as Error).message,
+                    }),
+                },
+              )
+            }
+          >
+            <SelectTrigger id="whole-document" className="w-full">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {[
+                ...WHOLE_DOCUMENT_CHOICES,
+                // A value set in config.toml that the menu doesn't offer stays selectable.
+                ...(WHOLE_DOCUMENT_CHOICES.some((c) => c.tokens === config.rag.whole_document_tokens)
+                  ? []
+                  : [wholeDocumentChoice(config.rag.whole_document_tokens)]),
+              ].map((choice) => (
+                <SelectItem key={choice.tokens} value={String(choice.tokens)}>
+                  {choice.label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <p className="text-xs text-muted-foreground">
+            A PDF this short is read whole, so summaries and "list every…"
+            questions see all of it. Longer PDFs are answered from the pages
+            that match best. Larger choices cost more tokens per question.
+          </p>
+        </div>
+      )}
 
       <div className="space-y-3 rounded-md border border-border bg-muted/40 p-4">
         <div className="flex items-center gap-2">

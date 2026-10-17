@@ -192,7 +192,7 @@ function ProviderCard({ provider, focused, focusProvider, openedFrom }: Provider
   const [modelsOpen, setModelsOpen] = useState(false);
   const [endpointOpen, setEndpointOpen] = useState(!!provider.base_url);
 
-  // A keyless server lists with no key (#88); a keyed provider needs its own.
+  // A provider that takes no key lists with none; a keyed one needs its own.
   const listable = !provider.requires_key || hasSavedKey(provider);
   const catalog = useProviderModels(provider, modelsOpen && listable);
   // A listing of the saved key moves its state on the sidecar (`valid`,
@@ -225,8 +225,8 @@ function ProviderCard({ provider, focused, focusProvider, openedFrom }: Provider
   const autoRequest = editingEndpoint ? null : autoVerifyRequest(draft, provider);
   const autoKey = autoRequest ? autoVerifyKey(draft, provider) : null;
   const checking = autoKey !== null && !checked;
-  // The provider turned this key down, or couldn't be reached: a local server
-  // may just not be running yet, so saving it anyway is offered straight away.
+  // The provider turned this key down, or couldn't be reached: the endpoint
+  // may just be down for now, so saving it anyway is offered straight away.
   const refused = checked !== null && checked.models === null;
   useEffect(() => {
     if (!autoRequest || !autoKey || checked) return;

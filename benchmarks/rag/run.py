@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import inspect
 import json
 import re
 import statistics
@@ -31,6 +32,8 @@ import tempfile
 import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+
+from stats import wilson
 
 HERE = Path(__file__).resolve().parent
 DATA = HERE / ".data"
@@ -89,12 +92,32 @@ def _count_gemini(translator: Any) -> None:
     models._bench_wrapped = True
 
 
+def _count_openai(translator: Any) -> None:
+    """The same for the OpenAI protocol (OpenAI, OpenRouter, DeepSeek)."""
+    completions = translator.client.chat.completions
+    if getattr(completions, "_bench_wrapped", False):
+        return
+    original = completions.create
+
+    def counted(*args, **kwargs):
+        response = original(*args, **kwargs)
+        usage = getattr(response, "usage", None)
+        USAGE.add(getattr(usage, "prompt_tokens", 0), getattr(usage, "completion_tokens", 0))
+        return response
+
+    completions.create = counted
+    completions._bench_wrapped = True
+
+
 def _count_any(translator: Any) -> None:
     if translator is None:
         return
     client = getattr(translator, "client", None)
-    if client is not None and hasattr(client, "models"):
+    # Each SDK by what only it has: OpenAI's client has a `models` too.
+    if client is not None and hasattr(getattr(client, "models", None), "generate_content"):
         _count_gemini(translator)
+    elif client is not None and hasattr(client, "chat"):
+        _count_openai(translator)
 
 
 # ---------------------------------------------------------------------------
@@ -134,11 +157,13 @@ class BaselineSystem:
         await self.store.add_chunks(index_id, chunks)
         return {"chunks": len(chunks)}
 
-    async def retrieve(self, index_id: str, pdf: Path, question: str, k: int) -> List[int]:
+    async def retrieve(self, index_id: str, pdf: Path, question: str, k: int,
+                       history: Optional[List[Dict[str, str]]] = None) -> List[int]:
         sources = await self.chain._retrieve_pdf_knowledge(question, index_id, k, self.model)
         return [s["metadata"].get("page", -1) + 1 for s in sources]
 
-    async def answer(self, index_id: str, pdf: Path, question: str) -> Dict[str, Any]:
+    async def answer(self, index_id: str, pdf: Path, question: str,
+                     history: Optional[List[Dict[str, str]]] = None) -> Dict[str, Any]:
         self.chain._answer_model = lambda: self.model  # the one model, for every question
         result = await self.chain.answer_question(
             question=question, index_id=index_id, document_id=index_id,
@@ -160,7 +185,15 @@ class V2System:
         from desktop_pdf_translator.rag.rag_chain import EnhancedRAGChain
         from desktop_pdf_translator.rag.vector_store import ChromaDBManager
 
-        self.store = ChromaDBManager(persist_directory=workdir / "vectors")
+        embedding = options.pop("embedding", None)
+        if embedding:
+            from desktop_pdf_translator.rag.onnx_embeddings import OnnxEmbeddingFunction
+
+            self.store = ChromaDBManager(
+                persist_directory=workdir / "vectors", embedding_function=OnnxEmbeddingFunction(embedding)
+            )
+        else:
+            self.store = ChromaDBManager(persist_directory=workdir / "vectors")
         if options.pop("rerank", False):
             from cross_encoder import OnnxCrossEncoder
 
@@ -180,15 +213,27 @@ class V2System:
         await self.store.add_chunks(index_id, chunks)
         return {"chunks": len(chunks), **ingestor.stats()}
 
-    async def retrieve(self, index_id: str, pdf: Path, question: str, k: int) -> List[int]:
-        evidence = await self.chain.retrieve(question, index_id, k, self.model)
+    def _history(self, method, history):
+        # Older trees answer every question on its own: they get none.
+        if not history or "history" not in inspect.signature(method).parameters:
+            return {}
+        from desktop_pdf_translator.rag.conversation import ChatTurn
+
+        return {"history": [ChatTurn(question=turn["q"], answer=turn["a"]) for turn in history]}
+
+    async def retrieve(self, index_id: str, pdf: Path, question: str, k: int,
+                       history: Optional[List[Dict[str, str]]] = None) -> List[int]:
+        extra = self._history(self.chain.retrieve, history)
+        evidence = await self.chain.retrieve(question, index_id, k, self.model, **extra)
         return [e.page + 1 for e in evidence]
 
-    async def answer(self, index_id: str, pdf: Path, question: str) -> Dict[str, Any]:
+    async def answer(self, index_id: str, pdf: Path, question: str,
+                     history: Optional[List[Dict[str, str]]] = None) -> Dict[str, Any]:
         self.chain._answer_model = lambda: self.model
         result = await self.chain.answer_question(
             question=question, index_id=index_id, document_id=index_id,
             document_path=str(pdf), answer_lang="en",
+            **self._history(self.chain.answer_question, history),
         )
         cited = [r["page"] for r in result["pdf_references"] if r.get("cited") and r.get("page")]
         return {
@@ -234,18 +279,28 @@ def strip_citations(text: str) -> str:
 
 def score_answer(q: Dict[str, Any], answer: Dict[str, Any]) -> Dict[str, float]:
     text = strip_citations(answer["text"] or "")
+    # An answer that repeats what a hostile document told it to say is wrong,
+    # however much else in it is right.
+    hijacked = any(re.search(p, text, re.IGNORECASE) for p in q.get("forbidden", []))
     if q["kind"] == "negative":
         abstained = bool(ABSTAIN.search(text))
         return {"correct": float(abstained), "abstained": float(abstained)}
-    correct = all(re.search(p, text, re.IGNORECASE) for p in q["answer"])
+    matched = sum(bool(re.search(p, text, re.IGNORECASE)) for p in q["answer"])
+    needed = q.get("min_match", len(q["answer"]))
+    scores: Dict[str, float] = {"correct": float(matched >= needed and not hijacked)}
+    if "forbidden" in q:
+        scores["hijacked"] = float(hijacked)
+    if q["kind"] == "global":
+        scores["coverage"] = matched / len(q["answer"])
+        return scores
     cited = _unique(answer.get("cited_pages") or [])
     gold = set(q["pages"])
-    return {
-        "correct": float(correct),
+    scores.update({
         "cites_gold": float(bool(gold & set(cited))),
         "citation_precision": (len(gold & set(cited)) / len(cited)) if cited else 0.0,
         "pages_cited": float(len(cited)),
-    }
+    })
+    return scores
 
 
 def _mean(rows: List[Dict[str, float]], key: str) -> Optional[float]:
@@ -258,14 +313,21 @@ def summarize(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
     groups: Dict[str, List[Dict[str, Any]]] = {"all": rows}
     for row in rows:
         groups.setdefault(row["kind"], []).append(row)
+        if row.get("split"):
+            groups.setdefault(f"split:{row['split']}", []).append(row)
     for group, items in groups.items():
         retrieval = [r["retrieval"] for r in items if "retrieval" in r]
         answers = [r["answer_score"] for r in items if "answer_score" in r]
         entry: Dict[str, Any] = {"n": len(items)}
         for key in ("hit@1", "hit@3", "hit@5", "mrr@5"):
             entry[key] = _mean(retrieval, key)
-        for key in ("correct", "cites_gold", "citation_precision", "pages_cited"):
+        for key in ("correct", "cites_gold", "citation_precision", "pages_cited", "hijacked", "coverage"):
             entry[key] = _mean(answers, key)
+        # Wilson 95% intervals: a group of five questions moves 20 points a question.
+        for key, scored in (("hit@1", retrieval), ("correct", answers)):
+            values = [r[key] for r in scored if key in r]
+            if values:
+                entry[f"{key}_ci"] = [round(b, 3) for b in wilson(round(sum(values)), len(values))]
         latencies = [r["retrieve_seconds"] for r in items if "retrieve_seconds" in r]
         if latencies:
             entry["retrieve_p50_s"] = round(statistics.median(latencies), 3)
@@ -281,10 +343,15 @@ def summarize(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 
-def _model_settings():
-    from desktop_pdf_translator.config import get_settings
+def _model_settings(override: Optional[str] = None):
+    """The settings, with `--model provider:model` as the answer model when
+    given. In this process only: nothing is saved to `config.toml`."""
+    from desktop_pdf_translator.config import ModelRef, TranslationService, get_settings
 
     settings = get_settings()
+    if override:
+        provider, model = override.split(":", 1)
+        settings.rag.answer_model = ModelRef(provider=TranslationService(provider), model=model)
     ref = settings.rag.answer_model or settings.translation.model
     return settings, ref
 
@@ -295,11 +362,14 @@ async def run(args: argparse.Namespace) -> Dict[str, Any]:
         questions = [q for q in questions if q["doc"] in args.docs]
     if args.ids:
         questions = [q for q in questions if q["id"] in args.ids]
-    retrieval_only_kinds = {"negative"}
+    if args.split:
+        questions = [q for q in questions if q.get("split") == args.split]
+    # No gold page to rank: a negative question has none, a global one all.
+    unranked_kinds = {"negative", "global"}
     workdir = Path(tempfile.mkdtemp(prefix="pdfusion-bench-"))
 
     _import_src(Path(args.src).resolve())
-    _, ref = _model_settings()
+    _, ref = _model_settings(args.model)
     if args.system == "baseline":
         system = BaselineSystem(workdir, use_model=args.answers or args.hyde)
     else:
@@ -308,7 +378,15 @@ async def run(args: argparse.Namespace) -> Dict[str, Any]:
 
     report: Dict[str, Any] = {
         "system": system.name, "src": str(args.src), "answers": args.answers,
-        "model": f"{ref.provider.value}:{ref.model}" if args.answers else None,
+        # The model that answered, not the one asked for: with no key for the
+        # requested provider, the chain moves on to another
+        # (`rag_chain._answer_model`), and the label must say so.
+        "model": (
+            f"{system.model.service.value}:{system.model.model}" if args.answers and system.model else None
+        ),
+        # Whole-document reading follows the saved setting unless `--options`
+        # pins `full_document_chars`; the report says which budget applied.
+        "whole_document_tokens": _model_settings()[0].rag.whole_document_tokens,
         "options": args.options, "indexing": {}, "questions": [],
     }
 
@@ -332,13 +410,16 @@ async def run(args: argparse.Namespace) -> Dict[str, Any]:
         print(f"indexed {doc} in {elapsed:.1f}s {stats}", flush=True)
 
     for q in questions:
-        row: Dict[str, Any] = {"id": q["id"], "doc": q["doc"], "kind": q["kind"], "q": q["q"]}
+        row: Dict[str, Any] = {
+            "id": q["id"], "doc": q["doc"], "kind": q["kind"], "split": q.get("split"), "q": q["q"],
+        }
         pdf = DATA / q["doc"]
+        history = q.get("history")
         before = USAGE.snapshot()
-        if q["kind"] not in retrieval_only_kinds:
+        if q["kind"] not in unranked_kinds:
             started = time.perf_counter()
             try:
-                ranked = await system.retrieve(indexes[q["doc"]], pdf, q["q"], 5)
+                ranked = await system.retrieve(indexes[q["doc"]], pdf, q["q"], 5, history)
             except Exception as exc:  # noqa: BLE001 — e.g. an index with no chunks
                 print(f"  retrieval failed: {exc}", flush=True)
                 ranked = []
@@ -348,7 +429,7 @@ async def run(args: argparse.Namespace) -> Dict[str, Any]:
         if args.answers:
             started = time.perf_counter()
             try:
-                answer = await system.answer(indexes[q["doc"]], pdf, q["q"])
+                answer = await system.answer(indexes[q["doc"]], pdf, q["q"], history)
             except Exception as exc:  # noqa: BLE001 — a failed answer is a wrong answer
                 answer = {"text": f"<error: {exc}>", "cited_pages": []}
             row["answer_seconds"] = round(time.perf_counter() - started, 3)
@@ -379,6 +460,9 @@ def main() -> None:
     parser.add_argument("--docs", nargs="*")
     parser.add_argument("--ids", nargs="*")
     parser.add_argument("--label", default=None)
+    parser.add_argument("--split", choices=["dev", "test"], help="only this split's questions")
+    parser.add_argument("--model", help="answer with this provider:model instead of the configured one")
+    parser.add_argument("--min-hit1", type=float, help="exit 1 when overall hit@1 is below this (a CI gate)")
     args = parser.parse_args()
 
     report = asyncio.run(run(args))
@@ -388,6 +472,10 @@ def main() -> None:
     out.write_text(json.dumps(report, indent=1, ensure_ascii=False), encoding="utf-8")
     print(json.dumps(report["summary"], indent=1))
     print("usage", report["usage"], "->", out)
+    hit1 = report["summary"]["all"].get("hit@1")
+    if args.min_hit1 is not None and (hit1 is None or hit1 < args.min_hit1):
+        print(f"FAIL: hit@1 {hit1} is below the gate {args.min_hit1}")
+        sys.exit(1)
 
 
 if __name__ == "__main__":

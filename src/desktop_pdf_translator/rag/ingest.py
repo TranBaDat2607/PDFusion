@@ -49,8 +49,11 @@ logger = logging.getLogger(__name__)
 # Renders a page image (PNG bytes) into its lines of text, in reading order.
 OcrEngine = Callable[[bytes], List[str]]
 
-# ~128 tokens of English, the embedding model's input limit, less room for
-# the heading `retrieval.contextual_text` puts in front.
+# ~128 tokens of English, the input limit of MiniLM, the first embedding
+# model, less room for the heading `retrieval.contextual_text` puts in front.
+# multilingual-e5-small reads 512, but 1200-character chunks retrieved worse
+# with it (hit@1 0.87 → 0.83, `benchmarks/rag/`): a smaller chunk is a sharper
+# match, and the answer reads its neighbours anyway (`rag_chain.NEIGHBOURS`).
 MAX_CHUNK_CHARS = 600
 # A table is kept whole up to here — its rows mean little apart from its
 # header — and split into header-repeating parts past it. Past ~500 characters

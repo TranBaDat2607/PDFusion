@@ -25,8 +25,8 @@ import threading
 from typing import Dict, FrozenSet, Iterable, Optional, Set, Tuple
 
 # (service, base_url, model). `base_url` is `None` for the provider's own
-# endpoint, so Ollama serving a model under an OpenAI name never shares a
-# record with OpenAI.
+# endpoint, so another server serving a model under an OpenAI name never
+# shares a record with OpenAI.
 EndpointKey = Tuple[str, Optional[str], str]
 
 # Words a 400 uses when a parameter itself is refused. Needed alongside the

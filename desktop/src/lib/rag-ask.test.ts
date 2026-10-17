@@ -23,6 +23,7 @@ function makeAnswer(answer: string): RagAnswer {
     timestamp: "2026-09-09T00:00:00",
     provider: null,
     model: null,
+    search_query: null,
   };
 }
 
@@ -180,5 +181,62 @@ describe("needsReindex", () => {
     const failed = failAsk(startAsk("doc-a"), "cleared", INDEX_UNAVAILABLE);
     expect(needsReindex(failed, "doc-b")).toBe(false);
     expect(needsReindex(failed, null)).toBe(false);
+  });
+});
+
+describe("streamed answer text", () => {
+  // `answer_delta` events carry each piece of the answer as the model writes
+  // it, with the offset it starts at. A retry restarts at 0, so placing each
+  // piece at its offset, rather than appending, never shows a stale prefix.
+  it("builds the draft from pieces at their offsets", () => {
+    let state = startAsk("doc-b");
+    expect(state.draft).toBe("");
+    state = reduceAskEvent(state, { type: "answer_delta", data: { offset: 0, text: "The plant " } });
+    state = reduceAskEvent(state, { type: "answer_delta", data: { offset: 10, text: "makes 38%" } });
+
+    expect(state.draft).toBe("The plant makes 38%");
+    expect(state.status).toBe("asking");
+  });
+
+  it("a piece at an earlier offset replaces what followed it", () => {
+    let state = startAsk("doc-b");
+    state = reduceAskEvent(state, { type: "answer_delta", data: { offset: 0, text: "First try, cut" } });
+    state = reduceAskEvent(state, { type: "answer_delta", data: { offset: 0, text: "Second" } });
+
+    expect(state.draft).toBe("Second");
+  });
+
+  it("the checked answer replaces the draft", () => {
+    // The draft still has the model's raw `[p. 3]`; the answer's citations
+    // are the checked, linked ones.
+    let state = startAsk("doc-b");
+    state = reduceAskEvent(state, { type: "answer_delta", data: { offset: 0, text: "It is 38% [p. 3]" } });
+    state = reduceAskEvent(state, { type: "answer", data: makeAnswer("It is 38% [p. 3](#page=3)") });
+
+    expect(state.draft).toBe("");
+    expect(state.answer?.answer).toBe("It is 38% [p. 3](#page=3)");
+  });
+
+  it("a failure drops the draft rather than leaving half an answer on screen", () => {
+    let state = startAsk("doc-b");
+    state = reduceAskEvent(state, { type: "answer_delta", data: { offset: 0, text: "Half an" } });
+    state = reduceAskEvent(state, { type: "error", data: { message: "Gemini rejected the key" } });
+
+    expect(state.status).toBe("error");
+    expect(state.draft).toBe("");
+  });
+});
+
+describe("a piece after the end", () => {
+  it("is ignored once the question has an answer or failed", () => {
+    // A replayed stream (`last_seq`) can carry a cancelled answer's late
+    // pieces after its terminal event.
+    let state = reduceAskEvent(startAsk("doc-b"), { type: "answer", data: makeAnswer("Done.") });
+    state = reduceAskEvent(state, { type: "answer_delta", data: { offset: 0, text: "late" } });
+    expect(state.draft).toBe("");
+
+    let failed = failAsk(startAsk("doc-b"), "boom");
+    failed = reduceAskEvent(failed, { type: "answer_delta", data: { offset: 0, text: "late" } });
+    expect(failed.draft).toBe("");
   });
 });

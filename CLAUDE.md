@@ -44,8 +44,9 @@ ruff check src tests scripts          # the lint gate
 
 # Chat RAG benchmark (local; --answers spends a few cents on the configured model)
 python benchmarks/rag/build_corpus.py
-python benchmarks/rag/run.py --system v2 [--answers]
-python benchmarks/rag/compare.py baseline-answers v2-answers
+python benchmarks/rag/run.py --system v2 [--answers] [--split dev]
+python benchmarks/rag/compare.py main-answers final-answers   # Δ with paired 95% intervals
+python benchmarks/rag/ui_check.py <out-dir> <some.pdf>        # the chat UI in headless Chromium (Playwright)
 
 # After touching api/schemas.py, api/sse_schemas.py or any route:
 python -m desktop_pdf_translator.api.export_openapi --output desktop/src/lib/openapi.json
@@ -118,7 +119,7 @@ singleton with no job id, so it is polled via `GET /setup/status`.
 | `providers/` | `registry.py` — one `ProviderSpec` per provider, the source of every per-provider rule (stdlib-only); `listing.py` — one model lister per protocol; `catalog.py` — the model catalog cache and `list_models` |
 | `processors/` | `PDFProcessor` (BabelDOC), `page_selection.py`, `pdf_pages.py`, `pdf_cache.py`, `doc_layout_cache.py` |
 | `translators/` | `BaseTranslator` + OpenAI/Gemini/Anthropic/Argos, `factory.py`, `capabilities.py`, `rate_limiter.py`, `translation_cache.py`, `param_compat.py`, `usage_estimate.py` |
-| `rag/` | `rag_chain.py` (`EnhancedRAGChain`), `ingest.py` (PDF → chunks, page kinds), `ocr.py`, `retrieval.py` (RRF, page evidence), `citations.py`, `page_images.py`, `vector_store.py`, `index_spec.py`, `onnx_embeddings.py`, `keyword_search.py` |
+| `rag/` | `rag_chain.py` (`EnhancedRAGChain`), `conversation.py` (`ChatTurn`, stdlib-only), `ingest.py` (PDF → chunks, page kinds), `ocr.py`, `retrieval.py` (RRF, page evidence), `citations.py`, `page_images.py`, `vector_store.py`, `index_spec.py` (embedding model + `EmbeddingSpec`s), `onnx_embeddings.py`, `keyword_search.py` |
 | `benchmarks/rag/` | Corpus, questions with gold pages, harness (baseline from a `main` worktree), results — `README.md` there has the numbers |
 | `storage/` | `sqlite.py` (pragmas, per-thread connections), `migrations.py`, `records.py` (`pdfusion.db`) |
 | `utils/` | `encryption.py`, `file_export.py`, `logging_setup.py`, `paths.py` |
@@ -137,7 +138,8 @@ than re-deriving from the routes.
 `POST /translate` + `/translate/{id}/events` + `/cancel` + `POST /translate/estimate` ·
 `POST /rag/index` + `/events` · `POST /rag/ask` + `/events` ·
 `GET /rag/documents` · `DELETE /rag/document/{id}` ·
-`GET|DELETE /rag/document/{id}/messages` · `POST /rag/reset` ·
+`GET|DELETE /rag/document/{id}/messages` ·
+`PUT /rag/document/{id}/messages/{message_id}/rating` · `POST /rag/reset` ·
 `GET /pdf/file` · `POST /pdf/export`
 
 Non-obvious bits of the contract:
@@ -196,8 +198,8 @@ rule has, unless noted, a test. They are the things most easily undone by
   bad value drops one field, never a provider's table or the whole map.
 - A saved API key is only ever sent to the endpoint it was saved for: `PUT
   /providers/{id}` 422s an endpoint change without `api_key` in the same body.
-  A keyless provider (`requires_key=False`, e.g. Ollama) has no key to guard
-  and is sent only its `placeholder_key`.
+  The keyless provider (`requires_key=False`, Argos) has no key to guard.
+  There is no local-model provider; a config saved with one loads without it.
 - The keystore holds **one master key**, and the decrypt path never mints a
   replacement. Keys it could not read are remembered and written back verbatim,
   so a locked keyring doesn't erase every provider key on the next save.
@@ -261,22 +263,42 @@ rule has, unless noted, a test. They are the things most easily undone by
   the chain or rerun `_recover` to pick up settings.
 - A failure is an `error` event, never a fallback answer; retrieval that finds
   nothing never reaches the model.
-- **Retrieve by text, read by vision.** Indexing and retrieval are local and
-  make no model call; the answer is the only paid request, and it sees images
+- **Retrieve by text, read by vision.** Indexing and search are local and
+  make no model call. The paid requests are the answer and, for a follow-up
+  only, one short rewrite of it into a standalone question. The answer sees images
   of at most `DEFAULT_MAX_IMAGES` pages, the best-ranked visual/table/scanned
   ones (`retrieval.select_image_pages`) — never every page.
   Evidence is **pages**: `max_pdf_sources` counts pages, references are one per
-  page, cited first.
+  page, cited first. A document whose text fits `rag.whole_document_tokens` is read
+  whole, but its images stay the retrieved pages', and its sources too, plus
+  any other page the answer cites. A longer one is never read whole: a second, whole read on
+  a retrieval miss (Self-Route) was measured and lost.
+- **Nothing logged at INFO or above carries the question or the document's
+  text**; `rag_answer` is the per-answer record.
 - `generate()` gets `images=` only when there are some (older backends take
   three arguments). A model that refuses an image is sent text only for the
   rest of the process; a 401 is not a refusal.
-- Only citations `citations.link_citations` checked against the evidence pages
+- Only citations `citations.link_citations` checked against the pages the answer read
   reach the chat, as `[p. N](#page=N)`; the panel turns those into jumps.
 - A reranker, if ever added, is fused with the first stage, never substituted
   for it — the one measured ranked tables below prose. Decisions here are
   re-measured with `benchmarks/rag/`, not argued.
 - Changing the embedding model, the chunker, or what `vector_store.add_chunks`
-  embeds means editing `rag/index_spec.py`.
+  embeds means editing `rag/index_spec.py`. How a model is run — ONNX file,
+  pooling, its `query: `/`passage: ` prefixes — is its `EmbeddingSpec` there;
+  a wrong one gives worse vectors and no error.
+- **A follow-up is searched for as its standalone rewrite, never fused with
+  the question as typed** (the raw words outvote it). The rewrite prompt has no
+  answer-language instruction; the history is the same document's last
+  `MAX_HISTORY_TURNS` turns, context in the answer prompt, never evidence.
+- **The pages are fenced** between `<document-…>` tags with a random suffix
+  per question, and the system prompt names the tag: everything inside is
+  data, never instructions. The question and the conversation stay outside.
+- **Only the answer streams**, as `answer_delta` events of `(offset, text)`.
+  The stream is read inside the request `_call_with_backoff` retries, so a
+  retry restarts at offset 0 and the client places pieces at their offsets;
+  `_run_ask` waits for every piece before `answer`. A backend gets `on_text`
+  only if its `generate` takes it.
 
 **PDF viewer** (#30) → `pdf-viewer.md`
 - A slot's size comes from `lib/pdf-viewer/layout.ts`, never from a canvas;
@@ -493,8 +515,9 @@ batching, failure/retry accounting, param adaptation, model listing (recorded
 responses) and the model catalog, the records DB, chat
 isolation (real ChromaDB under `tmp_path`), chat ingestion (real PDFs built with
 PyMuPDF), OCR respacing, rank fusion and page evidence, citation checking,
-page images, multimodal `generate()` per SDK, the answer chain's image and
-citation rules, chunking and rolling-PDF assembly,
+page images, multimodal and streamed `generate()` per SDK, the answer chain's
+image, citation, fence and conversation rules, answer ratings, the benchmark's
+interval statistics, chunking and rolling-PDF assembly,
 the data root per platform, packaging config agreement, and the viewer's pure
 half.
 
@@ -518,13 +541,16 @@ platform is the only place its own half is exercised. The Python job installs
 `requirements.txt` (not just the package), the desktop job runs `pnpm build`
 before cargo, and the OpenAPI diff-check runs on Windows only. A third job,
 `frozen-sidecar`, runs the real PyInstaller build and is `workflow_dispatch`
-only — run it before cutting an installer or after touching the spec.
+only — run it before cutting an installer or after touching the spec. A fourth,
+`rag-quality`, runs the chat retrieval benchmark (local, no key) with a
+`--min-hit1` gate on PRs that touch `rag/` or `benchmarks/rag/`, on demand, and
+weekly.
 
 ## Out of scope
 
 Auto-update · a signing certificate (plumbing exists, no cert) · macOS
 packaging and verification (Phase B of #69, needs hardware) · a Job Object
 equivalent off Windows (`prctl(PR_SET_PDEATHSIG)`) · UI i18n · more Argos
-language pairs · pre-bundled RAG embedding model (~470 MB, still downloads on
+language pairs · pre-bundled RAG embedding model (118 MB, still downloads on
 first Chat use) · synchronized scrolling between panes · an auto-save
 preference (#11).

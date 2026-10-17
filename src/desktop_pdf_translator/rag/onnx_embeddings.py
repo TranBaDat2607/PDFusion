@@ -1,16 +1,16 @@
-"""ONNX embedding function for ChromaDB — the same MiniLM weights, no torch.
+"""ONNX embedding function for ChromaDB — no torch.
 
 `sentence-transformers` pulled torch (466 MB) and transformers (119 MB) into the
-installer for one `model.encode()` call. The model itself
-(`paraphrase-multilingual-MiniLM-L12-v2`, multilingual, 384-dim — chosen for
-Vietnamese) is published with an ONNX export, and onnxruntime and tokenizers are
-already in the tree for BabelDOC and ChromaDB. So this reimplements the two
-things sentence-transformers was doing for us: tokenize, then mean-pool the
-token embeddings over the attention mask (the model's `modules.json` is
-Transformer → Pooling(mean), nothing else).
+installer for one `model.encode()` call. The models chat can use are published
+with ONNX exports, and onnxruntime and tokenizers are already in the tree for
+BabelDOC and ChromaDB. So this reimplements what sentence-transformers was
+doing for us: put the prefix the model was trained with in front of each text,
+tokenize, then pool the token embeddings — each model's way is its
+`index_spec.EmbeddingSpec`.
 
-The ~470 MB weight download on first Chat use is unchanged — same repo, same
-`~/.cache/huggingface` location. Pre-bundling it is still open (issue #21).
+The weights download on first Chat use into `~/.cache/huggingface`: 118 MB for
+the int8 multilingual-e5-small the app uses (470 MB for the MiniLM before it).
+Pre-bundling them is still open (issue #21).
 """
 
 import logging
@@ -20,7 +20,7 @@ from typing import Any, Dict, List
 import numpy as np
 from chromadb import EmbeddingFunction, Embeddings
 
-from .index_spec import EMBEDDING_MODEL
+from .index_spec import EMBEDDING_MODEL, EMBEDDING_SPECS
 
 logger = logging.getLogger(__name__)
 
@@ -28,9 +28,9 @@ logger = logging.getLogger(__name__)
 # documents rather than mixing two models' vectors in one index.
 DEFAULT_MODEL = EMBEDDING_MODEL
 
-# From the model's sentence_bert_config.json. Longer inputs are truncated, which
-# is what SentenceTransformer did too.
-_MAX_SEQ_LENGTH = 128
+# The default model's input limit: what chunk sizes are measured against
+# (`ingest.MAX_CHUNK_CHARS`).
+_MAX_SEQ_LENGTH = EMBEDDING_SPECS[DEFAULT_MODEL].max_tokens
 
 
 class OnnxEmbeddingFunction(EmbeddingFunction):
@@ -38,6 +38,7 @@ class OnnxEmbeddingFunction(EmbeddingFunction):
 
     def __init__(self, model_name: str = DEFAULT_MODEL):
         self.model_name = model_name
+        self.spec = EMBEDDING_SPECS[model_name]
         self._session = None
         self._tokenizer = None
         self._input_names: tuple = ()
@@ -45,6 +46,9 @@ class OnnxEmbeddingFunction(EmbeddingFunction):
 
     @staticmethod
     def name() -> str:
+        # Kept from when the only model was MiniLM: ChromaDB records it on
+        # every collection and refuses one opened under another name. Which
+        # model a collection holds is `get_config()`'s, and the records'.
         return "pdfusion-onnx-minilm"
 
     def default_space(self) -> str:
@@ -58,8 +62,8 @@ class OnnxEmbeddingFunction(EmbeddingFunction):
         return OnnxEmbeddingFunction(model_name=config.get("model_name", DEFAULT_MODEL))
 
     def _load(self) -> None:
-        """Fetch and open the model. Double-checked locking, so the ~470 MB
-        download happens once on the first embed and not at construction."""
+        """Fetch and open the model. Double-checked locking, so the download
+        happens once on the first embed and not at construction."""
         if self._session is not None:
             return
         with self._lock:
@@ -71,11 +75,11 @@ class OnnxEmbeddingFunction(EmbeddingFunction):
             from tokenizers import Tokenizer
 
             logger.info("Loading ONNX embedding model: %s", self.model_name)
-            model_path = hf_hub_download(self.model_name, "onnx/model.onnx")
+            model_path = hf_hub_download(self.model_name, self.spec.onnx_file)
             tokenizer_path = hf_hub_download(self.model_name, "tokenizer.json")
 
             tokenizer = Tokenizer.from_file(tokenizer_path)
-            tokenizer.enable_truncation(max_length=_MAX_SEQ_LENGTH)
+            tokenizer.enable_truncation(max_length=self.spec.max_tokens)
             tokenizer.enable_padding()
 
             session = onnxruntime.InferenceSession(
@@ -87,8 +91,17 @@ class OnnxEmbeddingFunction(EmbeddingFunction):
             logger.info("ONNX embedding model ready (inputs: %s)", ", ".join(self._input_names))
 
     def __call__(self, input: List[str]) -> Embeddings:
+        """Embed passages: what an index stores."""
+        return self._embed([self.spec.passage_prefix + text for text in input])
+
+    def embed_query(self, input: List[str]) -> Embeddings:
+        """Embed questions. ChromaDB calls this for `query_texts`; a model
+        trained with asymmetric prefixes reads a question differently."""
+        return self._embed([self.spec.query_prefix + text for text in input])
+
+    def _embed(self, texts: List[str]) -> Embeddings:
         self._load()
-        return embed_batch(self._session, self._tokenizer, self._input_names, input)
+        return embed_batch(self._session, self._tokenizer, self._input_names, texts, self.spec.pooling)
 
 
 def build_feed(
@@ -123,9 +136,18 @@ def mean_pool(token_embeddings: np.ndarray, mask: np.ndarray) -> np.ndarray:
     return pooled / norms
 
 
-def embed_batch(session, tokenizer, input_names, texts: List[str]) -> Embeddings:
+def pool(token_embeddings: np.ndarray, mask: np.ndarray, pooling: str) -> np.ndarray:
+    """One unit vector per input, pooled the way the model was trained."""
+    if pooling == "cls":
+        first = token_embeddings[:, 0, :]
+        norms = np.clip(np.linalg.norm(first, axis=1, keepdims=True), 1e-12, None)
+        return first / norms
+    return mean_pool(token_embeddings, mask)
+
+
+def embed_batch(session, tokenizer, input_names, texts: List[str], pooling: str = "mean") -> Embeddings:
     encodings = tokenizer.encode_batch(texts)
     ids = np.array([e.ids for e in encodings], dtype=np.int64)
     mask = np.array([e.attention_mask for e in encodings], dtype=np.int64)
     token_embeddings = session.run(None, build_feed(input_names, ids, mask))[0]
-    return mean_pool(token_embeddings, mask).tolist()
+    return pool(token_embeddings, mask, pooling).tolist()

@@ -488,3 +488,63 @@ def test_the_legacy_vector_stores_are_removed_and_the_current_one_kept(
     server._remove_legacy_vector_stores()
 
     assert sorted(p.name for p in root.iterdir()) == ["vectors"]
+
+
+# ---------------------------------------------------------------------------
+# PUT /rag/document/{document_id}/messages/{message_id}/rating
+# ---------------------------------------------------------------------------
+
+
+def _rated_conversation(tmp_path):
+    from desktop_pdf_translator.storage.records import RecordsStore
+
+    records = RecordsStore(tmp_path / "pdfusion.db")
+    records.upsert_document("abc123", "paper.pdf", 10, "C:/papers/paper.pdf")
+    records.add_exchange("abc123", "What is measured?", {"answer": "Tensile strength."})
+    question, answer = records.messages("abc123")
+    return records, question.id, answer.id
+
+
+def test_rating_an_answer_is_saved_and_comes_back_with_the_conversation(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch, tmp_path
+):
+    records, _question_id, answer_id = _rated_conversation(tmp_path)
+    _use(monkeypatch, records, loaded=False)
+
+    response = client.put(
+        f"/rag/document/abc123/messages/{answer_id}/rating", json={"rating": -1}, headers=AUTH
+    )
+
+    assert response.status_code == 204
+    messages = client.get("/rag/document/abc123/messages", headers=AUTH).json()["messages"]
+    assert [m["rating"] for m in messages] == [None, -1]
+
+
+def test_a_question_or_another_documents_message_cannot_be_rated(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch, tmp_path
+):
+    records, question_id, answer_id = _rated_conversation(tmp_path)
+    _use(monkeypatch, records, loaded=False)
+
+    asked = client.put(
+        f"/rag/document/abc123/messages/{question_id}/rating", json={"rating": 1}, headers=AUTH
+    )
+    elsewhere = client.put(
+        f"/rag/document/other/messages/{answer_id}/rating", json={"rating": 1}, headers=AUTH
+    )
+
+    assert asked.status_code == 404
+    assert elsewhere.status_code == 404
+
+
+def test_a_rating_is_up_down_or_none(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch, tmp_path
+):
+    records, _question_id, answer_id = _rated_conversation(tmp_path)
+    _use(monkeypatch, records, loaded=False)
+
+    response = client.put(
+        f"/rag/document/abc123/messages/{answer_id}/rating", json={"rating": 5}, headers=AUTH
+    )
+
+    assert response.status_code == 422

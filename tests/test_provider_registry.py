@@ -11,7 +11,6 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
-from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -146,22 +145,6 @@ def test_request_key_returns_the_typed_key_when_present(typed):
     assert registry.request_key(provider("openai"), typed) == typed
 
 
-@pytest.mark.parametrize("typed", [None, ""])
-def test_request_key_falls_back_to_the_placeholder_for_a_keyless_provider(typed):
-    keyless = replace(provider("openai"), requires_key=False, placeholder_key="unused")
-
-    assert registry.request_key(keyless, typed) == "unused"
-
-
-def test_request_key_never_gives_a_keyed_provider_a_placeholder():
-    """A keyless server's placeholder must never leak onto a keyed provider,
-    even if one somehow had `placeholder_key` set."""
-    keyed_with_a_placeholder = replace(provider("openai"), placeholder_key="unused")
-
-    assert registry.request_key(keyed_with_a_placeholder, None) is None
-    assert registry.request_key(keyed_with_a_placeholder, "") is None
-
-
 # ---------------------------------------------------------------------------
 # Registry contract for the two new kinds of provider (#88)
 #
@@ -176,16 +159,6 @@ def test_request_key_never_gives_a_keyed_provider_a_placeholder():
 def test_every_llm_has_a_lister(spec):
     if spec.is_llm:
         assert spec.lister is not None
-
-
-@pytest.mark.parametrize("spec", PROVIDERS, ids=lambda spec: spec.id)
-def test_a_keyless_llm_is_never_a_chat_fallback_and_has_a_placeholder(spec):
-    """A local server may not be running, so it must never be chosen as "any
-    LLM with a key" (`priority`); and its SDK needs something to send as the
-    key even though the user typed none."""
-    if spec.is_llm and not spec.requires_key:
-        assert spec.priority is None
-        assert spec.placeholder_key is not None
 
 
 @pytest.mark.parametrize("spec", PROVIDERS, ids=lambda spec: spec.id)

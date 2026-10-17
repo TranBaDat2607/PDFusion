@@ -49,30 +49,46 @@ that true:
 
 Chat is multimodal RAG built on one rule: **retrieve by text, read by
 vision.** Everything that runs per document or per question on the user's
-machine is local, offline and free; the only paid call is the answer itself,
-and it is shown pictures of at most three pages. The design, the alternatives
+machine is local, offline and free; the paid calls are the answer itself —
+shown pictures of at most three pages, and the whole text of a document
+short enough — and, for a follow-up only, one short rewrite of it into a
+question that stands alone (below). The design, the alternatives
 it was chosen over, and the measurements behind each choice are in
 `benchmarks/rag/README.md`. In short:
 
 ```
 index (once per document, rag/ingest.py)            ask (rag/rag_chain.py)
-  PyMuPDF blocks → paragraphs ≤600 chars              dense top-20  ─┐
-  headings → chunk metadata                           BM25 top-20   ─┴─ RRF → pages (≤5)
-  ruled tables → Markdown (find_tables)                     │
-  scanned pages → RapidOCR (rag/ocr.py)               best visual/table/scanned pages
-  page_kind: text | visual | scanned                   rendered → images (≤3)
-  embed heading+text (MiniLM ONNX) → ChromaDB               │
-                                                      answer model: page text + images,
+  PyMuPDF blocks → paragraphs ≤600 chars              a follow-up? → rewritten to stand alone
+  headings → chunk metadata                           dense top-20  ─┐
+  ruled tables → Markdown (find_tables)               BM25 top-20   ─┴─ RRF → pages (≤5)
+  scanned pages → RapidOCR (rag/ocr.py)                     │
+  page_kind: text | visual | scanned                  best visual/table/scanned pages
+  embed "passage: " + heading + text                   rendered → images (≤3)
+    (multilingual-e5-small int8, ONNX) → ChromaDB           │
+                                                      answer model: fenced page text + images
+                                                      + recent turns, streamed as written;
                                                       cites [p. N] → checked, linked
 ```
 
 **Ingestion** (`rag/ingest.py`, `PdfIngestor`) replaced
 `ScientificPDFProcessor`, and each difference fixed a measured failure:
 
-- **Chunks fit the embedding model.** MiniLM reads 128 tokens
-  (`onnx_embeddings._MAX_SEQ_LENGTH`), ~500 characters of English; the old
-  ~1000-character chunks were half unembedded. Paragraphs are packed up to
-  `MAX_CHUNK_CHARS = 600`, split between sentences, never across pages.
+- **Chunks fit the embedding model.** MiniLM, the first model, read 128
+  tokens, ~500 characters of English; the old ~1000-character chunks were half
+  unembedded. Paragraphs are packed up to `MAX_CHUNK_CHARS = 600`, split
+  between sentences, never across pages. multilingual-e5-small, the model now
+  (below), reads 512 tokens, but 1200-character chunks retrieved worse with it,
+  so 600 stayed.
+- **The embedding model is measured, not assumed.** `rag/index_spec.py` names
+  it, and `EMBEDDING_SPECS` says how each candidate is run — its ONNX file,
+  pooling, and the `query: ` / `passage: ` prefixes the e5 family was trained
+  with (`OnnxEmbeddingFunction.embed_query` is what ChromaDB calls for a
+  question). int8 multilingual-e5-small replaced MiniLM as at least as good —
+  ahead on every measure (99 ranked questions: hit@1 0.82 → 0.87, hit@3 0.95 →
+  0.98) but not significantly (McNemar p 0.23) — at the same speed, for a
+  118 MB download instead of 470 MB. bge-m3 was
+  marginally better and five times slower to index; e5-base no better than
+  e5-small (`benchmarks/rag/README.md`).
 - **Headings are context, not chunks.** A line ≥1.15× the document's body
   size is a heading; it becomes the `heading` of the chunks under it, and
   `retrieval.contextual_text` puts it in front of the chunk for embedding and
@@ -90,6 +106,17 @@ index (once per document, rag/ingest.py)            ask (rag/rag_chain.py)
   `visual` (an image ≥10% of the page, a table, or a `Figure N:`/`Table N:`
   caption — which also catches vector figures and unruled tables), `text`.
   This is what decides which pages the answer model sees as images.
+- **Vietnamese scans are read by the answer model, not the OCR.** RapidOCR's
+  recogniser is PaddleOCR's Chinese/English model: it drops Vietnamese marks
+  and runs words together (`co turc`, `1.50o`). No PaddleOCR model replaces it
+  — the Latin one has 4 of the 52 Vietnamese letters it would need, and the
+  others fewer (checked against every dictionary of the ONNX conversions,
+  2026-10). VietOCR and EasyOCR read Vietnamese but run on torch, which the
+  installer leaves out on purpose ([packaging.md](packaging.md)); Tesseract's
+  `vie` is a system install. So a Vietnamese scan is found by its digits and
+  whatever survives, and read from its image (`select_image_pages` always
+  offers a scanned page) — which is why the benchmark's Vietnamese scan
+  questions pass while its OCR text is poor.
 - **Scanned pages are OCRed** (`rag/ocr.py`) with RapidOCR, which BabelDOC
   already installs; the spec now bundles it. Its recogniser drops the spaces
   between English words; `respace` restores them from the character boxes'
@@ -128,7 +155,8 @@ index's chunks:
 - **The model reads every evidence page under its 1-indexed page number**:
   each page's hits and their neighbours on it (`NEIGHBOURS = 1`), every chunk
   whole. The chat lists each page as a source, so the answer must have read
-  all of them.
+  all of them. (A short document is read whole instead; see "A short document
+  is read whole" below.)
 - **The best-ranked pages whose content the text loses are shown as images**
   (`retrieval.select_image_pages`, at most `DEFAULT_MAX_IMAGES = 3`): visual
   and scanned pages, and pages with a table chunk. They are rendered when the
@@ -141,8 +169,8 @@ index's chunks:
   (base64 blocks); with no images the request is byte-for-byte what it was.
   `images` is passed only when there are some. `ProviderSpec.accepts_images`
   is False for DeepSeek, whose API takes text only. **A model that refuses an
-  image** — a 400/415/422 mentioning "image", typically a text-only model
-  behind OpenRouter or Ollama — is asked again without them, and that
+  image** — a 400/404/415/422 mentioning "image", typically a text-only model
+  behind OpenRouter — is asked again without them, and that
   (provider, model) is sent text only for the rest of the process
   (`EnhancedRAGChain._text_only`). A 401 is not a refusal: it is the usual
   error, never retried.
@@ -153,7 +181,8 @@ index's chunks:
   `[1]` is a bibliography reference and `[0, 1]` an interval. The chat renders
   those links as jumps (`desktop/src/lib/citation-links.ts`), never as
   navigation of the webview.
-- **References are one per evidence page, cited first** in the order the
+- **References are one per evidence page, cited first** (plus any page read
+  whole that the answer cites) in the order the
   answer cites them, then the rest in retrieval order, each with `cited`,
   `page_kind` and `shown_as_image` (`sse_schemas.PdfReferencePayload`). They
   used to be every retrieved chunk, unranked by use, so the list said nothing
@@ -216,6 +245,82 @@ or `test_rag_answers.py`:
   that refetches on `answer` finds it. Saving is best-effort, and a failed
   question is never saved. Remove forgets a document outright; Reset deletes
   only indexes, and neither ever needs the vector store open.
+
+### Conversations, hostile documents, streaming, ratings
+
+Added together after the benchmark grew to 93 questions — Vietnamese, real
+papers, follow-ups, a document that gives orders — and each measured or tested
+there:
+
+- **A follow-up is searched for as the question it stands for.** `_run_ask`
+  hands the chain the document's last `MAX_HISTORY_TURNS` (3) saved exchanges
+  (`rag/conversation.py`, stdlib-only because the route imports it on the boot
+  path). With a conversation, one extra model call rewrites the latest question
+  to stand alone (`_standalone_question`), in the question's own language — no
+  answer-language instruction, for HyDE's reason — and retrieval searches with
+  the rewrite **instead of** the typed question: a follow-up's own words ("and
+  what about that one?") match whatever page happens to share them, and fused
+  in they outvote the rewrite. A failed or empty rewrite falls back to the
+  question as typed; with no model, the previous question joins the new one.
+  The answer prompt shows the turns (answers cut to `HISTORY_ANSWER_CHARS`) as
+  context, never as evidence, before the question. Follow-ups went 7/9 → 9/9.
+  The rewrite comes back as the answer's `search_query`, shown under the
+  answer: when the sources look wrong, it is the first suspect.
+- **The pages are fenced in.** A PDF's text — white 1-pt text included —
+  reaches the model verbatim, so a page saying "ignore your instructions" must
+  read as something the page says. The pages go between `<document-…>` tags
+  whose suffix is random per question, and the system prompt says everything
+  inside is data, never instructions ("spotlighting" by delimiting, Hines et
+  al., 2024). A fixed tag could be closed by a document that knows it. The
+  benchmark's `manual.pdf` carries a visible and a hidden injection; no
+  answer obeyed either, before or after — the fence is defence in depth, not a
+  measured gain with this model.
+- **The answer streams.** `generate(on_text=...)` on every LLM backend asks
+  its SDK for a stream and calls `on_text(offset, piece)`; `_run_ask` turns
+  each into an `answer_delta` event, and waits for them all before sending
+  `answer`. The stream is read to its end *inside* the request
+  `_call_with_backoff` retries, so a dropped stream is asked for again from
+  the start, and its offsets restart at 0: the client places each piece at its
+  offset (`rag-ask.ts`), so a retry overwrites rather than duplicates. Only the
+  answer streams — never HyDE or the rewrite — and only to a backend whose
+  `generate` takes `on_text` (asked of its signature, as `images` is avoided
+  when empty). The streamed draft has unchecked citations, so it renders none
+  as a link; the `answer` event's checked text replaces it.
+- **A short document is read whole.** When the index's text is at most
+  `rag.whole_document_tokens` (Settings → Chat → "Read a PDF whole"; 11,500
+  by default, ~40,000 characters: the 15-page Attention paper fits), the answer reads every page in page order
+  (`retrieval.whole_document`) instead of the retrieved five — "summarize
+  this" and "list every table" need all of it. Retrieval still runs and still
+  decides what is offered as a source and which pages are shown as images: a
+  page read only because the document is short becomes a reference when the
+  answer cites it, never for having been shown. Long context beats retrieval
+  on quality when it fits and loses on cost (Li et al., EMNLP 2024). Measured
+  here on one run each: 3 answers fixed and none broken (McNemar p 0.25 — a
+  direction, not proof; one of the three had flipped between earlier runs),
+  for +79% input tokens a question (11k on the Attention paper) and +0.25 s at
+  p50. The budget is in English-equivalent characters (`_reading_length`: a
+  CJK character counts as a token's worth). No model, no whole document: the extractive answer quotes retrieved
+  passages. `quality_metrics.pages_read` says how many pages the answer read.
+- **A longer document is not given a second, whole read.** "Self-Route"
+  (Li et al.) — answer from retrieved pages, and re-answer from the whole
+  document when the model says they miss the answer — was built and measured,
+  and removed: Flash-Lite often replied with the bare "not found" marker
+  (three empty answers), and on the one question retrieval truly misses (b04)
+  it answered wrongly instead of saying so, so the second read never ran.
+  Net −0.024 on 127 questions (`benchmarks/rag/README.md`).
+- **Each answer can be rated.** Records migration 4 adds `chat_messages.rating`
+  (1, -1 or NULL); `PUT /rag/document/{id}/messages/{message_id}/rating` sets
+  or clears it, and 404s anything that is not an answer of that document. A
+  thumbs-down from a real document and question is where the next benchmark
+  question comes from.
+- **The log says what happened, never what was asked.** One `rag_answer`
+  JSON line per answer in `app.log` — pages retrieved, cited and refused,
+  images sent, pages read, whether a follow-up was rewritten, model, timings — and
+  every line that would carry the question (the chain's, the rewrite's, the
+  vector store's) is DEBUG, so a log a user shares holds none of their words.
+- **Each answer says how long its halves took** — `quality_metrics`'s
+  `retrieve_seconds` and `answer_seconds` — so a slow answer can be told apart
+  from a slow search.
 
 ## Chat state in the frontend
 

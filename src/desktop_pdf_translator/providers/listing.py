@@ -71,8 +71,8 @@ _GEMINI_FIRST_OFFERED = {"gemini": (2, 0), "gemma": (3, 0)}
 
 # OpenAI's own endpoint, where the id filter above applies. It is sent
 # explicitly since #88 (`registry.endpoint_for`), so "no endpoint" can't be
-# what marks it; any other server — OpenRouter, Ollama, a proxy — names its
-# models its own way.
+# what marks it; any other server — OpenRouter, a proxy — names its models
+# its own way.
 _OPENAI_API = "https://api.openai.com/v1"
 
 # Both SDKs read a timeout in seconds. A listing is one small GET; the route's
@@ -122,9 +122,9 @@ def list_openai_models(
         for model in client.models.list()
     ]
     if base_url is not None and base_url.rstrip("/") != _OPENAI_API:
-        # Ollama, LM Studio and proxies name models anything; `whisper-…` or
+        # Compatible servers and proxies name models anything; `whisper-…` or
         # `…-audio` there may well be the chat model the user wants. Nor is
-        # `created` a release date there: Ollama's is when it was pulled.
+        # `created` a release date there: a server may stamp when it loaded it.
         return Listing(models=tuple(models))
     return _split(
         models, lambda m: bool(_OPENAI_NON_CHAT.search(m.id)) or _released_too_early(m)
@@ -208,8 +208,8 @@ def model_matches(model: str, ids: Iterable[str]) -> bool:
 
     It exists to catch a typo before a whole document fails on it, so it errs
     toward "found": `claude-haiku-4-5` is Anthropic's alias for the listed
-    `claude-haiku-4-5-20251001`, and Ollama serves `llama3.2` as the listed
-    `llama3.2:latest`.
+    `claude-haiku-4-5-20251001`, and a compatible server may list `name` as
+    `name:latest`.
     """
     return any(
         listed == model or (listed.startswith(model) and listed[len(model)] in "-:")

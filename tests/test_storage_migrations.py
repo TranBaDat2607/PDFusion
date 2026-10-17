@@ -187,10 +187,11 @@ def test_a_version_2_records_database_gains_provider_and_model_on_chat_messages(
 
     version = migrate(db, records_module._MIGRATIONS)
 
-    assert version == 3
+    # Migrated through to the current schema: 4 adds each answer's rating.
+    assert version == 4
     conn = sqlite3.connect(db)
     columns = {row[1] for row in conn.execute("PRAGMA table_info(chat_messages)")}
-    assert {"provider", "model"} <= columns
+    assert {"provider", "model", "rating"} <= columns
     rows = conn.execute(
         "SELECT role, provider, model FROM chat_messages WHERE document_id = 'doc-a' ORDER BY id"
     ).fetchall()

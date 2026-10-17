@@ -94,7 +94,7 @@ def _fallback_records(
     spec: ProviderSpec, saved_model: Optional[str], custom_endpoint: bool
 ) -> List[ModelRecord]:
     """What to offer with no list: the saved model, and on the provider's own
-    endpoint its suggestions — which Ollama or LM Studio don't have."""
+    endpoint its suggestions — which another server doesn't have."""
     suggested = [] if custom_endpoint else list(spec.suggested_models)
     return _saved_first(saved_model, suggested) + [
         ModelRecord(id=model, source="suggested") for model in suggested
@@ -261,8 +261,8 @@ async def catalog_for(service: TranslationService, refresh: bool) -> ModelCatalo
     """The models the saved key can use at the saved endpoint.
 
     Served from the catalog while fresh; listed otherwise, or on `refresh`.
-    Every failure is `error` in a 200, with the saved model still on offer: a
-    local server that isn't up yet is ordinary.
+    Every failure is `error` in a 200, with the saved model still on offer: an
+    endpoint that is briefly down is ordinary.
     """
     spec = provider(service.value)
     if spec.lister is None:

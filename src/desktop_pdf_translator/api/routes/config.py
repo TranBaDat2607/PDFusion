@@ -74,6 +74,8 @@ async def update_config(payload: ConfigUpdateRequest) -> ConfigResponse:
         current["translation"]["default_target_lang"] = payload.default_target_lang.value
     if payload.chat_enabled is not None:
         current["rag"]["chat_enabled"] = payload.chat_enabled
+    if payload.whole_document_tokens is not None:
+        current["rag"]["whole_document_tokens"] = payload.whole_document_tokens
     if payload.max_parallel_chunks is not None:
         current["processing"]["max_parallel_chunks"] = payload.max_parallel_chunks
     if payload.max_pages is not None:

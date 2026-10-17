@@ -5,10 +5,8 @@ registry before building a translator (#88).
 `base_url` straight out of settings and hands them to the translator's
 constructor. Two new provider shapes need those resolved first: a provider
 that borrows another's API at its own URL needs the registry's
-`default_base_url` when nothing was saved (`registry.endpoint_for`), and a
-keyless local server needs its `placeholder_key` sent in place of no key at
-all (`registry.request_key`) — OpenAI's SDK refuses to build a client with
-none. Building a translator never calls its API, so these are built directly
+`default_base_url` when nothing was saved (`registry.endpoint_for`), and the
+key sent is the saved one or none (`registry.request_key`). Building a translator never calls its API, so these are built directly
 and inspected rather than through a fake.
 """
 
@@ -22,7 +20,6 @@ from desktop_pdf_translator.translators import factory as factory_module
 from desktop_pdf_translator.translators.factory import TranslatorFactory
 from desktop_pdf_translator.translators.openai_translator import OpenAITranslator
 
-from provider_fakes import make_keyless
 
 
 def _settings(**providers) -> AppSettings:
@@ -55,22 +52,6 @@ def test_openai_with_a_saved_endpoint_uses_it(monkeypatch: pytest.MonkeyPatch):
     )
 
     assert translator.base_url == "https://openrouter.ai/api/v1"
-
-
-def test_a_keyless_variant_builds_fine_with_the_placeholder_key(
-    monkeypatch: pytest.MonkeyPatch,
-):
-    """Ollama et al. (#88): no key saved, but OpenAI's SDK refuses to build a
-    client with none — `request_key` must supply the registry's placeholder."""
-    make_keyless(monkeypatch, "openai")
-    settings = _settings(openai={"base_url": "http://localhost:11434/v1"})
-    monkeypatch.setattr(factory_module, "get_settings", lambda: settings)
-
-    translator = TranslatorFactory.create_translator(
-        service="openai", lang_in="en", lang_out="vi"
-    )
-
-    assert translator.api_key == "unused"
 
 
 def test_constructing_the_openai_translator_makes_no_network_call(
@@ -111,18 +92,18 @@ def fresh_limiters(monkeypatch: pytest.MonkeyPatch) -> dict:
 def test_a_provider_borrowing_openais_translator_runs_under_its_own_limiter(
     monkeypatch: pytest.MonkeyPatch, fresh_limiters: dict
 ):
-    """OpenRouter, DeepSeek and Ollama reuse `OpenAITranslator`. Keyed on the
-    class's own name, all four drew on OpenAI's budget, and the registry's
+    """OpenRouter and DeepSeek reuse `OpenAITranslator`. Keyed on the
+    class's own name, all three drew on OpenAI's budget, and the registry's
     `default_qps` for the others was never read."""
     from desktop_pdf_translator.providers.registry import provider
 
-    settings = _settings(openai={"api_key": "sk-test"})
+    settings = _settings(openai={"api_key": "sk-test"}, openrouter={"api_key": "sk-or"})
     monkeypatch.setattr(factory_module, "get_settings", lambda: settings)
 
-    TranslatorFactory.create_translator(service="ollama", lang_in="en", lang_out="vi")
+    TranslatorFactory.create_translator(service="openrouter", lang_in="en", lang_out="vi")
 
-    assert set(fresh_limiters) == {"ollama"}
-    assert fresh_limiters["ollama"]._rate == provider("ollama").default_qps
+    assert set(fresh_limiters) == {"openrouter"}
+    assert fresh_limiters["openrouter"]._rate == provider("openrouter").default_qps
 
 
 def test_a_max_qps_saved_for_one_provider_leaves_openais_limiter_alone(
@@ -146,10 +127,9 @@ def test_a_max_qps_saved_for_one_provider_leaves_openais_limiter_alone(
 # the paragraph cache is namespaced by provider too (#88 follow-up)
 # ---------------------------------------------------------------------------
 #
-# OpenRouter, DeepSeek and Ollama all build `OpenAITranslator`. If the cache
-# key it writes through is only ever "openai" regardless of which of those
-# built it, an Ollama server and an OpenAI-compatible endpoint that happen to
-# serve a same-named model (e.g. "llama3.2") will silently serve each other's
+# OpenRouter and DeepSeek both build `OpenAITranslator`. If the cache key it
+# writes through is only ever "openai" regardless of which of those built it,
+# two of them serving a same-named model will silently serve each other's
 # cached paragraphs.
 
 
@@ -220,16 +200,16 @@ _PARAGRAPH = (
 def test_a_provider_sharing_openais_translator_does_not_serve_its_cached_paragraph(
     isolated_paragraph_cache, fresh_limiters: dict
 ):
-    """Ollama translates the paragraph first; the OpenAI-built translator,
+    """DeepSeek translates the paragraph first; the OpenAI-built translator,
     same model name and languages, must call its own client rather than be
-    served Ollama's cached text."""
-    ollama = _build_openai_translator("ollama", "Bản dịch Ollama")
+    served DeepSeek's cached text."""
+    deepseek = _build_openai_translator("deepseek", "Bản dịch DeepSeek")
     openai = _build_openai_translator("openai", "Bản dịch OpenAI")
 
-    ollama_result = ollama.translate(_PARAGRAPH)
+    deepseek_result = deepseek.translate(_PARAGRAPH)
     openai_result = openai.translate(_PARAGRAPH)
 
-    assert ollama_result == "Bản dịch Ollama"
+    assert deepseek_result == "Bản dịch DeepSeek"
     assert openai_result == "Bản dịch OpenAI"
     assert len(openai.client.completions.calls) == 1
 
