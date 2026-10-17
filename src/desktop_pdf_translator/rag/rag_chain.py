@@ -375,7 +375,7 @@ class EnhancedRAGChain:
         # What the answer reads: the retrieved pages, or the whole of a short
         # document. Images and the sources offered stay the retrieved pages'.
         read = evidence
-        if model is not None and evidence and self._reads_whole(chunks):
+        if model is not None and evidence and await asyncio.to_thread(self._reads_whole, chunks):
             read = await asyncio.to_thread(whole_document, chunks, evidence)
         written_at = datetime.now()
         # Read whole, the pages are the outline; read from retrieval, the
@@ -631,8 +631,18 @@ Question: {question}"""
         limit = self.full_document_chars
         if limit is None:
             limit = int(get_settings().rag.whole_document_tokens * CHARS_PER_TOKEN)
-        length = sum(reading_length(chunk['text']) for chunk in chunks)
-        return 0 < length <= limit
+        # `reading_length` walks every character in Python, so a long document
+        # costs ~100 ms: "Off" is known without reading any, and a running
+        # total past the limit is final. Called through `to_thread`, because
+        # even the bounded walk (the limit's worth of text) is not free.
+        if limit <= 0:
+            return False
+        length = 0.0
+        for chunk in chunks:
+            length += reading_length(chunk['text'])
+            if length > limit:
+                return False
+        return length > 0
 
     async def _outline_for(self, model: Optional[AnswerModel],
                            evidence: Sequence[PageEvidence],

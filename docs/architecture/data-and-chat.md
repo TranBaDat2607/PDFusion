@@ -304,6 +304,10 @@ there:
   112k, plus 4k of answer, ~3k of page images, ~1.5k of conversation and the
   prompt, ~121k, inside a 128k window (#106). A saved 90,000 or 100,000 — earlier
   versions offered and allowed them — loads as 80,000, not as the default.
+  Deciding costs: `reading_length` walks every character in Python, so
+  `_reads_whole` returns at once for a budget of 0, stops summing the moment
+  the total passes the budget, and runs under `asyncio.to_thread` — on the loop
+  it froze every stream for ~100 ms a question on a 300-page PDF (#107).
   The estimate is still an estimate: a provider that refuses a whole read as
   too long (`rag_chain.is_context_overflow`: 413, or a 400/422 naming the
   context length) is asked again, once, with the retrieved pages and the
