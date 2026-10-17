@@ -51,7 +51,7 @@ the baseline, which cites nothing, the references it lists are its citations.
   (~1000 chars, Camelot/pdfplumber tables), ChromaDB + BM25 blended by score,
   HyDE (one extra LLM call before retrieval), a heuristic re-rank, a text-only
   answer with no citations.
-- **v2** — this redesign (see `docs/architecture-notes.md` → "Chat answers").
+- **v2** — this redesign (see `docs/architecture/data-and-chat.md` → "Chat answers").
 
 ## Results
 
