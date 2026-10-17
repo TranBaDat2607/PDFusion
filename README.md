@@ -194,7 +194,7 @@ opens the right directory for your platform.
 
 See **[docs/development.md](docs/development.md)** for prerequisites, setup and
 how to build an installer, and
-**[docs/architecture-notes.md](docs/architecture-notes.md)** for why the app is
+**[docs/architecture/](docs/architecture/README.md)** for why the app is
 put together the way it is.
 
 Issues and pull requests are welcome.
