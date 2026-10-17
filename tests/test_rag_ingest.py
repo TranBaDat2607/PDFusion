@@ -702,3 +702,74 @@ def test_a_table_sits_between_the_paragraphs_around_it(tmp_path: Path) -> None:
 
     kinds = [(c["metadata"]["kind"], c["text"][:11]) for c in chunks]
     assert kinds == [("text", "Words above"), ("table", "| A | B | C"), ("text", "Words below")]
+
+
+def _subsection_page(doc: fitz.Document, blocks: Sequence[str]) -> fitz.Page:
+    """A page of body-size (11pt) blocks given as HTML, each in a box of its
+    own, as a paper's two-column layout sets them."""
+    page = doc.new_page(width=PAGE_W, height=PAGE_H)
+    top = 60.0
+    for block in blocks:
+        _write_html(page, fitz.Rect(50, top, 545, top + 90), block)
+        top += 100
+    return page
+
+
+def test_a_bold_body_size_line_standing_alone_is_a_subsection_heading(tmp_path: Path) -> None:
+    """Papers set subsections ("4.1 GLUE") in bold at the body's own size; read
+    as text, the chunks under them lose the section they belong to, and the
+    document's outline loses every subsection."""
+    doc = fitz.open()
+    _text_page(doc, ["Body text sets the size every heading is measured against."] * 6)
+    _subsection_page(doc, [
+        '<p style="font-size:11pt"><b>4.1 GLUE</b></p>',
+        '<p style="font-size:11pt">The General Language Understanding Evaluation benchmark '
+        'is a collection of diverse natural language understanding tasks.</p>',
+    ])
+    path = _save(doc, tmp_path)
+
+    _, chunks = _ingest(path)
+
+    glue = [c for c in chunks if "General Language" in c["text"]]
+    # Its own field, not the heading: headings are embedded with every chunk
+    # under them, and taking these as headings cost retrieval three questions
+    # in 99 (`benchmarks/rag/README.md`); the outline is what needs them.
+    assert glue and all(c["metadata"]["subheading"] == "4.1 GLUE" for c in glue)
+    assert all(c["metadata"]["heading"] == "" for c in glue)
+    assert not any(c["text"].strip() == "4.1 GLUE" for c in chunks)
+
+
+def test_a_new_section_heading_ends_the_subsection(tmp_path: Path) -> None:
+    doc = fitz.open()
+    _text_page(doc, ["Body text sets the size every heading is measured against."] * 6)
+    _subsection_page(doc, [
+        '<p style="font-size:11pt"><b>4.1 GLUE</b></p>',
+        '<p style="font-size:11pt">Text under the subsection.</p>',
+    ])
+    _text_page(doc, ["Text under the next section."], heading="5 Ablation Studies")
+    path = _save(doc, tmp_path)
+
+    _, chunks = _ingest(path)
+
+    after = [c for c in chunks if "next section" in c["text"]]
+    assert after and all(c["metadata"]["subheading"] == "" for c in after)
+    assert all(c["metadata"]["heading"] == "5 Ablation Studies" for c in after)
+
+
+def test_a_paragraph_that_only_starts_in_bold_is_not_a_heading(tmp_path: Path) -> None:
+    """Bold lead-in words ("Task #1: Masked LM.") run into their paragraph's
+    text: the block isn't all bold, so it stays text, and its words reach a chunk."""
+    doc = fitz.open()
+    _text_page(doc, ["Body text sets the size every heading is measured against."] * 6)
+    _subsection_page(doc, [
+        '<p style="font-size:11pt"><b>Task one.</b> Intuitively, it is reasonable to believe '
+        'that a deep bidirectional model is more powerful than a shallow one, and this '
+        'sentence runs on long enough to wrap onto a second line of the box.</p>',
+    ])
+    path = _save(doc, tmp_path)
+
+    _, chunks = _ingest(path)
+
+    assert "Intuitively" in _all_text(chunks)
+    assert "Task one." in _all_text(chunks)
+    assert all(c["metadata"]["heading"] != "Task one." for c in chunks)

@@ -75,6 +75,20 @@ def test_a_heading_that_starts_a_later_section_again_is_listed_again():
     ]
 
 
+def test_subsections_are_listed_under_their_section():
+    """A paper's "4.1 GLUE", "4.2 SQuAD v1.1" are where its benchmarks are."""
+    def sub(page, heading, subheading):
+        return {"text": "w", "metadata": {"page": page, "heading": heading, "subheading": subheading}}
+
+    chunks = [sub(4, "4 Experiments", ""), sub(4, "4 Experiments", "4.1 GLUE"),
+              sub(5, "4 Experiments", "4.1 GLUE"), sub(5, "4 Experiments", "4.2 SQuAD v1.1"),
+              sub(6, "5 Ablation Studies", "")]
+
+    assert [heading for _page, heading in outline(chunks, max_chars=1000)] == [
+        "4 Experiments", "4.1 GLUE", "4.2 SQuAD v1.1", "5 Ablation Studies",
+    ]
+
+
 def test_chunks_without_a_heading_or_metadata_are_skipped():
     chunks = [{"text": "no metadata"}, chunk(0, None), chunk(1, "  "), chunk(2, "Results")]
 

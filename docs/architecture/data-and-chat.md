@@ -313,9 +313,14 @@ there:
   whole-document questions on PDFs too long to read whole went 9/18 → 10/18:
   a section list 0/3 → 3/3, a "main ideas" summary 3/3 → 1/3. A heading that
   starts a later section again is listed again, so a multi-paper PDF keeps
-  each paper's "Abstract". It is only as good as
-  heading detection: a paper whose subsections ingest doesn't recognise as
-  headings outlines as its top-level sections alone.
+  each paper's "Abstract". Subsections are in it too: a block wholly in bold
+  at the body's size ("4.1 GLUE") is recorded as the chunk's `subheading`
+  (`ingest.PdfIngestor._is_subheading`, `CHUNKER_VERSION` "3") — recorded and
+  nothing else. Taken as headings, they were embedded with every chunk under
+  them and retrieval lost three questions in 99; splitting chunks at them
+  still lost two. Left in the text, chunks are byte-for-byte what they were,
+  retrieval is unchanged, and the long-PDF whole-document questions went from
+  10/18 to 12/18 (9/18 with no outline).
 - **A longer document is not given a second, whole read.** "Self-Route"
   (Li et al.) — answer from retrieved pages, and re-answer from the whole
   document when the model says they miss the answer — was built and measured,

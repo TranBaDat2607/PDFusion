@@ -114,6 +114,8 @@ class ChromaDBManager:
                 'page': chunk.get('page', 0),
                 'kind': section.get('kind', 'text'),
                 'heading': section.get('heading', ''),
+                # The outline's subsections (`retrieval.outline`); never embedded.
+                'subheading': section.get('subheading', ''),
                 'page_kind': section.get('page_kind', 'text'),
                 'has_equations': bool(section.get('has_equations', False)),
                 'has_tables': bool(section.get('has_tables', False)),

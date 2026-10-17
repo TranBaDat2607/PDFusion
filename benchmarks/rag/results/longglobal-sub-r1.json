@@ -1,0 +1,272 @@
+{
+ "system": "v2",
+ "src": "/home/nammovuivui/PDFusion-industrial-rag/src",
+ "answers": true,
+ "model": "gemini:gemini-2.5-flash-lite",
+ "whole_document_tokens": 11500,
+ "options": "{\"full_document_chars\": 40250}",
+ "indexing": {
+  "bert.pdf": {
+   "seconds": 18.98,
+   "chunks": 144,
+   "pages": 16,
+   "text_pages": 7,
+   "visual_pages": 9,
+   "scanned_pages": 0,
+   "ocr_pages": 0,
+   "ocr_failed_pages": 0,
+   "tables": 4,
+   "llm_input_tokens": 0,
+   "llm_output_tokens": 0
+  },
+  "long.pdf": {
+   "seconds": 55.8,
+   "chunks": 376,
+   "pages": 57,
+   "text_pages": 24,
+   "visual_pages": 31,
+   "scanned_pages": 2,
+   "ocr_pages": 2,
+   "ocr_failed_pages": 0,
+   "tables": 21,
+   "llm_input_tokens": 0,
+   "llm_output_tokens": 0
+  },
+  "resnet.pdf": {
+   "seconds": 18.91,
+   "chunks": 121,
+   "pages": 12,
+   "text_pages": 3,
+   "visual_pages": 9,
+   "scanned_pages": 0,
+   "ocr_pages": 0,
+   "ocr_failed_pages": 0,
+   "tables": 13,
+   "llm_input_tokens": 0,
+   "llm_output_tokens": 0
+  }
+ },
+ "questions": [
+  {
+   "id": "g05",
+   "doc": "bert.pdf",
+   "kind": "global",
+   "split": "test",
+   "q": "What are the main ideas of this paper?",
+   "answer_seconds": 4.376,
+   "answer": {
+    "text": "The main ideas of this paper are:\n\n*   **BERT: Bidirectional Encoder Representations from Transformers**: A new language representation model that improves fine-tuning based approaches by alleviating the unidirectionality constraint of standard language models [p. 1](#page=1).\n*   **Masked Language Model (MLM)**: BERT uses an MLM pre-training objective, inspired by the Cloze task, which randomly masks tokens and trains the model to predict them [p. 1](#page=1). This allows for bidirectional context.\n*   **Comparison of Pre-training Strategies**: The paper discusses two existing strategies: feature-based (e.g., ELMo) and fine-tuning (e.g., OpenAI GPT) [p. 1](#page=1). BERT improves upon the fine-tuning approach.\n*   **Application to Downstream Tasks**: BERT is applied to various natural language processing tasks, including sentence-level tasks like natural language inference and paraphrasing, and token-level tasks like named entity recognition and question answering [p. 1](#page=1).\n*   **Experiments and Results**: The paper presents experiments on several benchmarks, including GLUE, SQuAD v1.1, SQuAD v2.0, SWAG, CoLA, STS-B, MRPC, and RTE, showing BERT's performance [p. 7](#page=7), [p. 15](#page=15).\n*   **Ablation Studies**: Additional studies are presented to analyze the effect of different pre-training tasks and training steps [p. 7](#page=7), [p. 12](#page=12).",
+    "cited_pages": [
+     1,
+     7,
+     15,
+     12
+    ],
+    "images_sent": 2
+   },
+   "answer_score": {
+    "correct": 1.0,
+    "coverage": 1.0
+   },
+   "llm_input_tokens": 4834,
+   "llm_output_tokens": 312,
+   "llm_calls": 1
+  },
+  {
+   "id": "g06",
+   "doc": "resnet.pdf",
+   "kind": "global",
+   "split": "dev",
+   "q": "Give an overview of this paper.",
+   "answer_seconds": 4.416,
+   "answer": {
+    "text": "This paper introduces a deep residual learning framework to ease the training of very deep networks [p. 1](#page=1). The framework reformulates layers to learn residual functions with reference to layer inputs, rather than unreferenced functions [p. 1](#page=1). This approach makes networks easier to optimize and allows for increased depth, leading to improved accuracy [p. 1](#page=1).\n\nThe paper's outline includes:\n*   Deep Residual Learning for Image Recognition\n*   Abstract\n*   1. Introduction\n*   2. Related Work\n*   3.1. Residual Learning\n*   3.3. Network Architectures\n*   3.2. Identity Mapping by Shortcuts\n*   3.4. Implementation\n*   4.1. ImageNet Classification\n*   4.2. CIFAR-10 and Analysis\n*   4.3. Object Detection on PASCAL and MS COCO\n*   References\n*   A. Object Detection Baselines\n*   B. Object Detection Improvements\n*   C. ImageNet Localization\n\nThe authors present experiments on ImageNet and CIFAR-10 datasets, demonstrating that their residual networks achieve state-of-the-art results [p. 1](#page=1), [p. 8](#page=8). They also show that their method is effective for object detection tasks [p. 8](#page=8). The paper discusses the concept of residual learning, where layers fit a residual mapping $F(x) := H(x) - x$ instead of the desired mapping $H(x)$ [p. 2](#page=2). This is implemented using shortcut connections that perform identity mappings and are added to the outputs of stacked layers [p. 2](#page=2). The paper also explores networks with over 1000 layers, showing that residual learning facilitates their training [p. 8](#page=8).",
+    "cited_pages": [
+     1,
+     8,
+     2
+    ],
+    "images_sent": 3
+   },
+   "answer_score": {
+    "correct": 1.0,
+    "coverage": 1.0
+   },
+   "llm_input_tokens": 6764,
+   "llm_output_tokens": 366,
+   "llm_calls": 1
+  },
+  {
+   "id": "g12",
+   "doc": "long.pdf",
+   "kind": "global",
+   "split": "dev",
+   "q": "What separate documents or papers does this PDF contain?",
+   "answer_seconds": 2.521,
+   "answer": {
+    "text": "This PDF contains the following documents:\n* Attention Is All You Need [p. 1](#page=1)\n* BERT: Pre-training of Deep Bidirectional Transformers for Language Understanding\n* Deep Residual Learning for Image Recognition",
+    "cited_pages": [
+     1
+    ],
+    "images_sent": 1
+   },
+   "answer_score": {
+    "correct": 0.0,
+    "coverage": 0.75
+   },
+   "llm_input_tokens": 4505,
+   "llm_output_tokens": 57,
+   "llm_calls": 1
+  },
+  {
+   "id": "g13",
+   "doc": "bert.pdf",
+   "kind": "global",
+   "split": "test",
+   "q": "List the main sections of this paper.",
+   "answer_seconds": 3.371,
+   "answer": {
+    "text": "The main sections of the paper are:\nAbstract [p. 1](#page=1)\n1 Introduction [p. 1](#page=1)\n2 Related Work\n2.1 Unsupervised Feature-based Approaches\n2.3 Transfer Learning from Supervised Data [p. 3](#page=3)\n3 BERT [p. 3](#page=3)\n3.1 Pre-training BERT\n4 Experiments\n4.1 GLUE\n4.2 SQuAD v1.1\n4.3 SQuAD v2.0 [p. 7](#page=7)\n5 Ablation Studies [p. 7](#page=7)\n5.1 Effect of Pre-training Tasks\n5.3 Feature-based Approach with BERT\n6 Conclusion\nReferences\nA Additional Details for BERT [p. 12](#page=12)\nA.1 Illustration of the Pre-training Tasks [p. 12](#page=12)\nA.3 Fine-tuning Procedure\nB Detailed Experimental Setup\nC Additional Ablation Studies\nC.1 Effect of Number of Training Steps",
+    "cited_pages": [
+     1,
+     3,
+     7,
+     12
+    ],
+    "images_sent": 3
+   },
+   "answer_score": {
+    "correct": 1.0,
+    "coverage": 1.0
+   },
+   "llm_input_tokens": 4646,
+   "llm_output_tokens": 294,
+   "llm_calls": 1
+  },
+  {
+   "id": "g14",
+   "doc": "resnet.pdf",
+   "kind": "global",
+   "split": "dev",
+   "q": "Which datasets does the paper report experiments on?",
+   "answer_seconds": 2.258,
+   "answer": {
+    "text": "The paper reports experiments on ImageNet [p. 7](#page=7), CIFAR-10 [p. 7](#page=7), [p. 8](#page=8), PASCAL VOC 2007/2012 [p. 8](#page=8), and MS COCO [p. 8](#page=8).",
+    "cited_pages": [
+     7,
+     8
+    ],
+    "images_sent": 2
+   },
+   "answer_score": {
+    "correct": 1.0,
+    "coverage": 1.0
+   },
+   "llm_input_tokens": 6356,
+   "llm_output_tokens": 60,
+   "llm_calls": 1
+  },
+  {
+   "id": "g15",
+   "doc": "bert.pdf",
+   "kind": "global",
+   "split": "dev",
+   "q": "Which benchmarks or tasks is BERT evaluated on?",
+   "answer_seconds": 2.903,
+   "answer": {
+    "text": "BERT is evaluated on the following benchmarks and tasks:\n\n*   GLUE (General Language Understanding Evaluation) [p. 5](#page=5)\n*   SQuAD v1.1 (Stanford Question Answering Dataset) [p. 6](#page=6)",
+    "cited_pages": [
+     5,
+     6
+    ],
+    "images_sent": 3
+   },
+   "answer_score": {
+    "correct": 0.0,
+    "coverage": 0.6
+   },
+   "llm_input_tokens": 5715,
+   "llm_output_tokens": 50,
+   "llm_calls": 1
+  }
+ ],
+ "summary": {
+  "all": {
+   "n": 6,
+   "hit@1": null,
+   "hit@3": null,
+   "hit@5": null,
+   "mrr@5": null,
+   "correct": 0.667,
+   "cites_gold": null,
+   "citation_precision": null,
+   "pages_cited": null,
+   "hijacked": null,
+   "coverage": 0.892,
+   "correct_ci": [
+    0.3,
+    0.903
+   ],
+   "answer_p50_s": 3.137
+  },
+  "global": {
+   "n": 6,
+   "hit@1": null,
+   "hit@3": null,
+   "hit@5": null,
+   "mrr@5": null,
+   "correct": 0.667,
+   "cites_gold": null,
+   "citation_precision": null,
+   "pages_cited": null,
+   "hijacked": null,
+   "coverage": 0.892,
+   "correct_ci": [
+    0.3,
+    0.903
+   ],
+   "answer_p50_s": 3.137
+  },
+  "split:test": {
+   "n": 2,
+   "hit@1": null,
+   "hit@3": null,
+   "hit@5": null,
+   "mrr@5": null,
+   "correct": 1.0,
+   "cites_gold": null,
+   "citation_precision": null,
+   "pages_cited": null,
+   "hijacked": null,
+   "coverage": 1.0,
+   "correct_ci": [
+    0.342,
+    1.0
+   ],
+   "answer_p50_s": 3.873
+  },
+  "split:dev": {
+   "n": 4,
+   "hit@1": null,
+   "hit@3": null,
+   "hit@5": null,
+   "mrr@5": null,
+   "correct": 0.5,
+   "cites_gold": null,
+   "citation_precision": null,
+   "pages_cited": null,
+   "hijacked": null,
+   "coverage": 0.838,
+   "correct_ci": [
+    0.15,
+    0.85
+   ],
+   "answer_p50_s": 2.712
+  }
+ },
+ "usage": {
+  "calls": 6,
+  "input_tokens": 32820,
+  "output_tokens": 1139
+ }
+}

@@ -244,6 +244,22 @@ still short of passing (it leaves out the annual report). BERT's benchmarks
 fail both ways: the standalone paper's subsections aren't detected as
 headings, so they aren't in its outline.
 
+**Subsections in the outline** (`longglobal-sub-r*`): papers set "4.1 GLUE"
+in bold at the body's size, which heading detection doesn't take; recorded
+as a chunk's `subheading` and listed in the outline, they took the six
+questions to **12/18** — "main ideas of BERT" back to 3/3, the section list
+3/3, BERT's benchmarks closer but still short (GLUE and SQuAD v1.1 named, not
+v2.0, SWAG, NER). Two ways of getting them were measured first and dropped:
+as headings, embedded with every chunk under them, retrieval lost three
+questions in 99 (`r131-subsections`, removed); splitting chunks at them lost
+two. Recorded without touching the chunks, retrieval is identical
+(`r131-subheading`: Δ 0.000 on 99).
+
+With all of it (`final7-answers`, Gemini 2.5 Flash-Lite, 131 questions): 0.96
+correct (0.91–0.98); against the run before subsections, 3 fixed and 0
+broken; against `main` on the shared 127, +0.055 (bootstrap +0.008…+0.110,
+McNemar p 0.065).
+
 On the 127 questions the outline isn't meant for (`final3` → `final6`), one
 answer was fixed (n02, ResNet, which gets the outline) and two broke: a10 is
 on a document read whole, so the outline never reached it, and p02 picked the

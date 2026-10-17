@@ -87,4 +87,5 @@ EMBEDDING_DIMENSIONS = EMBEDDING_SPECS[EMBEDDING_MODEL].dimensions
 # Bump when `rag/ingest.py` changes how a PDF becomes chunks, or
 # `vector_store.add_chunks` what is embedded for one. "2": page-aware ingestion
 # with OCR, embedded under section headings, replaced ScientificPDFProcessor.
-CHUNKER_VERSION = "2"
+# "3": chunks carry the subsection in force (`subheading`) for the outline.
+CHUNKER_VERSION = "3"

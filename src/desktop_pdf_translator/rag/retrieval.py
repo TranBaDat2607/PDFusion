@@ -219,8 +219,9 @@ def outline_line(page: int, heading: str) -> str:
 
 
 def outline(chunks: Sequence[Dict[str, Any]], max_chars: int) -> List[Tuple[int, str]]:
-    """The document's table of contents from its chunks' headings: an entry
-    each time a new section starts, with the 1-indexed page it starts on.
+    """The document's table of contents from its chunks' headings and
+    subheadings (`ingest.PdfIngestor._is_subheading`): an entry each time a new
+    section or subsection starts, with the 1-indexed page it starts on.
 
     What an answer from five retrieved pages knows of the rest of a long
     document. A heading seen before is listed again when it starts a section
@@ -232,16 +233,22 @@ def outline(chunks: Sequence[Dict[str, Any]], max_chars: int) -> List[Tuple[int,
     """
     entries: List[Tuple[int, str]] = []
     used = 0.0
-    previous = None
+    previous_heading = previous_sub = None
     for chunk in sorted(chunks, key=lambda c: (_page(c), _index(c))):
-        heading = ((chunk.get("metadata") or {}).get("heading") or "").strip()
-        if not heading or heading == previous:
-            continue
-        previous = heading
+        metadata = chunk.get("metadata") or {}
+        heading = (metadata.get("heading") or "").strip()
+        sub = (metadata.get("subheading") or "").strip()
+        titles = []
+        if heading and heading != previous_heading:
+            titles.append(heading)
+        if sub and (sub != previous_sub or heading != previous_heading):
+            titles.append(sub)
+        previous_heading, previous_sub = heading, sub
         page = _page(chunk) + 1
-        cost = reading_length(outline_line(page, heading)) + 1
-        if used + cost > max_chars:
-            break
-        entries.append((page, heading))
-        used += cost
+        for title in titles:
+            cost = reading_length(outline_line(page, title)) + 1
+            if used + cost > max_chars:
+                return entries
+            entries.append((page, title))
+            used += cost
     return entries
