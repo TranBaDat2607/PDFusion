@@ -2,14 +2,10 @@ import { describe, expect, it } from "vitest";
 
 import {
   MAX_RANGES,
-  checkPageLimit,
   countPages,
   describeSelection,
   formatPageRanges,
-  pageLimitCopy,
   parsePageRanges,
-  truncateRanges,
-  type PageLimitCheck,
 } from "./page-range";
 
 describe("parsePageRanges", () => {
@@ -106,76 +102,6 @@ describe("formatting and counting", () => {
       ok: true,
       ranges,
     });
-  });
-
-  it("keeps the first pages of a selection", () => {
-    expect(truncateRanges([[1, 20], [30, 40]], 25)).toEqual([
-      [1, 20],
-      [30, 34],
-    ]);
-    expect(truncateRanges([[1, 20], [30, 40]], 20)).toEqual([[1, 20]]);
-    expect(truncateRanges([[5, 5]], 50)).toEqual([[5, 5]]);
-  });
-});
-
-describe("checkPageLimit", () => {
-  it("lets a document within the limit through", () => {
-    expect(checkPageLimit(50, null, 50)).toEqual({ over: false });
-  });
-
-  it("offers the first pages of a long document", () => {
-    expect(checkPageLimit(120, null, 50)).toEqual({
-      over: true,
-      selected: 120,
-      limit: 50,
-      wholeDocument: true,
-      suggestion: [[1, 50]],
-    });
-  });
-
-  it("lets a selection within the limit through, however long the PDF", () => {
-    expect(checkPageLimit(500, [[101, 150]], 50)).toEqual({ over: false });
-  });
-
-  it("offers the first pages of a selection that is too long", () => {
-    expect(checkPageLimit(500, [[10, 40], [100, 150]], 50)).toEqual({
-      over: true,
-      selected: 82,
-      limit: 50,
-      wholeDocument: false,
-      suggestion: [
-        [10, 40],
-        [100, 118],
-      ],
-    });
-  });
-});
-
-describe("pageLimitCopy", () => {
-  const over = (check: PageLimitCheck) => {
-    if (!check.over) throw new Error("expected a check over the limit");
-    return check;
-  };
-
-  it("names the pages it will translate", () => {
-    const copy = pageLimitCopy(over(checkPageLimit(120, null, 50)));
-    expect(copy.title).toBe("This PDF has 120 pages");
-    expect(copy.action).toBe("Translate pages 1–50");
-    expect(copy.description).toContain("up to 50 pages at a time");
-    expect(copy.description).toContain("Pages box");
-    expect(copy.description).toContain("Settings → Cache → Performance");
-  });
-
-  it("keeps the button short when the suggestion is several ranges", () => {
-    const copy = pageLimitCopy(over(checkPageLimit(500, [[10, 40], [100, 150]], 50)));
-    expect(copy.title).toBe("82 pages are selected");
-    expect(copy.action).toBe("Translate the first 50 pages");
-    expect(copy.description).toContain("pages 10–40, 100–118");
-  });
-
-  it("names a single-range suggestion on the button", () => {
-    const copy = pageLimitCopy(over(checkPageLimit(500, [[100, 199]], 50)));
-    expect(copy.action).toBe("Translate pages 100–149");
   });
 });
 

@@ -95,7 +95,7 @@ def manager(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> ConfigManager:
     for service in ("OPENAI", "GEMINI", "ANTHROPIC"):
         monkeypatch.delenv(f"{service}_API_KEY", raising=False)
         monkeypatch.delenv(f"{service}_MODEL", raising=False)
-    for var in ("DEBUG_MODE", "MAX_PAGES", "MAX_FILE_SIZE_MB"):
+    for var in ("DEBUG_MODE",):
         monkeypatch.delenv(var, raising=False)
     return ConfigManager(config_dir=tmp_path / "PDFusion")
 

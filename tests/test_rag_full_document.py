@@ -11,6 +11,8 @@ a hashing embedding function, a recording model.
 
 from __future__ import annotations
 
+import json
+import logging
 import re
 from pathlib import Path
 from typing import Dict, List
@@ -21,9 +23,12 @@ from desktop_pdf_translator.config import AppSettings
 from desktop_pdf_translator.rag import rag_chain as rag_chain_module
 from desktop_pdf_translator.rag.vector_store import ChromaDBManager
 
+from desktop_pdf_translator.rag.errors import AnswerGenerationError
+
 from test_rag_answers import (
     _FENCE,
     HashingEmbeddingFunction,
+    _SdkError,
     _Translator,
     ask,
     build_document,
@@ -392,3 +397,204 @@ def test_the_token_budget_converts_at_three_and_a_half_characters_a_token(tmp_pa
         shown.append(len(shown_pages(only_call(translator))))
 
     assert shown == [8, 2]
+
+
+# ---------------------------------------------------------------------------
+# the provider refuses a whole read as too long (#106)
+# ---------------------------------------------------------------------------
+#
+# The budget is an estimate (`_CHARS_PER_TOKEN`), and Vietnamese or CJK text
+# runs past it, so a whole read can still overflow a small window. The request
+# is rejected, and every later question on that document would fail the same
+# way; the retrieved pages always fit, so the question is asked again with those.
+
+# One message per provider family; the status is what each really sends.
+_TOO_LONG = [
+    pytest.param(
+        400,
+        "This model's maximum context length is 131072 tokens. However, you "
+        "requested 150000 tokens in the messages.",
+        id="openai-deepseek-openrouter",
+    ),
+    pytest.param(
+        400,
+        "Error code: 400 - {'error': {'code': 'context_length_exceeded'}}",
+        id="openai-code",
+    ),
+    pytest.param(400, "prompt is too long: 210000 tokens > 200000 maximum", id="anthropic"),
+    pytest.param(
+        400,
+        "The input token count (1200000) exceeds the maximum number of tokens allowed (1048576).",
+        id="gemini",
+    ),
+    pytest.param(422, "Maximum Context Length exceeded", id="422-any-case"),
+    pytest.param(
+        400,
+        "input length and `max_tokens` exceed context limit: 190000 + 64000 > 200000",
+        id="anthropic-with-max-tokens",
+    ),
+    pytest.param(
+        400, "This endpoint's maximum prompt length is 131072 tokens", id="openrouter-routed"
+    ),
+    pytest.param(413, "Payload Too Large", id="413-whatever-the-message"),
+    pytest.param(413, "", id="413-no-message"),
+]
+
+
+@pytest.mark.parametrize(("status", "message"), _TOO_LONG)
+def test_a_whole_read_the_provider_calls_too_long_is_asked_again_from_the_retrieved_pages(
+    tmp_path, store, status, message
+):
+    pages = eight_pages()
+    translator = _Translator(_SdkError(status, message), "Drift is calibrated [p. 6].")
+    index, path = build_document(tmp_path, store, pages)
+    chain = make_chain(store, translator, full_document_chars=total_chars(pages) + 100)
+
+    result = ask(chain, index, path, max_pdf_sources=2)
+
+    assert len(translator.calls) == 2
+    assert "[p. 6](#page=6)" in result["answer"]
+    assert result["quality_metrics"]["pages_read"] == 2
+
+
+def test_the_second_read_shows_only_the_retrieved_pages(tmp_path, store):
+    """The same question, so the retry changes only how much of the document
+    goes with it."""
+    pages = eight_pages()
+    translator = _Translator(_SdkError(400, "maximum context length is 8192 tokens"), "ok")
+    index, path = build_document(tmp_path, store, pages)
+    chain = make_chain(store, translator, full_document_chars=total_chars(pages) + 100)
+
+    ask(chain, index, path, max_pdf_sources=2)
+
+    (whole, _s1, _k1), (retrieved, _s2, _k2) = translator.calls
+    assert sorted(shown_pages(whole)) == [1, 2, 3, 4, 5, 6, 7, 8]
+    assert sorted(shown_pages(retrieved)) == [_SECOND, _BEST]
+    for number, marker in enumerate(MARKERS, start=1):
+        assert (marker in retrieved) == (number in (_SECOND, _BEST)), marker
+
+
+def test_a_citation_only_the_rejected_read_could_have_made_is_dropped(tmp_path, store):
+    """The model that answers saw pages 3 and 6; page 8 was in the request that
+    was refused, so citing it would point at a page nobody read."""
+    pages = eight_pages()
+    translator = _Translator(
+        _SdkError(400, "prompt is too long: 300000 tokens > 200000 maximum"),
+        "The appendix says so [p. 8], the drift is in [p. 6].",
+    )
+    index, path = build_document(tmp_path, store, pages)
+    chain = make_chain(store, translator, full_document_chars=total_chars(pages) + 100)
+
+    result = ask(chain, index, path, max_pdf_sources=2)
+
+    assert "p. 8" not in result["answer"]
+    assert "page=8" not in result["answer"]
+    assert "[p. 6](#page=6)" in result["answer"]
+    assert result["quality_metrics"]["invalid_citations"] == 1
+    assert all(r["page"] != 8 for r in result["pdf_references"])
+
+
+@pytest.mark.parametrize(
+    ("status", "message"),
+    [
+        pytest.param(
+            429,
+            "Request too large for gpt-4o in organization org-x on tokens per min "
+            "(TPM): Limit 30000, Requested 45000.",
+            id="rate-limit-wording",
+        ),
+        pytest.param(400, "Invalid request: temperature is out of range", id="unrelated-400"),
+        pytest.param(500, "maximum context length", id="not-a-client-error"),
+    ],
+)
+def test_guard_an_error_that_is_not_about_length_does_not_trigger_the_retry(
+    tmp_path, store, status, message
+):
+    """A rate limit says "too large" too, but waiting fixes it, and reading
+    fewer pages would only hide it."""
+    pages = eight_pages()
+    translator = _Translator(_SdkError(status, message))
+    index, path = build_document(tmp_path, store, pages)
+    chain = make_chain(store, translator, full_document_chars=total_chars(pages) + 100)
+
+    with pytest.raises(AnswerGenerationError):
+        ask(chain, index, path, max_pdf_sources=2)
+
+    assert len(translator.calls) == 1
+
+
+def test_guard_a_retrieved_read_the_provider_calls_too_long_has_nothing_smaller_to_try(
+    tmp_path, store
+):
+    pages = eight_pages()
+    translator = _Translator(_SdkError(400, "maximum context length is 8192 tokens"))
+    index, path = build_document(tmp_path, store, pages)
+    chain = make_chain(store, translator, full_document_chars=0)
+
+    with pytest.raises(AnswerGenerationError):
+        ask(chain, index, path, max_pdf_sources=2)
+
+    assert len(translator.calls) == 1
+
+
+def test_a_second_refusal_after_the_retry_fails_the_question(tmp_path, store):
+    """One retry, not a loop: the retrieved read overflowing too is an error."""
+    pages = eight_pages()
+    translator = _Translator(_SdkError(400, "maximum context length is 8192 tokens"))
+    index, path = build_document(tmp_path, store, pages)
+    chain = make_chain(store, translator, full_document_chars=total_chars(pages) + 100)
+
+    with pytest.raises(AnswerGenerationError):
+        ask(chain, index, path, max_pdf_sources=2)
+
+    assert len(translator.calls) == 2
+
+
+def test_a_context_overflow_that_mentions_images_is_not_taken_for_an_image_refusal(tmp_path, store):
+    """"...including image tokens" is a length complaint. Read as a refusal of
+    images it would make the model text-only for the rest of the process, and
+    the question would be answered from the whole read it can't hold."""
+    pages = eight_pages({_BEST: {"page_kind": "visual"}})
+    translator = _Translator(
+        _SdkError(400, "maximum context length is 131072 tokens, including image tokens"), "ok"
+    )
+    index, path = build_document(tmp_path, store, pages)
+    chain = make_chain(store, translator, full_document_chars=total_chars(pages) + 100)
+
+    ask(chain, index, path, max_pdf_sources=2)
+
+    assert chain._text_only == set()
+    (_whole, _s1, _k1), (retrieved, _s2, _k2) = translator.calls
+    assert sorted(shown_pages(retrieved)) == [_SECOND, _BEST]
+
+
+def test_a_refusal_that_is_recovered_is_not_logged_as_an_error(tmp_path, store, caplog):
+    """Support reads ERROR lines as failed questions; this one was answered."""
+    pages = eight_pages()
+    translator = _Translator(_SdkError(400, "maximum context length is 8192 tokens"), "ok")
+    index, path = build_document(tmp_path, store, pages)
+    chain = make_chain(store, translator, full_document_chars=total_chars(pages) + 100)
+
+    with caplog.at_level(logging.INFO):
+        ask(chain, index, path, max_pdf_sources=2)
+
+    assert [r.getMessage() for r in caplog.records if r.levelno >= logging.ERROR] == []
+    assert any(r.levelno == logging.WARNING for r in caplog.records)
+
+
+@pytest.mark.parametrize(("refused", "calls"), [(True, 2), (False, 1)])
+def test_the_answer_record_says_whether_the_whole_read_was_refused(
+    tmp_path, store, caplog, refused, calls
+):
+    pages = eight_pages()
+    replies = [_SdkError(400, "maximum context length is 8192 tokens"), "ok"] if refused else ["ok"]
+    translator = _Translator(*replies)
+    index, path = build_document(tmp_path, store, pages)
+    chain = make_chain(store, translator, full_document_chars=total_chars(pages) + 100)
+
+    with caplog.at_level(logging.INFO):
+        ask(chain, index, path, max_pdf_sources=2)
+
+    (record,) = [r.getMessage() for r in caplog.records if r.getMessage().startswith("rag_answer ")]
+    assert len(translator.calls) == calls
+    assert json.loads(record.removeprefix("rag_answer "))["whole_read_refused"] is refused

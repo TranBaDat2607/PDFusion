@@ -24,6 +24,7 @@ from desktop_pdf_translator.rag.vector_store import ChromaDBManager
 from test_rag_answers import (
     _FENCE,
     HashingEmbeddingFunction,
+    _SdkError,
     _Translator,
     ask,
     make_chain,
@@ -214,3 +215,17 @@ def test_an_outline_budget_of_zero_turns_it_off(tmp_path, store):
         max_pdf_sources=1)
 
     assert "outline" not in translator.calls[0][0].lower()
+
+
+def test_a_whole_read_refused_as_too_long_is_asked_again_with_the_outline(tmp_path, store):
+    """The whole read carries every page, so it needs no outline; the retrieved
+    read that replaces it (#106) knows of the other pages only through one."""
+    translator = _Translator(_SdkError(400, "maximum context length is 8192 tokens"), "ok")
+    index, path, headings = build_long(tmp_path, store)
+
+    ask(make_chain(store, translator, full_document_chars=100_000), index, path, max_pdf_sources=1)
+
+    whole, retrieved = (fenced(prompt) for prompt, _system, _kwargs in translator.calls)
+    for page, heading in enumerate(headings, start=1):
+        assert outline_line(page, heading) not in whole
+        assert outline_line(page, heading) in retrieved, heading

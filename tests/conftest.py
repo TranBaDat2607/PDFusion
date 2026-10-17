@@ -46,6 +46,26 @@ atexit.register(shutil.rmtree, _TEST_LOCALAPPDATA, ignore_errors=True)
 
 
 @pytest.fixture(autouse=True)
+def _release_chroma_stores():
+    """Stop the ChromaDB systems a test opened.
+
+    `ChromaDBManager` has no close, and chromadb keeps each persistent client's
+    system in a class-level cache, so every store a test built held ~4 file
+    descriptors until the process ended. The run reached the C runtime's 512
+    on Windows and the next test to open a file failed with "Too many open
+    files" (#106 added enough chat tests to get there). Nothing is imported
+    here: a test that never touched chromadb pays nothing.
+    """
+    yield
+    shared = sys.modules.get("chromadb.api.shared_system_client")
+    if shared is None:
+        return
+    for system in list(shared.SharedSystemClient._identifier_to_system.values()):
+        system.stop()
+    shared.SharedSystemClient.clear_system_cache()
+
+
+@pytest.fixture(autouse=True)
 def _no_real_keystore(monkeypatch: pytest.MonkeyPatch):
     """Keep every test off the developer's real Secret Service / Keychain.
 

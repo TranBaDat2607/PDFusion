@@ -14,9 +14,8 @@ SSE events.
 **A partial entry is second-class**, and both rules that make it so exist
 because what it stores is the *full-length* rolling PDF — every page present,
 only the selected ones translated. So it costs as much disk as the whole
-document's entry while answering far fewer requests, and the workflow
-`page_selection.PAGE_LIMIT_HELP` recommends (a long book in parts) produces a
-string of them:
+document's entry while answering far fewer requests, and translating a long
+book in parts (the Pages box) produces a string of them:
 
 * `_enforce_lru_cap` evicts partial entries before whole-document ones, so
   working through a book in parts can never cost the user the whole-document
@@ -588,8 +587,8 @@ class PDFTranslationCache:
                 # A partial entry costs a full-length PDF's disk (only the
                 # selected pages differ) and answers only its own selection,
                 # while a whole-document entry answers every request for that
-                # file — so the sequential-parts workflow `PAGE_LIMIT_HELP`
-                # recommends must not be able to evict one. SQLite renders the
+                # file — so translating a book in parts must not be able to
+                # evict one. SQLite renders the
                 # predicate as 1/0, so DESC puts the partials at the front.
                 "ORDER BY (pages IS NOT NULL) DESC, last_used_seq ASC"
             ).fetchall()

@@ -11,10 +11,6 @@ import { ContextBar } from "@/components/layout/ContextBar";
 import { DropOverlay } from "@/components/layout/DropOverlay";
 import { MainLayout } from "@/components/layout/MainLayout";
 import { DiscardTranslationDialog } from "@/components/translation/DiscardTranslationDialog";
-import {
-  PageLimitDialog,
-  type OverLimit,
-} from "@/components/translation/PageLimitDialog";
 import { ProgressOverlay } from "@/components/translation/ProgressOverlay";
 import { SettingsSheet } from "@/components/settings/SettingsSheet";
 import { SetupScreen } from "@/components/setup/SetupScreen";
@@ -30,8 +26,6 @@ import { isTranslationBusy, useTranslation } from "@/hooks/useTranslation";
 import { shouldConfirmSwap, type SwapPrompt } from "@/lib/document-swap";
 import { readSkipped, shouldShowSetup } from "@/lib/engine-setup";
 import {
-  checkPageLimit,
-  formatPageRanges,
   parsePageRanges,
 } from "@/lib/page-range";
 import { useAppStore } from "@/lib/store";
@@ -129,14 +123,6 @@ function Workspace() {
   // translation model, or chat's answer model.
   const [settingsFrom, setSettingsFrom] = useState<OpenedFrom>("translation");
   const [aboutOpen, setAboutOpen] = useState(false);
-  // A Translate click that covered more pages than one translation may, held
-  // while the user answers the offer. `path` guards against a document opened
-  // (dropped, say) while the dialog was up.
-  const [limitPrompt, setLimitPrompt] = useState<{
-    check: OverLimit;
-    path: string;
-    bypassCache: boolean;
-  } | null>(null);
   // A document waiting to be opened while a translation runs, held until the
   // user answers the offer to discard that run (#44).
   const [swapPrompt, setSwapPrompt] = useState<SwapPrompt | null>(null);
@@ -177,10 +163,9 @@ function Workspace() {
       // The saved copy belongs to the *previous* document — keeping it would
       // make the toolbar offer "Open" on an unrelated file.
       setExportedPath(null);
-      setLimitPrompt(null);
-      // Both prompts are about the document being replaced. The swap one can
-      // still be up here: a run that finished while the dialog waited leaves
-      // the next open free to go straight through, and its question with it.
+      // The prompt is about the document being replaced. It can still be up
+      // here: a run that finished while the dialog waited leaves the next open
+      // free to go straight through, and its question with it.
       setSwapPrompt(null);
       translation.reset();
       // Fire-and-forget pre-warm: by the time the user clicks Translate, the
@@ -301,9 +286,7 @@ function Workspace() {
   }, []);
 
   // Translate, Re-translate and Retry all come through here. The Pages box is
-  // read at click time, and a request over the page limit becomes an offer of
-  // the pages that fit (#33) instead of a job the sidecar would refuse. With
-  // the page count not known yet, the sidecar's own check is what applies.
+  // read at click time (#33).
   const requestTranslation = useCallback(
     (bypassCache: boolean) => {
       if (!originalPath) return;
@@ -313,21 +296,13 @@ function Workspace() {
         toast.error("Check the pages to translate", { description: parsed.error });
         return;
       }
-      const maxPages = config?.translation.max_pages;
-      if (originalPageCount != null && maxPages != null) {
-        const check = checkPageLimit(originalPageCount, parsed.ranges, maxPages);
-        if (check.over) {
-          setLimitPrompt({ check, path: originalPath, bypassCache });
-          return;
-        }
-      }
       void translation.start(originalPath, {
         ...selection,
         bypassCache,
         pageRanges: parsed.ranges,
       });
     },
-    [originalPath, config, translation, selection],
+    [originalPath, translation, selection],
   );
 
   const handleTranslate = useCallback(
@@ -338,25 +313,6 @@ function Workspace() {
   const handleReTranslate = useCallback(
     () => requestTranslation(true),
     [requestTranslation],
-  );
-
-  // The offer accepted: the Pages box shows what is being translated, so the
-  // next click (and Re-translate) asks for the same pages.
-  const confirmLimit = useCallback(
-    (check: OverLimit) => {
-      const prompt = limitPrompt;
-      setLimitPrompt(null);
-      if (!prompt || prompt.path !== originalPath) return;
-      useAppStore
-        .getState()
-        .setPageRangeText(formatPageRanges(check.suggestion, "-"));
-      void translation.start(prompt.path, {
-        ...selection,
-        bypassCache: prompt.bypassCache,
-        pageRanges: check.suggestion,
-      });
-    },
-    [limitPrompt, originalPath, translation, selection],
   );
 
   return (
@@ -408,11 +364,6 @@ function Workspace() {
       </div>
 
       <DropOverlay state={fileDrop} />
-      <PageLimitDialog
-        check={limitPrompt?.check ?? null}
-        onCancel={() => setLimitPrompt(null)}
-        onConfirm={confirmLimit}
-      />
       <DiscardTranslationDialog
         prompt={swapPrompt}
         onCancel={() => setSwapPrompt(null)}

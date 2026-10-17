@@ -1,12 +1,10 @@
 /**
  * The toolbar's Pages box (#33): what the user typed, as the `page_ranges`
- * that `POST /translate` takes, and whether that is more than one translation
- * may cover.
+ * that `POST /translate` takes.
  *
- * The sidecar checks all of this again (`processors/page_selection.py`) and
+ * The sidecar checks the selection again (`processors/page_selection.py`) and
  * answers 422 with a sentence. This module exists so the toolbar can say so
- * before anything starts, and offer a selection that fits. Pure, so it runs
- * under vitest's node environment.
+ * before anything starts. Pure, so it runs under vitest's node environment.
  */
 
 import { pluralizePages } from "@/lib/translation-progress";
@@ -119,80 +117,6 @@ export function formatPageRanges(ranges: PageRange[], dash = "–"): string {
   return ranges
     .map(([first, last]) => (first === last ? `${first}` : `${first}${dash}${last}`))
     .join(", ");
-}
-
-/** The first `limit` pages of `ranges`. */
-export function truncateRanges(ranges: PageRange[], limit: number): PageRange[] {
-  const kept: PageRange[] = [];
-  let remaining = limit;
-  for (const [first, last] of ranges) {
-    if (remaining <= 0) break;
-    const end = Math.min(last, first + remaining - 1);
-    kept.push([first, end]);
-    remaining -= end - first + 1;
-  }
-  return kept;
-}
-
-export type PageLimitCheck =
-  | { over: false }
-  | {
-      over: true;
-      /** Pages the request would cover. */
-      selected: number;
-      limit: number;
-      /** Nothing was selected: the whole document was asked for. */
-      wholeDocument: boolean;
-      /** The first `limit` pages of what was asked for. */
-      suggestion: PageRange[];
-    };
-
-/** Whether translating `ranges` (`null`: every page) goes past `maxPages`,
- *  mirroring `page_selection.limit_problem`'s page half. */
-export function checkPageLimit(
-  pageCount: number,
-  ranges: PageRange[] | null,
-  maxPages: number,
-): PageLimitCheck {
-  const asked: PageRange[] = ranges ?? [[1, pageCount]];
-  const selected = countPages(asked);
-  if (selected <= maxPages) return { over: false };
-  return {
-    over: true,
-    selected,
-    limit: maxPages,
-    wholeDocument: ranges === null,
-    suggestion: truncateRanges(asked, maxPages),
-  };
-}
-
-/** What the "too many pages" dialog says, and what its button does. */
-export function pageLimitCopy(
-  check: Extract<PageLimitCheck, { over: true }>,
-): { title: string; description: string; action: string } {
-  const pages = formatPageRanges(check.suggestion);
-  const single = check.suggestion.length === 1;
-  const where = "You can raise the limit in Settings → Cache → Performance.";
-  if (check.wholeDocument) {
-    return {
-      title: `This PDF has ${check.selected} pages`,
-      description:
-        `PDFusion translates up to ${pluralizePages(check.limit)} at a time. ` +
-        `Translate pages ${pages} now, or type the pages you want in the ` +
-        `Pages box next to the file name. ${where}`,
-      action: `Translate pages ${pages}`,
-    };
-  }
-  return {
-    title: `${check.selected} pages are selected`,
-    description:
-      `PDFusion translates up to ${pluralizePages(check.limit)} at a time. ` +
-      `Translate the first ${check.limit} of them (pages ${pages}) now, or ` +
-      `choose fewer pages. ${where}`,
-    action: single
-      ? `Translate pages ${pages}`
-      : `Translate the first ${check.limit} pages`,
-  };
 }
 
 /** The hint after the Pages box: "of 120" beside its "All" placeholder, or

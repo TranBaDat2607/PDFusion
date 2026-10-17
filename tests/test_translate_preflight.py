@@ -3,9 +3,8 @@
 Two reasons are covered here. A machine with no layout model (#21) used to
 accept the job, get minutes into it, and fail from inside chunk 1 with
 "BabelDOC processing error in chunk 1: 1" — the stringified `SystemExit`
-BabelDOC's asset layer raises — leaving a partial artifact behind. And a PDF
-over the page or size limit (#33) opened the progress overlay and then failed
-with "Too many pages: 120 > 50", with no way to translate part of it.
+BabelDOC's asset layer raises — leaving a partial artifact behind. And a page
+past the end of the document (#33) opened the progress overlay and then failed.
 
 Only the `translation` router is mounted, so no lifespan runs (see
 `test_pdf_export_api.py` for the same reasoning), and `_run_translation` is
@@ -23,7 +22,8 @@ from fastapi.testclient import TestClient
 
 from desktop_pdf_translator.api import auth
 from desktop_pdf_translator.api.routes import translation as translation_routes
-from desktop_pdf_translator.config import LanguageCode, ModelRef, TranslationService
+from desktop_pdf_translator.config import AppSettings, LanguageCode, ModelRef, TranslationService
+from desktop_pdf_translator.processors.pdf_pages import PdfInfo
 from desktop_pdf_translator.providers.registry import provider
 from desktop_pdf_translator.engine_assets import MISSING_ASSETS_MESSAGE
 
@@ -37,8 +37,6 @@ class _FakeTranslationSettings:
         self.default_source_lang = LanguageCode.ENGLISH
         self.default_target_lang = LanguageCode.VIETNAMESE
         self.model = ModelRef(provider=preferred, model=provider(preferred.value).default_model)
-        self.max_pages = 50
-        self.max_file_size_mb = 50.0
 
 
 class _FakeSettings:
@@ -98,12 +96,8 @@ def _settings(
     monkeypatch: pytest.MonkeyPatch,
     preferred: TranslationService = TranslationService.ARGOS,
     keyed: tuple[TranslationService, ...] = (),
-    max_pages: int = 50,
-    max_file_size_mb: float = 50.0,
 ):
     settings = _FakeSettings(preferred, keyed)
-    settings.translation.max_pages = max_pages
-    settings.translation.max_file_size_mb = max_file_size_mb
     monkeypatch.setattr(translation_routes, "get_settings", lambda: settings)
 
 
@@ -189,51 +183,18 @@ def test_a_keyed_service_is_checked_as_itself(
 
 
 # ---------------------------------------------------------------------------
-# Page limits and page selections (#33)
+# Page selections (#33)
 # ---------------------------------------------------------------------------
 
 
-def test_a_pdf_over_the_page_limit_is_refused_with_a_way_out(
+def test_a_selection_starts_the_job(
     client: TestClient, five_pages: Path, monkeypatch: pytest.MonkeyPatch, started
 ):
-    _settings(monkeypatch, max_pages=2)
-    _engine(monkeypatch, ready=True)
-    response = _post(client, five_pages)
-    assert response.status_code == 422
-    detail = response.json()["detail"]
-    assert "5 pages" in detail and "up to 2" in detail
-    assert "Choose the pages" in detail and "Settings" in detail
-    assert started == []
-
-
-def test_a_selection_within_the_limit_starts_the_job(
-    client: TestClient, five_pages: Path, monkeypatch: pytest.MonkeyPatch, started
-):
-    _settings(monkeypatch, max_pages=2)
+    _settings(monkeypatch)
     _engine(monkeypatch, ready=True)
     response = _post(client, five_pages, page_ranges=[[4, 5]])
     assert response.status_code == 202
     assert [p.page_ranges for p in started] == [[(4, 5)]]
-
-
-def test_a_selection_over_the_limit_is_refused(
-    client: TestClient, five_pages: Path, monkeypatch: pytest.MonkeyPatch
-):
-    _settings(monkeypatch, max_pages=2)
-    _engine(monkeypatch, ready=True)
-    response = _post(client, five_pages, page_ranges=[[1, 2], [4, 4]])
-    assert response.status_code == 422
-    assert response.json()["detail"].startswith("3 pages are selected")
-
-
-def test_selecting_every_page_is_the_whole_document(
-    client: TestClient, five_pages: Path, monkeypatch: pytest.MonkeyPatch
-):
-    _settings(monkeypatch, max_pages=2)
-    _engine(monkeypatch, ready=True)
-    response = _post(client, five_pages, page_ranges=[[1, 5]])
-    assert response.status_code == 422
-    assert "This PDF has 5 pages" in response.json()["detail"]
 
 
 def test_a_page_past_the_end_is_refused(
@@ -256,6 +217,29 @@ def test_a_backwards_range_is_refused(
     assert "ends before it starts" in response.json()["detail"]
 
 
+def test_a_bad_selection_is_reported_before_a_missing_engine(
+    client: TestClient, five_pages: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """The selection is something the user can settle in the toolbar; the setup
+    screen can't. Reporting 409 first would send them through an install only
+    to be refused again."""
+    _settings(monkeypatch)
+    _engine(monkeypatch, ready=False)
+    assert _post(client, five_pages, page_ranges=[[4, 9]]).status_code == 422
+
+
+def test_the_pair_check_comes_before_the_selection(
+    client: TestClient, five_pages: Path, monkeypatch: pytest.MonkeyPatch
+):
+    _settings(monkeypatch)
+    _engine(monkeypatch, ready=True)
+    response = _post(
+        client, five_pages, page_ranges=[[4, 9]], source_lang="en", target_lang="ja"
+    )
+    assert response.status_code == 422
+    assert "Argos" in response.json()["detail"]
+
+
 @pytest.mark.parametrize("ranges", [[], [[0, 2]], [[1]], [[1, 2]] * 501])
 def test_a_malformed_selection_is_refused_by_the_schema(
     client: TestClient,
@@ -268,16 +252,6 @@ def test_a_malformed_selection_is_refused_by_the_schema(
     _engine(monkeypatch, ready=True)
     assert _post(client, five_pages, page_ranges=ranges).status_code == 422
     assert started == []
-
-
-def test_a_pdf_over_the_size_limit_is_refused(
-    client: TestClient, five_pages: Path, monkeypatch: pytest.MonkeyPatch
-):
-    _settings(monkeypatch, max_file_size_mb=0.0001)
-    _engine(monkeypatch, ready=True)
-    response = _post(client, five_pages, page_ranges=[[1, 1]])
-    assert response.status_code == 422
-    assert "MB" in response.json()["detail"]
 
 
 def test_a_file_that_is_not_a_pdf_is_refused(
@@ -308,22 +282,44 @@ def test_a_password_protected_pdf_is_refused(
     assert "password-protected" in response.json()["detail"]
 
 
-def test_the_limit_is_reported_before_a_missing_engine(
-    client: TestClient, five_pages: Path, monkeypatch: pytest.MonkeyPatch
-):
-    """The limit is something the user can settle in the toolbar; the setup
-    screen can't. Reporting 409 first would send them through an install only
-    to be refused again."""
-    _settings(monkeypatch, max_pages=2)
-    _engine(monkeypatch, ready=False)
-    assert _post(client, five_pages).status_code == 422
+# ---------------------------------------------------------------------------
+# No page or size limit
+# ---------------------------------------------------------------------------
+#
+# These use the real `AppSettings`, not `_FakeSettings`: the point is that
+# nothing in the settings caps a translation any more, so a stand-in that
+# carries (or lacks) the old fields would prove nothing.
 
 
-def test_the_pair_check_comes_before_the_limit(
-    client: TestClient, five_pages: Path, monkeypatch: pytest.MonkeyPatch
+def test_a_long_pdf_with_no_selection_starts_the_job(
+    client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, started
 ):
-    _settings(monkeypatch, max_pages=2)
+    """Over 50 pages used to be a 422 that sent the user to the Pages box (#33)."""
+    book = tmp_path / "long.pdf"
+    with fitz.open() as doc:
+        for _ in range(120):
+            doc.new_page()
+        doc.save(book)
+    monkeypatch.setattr(translation_routes, "get_settings", lambda: AppSettings())
     _engine(monkeypatch, ready=True)
-    response = _post(client, five_pages, source_lang="en", target_lang="ja")
-    assert response.status_code == 422
-    assert "Argos" in response.json()["detail"]
+
+    response = _post(client, book)
+
+    assert response.status_code == 202
+    assert [p.page_ranges for p in started] == [None]
+
+
+def test_a_large_file_starts_the_job(
+    client: TestClient, five_pages: Path, monkeypatch: pytest.MonkeyPatch, started
+):
+    """500 MB is far past the 200 MB the setting could be raised to."""
+    monkeypatch.setattr(translation_routes, "get_settings", lambda: AppSettings())
+    monkeypatch.setattr(
+        translation_routes,
+        "inspect_pdf",
+        lambda path: PdfInfo(page_count=5, size_mb=500.0),
+    )
+    _engine(monkeypatch, ready=True)
+
+    assert _post(client, five_pages).status_code == 202
+    assert len(started) == 1

@@ -17,7 +17,8 @@ from fastapi.testclient import TestClient
 
 from desktop_pdf_translator.api import auth
 from desktop_pdf_translator.api.routes import translation as translation_routes
-from desktop_pdf_translator.config import LanguageCode, TranslationService
+from desktop_pdf_translator.config import AppSettings, LanguageCode, TranslationService
+from desktop_pdf_translator.processors.pdf_pages import PdfInfo
 from desktop_pdf_translator.translators.usage_estimate import estimate_tokens
 
 TOKEN = "test-token-for-translate-estimate"
@@ -28,8 +29,6 @@ class _FakeTranslationSettings:
     default_source_lang = LanguageCode.ENGLISH
     default_target_lang = LanguageCode.VIETNAMESE
     preferred_service = TranslationService.OPENAI
-    max_pages = 50
-    max_file_size_mb = 50.0
     min_text_length = 5
 
 
@@ -104,23 +103,17 @@ def test_the_target_language_changes_the_prompt(client, book, settings):
     assert japanese["output_tokens"] == vietnamese["output_tokens"]
 
 
-def test_the_page_limit_does_not_hide_the_estimate(client, book, settings):
-    """Over the limit, Translate offers the pages that fit. The estimate still
-    describes what is selected."""
-    settings.translation.max_pages = 2
-    assert _estimate(client, book).json()["pages_selected"] == 6
-
-
-def test_a_file_too_big_to_translate_is_not_read(client, book, settings, monkeypatch):
-    settings.translation.max_file_size_mb = 0.0001
-    read = []
+def test_a_large_file_is_estimated_like_any_other(client, book, monkeypatch):
+    """There is no size limit to hide behind: the estimate reads the pages."""
+    monkeypatch.setattr(translation_routes, "get_settings", lambda: AppSettings())
     monkeypatch.setattr(
-        translation_routes, "text_stats", lambda *a, **k: read.append(a)
+        translation_routes, "inspect_pdf", lambda path: PdfInfo(page_count=6, size_mb=500.0)
     )
+
     response = _estimate(client, book)
-    assert response.status_code == 422
-    assert "MB" in response.json()["detail"]
-    assert read == []
+
+    assert response.status_code == 200
+    assert response.json()["pages_selected"] == 6
 
 
 def test_a_page_past_the_end_is_refused(client, book, settings):
