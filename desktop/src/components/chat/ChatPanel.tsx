@@ -14,6 +14,7 @@ import { UserMessage } from "@/components/chat/UserMessage";
 import { useChatHistory, useClearChatHistory, useRateAnswer } from "@/hooks/useChatHistory";
 import { useRagAsk } from "@/hooks/useRagAsk";
 import { useRagIndex } from "@/hooks/useRagIndex";
+import { useThrottledText } from "@/hooks/useThrottledText";
 import { useConfig } from "@/hooks/useConfig";
 import {
   CHAT_DOCUMENTS_KEY,
@@ -32,6 +33,10 @@ import { useProviders } from "@/hooks/useProviders";
 import { answeredBy } from "@/lib/model-choice";
 import { useAppStore } from "@/lib/store";
 
+/** 20 redraws a second reads as smooth; the stream is ~33 pieces a second, so
+ *  this drops about 40% of them. */
+const DRAFT_INTERVAL_MS = 50;
+
 interface ChatPanelProps {
   documentPath: string | null;
   onJumpToPage?: (page: number) => void;
@@ -49,6 +54,9 @@ export function ChatPanel({
 }: ChatPanelProps) {
   const index = useRagIndex();
   const ask = useRagAsk();
+  // What reaches the screen, not what has arrived: deltas come every ~30 ms,
+  // and each one drawn is a layout pass and a scroll decision (#113).
+  const draft = useThrottledText(ask.state.draft, DRAFT_INTERVAL_MS);
   const { data: config } = useConfig();
   const { data: providers } = useProviders();
   const queryClient = useQueryClient();
@@ -176,7 +184,7 @@ export function ChatPanel({
     messages.length,
     ask.state.actions.length,
     ask.state.status,
-    ask.state.draft,
+    draft,
   ]);
 
   const handleSubmit = useCallback(
@@ -312,8 +320,8 @@ export function ChatPanel({
                   Working on: <span className="italic">{pendingQuestion}</span>
                 </div>
               )}
-              {ask.state.draft ? (
-                <DraftMessage text={ask.state.draft} />
+              {draft ? (
+                <DraftMessage text={draft} />
               ) : (
                 <ActionLog
                   actions={ask.state.actions}
