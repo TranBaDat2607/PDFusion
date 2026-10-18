@@ -13,7 +13,7 @@ from typing import Any, Dict, FrozenSet, List, Optional, Sequence
 import anthropic
 
 from ..providers.registry import provider
-from .base import BaseTranslator, OnText, PageImage, TranslationCancelled, deliver_stream
+from .base import BaseTranslator, OnText, PageImage, TranslationCancelled, deliver_stream, generate_timeout_s
 from .translation_cache import llm_cache_get as _llm_cache_get, llm_cache_set as _llm_cache_set
 
 
@@ -168,14 +168,15 @@ class AnthropicTranslator(BaseTranslator):
         kwargs = {}
         if system:
             kwargs["system"] = system
+        timeout = generate_timeout_s(prompt, system, images)
         if on_text is not None:
-            return self._generate_streaming(prompt, max_tokens, images, kwargs, on_text)
+            return self._generate_streaming(prompt, max_tokens, images, kwargs, timeout, on_text)
         response = self._call_adapting(
             lambda rejected: self.client.messages.create(
                 model=self.model,
                 max_tokens=max_tokens,
                 messages=[{"role": "user", "content": self._user_content(prompt, images)}],
-                timeout=60,
+                timeout=timeout,
                 **kwargs,
                 **self._sampling_kwargs(rejected, 0.3),
             ),
@@ -194,7 +195,7 @@ class AnthropicTranslator(BaseTranslator):
 
     def _generate_streaming(self, prompt: str, max_tokens: int,
                             images: Optional[Sequence[PageImage]], kwargs: Dict[str, Any],
-                            on_text: OnText) -> Optional[str]:
+                            timeout: float, on_text: OnText) -> Optional[str]:
         def send(rejected: FrozenSet[str]):
             # Sent and read to its end inside one retried request; see
             # `OpenAITranslator._generate_streaming`.
@@ -202,7 +203,7 @@ class AnthropicTranslator(BaseTranslator):
                 model=self.model,
                 max_tokens=max_tokens,
                 messages=[{"role": "user", "content": self._user_content(prompt, images)}],
-                timeout=60,
+                timeout=timeout,
                 stream=True,
                 **kwargs,
                 **self._sampling_kwargs(rejected, 0.3),

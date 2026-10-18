@@ -3,6 +3,7 @@ Base translator interface compatible with BabelDOC.
 """
 
 import logging
+import math
 import random
 import re
 import threading
@@ -15,6 +16,7 @@ from typing import Callable, Dict, FrozenSet, Iterable, Optional, Any, Sequence
 from ..config import LanguageCode
 from . import param_compat
 from .rate_limiter import default_qps_for, get_rate_limiter
+from .usage_estimate import count_cjk, text_tokens
 
 
 logger = logging.getLogger(__name__)
@@ -179,6 +181,47 @@ class PageImage:
         import base64
 
         return base64.b64encode(self.data).decode("ascii")
+
+
+_GENERATE_BASE_TIMEOUT_S = 60.0
+_GENERATE_MAX_TIMEOUT_S = 300.0
+# A prompt this size or smaller keeps the base timeout: an ordinary answer
+# (five retrieved pages and their images) has always fit in 60 s.
+_GENERATE_FREE_TOKENS = 10_000
+# Seconds of waiting per 1,000 prompt tokens beyond that. A 100k-token
+# whole-document read (#106) then waits 195 s, well past the 60 s that timed out
+# on it (#110) and inside the cap. Not a measured rate — the provider's queue
+# and the model dominate — just room for a long prompt.
+_GENERATE_S_PER_1K_TOKENS = 1.5
+# A page image costs about this many prompt tokens whatever its byte size: the
+# providers bill by dimensions, and the chat sends JPEGs of a fixed scale.
+_IMAGE_TOKENS = 1500
+
+
+def generate_timeout_s(
+    prompt: str,
+    system: Optional[str],
+    images: Optional[Sequence[PageImage]],
+) -> float:
+    """How long one `generate()` request may wait on the provider, in seconds.
+
+    Scaled to the prompt because the chat can send a whole document: a fixed
+    60 s timed out on it, and `_call_with_backoff` then retried, paying for the
+    full prompt each time (#110). It applies to a streamed request too, where
+    the wait is the time to the first token on the same prompt. Short prompts
+    keep the 60 s they always had.
+    """
+    text = prompt + (system or "")
+    # CJK runs near one token a character, so a Chinese whole read of 80,000
+    # characters is 80,000 tokens, not the 20,000 that characters/4 would say.
+    cjk = count_cjk(text)
+    tokens = text_tokens(cjk, len(text) - cjk)
+    tokens += _IMAGE_TOKENS * len(images or ())
+    excess = max(0.0, tokens - _GENERATE_FREE_TOKENS)
+    seconds = _GENERATE_BASE_TIMEOUT_S + _GENERATE_S_PER_1K_TOKENS * excess / 1000
+    # Whole seconds: the same number everywhere it is logged or compared, and
+    # Gemini's server-side deadline header is whole seconds anyway.
+    return float(min(math.ceil(seconds), _GENERATE_MAX_TIMEOUT_S))
 
 
 class TranslationCancelled(Exception):
