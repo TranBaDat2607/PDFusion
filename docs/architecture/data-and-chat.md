@@ -290,6 +290,22 @@ there:
   remembered for the process; the message must name "stream" as a word,
   because a proxy's "upstream provider error" is not a refusal and counting it
   cost a second paid request and the model's streaming (#108).
+- **An answer's request timeout scales with its prompt.** `generate()` waits
+  `base.generate_timeout_s(prompt, system, images)`: 60 s up to ~10,000 prompt
+  tokens (an ordinary five-page answer), then 1.5 s per further 1,000 tokens,
+  capped at 300 s, so the largest whole read (80,000 tokens) waits 165 s. Tokens
+  are counted as `usage_estimate` does: a CJK character is a token, the rest
+  four characters; a page image is 1,500. A fixed 60 s timed out on such a
+  read and `_call_with_backoff` then retried it, paying for the full prompt
+  each time (#110). The same number is used streamed (it bounds each gap
+  between reads, the first being the long one) and on Gemini, where it
+  overrides the client-wide 30 s per request (`http_options`, milliseconds,
+  and the `X-Server-Timeout` header the SDK would otherwise keep from an
+  earlier 30 s request). Paragraph translation keeps its short timeouts. A
+  timeout is still retried; the growth is in the wait, not a cap on retries,
+  and the constants are room for a long prompt, not a measured rate. A
+  non-streamed wait also covers the output, which the prompt size does not
+  predict.
 - **A short document is read whole.** When the index's text is at most
   `rag.whole_document_tokens` (Settings → Chat → "Read a PDF whole"; 11,500
   by default, ~40,000 characters: the 15-page Attention paper fits), the answer reads every page in page order

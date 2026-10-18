@@ -10,7 +10,7 @@ from google import genai
 from google.genai import types as genai_types
 
 from ..providers.registry import provider
-from .base import BaseTranslator, OnText, PageImage, TranslationCancelled, deliver_stream
+from .base import BaseTranslator, OnText, PageImage, TranslationCancelled, deliver_stream, generate_timeout_s
 from .translation_cache import llm_cache_get as _llm_cache_get, llm_cache_set as _llm_cache_set
 
 
@@ -56,9 +56,10 @@ class GeminiTranslator(BaseTranslator):
         self.temperature = kwargs.get("temperature", 0.3)
 
         # Set once here rather than per-GenerateContentConfig so it also
-        # covers generate() (RAG answer synthesis) — without it, google-genai
-        # passes no timeout to httpx at all, and a hung call blocks this
-        # worker thread indefinitely, past what a cancel check can catch.
+        # covers validate_configuration — without it, google-genai passes no
+        # timeout to httpx at all, and a hung call blocks this worker thread
+        # indefinitely, past what a cancel check can catch. generate() sets its
+        # own per request (`_request_options`).
         self.client = genai.Client(
             api_key=self.api_key,
             http_options=genai_types.HttpOptions(timeout=30_000),
@@ -151,6 +152,7 @@ class GeminiTranslator(BaseTranslator):
             temperature=0.3,
             max_output_tokens=max_tokens,
             system_instruction=system if system else None,
+            http_options=self._request_options(generate_timeout_s(prompt, system, images)),
         )
         if on_text is not None:
             return self._generate_streaming(prompt, images, config, on_text)
@@ -166,6 +168,18 @@ class GeminiTranslator(BaseTranslator):
             raise RuntimeError("Gemini stopped at its token limit")
         text = response.text
         return text.strip() if text else None
+
+    @staticmethod
+    def _request_options(seconds: float):
+        """Per request: the client-wide 30 s is right for a paragraph and far
+        too short for a whole-document prompt (#110). The SDK also sends the
+        timeout as `X-Server-Timeout` and keeps one already on the client's
+        headers, which a client that once made a 30 s request has; naming it
+        here is what keeps the server's deadline in step with ours."""
+        return genai_types.HttpOptions(
+            timeout=int(seconds * 1000),
+            headers={"X-Server-Timeout": str(int(seconds))},
+        )
 
     def _generate_streaming(self, prompt: str, images: Optional[Sequence[PageImage]],
                             config, on_text: OnText) -> Optional[str]:

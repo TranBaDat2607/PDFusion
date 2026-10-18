@@ -8,7 +8,7 @@ from typing import Any, Dict, FrozenSet, List, Optional, Sequence
 from openai import OpenAI
 
 from ..providers.registry import provider
-from .base import BaseTranslator, OnText, PageImage, TranslationCancelled, deliver_stream
+from .base import BaseTranslator, OnText, PageImage, TranslationCancelled, deliver_stream, generate_timeout_s
 from .translation_cache import llm_cache_get as _llm_cache_get, llm_cache_set as _llm_cache_set
 
 
@@ -143,13 +143,14 @@ class OpenAITranslator(BaseTranslator):
         if system:
             messages.append({"role": "system", "content": system})
         messages.append({"role": "user", "content": self._user_content(prompt, images)})
+        timeout = generate_timeout_s(prompt, system, images)
         if on_text is not None:
-            return self._generate_streaming(messages, max_tokens, on_text)
+            return self._generate_streaming(messages, max_tokens, timeout, on_text)
         response = self._call_adapting(
             lambda rejected: self.client.chat.completions.create(
                 model=self.model,
                 messages=messages,
-                timeout=60,
+                timeout=timeout,
                 **self._sampling_kwargs(rejected, 0.3, max_tokens),
             ),
             self._ADAPTABLE_PARAMS,
@@ -161,14 +162,14 @@ class OpenAITranslator(BaseTranslator):
         return content.strip() if content else None
 
     def _generate_streaming(self, messages: List[Dict[str, Any]], max_tokens: int,
-                            on_text: OnText) -> Optional[str]:
+                            timeout: float, on_text: OnText) -> Optional[str]:
         def send(rejected: FrozenSet[str]):
             # Sent and read to its end inside one retried request: a stream
             # that drops midway is asked for again from the start.
             stream = self.client.chat.completions.create(
                 model=self.model,
                 messages=messages,
-                timeout=60,
+                timeout=timeout,
                 stream=True,
                 **self._sampling_kwargs(rejected, 0.3, max_tokens),
             )
