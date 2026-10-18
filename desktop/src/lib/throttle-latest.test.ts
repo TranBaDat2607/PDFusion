@@ -49,20 +49,6 @@ describe("createLatestThrottle", () => {
     expect(emit).toHaveBeenCalledTimes(1);
   });
 
-  it("emits a pending value at once on flush, and only once", () => {
-    const emit = vi.fn();
-    const throttle = createLatestThrottle<string>(50, emit);
-
-    throttle.push("a");
-    throttle.push("b");
-    throttle.flush();
-    expect(emit).toHaveBeenCalledTimes(2);
-    expect(emit).toHaveBeenLastCalledWith("b");
-
-    vi.advanceTimersByTime(500);
-    expect(emit).toHaveBeenCalledTimes(2);
-  });
-
   it("emits a value pushed after a quiet interval at once", () => {
     const emit = vi.fn();
     const throttle = createLatestThrottle<string>(50, emit);
@@ -88,5 +74,9 @@ describe("createLatestThrottle", () => {
 
     expect(emit.mock.calls.length).toBeLessThanOrEqual(21);
     expect(emit.mock.calls.length).toBeGreaterThan(10);
+
+    // The stream stopping must not strand the last value in a window.
+    vi.advanceTimersByTime(50);
+    expect(emit).toHaveBeenLastCalledWith(32);
   });
 });

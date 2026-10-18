@@ -41,10 +41,5 @@ export function createLatestThrottle<T>(
       open();
     },
     cancel,
-    flush() {
-      const held = pending;
-      cancel();
-      if (held) emit(held.value);
-    },
   };
 }

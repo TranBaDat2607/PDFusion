@@ -1,6 +1,7 @@
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { ApiError, api } from "@/lib/api-client";
+import { createAskCommitter } from "@/lib/ask-commit";
 import { buildAskBody } from "@/lib/ask-request";
 import {
   IDLE_ASK,
@@ -28,8 +29,17 @@ interface AskParams {
   targetLang?: string | null;
 }
 
+/** How often a streaming answer may redraw the chat panel (#113): 20 a
+ *  second reads as smooth, and the stream itself is ~33 deltas a second. */
+const DELTA_COMMIT_MS = 50;
+
 export function useRagAsk() {
   const [state, setState] = useState<AskState>(IDLE_ASK);
+  const committer = useMemo(
+    () => createAskCommitter(setState, DELTA_COMMIT_MS),
+    [],
+  );
+  useEffect(() => () => committer.cancel(), [committer]);
   const abortRef = useRef<AbortController | null>(null);
   // Bumped by every ask, abort and reset. A callback from a stream whose
   // generation is no longer current belongs to a question nobody is waiting
@@ -41,15 +51,20 @@ export function useRagAsk() {
     generationRef.current += 1;
     abortRef.current?.abort();
     abortRef.current = null;
-  }, []);
+    // Deltas held back belong to the question nobody is waiting for.
+    committer.cancel();
+  }, [committer]);
 
   const ask = useCallback(async (params: AskParams) => {
     abort();
     const generation = generationRef.current;
-    const update = (next: (s: AskState) => AskState) => {
-      if (generationRef.current === generation) setState(next);
+    const update = (
+      next: (s: AskState) => AskState,
+      coalesce = false,
+    ) => {
+      if (generationRef.current === generation) committer.fold(next, coalesce);
     };
-    setState(startAsk(params.documentId));
+    committer.set(startAsk(params.documentId));
 
     let jobId: string;
     try {
@@ -75,7 +90,11 @@ export function useRagAsk() {
         buildPath: (lastEventId) =>
           `/rag/ask/${jobId}/events${lastEventId ? `?last_seq=${lastEventId}` : ""}`,
         signal: controller.signal,
-        onEvent: (event) => update((s) => reduceAskEvent(s, event)),
+        onEvent: (event) =>
+          update(
+            (s) => reduceAskEvent(s, event),
+            event.type === "answer_delta",
+          ),
       });
       // Stream ended without a terminal event (sidecar died mid-answer).
       update(streamEnded);
@@ -84,12 +103,12 @@ export function useRagAsk() {
     } finally {
       if (abortRef.current === controller) abortRef.current = null;
     }
-  }, [abort]);
+  }, [abort, committer]);
 
   const reset = useCallback(() => {
     abort();
-    setState(IDLE_ASK);
-  }, [abort]);
+    committer.set(IDLE_ASK);
+  }, [abort, committer]);
 
   return { state, ask, abort, reset };
 }
