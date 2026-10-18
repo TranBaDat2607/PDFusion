@@ -108,6 +108,21 @@ def test_cjk_text_counts_a_token_a_character():
 # --- what each backend sends ------------------------------------------------
 
 
+class _Stream:
+    """What an OpenAI or Anthropic `create(stream=True)` returns: iterable, and
+    closable, which `_generate_streaming` relies on to release the connection
+    of an attempt that fails partway (#112). A bare `iter()` has no `close`."""
+
+    def __init__(self, chunks):
+        self._chunks = iter(chunks)
+
+    def __iter__(self):
+        return self._chunks
+
+    def close(self) -> None:
+        pass
+
+
 class _OpenAIBackend:
     name = "openai"
 
@@ -120,7 +135,7 @@ class _OpenAIBackend:
     def _create(self, **kwargs):
         self.calls.append(kwargs)
         if kwargs.get("stream"):
-            return iter(
+            return _Stream(
                 [
                     SimpleNamespace(
                         choices=[SimpleNamespace(delta=SimpleNamespace(content="ok"), finish_reason="stop")]
@@ -145,7 +160,7 @@ class _AnthropicBackend:
     def _create(self, **kwargs):
         self.calls.append(kwargs)
         if kwargs.get("stream"):
-            return iter(
+            return _Stream(
                 [
                     SimpleNamespace(type="message_start", message=SimpleNamespace(content=[])),
                     SimpleNamespace(

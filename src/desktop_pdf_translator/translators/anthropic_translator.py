@@ -8,6 +8,7 @@ placeholders), so this class plugs in the same way OpenAITranslator/GeminiTransl
 """
 
 import logging
+from contextlib import closing
 from typing import Any, Dict, FrozenSet, List, Optional, Sequence
 
 import anthropic
@@ -197,9 +198,11 @@ class AnthropicTranslator(BaseTranslator):
                             images: Optional[Sequence[PageImage]], kwargs: Dict[str, Any],
                             timeout: float, on_text: OnText) -> Optional[str]:
         def send(rejected: FrozenSet[str]):
-            # Sent and read to its end inside one retried request; see
-            # `OpenAITranslator._generate_streaming`.
-            events = self.client.messages.create(
+            # Sent and read to its end inside one retried request, and closed
+            # on the way out; see `OpenAITranslator._generate_streaming`. The
+            # SDK closes it for a failure inside its own iterator, but not
+            # when `on_text` raises and leaves the generator suspended.
+            with closing(self.client.messages.create(
                 model=self.model,
                 max_tokens=max_tokens,
                 messages=[{"role": "user", "content": self._user_content(prompt, images)}],
@@ -207,21 +210,21 @@ class AnthropicTranslator(BaseTranslator):
                 stream=True,
                 **kwargs,
                 **self._sampling_kwargs(rejected, 0.3),
-            )
-            stop: List[Optional[str]] = [None]
+            )) as events:
+                stop: List[Optional[str]] = [None]
 
-            def pieces():
-                for event in events:
-                    kind = getattr(event, "type", None)
-                    if kind == "content_block_delta":
-                        delta = event.delta
-                        # Thinking is the model's working, not the answer.
-                        if getattr(delta, "type", None) == "text_delta":
-                            yield delta.text
-                    elif kind == "message_delta":
-                        stop[0] = getattr(event.delta, "stop_reason", None) or stop[0]
+                def pieces():
+                    for event in events:
+                        kind = getattr(event, "type", None)
+                        if kind == "content_block_delta":
+                            delta = event.delta
+                            # Thinking is the model's working, not the answer.
+                            if getattr(delta, "type", None) == "text_delta":
+                                yield delta.text
+                        elif kind == "message_delta":
+                            stop[0] = getattr(event.delta, "stop_reason", None) or stop[0]
 
-            return deliver_stream(pieces(), on_text), stop[0]
+                return deliver_stream(pieces(), on_text), stop[0]
 
         text, stop = self._call_adapting(send, self._ADAPTABLE_PARAMS)
         if stop in _CUT_SHORT:

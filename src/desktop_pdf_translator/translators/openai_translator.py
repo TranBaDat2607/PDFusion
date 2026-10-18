@@ -3,6 +3,7 @@ OpenAI translator implementation with Vietnamese optimization.
 """
 
 import logging
+from contextlib import closing
 from typing import Any, Dict, FrozenSet, List, Optional, Sequence
 
 from openai import OpenAI
@@ -165,26 +166,29 @@ class OpenAITranslator(BaseTranslator):
                             timeout: float, on_text: OnText) -> Optional[str]:
         def send(rejected: FrozenSet[str]):
             # Sent and read to its end inside one retried request: a stream
-            # that drops midway is asked for again from the start.
-            stream = self.client.chat.completions.create(
+            # that drops midway is asked for again from the start. Only
+            # reading to the end releases the SDK stream's pooled connection,
+            # so a failed attempt is closed here, before the retry opens
+            # another and a bad link drains the pool (#112).
+            with closing(self.client.chat.completions.create(
                 model=self.model,
                 messages=messages,
                 timeout=timeout,
                 stream=True,
                 **self._sampling_kwargs(rejected, 0.3, max_tokens),
-            )
-            finish: List[Optional[str]] = [None]
+            )) as stream:
+                finish: List[Optional[str]] = [None]
 
-            def pieces():
-                for chunk in stream:
-                    # The usage chunk some servers send last has no choices.
-                    if not chunk.choices:
-                        continue
-                    choice = chunk.choices[0]
-                    finish[0] = getattr(choice, "finish_reason", None) or finish[0]
-                    yield getattr(getattr(choice, "delta", None), "content", None)
+                def pieces():
+                    for chunk in stream:
+                        # The usage chunk some servers send last has no choices.
+                        if not chunk.choices:
+                            continue
+                        choice = chunk.choices[0]
+                        finish[0] = getattr(choice, "finish_reason", None) or finish[0]
+                        yield getattr(getattr(choice, "delta", None), "content", None)
 
-            return deliver_stream(pieces(), on_text), finish[0]
+                return deliver_stream(pieces(), on_text), finish[0]
 
         text, finish = self._call_adapting(send, self._ADAPTABLE_PARAMS)
         if finish == "length":
