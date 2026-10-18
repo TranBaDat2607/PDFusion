@@ -58,6 +58,24 @@ export function appendExchange(
   };
 }
 
+/**
+ * The conversation with a just-answered question on the end, for the render
+ * that sees the answer before the history cache does. Without it the panel
+ * drops its draft and pending question for a frame, shrinks, and the browser
+ * clamps a reader who had scrolled up to the new bottom (#109).
+ *
+ * The answer is matched by identity: `appendExchange` stores the very object
+ * it is given, so once the cache holds the stand-in, nothing is added twice.
+ */
+export function exchangeShown(
+  saved: ChatMessage[],
+  question: string,
+  answer: RagAnswer,
+): ChatMessage[] {
+  if (saved[saved.length - 1]?.answer === answer) return saved;
+  return appendExchange({ messages: saved }, question, answer, "").messages;
+}
+
 /** The user's verdict on an answer: helpful, wrong, or none. */
 export type Rating = 1 | -1 | null;
 

@@ -20,6 +20,7 @@ import {
   appendExchange,
   canRate,
   chatHistoryKey,
+  exchangeShown,
   nextRating,
   type ChatHistory,
   type ChatMessage,
@@ -59,9 +60,10 @@ export function ChatPanel({
   const setChatOpen = useAppStore((s) => s.setChatOpen);
   const scrollRef = useRef<HTMLDivElement>(null);
   const prevScrollHeightRef = useRef(0);
-  // Set where the reader should land at the bottom whatever the last measure
-  // said: their own question, another document's conversation, or the panel
-  // coming back as a fresh element at scrollTop 0 against the old one's height.
+  // Set when the next update should land at the bottom whatever the last
+  // measure said: the reader's own question, or another document's
+  // conversation. It starts true because the panel mounts fresh each time it is
+  // shown (MainLayout unmounts it after the exit animation), at scrollTop 0.
   const followNextRef = useRef(true);
   const [pendingQuestion, setPendingQuestion] = useState<string | null>(null);
 
@@ -72,6 +74,14 @@ export function ChatPanel({
   const showPending =
     pendingQuestion !== null &&
     (ask.state.status === "asking" || ask.state.status === "error");
+  // The render that sees the answer arrive carries it too, rather than waiting
+  // for the effect below to cache it: that gap was a frame in which the draft
+  // and the pending question were gone and the answer not yet there, and the
+  // browser clamped a reader who had scrolled up to the shorter content (#109).
+  const answered =
+    pendingQuestion !== null
+      ? answerForDocument(ask.state, index.state.documentId)
+      : null;
   const messages: ChatMessage[] = showPending
     ? [
         ...saved,
@@ -83,7 +93,9 @@ export function ChatPanel({
           created_at: "",
         },
       ]
-    : saved;
+    : answered
+      ? exchangeShown(saved, pendingQuestion!, answered)
+      : saved;
 
   // Hides the panel and nothing more. Settings → Chat is where chat is
   // turned off (#32).
@@ -138,21 +150,15 @@ export function ChatPanel({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ask.state.status, ask.state.errorCode]);
 
-  // Declared before the scroll effect below: effects run in order, and that one
-  // must see the flag.
-  useEffect(() => {
-    if (showing) followNextRef.current = true;
-  }, [showing]);
-
-  // Follow the bottom only while the reader is at it, or the panel has just
-  // been given new content to start from (#109): a streamed answer updates this
-  // dozens of times a second, and an unconditional scroll made an earlier
-  // message impossible to read until the answer finished. The test is made
-  // here against the height the *previous* update left, not in a scroll
-  // listener — a listener's flag lags the wheel by a frame, so a delta landing
-  // in between would snap the reader back. `scrollTop` is live, so it already
-  // holds where the reader went; the old height is what the content measured
-  // before this update grew it.
+  // Follow the bottom only while the reader is at it, or has just asked for
+  // something new (#109): a streamed answer updates this dozens of times a
+  // second, and an unconditional scroll made an earlier message impossible to
+  // read until the answer finished. The decision is made at the update itself,
+  // against the height the *previous* update left: `scrollTop` is live, so it
+  // holds wherever the reader went since, and the old height is what the
+  // content measured before this update grew it. A flag kept by a scroll
+  // listener would have to be right about a position the update is about to
+  // change.
   useEffect(() => {
     const el = scrollRef.current;
     if (!el) return;
@@ -167,7 +173,6 @@ export function ChatPanel({
     if (follow) el.scrollTop = el.scrollHeight;
     prevScrollHeightRef.current = el.scrollHeight;
   }, [
-    showing,
     messages.length,
     ask.state.actions.length,
     ask.state.status,
