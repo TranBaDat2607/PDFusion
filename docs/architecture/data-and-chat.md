@@ -253,9 +253,10 @@ papers, follow-ups, a document that gives orders — and each measured or tested
 there:
 
 - **A follow-up is searched for as the question it stands for.** `_run_ask`
-  hands the chain the document's last `MAX_HISTORY_TURNS` (3) saved exchanges
+  reads the document's last `MAX_HISTORY_TURNS` (3) saved exchanges
   (`rag/conversation.py`, stdlib-only because the route imports it on the boot
-  path). With a conversation, one extra model call rewrites the latest question
+  path) and hands them to the chain, which cuts to the window itself at each
+  public entry (`answer_question`, `retrieve`) — the one place to change it. With a conversation, one extra model call rewrites the latest question
   to stand alone (`_standalone_question`), in the question's own language — no
   answer-language instruction, for HyDE's reason — and retrieval searches with
   the rewrite **instead of** the typed question: a follow-up's own words ("and

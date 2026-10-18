@@ -415,7 +415,9 @@ def _conversation(document_id: str) -> List[ChatTurn]:
     accepted for, so it is never another document's. Best-effort: a question
     is still answered, on its own, when the history can't be read."""
     try:
-        # Each exchange is two rows, saved together (`add_exchange`).
+        # Each exchange is two rows, saved together (`add_exchange`). This
+        # only avoids reading the whole conversation; the chain applies the
+        # window itself.
         messages = get_records_store().messages(document_id, last=2 * MAX_HISTORY_TURNS)
     except Exception:  # noqa: BLE001
         logger.warning("Could not read the chat history of document %s", document_id, exc_info=True)
@@ -424,7 +426,7 @@ def _conversation(document_id: str) -> List[ChatTurn]:
     for asked, answered in zip(messages, messages[1:]):
         if asked.role == "user" and answered.role == "assistant":
             turns.append(ChatTurn(question=asked.content, answer=answered.content))
-    return turns[-MAX_HISTORY_TURNS:]
+    return turns
 
 
 async def _run_ask(
