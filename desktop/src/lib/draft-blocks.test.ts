@@ -101,6 +101,54 @@ describe("splitDraftBlocks", () => {
     expect(splitDraftBlocks("a\n\n\n\nb")).toEqual({ blocks: ["a\n\n\n\n"], tail: "b" });
   });
 
+  // A line that only looks like an opener must not invert the tracking for the
+  // rest of the answer: the real fence's closer would then be read as an
+  // opener, and all later prose would stream in as code.
+  it("does not read a backtick line with a backtick in its info string as a fence", () => {
+    const text = "```npm i``` sets it up.\n\nThen:\n\n```\na = 1\n\nb = 2\n```\n\nDone.";
+    expect(splitDraftBlocks(text)).toEqual({
+      blocks: ["```npm i``` sets it up.\n\n", "Then:\n\n", "```\na = 1\n\nb = 2\n```\n\n"],
+      tail: "Done.",
+    });
+  });
+
+  it("opens a math block on $$ followed by a meta string", () => {
+    const math = "$$\\begin{aligned}\nx\n\ny\n$$\n\n";
+    expect(splitDraftBlocks(`${math}after`)).toEqual({ blocks: [math], tail: "after" });
+  });
+
+  it("does not open a math block on $$x$$ in one line", () => {
+    expect(splitDraftBlocks("$$x$$\n\nnext\n\nlast")).toEqual({
+      blocks: ["$$x$$\n\n", "next\n\n"],
+      tail: "last",
+    });
+  });
+
+  it("closes a fence only with one at least as long as its opener", () => {
+    const fence = "````\na\n```\n\nb\n````\n\n";
+    expect(splitDraftBlocks(`${fence}after`)).toEqual({ blocks: [fence], tail: "after" });
+  });
+
+  it("does not close a fence with a line that has an info string", () => {
+    expect(splitDraftBlocks("```\na\n```js\n\nb")).toEqual({
+      blocks: [],
+      tail: "```\na\n```js\n\nb",
+    });
+  });
+
+  it("counts a whitespace-only line as blank", () => {
+    expect(splitDraftBlocks("a\n  \nb")).toEqual({ blocks: ["a\n  \n"], tail: "b" });
+  });
+
+  it("splits CRLF text the same way and keeps the line endings", () => {
+    expect(splitDraftBlocks("a\r\n\r\nb")).toEqual({ blocks: ["a\r\n\r\n"], tail: "b" });
+  });
+
+  it("tracks a fence indented inside a list item", () => {
+    const item = "- step\n\n  ```\n  x\n\n  y\n  ```\n\n";
+    expect(splitDraftBlocks(`${item}after`)).toEqual({ blocks: [item], tail: "after" });
+  });
+
   describe("over every prefix of a realistic answer", () => {
     const ANSWER = [
       "The invoice total is stated on the first page.\n",

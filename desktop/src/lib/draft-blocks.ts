@@ -27,9 +27,7 @@ export function splitDraftBlocks(text: string): {
     const body = line.replace(/\r?\n$/, "");
     const trimmed = body.trim();
 
-    // A whitespace-only line with no newline yet may still grow into an
-    // indented one, so only a line that is over counts as blank.
-    if (trimmed === "" && line.endsWith("\n")) {
+    if (trimmed === "") {
       blankRun = true;
     } else {
       if (blankRun && closer === "" && !/^\s/.test(body)) {
@@ -54,7 +52,11 @@ function nextCloser(closer: string, trimmed: string): string {
       trimmed.length >= closer.length && trimmed === closer[0].repeat(trimmed.length);
     return closes ? "" : closer;
   }
-  if (trimmed === "$$") return "$$";
-  const fence = /^(`{3,}|~{3,})/.exec(trimmed);
-  return fence ? fence[1] : "";
+  // The opener rules are the Markdown parsers': a backtick fence's info string
+  // has no backtick (else the line is inline code), and a math fence's meta no
+  // `$` (else the line is `$$x$$`). Reading either as an opener would take the
+  // real fence's closer for one and flip every fence after it.
+  if (/^\$\$[^$]*$/.test(trimmed)) return "$$";
+  const fence = /^(`{3,})[^`]*$|^(~{3,})/.exec(trimmed);
+  return fence ? (fence[1] ?? fence[2]) : "";
 }
