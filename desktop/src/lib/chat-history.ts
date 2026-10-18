@@ -76,8 +76,12 @@ export function exchangeShown(
   return appendExchange({ messages: saved }, question, answer, "").messages;
 }
 
-/** The user's verdict on an answer: helpful, wrong, or none. */
-export type Rating = 1 | -1 | null;
+/** The user's verdict on an answer: helpful, wrong, or none. Optional on the
+ *  wire, so the schema's type carries `undefined`; a verdict never does. */
+export type Rating = Exclude<components["schemas"]["RateAnswerRequest"]["rating"], undefined>;
+
+/** A thumb: the verdict a click gives. */
+export type Thumb = NonNullable<Rating>;
 
 /** The history with one answer's rating changed: what the panel shows while
  *  the sidecar saves it. */
@@ -94,7 +98,7 @@ export function withRating(
 }
 
 /** A thumb toggles: clicking the one already chosen takes the rating back. */
-export function nextRating(current: Rating | undefined, clicked: 1 | -1): Rating {
+export function nextRating(current: Rating | undefined, clicked: Thumb): Rating {
   return current === clicked ? null : clicked;
 }
 

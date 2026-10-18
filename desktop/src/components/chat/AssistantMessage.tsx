@@ -7,6 +7,7 @@ import "katex/dist/katex.min.css";
 import { ReferenceList } from "@/components/chat/ReferenceList";
 import { Sparkles, ThumbsDown, ThumbsUp } from "lucide-react";
 import type { RagAnswer } from "@/hooks/useRagAsk";
+import type { Rating, Thumb } from "@/lib/chat-history";
 import { pageFromCitationHref } from "@/lib/citation-links";
 import { toReferenceRows } from "@/lib/rag-references";
 
@@ -16,8 +17,8 @@ interface AssistantMessageProps {
   byline?: string | null;
   onJumpToPage?: (page: number) => void;
   /** The user's rating; `undefined` when the answer can't be rated yet. */
-  rating?: 1 | -1 | null;
-  onRate?: (clicked: 1 | -1) => void;
+  rating?: Rating;
+  onRate?: (clicked: Thumb) => void;
 }
 
 export function AssistantMessage({
