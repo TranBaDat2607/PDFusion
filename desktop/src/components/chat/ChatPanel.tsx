@@ -20,10 +20,12 @@ import {
   appendExchange,
   canRate,
   chatHistoryKey,
+  exchangeShown,
   nextRating,
   type ChatHistory,
   type ChatMessage,
 } from "@/lib/chat-history";
+import { isNearBottom } from "@/lib/chat-scroll";
 import { answerForDocument, needsReindex } from "@/lib/rag-ask";
 import { AnswerModelPicker } from "@/components/chat/AnswerModelPicker";
 import { useProviders } from "@/hooks/useProviders";
@@ -57,6 +59,12 @@ export function ChatPanel({
   const rateAnswer = useRateAnswer(index.state.documentId);
   const setChatOpen = useAppStore((s) => s.setChatOpen);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const prevScrollHeightRef = useRef(0);
+  // Set when the next update should land at the bottom whatever the last
+  // measure said: the reader's own question, or another document's
+  // conversation. It starts true because the panel mounts fresh each time it is
+  // shown (MainLayout unmounts it after the exit animation), at scrollTop 0.
+  const followNextRef = useRef(true);
   const [pendingQuestion, setPendingQuestion] = useState<string | null>(null);
 
   const saved = history.data?.messages ?? [];
@@ -66,6 +74,14 @@ export function ChatPanel({
   const showPending =
     pendingQuestion !== null &&
     (ask.state.status === "asking" || ask.state.status === "error");
+  // The render that sees the answer arrive carries it too, rather than waiting
+  // for the effect below to cache it: that gap was a frame in which the draft
+  // and the pending question were gone and the answer not yet there, and the
+  // browser clamped a reader who had scrolled up to the shorter content (#109).
+  const answered =
+    pendingQuestion !== null
+      ? answerForDocument(ask.state, index.state.documentId)
+      : null;
   const messages: ChatMessage[] = showPending
     ? [
         ...saved,
@@ -77,7 +93,9 @@ export function ChatPanel({
           created_at: "",
         },
       ]
-    : saved;
+    : answered
+      ? exchangeShown(saved, pendingQuestion!, answered)
+      : saved;
 
   // Hides the panel and nothing more. Settings → Chat is where chat is
   // turned off (#32).
@@ -91,6 +109,7 @@ export function ChatPanel({
   useEffect(() => {
     ask.reset();
     setPendingQuestion(null);
+    followNextRef.current = true;
     if (!documentPath) {
       index.reset();
       return;
@@ -131,16 +150,40 @@ export function ChatPanel({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ask.state.status, ask.state.errorCode]);
 
-  // Auto-scroll to bottom when content changes
+  // Follow the bottom only while the reader is at it, or has just asked for
+  // something new (#109): a streamed answer updates this dozens of times a
+  // second, and an unconditional scroll made an earlier message impossible to
+  // read until the answer finished. The decision is made at the update itself,
+  // against the height the *previous* update left: `scrollTop` is live, so it
+  // holds wherever the reader went since, and the old height is what the
+  // content measured before this update grew it. A flag kept by a scroll
+  // listener would have to be right about a position the update is about to
+  // change.
   useEffect(() => {
-    if (!scrollRef.current) return;
-    scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
-  }, [messages.length, ask.state.actions.length, ask.state.status, ask.state.draft]);
+    const el = scrollRef.current;
+    if (!el) return;
+    const follow =
+      followNextRef.current ||
+      isNearBottom({
+        scrollTop: el.scrollTop,
+        clientHeight: el.clientHeight,
+        scrollHeight: prevScrollHeightRef.current,
+      });
+    followNextRef.current = false;
+    if (follow) el.scrollTop = el.scrollHeight;
+    prevScrollHeightRef.current = el.scrollHeight;
+  }, [
+    messages.length,
+    ask.state.actions.length,
+    ask.state.status,
+    ask.state.draft,
+  ]);
 
   const handleSubmit = useCallback(
     ({ text }: { text: string }) => {
       const documentId = index.state.documentId;
       if (!documentId) return;
+      followNextRef.current = true;
       setPendingQuestion(text);
       // The toolbar's "To" language, which is also what Translate sends.
       void ask.ask({

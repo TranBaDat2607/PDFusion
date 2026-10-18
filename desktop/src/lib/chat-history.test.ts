@@ -4,9 +4,11 @@ import {
   appendExchange,
   canRate,
   chatHistoryKey,
+  exchangeShown,
   nextRating,
   withRating,
   type ChatHistory,
+  type ChatMessage,
 } from "./chat-history";
 import type { RagAnswer } from "./rag-ask";
 
@@ -67,6 +69,39 @@ describe("appendExchange", () => {
     const saved: ChatHistory = { messages: [] };
     appendExchange(saved, "Q", makeAnswer("A"), "t");
     expect(saved.messages).toEqual([]);
+  });
+});
+
+describe("exchangeShown", () => {
+  const savedQ1: ChatMessage[] = [
+    { id: 7, role: "user", text: "Q1", answer: null, created_at: "t0" },
+    { id: 8, role: "assistant", text: "A1", answer: makeAnswer("A1"), created_at: "t0" },
+  ];
+
+  it("puts the question and its answer after the saved conversation", () => {
+    const shown = exchangeShown(savedQ1, "Q2", makeAnswer("A2"));
+
+    expect(shown.map((m) => [m.role, m.text])).toEqual([
+      ["user", "Q1"],
+      ["assistant", "A1"],
+      ["user", "Q2"],
+      ["assistant", "A2"],
+    ]);
+  });
+
+  // The frame where the answer's stand-in is cached but the panel still holds
+  // the pending question must not show the exchange twice.
+  it("adds nothing once the answer is already the last saved message", () => {
+    const answer = makeAnswer("A2");
+    const cached = appendExchange({ messages: savedQ1 }, "Q2", answer, "t1").messages;
+
+    expect(exchangeShown(cached, "Q2", answer)).toEqual(cached);
+  });
+
+  it("leaves the saved messages it was given alone", () => {
+    const before = [...savedQ1];
+    exchangeShown(savedQ1, "Q2", makeAnswer("A2"));
+    expect(savedQ1).toEqual(before);
   });
 });
 
