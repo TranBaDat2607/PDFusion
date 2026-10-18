@@ -282,10 +282,7 @@ there:
   `answer`. The stream is read to its end *inside* the request
   `_call_with_backoff` retries, so a dropped stream is asked for again from
   the start, and its offsets restart at 0: the client places each piece at its
-  offset (`rag-ask.ts`), so a retry overwrites rather than duplicates. A stream
-  that fails partway is closed before that retry (OpenAI, Anthropic): only
-  reading to the end releases its pooled connection, and each abandoned one
-  held a slot until GC (#112). Gemini's SDK exposes no handle to close. Only the
+  offset (`rag-ask.ts`), so a retry overwrites rather than duplicates. Only the
   answer streams — never HyDE or the rewrite — and only to a backend whose
   `generate` takes `on_text` (asked of its signature, as `images` is avoided
   when empty). The streamed draft has unchecked citations, so it renders none
