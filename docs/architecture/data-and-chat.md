@@ -275,6 +275,16 @@ there:
   benchmark's `manual.pdf` carries a visible and a hidden injection; no
   answer obeyed either, before or after — the fence is defence in depth, not a
   measured gain with this model.
+- **Earlier answers are fenced in too** (#111). The saved conversation was
+  first left outside the fence as "the user's own words", but an answer is not:
+  it quotes the document, so an instruction a PDF hid in white text came back
+  with the next question, outside the fence, and the defence lapsed after one
+  turn. Each earlier answer now sits between `<earlier-answer-…>` tags (a
+  suffix random per model call, clipped *before* it is wrapped so a long answer
+  keeps its closing tag), and the system prompt of **both** the answer and the
+  follow-up rewrite names the tag and says it is data. Earlier questions stay
+  outside every fence. With no conversation nothing changes — no tag, no extra
+  sentence — so the benchmark's prompts are as measured.
 - **The answer streams.** `generate(on_text=...)` on every LLM backend asks
   its SDK for a stream and calls `on_text(offset, piece)`; `_run_ask` turns
   each into an `answer_delta` event, and waits for them all before sending

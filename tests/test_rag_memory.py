@@ -449,7 +449,7 @@ def test_each_turn_is_a_question_then_a_fenced_answer(tmp_path, store):
 
     prompt, _system, _ = ask_with_history(tmp_path, store, history).calls[ANSWER_CALL]
 
-    tag, _body = answers_fence(prompt)
+    (tag,) = set(re.findall(r"<earlier-answer-(\w{12})>", prompt))
     for turn in history:
         assert (f"Q: {turn.question}\nA: <earlier-answer-{tag}>\n{turn.answer}\n"
                 f"</earlier-answer-{tag}>") in prompt
@@ -495,7 +495,9 @@ def test_a_long_earlier_answer_is_clipped_inside_its_fence(tmp_path, store, call
 
     _tag, body = answers_fence(prompt)
     assert body.strip().startswith("BEGINMARK")
-    assert body.strip().endswith("x")
+    # The clip's own marker is the last thing inside, so the fence closed after it.
+    assert body.strip().endswith("…")
+    assert "x" * 5000 not in prompt
     assert "ENDMARK" not in prompt
     assert FOLLOW_UP in outside_fences(prompt)
 
