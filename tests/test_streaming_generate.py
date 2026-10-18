@@ -73,15 +73,44 @@ class _Attempt:
         self.error = error
 
 
+class _FakeStream:
+    """What an SDK's `Stream` is to the connection pool: iterating it to the
+    end releases the connection, and so does `close()`. A generator that
+    raised cannot tell a test whether the caller closed it, so this records it."""
+
+    def __init__(self, chunks):
+        self._chunks = chunks
+        self.closed = False
+
+    def __iter__(self):
+        yield from self._chunks
+        # Reached only when the chunks ran out without raising.
+        self.closed = True
+
+    def close(self) -> None:
+        self.closed = True
+
+
 class _Backend:
     def __init__(self, attempts: List[_Attempt]):
         self.attempts = list(attempts)
         self.requests: List[Dict[str, Any]] = []
         self.streamed: List[bool] = []
+        self.streams: List[_FakeStream] = []
+        # How many earlier streams were still holding a connection as each
+        # request was sent: a retry that starts before the failed stream is
+        # released is what drains the pool (#112).
+        self.open_at_request: List[int] = []
 
     def _next_attempt(self) -> _Attempt:
         assert self.attempts, "the code under test made more requests than scripted"
         return self.attempts.pop(0)
+
+    def _open_stream(self, chunks) -> _FakeStream:
+        self.open_at_request.append(sum(1 for s in self.streams if not s.closed))
+        stream = _FakeStream(chunks)
+        self.streams.append(stream)
+        return stream
 
 
 class _OpenAIBackend(_Backend):
@@ -112,7 +141,7 @@ class _OpenAIBackend(_Backend):
         self.streamed.append(kwargs.get("stream") is True)
         attempt = self._next_attempt()
         if kwargs.get("stream"):
-            return self._stream(attempt)
+            return self._open_stream(self._stream(attempt))
         message = SimpleNamespace(content="".join(p or "" for p in attempt.pieces))
         return SimpleNamespace(choices=[SimpleNamespace(message=message, finish_reason=attempt.finish)])
 
@@ -157,7 +186,7 @@ class _AnthropicBackend(_Backend):
         self.streamed.append(kwargs.get("stream") is True)
         attempt = self._next_attempt()
         if kwargs.get("stream"):
-            return self._stream(attempt)
+            return self._open_stream(self._stream(attempt))
         text = "".join(p or "" for p in attempt.pieces)
         stop = "max_tokens" if attempt.finish == "length" else "end_turn"
         return SimpleNamespace(content=[SimpleNamespace(type="text", text=text)], stop_reason=stop)
@@ -443,6 +472,58 @@ def test_a_failure_that_is_not_retryable_surfaces_after_its_pieces(make_backend)
         backend.translator.generate(PROMPT, on_text=got)
 
     assert len(backend.requests) == 1
+
+
+# Gemini is left out of the stream-release tests below: its SDK hands back a
+# bare generator over an httpx response it never exposes, so there is no handle
+# for the caller to close (#112).
+@pytest.fixture(params=[_OpenAIBackend, _AnthropicBackend], ids=lambda cls: cls.name)
+def make_closable_backend(request, monkeypatch: pytest.MonkeyPatch):
+    for module in (openai_translator, anthropic_translator):
+        monkeypatch.setattr(module, "_llm_cache_get", lambda *a, **k: None)
+        monkeypatch.setattr(module, "_llm_cache_set", lambda *a, **k: None)
+
+    def build(*attempts: _Attempt):
+        backend = request.param(list(attempts))
+        backend.translator._sleep_or_cancel = lambda seconds: False
+        return backend
+
+    return build
+
+
+def test_a_stream_that_drops_midway_is_closed_before_the_retry_is_sent(make_closable_backend):
+    backend = make_closable_backend(
+        _Attempt(["Hel", "lo"], error=APIConnectionError("connection reset")),
+        _Attempt(["Hello"]),
+    )
+
+    backend.translator.generate(PROMPT, on_text=_Collector())
+
+    assert backend.open_at_request == [0, 0]
+    assert all(stream.closed for stream in backend.streams)
+
+
+def test_a_stream_is_closed_when_the_consumer_raises(make_closable_backend):
+    backend = make_closable_backend(_Attempt(["Hel", "lo"]))
+
+    def refuses(offset: int, piece: str) -> None:
+        raise ValueError("consumer failed")
+
+    with pytest.raises(ValueError, match="consumer failed"):
+        backend.translator.generate(PROMPT, on_text=refuses)
+
+    assert [stream.closed for stream in backend.streams] == [True]
+
+
+def test_a_stream_is_closed_when_the_key_is_rejected_inside_it(make_closable_backend):
+    backend = make_closable_backend(
+        _Attempt(["Hel"], error=APIStatusError("invalid x-api-key", status_code=401)),
+    )
+
+    with pytest.raises(APIStatusError):
+        backend.translator.generate(PROMPT, on_text=_Collector())
+
+    assert [stream.closed for stream in backend.streams] == [True]
 
 
 def test_the_system_prompt_is_sent_when_streaming(make_backend):
