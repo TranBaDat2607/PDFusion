@@ -569,7 +569,8 @@ class EnhancedRAGChain:
             return f"{history[-1].question} {question}"
         # No answer-language instruction, for the reason HyDE has none
         # (`answer_language_instruction`): the rewrite is a search query.
-        # Its own tag, not the answer call's: each call is a separate request.
+        # Never the tag the answer will use: a tag first shown in this request
+        # cannot have been echoed into any saved answer.
         answers_fence = f"earlier-answer-{secrets.token_hex(6)}"
         prompt = f"""Rewrite the latest question so that it can be understood without the conversation: replace words like "it", "that" or "and in Q4?" with what they refer to. Keep the language of the latest question, keep its names and numbers, and add nothing it does not ask. If it already stands on its own, return it unchanged. Reply with the question only.
 
@@ -707,7 +708,7 @@ Question: {question}"""
         read = evidence if read is None else read
         prompt = self._create_answer_prompt(
             question, read, answer_lang, images, fence=fence, history=history, contents=contents,
-            answers_fence=answers_fence or "earlier-answer",
+            answers_fence=answers_fence,
         )
         try:
             answer = await self._generate_with_llm(
@@ -722,7 +723,7 @@ Question: {question}"""
             images = []
             prompt = self._create_answer_prompt(
                 question, read, answer_lang, images, fence=fence, history=history,
-                contents=contents, answers_fence=answers_fence or "earlier-answer",
+                contents=contents, answers_fence=answers_fence,
             )
             # Streams again from offset 0, replacing the refused attempt's text.
             answer = await self._generate_with_llm(
@@ -742,7 +743,7 @@ Question: {question}"""
                               fence: str = "document",
                               history: Sequence[ChatTurn] = (),
                               contents: Sequence[Tuple[int, str]] = (),
-                              answers_fence: str = "earlier-answer") -> str:
+                              answers_fence: Optional[str] = None) -> str:
         """The prompt for one answer.
 
         Every evidence page, whole, under its page number: the chat lists each
@@ -780,6 +781,10 @@ Question: {question}"""
             )
         conversation = ""
         if history:
+            # No default tag: one a caller could guess is one an answer could
+            # close, and the system prompt would not name it either.
+            if answers_fence is None:
+                raise ValueError("a conversation needs the answers_fence its system prompt names")
             # Outside the pages' fence: the user's own conversation, not the
             # document. Only the questions are the user's words, though; an
             # answer repeats the document, so each sits in a fence of its own.
@@ -819,6 +824,9 @@ Question: {question}
         model fails or returns nothing; `_ImagesRefused` when it failed because
         it takes no images. `images` is passed only when there are some, so a
         backend written before images existed is called as it always was.
+
+        `answers_fence` is the tag the prompt put around the earlier answers;
+        the system prompt names it, and only when there is a conversation.
         """
         system = (
             "You answer questions about one PDF document from pages of it, and cite "

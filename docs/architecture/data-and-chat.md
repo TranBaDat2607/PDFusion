@@ -279,12 +279,22 @@ there:
   first left outside the fence as "the user's own words", but an answer is not:
   it quotes the document, so an instruction a PDF hid in white text came back
   with the next question, outside the fence, and the defence lapsed after one
-  turn. Each earlier answer now sits between `<earlier-answer-…>` tags (a
-  suffix random per model call, clipped *before* it is wrapped so a long answer
-  keeps its closing tag), and the system prompt of **both** the answer and the
-  follow-up rewrite names the tag and says it is data. Earlier questions stay
-  outside every fence. With no conversation nothing changes — no tag, no extra
-  sentence — so the benchmark's prompts are as measured.
+  turn. Each earlier answer now sits between `<earlier-answer-…>` tags (clipped
+  *before* it is wrapped so a long answer keeps its closing tag), and the
+  system prompt of **both** the answer and the follow-up rewrite names the tag
+  and says it is data. The suffix is random and new for the rewrite and for the
+  answer, so a tag is never one an earlier request has shown; a refusal retry
+  of the same question reuses its answer's tag, since the refused attempt
+  produced nothing that could have learned it. There is no default tag: a
+  caller that passes a conversation without one gets a `ValueError`, not a
+  guessable fence.
+  A request with no conversation is unchanged — no tag, no extra sentence
+  (pinned by a test on the whole system prompt). The benchmark's follow-up
+  questions do send one, so *their* prompts changed in both calls, and their
+  9/9 above has not been re-measured with an answer model (`--answers`).
+  Earlier **questions** stay outside every fence: they are what the user typed.
+  The one residual: text the user copies out of the viewer carries any hidden
+  white text with it, and that question is outside the fence from then on.
 - **The answer streams.** `generate(on_text=...)` on every LLM backend asks
   its SDK for a stream and calls `on_text(offset, piece)`; `_run_ask` turns
   each into an `answer_delta` event, and waits for them all before sending

@@ -27,10 +27,14 @@ from desktop_pdf_translator.rag.rag_chain import ChatTurn, EnhancedRAGChain
 from desktop_pdf_translator.rag.vector_store import ChromaDBManager
 from test_rag_answers import (
     DOCUMENT_ID,
+    QUESTION,
     HashingEmbeddingFunction,
+    _RefusesStreaming,
+    _SdkError,
     _Translator,
     build_document,
     make_chain,
+    ranked,
 )
 
 # The follow-up shares not one content word with the page that answers it, and
@@ -422,7 +426,11 @@ def test_an_earlier_answer_is_fenced_and_the_system_prompt_names_the_fence(
     assert prompt.count(PLANTED) == 1
     assert f"earlier-answer-{tag}" in system
     # Naming the tag is not enough; the model is told what the fence means.
-    assert "instruction" in system.lower()
+    # "instruction" alone proves nothing for the answer call, whose system
+    # prompt already says it of the pages; these two phrases are the new
+    # sentence's own.
+    assert "may quote" in system
+    assert "never as instructions" in system
 
 
 @BOTH_CALLS
@@ -488,16 +496,19 @@ def test_every_model_call_and_every_question_gets_a_tag_of_its_own(tmp_path, sto
 def test_a_long_earlier_answer_is_clipped_inside_its_fence(tmp_path, store, call_index):
     """Clip first, wrap second: wrapping first would cut the closing tag off
     and leave the rest of the prompt inside the fence."""
-    long_answer = "BEGINMARK " + "x" * 5000 + " ENDMARK"
+    # Words, not one 5000-character token: the clip falls back to the last
+    # space, which would leave a single token with almost nothing.
+    long_answer = "BEGINMARK " + "word " * 1000 + "ENDMARK"
     history = [ChatTurn(PREVIOUS_QUESTION, long_answer)]
 
     prompt, _system, _ = ask_with_history(tmp_path, store, history).calls[call_index]
 
     _tag, body = answers_fence(prompt)
+    limit = rag_chain_module.HISTORY_ANSWER_CHARS
     assert body.strip().startswith("BEGINMARK")
     # The clip's own marker is the last thing inside, so the fence closed after it.
-    assert body.strip().endswith("…")
-    assert "x" * 5000 not in prompt
+    assert body.strip().endswith("word …")
+    assert limit - 10 <= len(body.strip()) <= limit + 2, "clipped to the limit, not further"
     assert "ENDMARK" not in prompt
     assert FOLLOW_UP in outside_fences(prompt)
 
@@ -524,4 +535,58 @@ def test_without_history_nothing_mentions_an_earlier_answer(tmp_path, store):
 
     (prompt, system, _), = translator.calls
     assert "earlier-answer" not in prompt
-    assert "earlier-answer" not in (system or "")
+    # The whole system prompt, so any other sentence added for a conversation
+    # that is not there fails too: the benchmark measured this request.
+    (pages_tag,) = re.findall(r"<(document-\w+)>", prompt)
+    assert system == (
+        "You answer questions about one PDF document from pages of it, and cite "
+        "the page each statement comes from as [p. N]. "
+        + rag_chain_module._fence_instruction(pages_tag) + " "
+        + rag_chain_module.answer_language_instruction("en")
+    )
+
+
+def test_a_conversation_without_its_fence_tag_is_refused_not_given_a_guessable_one(
+        tmp_path, store):
+    chain = make_chain(store, None)
+    index, _path = build_document(tmp_path, store, PAGES)
+    evidence = asyncio.run(chain.retrieve(FOLLOW_UP, index, 1))
+
+    with pytest.raises(ValueError):
+        chain._create_answer_prompt(FOLLOW_UP, evidence, history=HISTORY)
+
+
+def assert_names_its_fence(call) -> None:
+    prompt, system, _ = call
+    tag, _body = answers_fence(prompt)
+    assert f"earlier-answer-{tag}" in system
+
+
+def test_a_retry_after_an_image_refusal_still_names_the_fence(tmp_path, store):
+    """The retry builds a new prompt and a new request; a system prompt that
+    forgot the tag would fence the answers and leave the model not knowing
+    what the fence means."""
+    refusal = _SdkError(400, "Invalid request: image input is not supported by this model")
+    translator = _Translator(QUESTION, refusal, "It drifts [p. 1].")
+    index, path = build_document(tmp_path, store, ranked("visual"))
+
+    ask(make_chain(store, translator), index, path, question=QUESTION, history=HISTORY)
+
+    rewrite, refused, retried = translator.calls
+    assert "images" in refused[2] and "images" not in retried[2], "the fixture refused images"
+    for call in (refused, retried):
+        assert_names_its_fence(call)
+
+
+def test_a_retry_after_a_refusal_to_stream_still_names_the_fence(tmp_path, store):
+    translator = _RefusesStreaming(QUESTION, "It drifts [p. 1].")
+    index, path = build_document(tmp_path, store, ranked())
+
+    ask(make_chain(store, translator), index, path, question=QUESTION, history=HISTORY,
+        on_text=lambda offset, text: None)
+
+    rewrite, refused, retried = translator.calls
+    assert refused[2]["on_text"] is not None and retried[2]["on_text"] is None, \
+        "the fixture refused streaming"
+    for call in (refused, retried):
+        assert_names_its_fence(call)
