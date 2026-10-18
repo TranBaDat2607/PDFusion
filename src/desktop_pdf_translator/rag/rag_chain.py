@@ -492,14 +492,17 @@ class EnhancedRAGChain:
 
         Raises `IndexUnavailableError` when the index has no chunks to read.
         """
-        evidence, _query, _chunks = await self._retrieve(question, index_id, max_pages, model, history)
+        evidence, _query, _chunks = await self._retrieve(
+            question, index_id, max_pages, model, _recent(history)
+        )
         return evidence
 
     async def _retrieve(self, question: str, index_id: str, max_pages: int,
                         model: Optional[AnswerModel],
                         history: Sequence[ChatTurn],
                         ) -> Tuple[List[PageEvidence], str, List[Dict[str, Any]]]:
-        """`retrieve`, the question it searched with, and the index's chunks."""
+        """`retrieve`, the question it searched with, and the index's chunks.
+        `history` is already cut to the window by the public entry."""
         # The index's chunks, read once. The keyword search and the page
         # grouping both work from this list; reading them again per search
         # used to cost up to 12 reads a question (#59).
@@ -513,7 +516,6 @@ class EnhancedRAGChain:
         # Tokenizing a whole document is CPU work: off the event loop.
         keywords = await asyncio.to_thread(Bm25Index, [contextual_text(c) for c in chunks])
 
-        history = _recent(history)
         if history:
             question = await self._standalone_question(question, history, model)
         queries = [question]
@@ -915,6 +917,9 @@ def _streams(translator: Any) -> bool:
 
 
 def _recent(history: Sequence[ChatTurn]) -> List[ChatTurn]:
+    """The window of earlier exchanges the prompts may carry. Applied once, at
+    each public entry (`answer_question`, `retrieve`) and nowhere below, so
+    changing the window is one edit; the route only bounds its database read."""
     return list(history)[-MAX_HISTORY_TURNS:]
 
 

@@ -253,9 +253,10 @@ papers, follow-ups, a document that gives orders — and each measured or tested
 there:
 
 - **A follow-up is searched for as the question it stands for.** `_run_ask`
-  hands the chain the document's last `MAX_HISTORY_TURNS` (3) saved exchanges
+  reads the document's last `MAX_HISTORY_TURNS` (3) saved exchanges
   (`rag/conversation.py`, stdlib-only because the route imports it on the boot
-  path). With a conversation, one extra model call rewrites the latest question
+  path) and hands them to the chain, which cuts to the window itself at each
+  public entry (`answer_question`, `retrieve`) — the one place to change it. With a conversation, one extra model call rewrites the latest question
   to stand alone (`_standalone_question`), in the question's own language — no
   answer-language instruction, for HyDE's reason — and retrieval searches with
   the rewrite **instead of** the typed question: a follow-up's own words ("and
@@ -281,7 +282,10 @@ there:
   `answer`. The stream is read to its end *inside* the request
   `_call_with_backoff` retries, so a dropped stream is asked for again from
   the start, and its offsets restart at 0: the client places each piece at its
-  offset (`rag-ask.ts`), so a retry overwrites rather than duplicates. Only the
+  offset (`rag-ask.ts`), so a retry overwrites rather than duplicates. A stream
+  that fails partway is closed before that retry (OpenAI, Anthropic): only
+  reading to the end releases its pooled connection, and each abandoned one
+  held a slot until GC (#112). Gemini's SDK exposes no handle to close. Only the
   answer streams — never HyDE or the rewrite — and only to a backend whose
   `generate` takes `on_text` (asked of its signature, as `images` is avoided
   when empty). The streamed draft has unchecked citations, so it renders none
