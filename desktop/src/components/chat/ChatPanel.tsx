@@ -24,6 +24,7 @@ import {
   type ChatHistory,
   type ChatMessage,
 } from "@/lib/chat-history";
+import { isNearBottom } from "@/lib/chat-scroll";
 import { answerForDocument, needsReindex } from "@/lib/rag-ask";
 import { AnswerModelPicker } from "@/components/chat/AnswerModelPicker";
 import { useProviders } from "@/hooks/useProviders";
@@ -57,6 +58,11 @@ export function ChatPanel({
   const rateAnswer = useRateAnswer(index.state.documentId);
   const setChatOpen = useAppStore((s) => s.setChatOpen);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const prevScrollHeightRef = useRef(0);
+  // Set where the reader should land at the bottom whatever the last measure
+  // said: their own question, another document's conversation, or the panel
+  // coming back as a fresh element at scrollTop 0 against the old one's height.
+  const followNextRef = useRef(true);
   const [pendingQuestion, setPendingQuestion] = useState<string | null>(null);
 
   const saved = history.data?.messages ?? [];
@@ -91,6 +97,7 @@ export function ChatPanel({
   useEffect(() => {
     ask.reset();
     setPendingQuestion(null);
+    followNextRef.current = true;
     if (!documentPath) {
       index.reset();
       return;
@@ -131,16 +138,47 @@ export function ChatPanel({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ask.state.status, ask.state.errorCode]);
 
-  // Auto-scroll to bottom when content changes
+  // Declared before the scroll effect below: effects run in order, and that one
+  // must see the flag.
   useEffect(() => {
-    if (!scrollRef.current) return;
-    scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
-  }, [messages.length, ask.state.actions.length, ask.state.status, ask.state.draft]);
+    if (showing) followNextRef.current = true;
+  }, [showing]);
+
+  // Follow the bottom only while the reader is at it, or the panel has just
+  // been given new content to start from (#109): a streamed answer updates this
+  // dozens of times a second, and an unconditional scroll made an earlier
+  // message impossible to read until the answer finished. The test is made
+  // here against the height the *previous* update left, not in a scroll
+  // listener — a listener's flag lags the wheel by a frame, so a delta landing
+  // in between would snap the reader back. `scrollTop` is live, so it already
+  // holds where the reader went; the old height is what the content measured
+  // before this update grew it.
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const follow =
+      followNextRef.current ||
+      isNearBottom({
+        scrollTop: el.scrollTop,
+        clientHeight: el.clientHeight,
+        scrollHeight: prevScrollHeightRef.current,
+      });
+    followNextRef.current = false;
+    if (follow) el.scrollTop = el.scrollHeight;
+    prevScrollHeightRef.current = el.scrollHeight;
+  }, [
+    showing,
+    messages.length,
+    ask.state.actions.length,
+    ask.state.status,
+    ask.state.draft,
+  ]);
 
   const handleSubmit = useCallback(
     ({ text }: { text: string }) => {
       const documentId = index.state.documentId;
       if (!documentId) return;
+      followNextRef.current = true;
       setPendingQuestion(text);
       // The toolbar's "To" language, which is also what Translate sends.
       void ask.ask({
