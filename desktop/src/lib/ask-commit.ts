@@ -20,9 +20,6 @@ export function createAskCommitter(
   const throttle = createLatestThrottle<AskState>(intervalMs, commit);
 
   return {
-    get state() {
-      return latest;
-    },
     /** `coalesce` for a delta; anything else commits now. */
     fold(step: (state: AskState) => AskState, coalesce: boolean) {
       latest = step(latest);

@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { createAskCommitter } from "./ask-commit";
-import { IDLE_ASK, reduceAskEvent, startAsk, type AskState } from "./rag-ask";
+import { reduceAskEvent, startAsk, type AskState } from "./rag-ask";
 
 const delta = (offset: number, text: string) => ({
   type: "answer_delta",
@@ -104,9 +104,5 @@ describe("createAskCommitter", () => {
 
     expect(commit).toHaveBeenCalledTimes(2);
     expect(commit.mock.lastCall![0]).toEqual(startAsk("doc"));
-  });
-
-  it("starts idle", () => {
-    expect(createAskCommitter(commit, 50).state).toEqual(IDLE_ASK);
   });
 });

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import { ApiError, api } from "@/lib/api-client";
 import { createAskCommitter } from "@/lib/ask-commit";
@@ -35,9 +35,8 @@ const DELTA_COMMIT_MS = 50;
 
 export function useRagAsk() {
   const [state, setState] = useState<AskState>(IDLE_ASK);
-  const committer = useMemo(
-    () => createAskCommitter(setState, DELTA_COMMIT_MS),
-    [],
+  const [committer] = useState(() =>
+    createAskCommitter(setState, DELTA_COMMIT_MS),
   );
   useEffect(() => () => committer.cancel(), [committer]);
   const abortRef = useRef<AbortController | null>(null);
