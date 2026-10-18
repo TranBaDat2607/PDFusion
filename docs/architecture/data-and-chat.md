@@ -285,7 +285,11 @@ there:
   answer streams — never HyDE or the rewrite — and only to a backend whose
   `generate` takes `on_text` (asked of its signature, as `images` is avoided
   when empty). The streamed draft has unchecked citations, so it renders none
-  as a link; the `answer` event's checked text replaces it.
+  as a link; the `answer` event's checked text replaces it. A model the
+  provider refuses to stream (`is_stream_refusal`) is asked again whole and
+  remembered for the process; the message must name "stream" as a word,
+  because a proxy's "upstream provider error" is not a refusal and counting it
+  cost a second paid request and the model's streaming (#108).
 - **A short document is read whole.** When the index's text is at most
   `rag.whole_document_tokens` (Settings → Chat → "Read a PDF whole"; 11,500
   by default, ~40,000 characters: the 15-page Attention paper fits), the answer reads every page in page order

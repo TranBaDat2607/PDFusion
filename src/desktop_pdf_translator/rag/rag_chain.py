@@ -28,6 +28,7 @@ import asyncio
 import inspect
 import json
 import logging
+import re
 import secrets
 import threading
 from dataclasses import dataclass
@@ -223,16 +224,20 @@ class _ContextTooLong(AnswerGenerationError):
     """The provider refused the request as longer than the model's window."""
 
 
-# A status that, with "stream" in the message, is a provider refusing to
-# stream this model rather than a broken request: OpenAI answers `stream=True`
-# with a 400 for some models until the organisation is verified.
+# A status that, with the word "stream" in the message, is a provider refusing
+# to stream this model rather than a broken request: OpenAI answers
+# `stream=True` with a 400 for some models until the organisation is verified.
+# A word that *starts* with it, not a substring: a proxy reports its own
+# provider failing as "upstream", and reading that as a refusal paid for a
+# second request and ended the model's streaming for the process (#108).
 _STREAM_REFUSAL_STATUSES = frozenset({400, 403, 422})
+_STREAM_WORD = re.compile(r"\bstream")
 
 
 def is_stream_refusal(error: BaseException) -> bool:
     return (
         _status_code_of(error) in _STREAM_REFUSAL_STATUSES
-        and "stream" in str(error).lower()
+        and _STREAM_WORD.search(str(error).lower()) is not None
     )
 
 
