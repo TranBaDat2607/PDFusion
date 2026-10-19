@@ -54,6 +54,10 @@ ENGINE_WARM_TIMEOUT_S = 180.0
 ENGINE_WARM_OK = "Translation engine warm in "
 ENGINE_WARM_FAILED = "Translation engine warm-up failed (non-fatal): "
 
+# A child that bootstraps correctly dies in well under a second on a bogus pipe
+# handle; the margin covers the cold-disk start of the one-dir bootloader.
+CHILD_EXIT_TIMEOUT_S = 60.0
+
 READY_RE = re.compile(r"^READY port=(\d+) token=(\S+)$")
 
 
@@ -316,3 +320,68 @@ def test_the_token_never_appears_on_stderr(tmp_path: Path):
     process.kill()
     _, stderr = process.communicate(timeout=30)
     assert started.token not in stderr
+
+
+def test_a_multiprocessing_child_launch_never_starts_a_second_sidecar(
+    tmp_path: Path,
+):
+    """On Windows `multiprocessing` starts a child by re-running
+    `sys.executable`, which in a frozen app is the sidecar itself, with
+    `--multiprocessing-fork parent_pid=… pipe_handle=…` appended. Without
+    `multiprocessing.freeze_support()` ahead of `main()` each such child boots a
+    complete sidecar instead of doing the child's work: it warms the engine
+    again, prints its own READY line, and never answers the parent. BabelDOC
+    saves its PDF in one of these children, so every translation then waited out
+    the save's 120 s timeout.
+
+    Frozen-only: a source run never re-executes the exe (the child is
+    `python -c …`), so there is no launch to reproduce there.
+
+    A correct bootstrap given a handle that names nothing fails fast with an
+    error. That is acceptable here; what is not is still running after the wait,
+    or having printed the handshake.
+    """
+    command, env = launch_args("frozen", tmp_path)
+    # A live parent pid, so the only thing wrong with the launch is the handle.
+    command += [
+        "--multiprocessing-fork",
+        f"parent_pid={os.getpid()}",
+        "pipe_handle=999999",
+    ]
+    process = spawn(command, env)
+    lines: list[str] = []
+
+    def read_stdout() -> None:
+        assert process.stdout is not None
+        for line in process.stdout:
+            lines.append(line)
+
+    reader = threading.Thread(target=read_stdout, daemon=True)
+    reader.start()
+    try:
+        deadline = time.monotonic() + CHILD_EXIT_TIMEOUT_S
+        # Stop at the first READY rather than waiting out a sidecar that, by
+        # design, never exits.
+        while (
+            time.monotonic() < deadline
+            and process.poll() is None
+            and not any(line.startswith("READY ") for line in lines)
+        ):
+            time.sleep(0.25)
+        still_running = process.poll() is None
+        printed_ready = any(line.startswith("READY ") for line in lines)
+    finally:
+        process.kill()
+        process.wait(timeout=30)
+        reader.join(timeout=10)
+
+    # The token is redacted even for a throwaway process, as everywhere else.
+    stdout = [re.sub(r"token=\S+", "token=<redacted>", line) for line in lines]
+    assert not printed_ready, (
+        "a multiprocessing child launch started a second sidecar and printed "
+        f"its handshake: {stdout!r}"
+    )
+    assert not still_running, (
+        f"a multiprocessing child launch was still running after "
+        f"{CHILD_EXIT_TIMEOUT_S:.0f}s; it should have failed fast. stdout: {stdout!r}"
+    )

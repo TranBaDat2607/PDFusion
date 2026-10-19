@@ -175,6 +175,10 @@ rule has, unless noted, a test. They are the things most easily undone by
   showing a progress bar for.
 - The sidecar prints READY before `create_app()`, so `main()` must repeat
   uvicorn's `if not server.started: sys.exit(...)` tail.
+- `main.py` calls `multiprocessing.freeze_support()` before anything else. A
+  frozen sidecar is its own `sys.executable`, so each multiprocessing child
+  (BabelDOC saves PDFs in one) re-runs the exe; without the call each child
+  booted a second sidecar and every save waited out a 120 s timeout.
 
 **Cross-platform** (#69) → `cross-platform.md`
 - The data root is the platform's (`%LOCALAPPDATA%` / `~/Library/Application
