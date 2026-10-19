@@ -104,6 +104,14 @@ hiddenimports += collect_submodules("argostranslate")
 # (argos_translator._configure_argos_settings), and the repacked en→vi pack
 # carries its 0.19 MB onnx model. It replaces stanza, which is excluded below.
 hiddenimports += collect_submodules("minisbd")
+# chardet >= 7 is compiled with mypyc, and on Windows each compiled module is a
+# stub `.pyd` that imports a sibling `<name>__mypyc` extension from C, where
+# PyInstaller's analysis cannot see it. The contrib hook only collects
+# `chardet.pipeline`, so when 7.7.0 compiled `chardet.models._format` the same
+# way, its companion was left out and every translate failed with "No module
+# named 'chardet.models._format__mypyc'" (#126; babeldoc/glossary.py imports
+# chardet). The whole package, so the next compiled module isn't a release bug.
+hiddenimports += collect_submodules("chardet")
 # huggingface_hub has a `_LazyImporter` in its package __init__ that resolves
 # attributes through `importlib.import_module` — babeldoc's asset layer and
 # rag/onnx_embeddings.py's hf_hub_download both go through it.

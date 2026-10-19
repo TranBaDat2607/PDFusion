@@ -1,7 +1,7 @@
 """End-to-end: start a sidecar, read its READY line, use the token.
 
 `test_sidecar_boot.py` asserts the *import* graph stays cheap; this asserts the
-process actually comes up and answers. The two failures it exists to catch:
+process actually comes up and answers. The three failures it exists to catch:
 
 * a `ModuleNotFoundError` from the PyInstaller `excludes` list — invisible in a
   source run, fatal in the shipped `.msi`, and until now only discoverable by
@@ -9,7 +9,10 @@ process actually comes up and answers. The two failures it exists to catch:
 * a broken handshake. The Rust shell parses exactly one line of stdout and then
   waits out `READY_TIMEOUT` (90 s) plus `HEALTH_TIMEOUT` (30 s) before saying
   anything, so "the app sits on a spinner for two minutes" is what a regression
-  here looks like from the outside.
+  here looks like from the outside;
+* a bundle that boots but cannot import the translation engine. BabelDOC is
+  imported lazily, so every route above answers and the first Translate is
+  what fails (#126).
 
 **Marked `smoke` and excluded from the default run.** Every other suite in
 `tests/` is in-process and the whole set finishes in about a second; this one
@@ -29,6 +32,7 @@ import re
 import subprocess
 import sys
 import threading
+import time
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
@@ -43,6 +47,12 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 # The Rust shell allows 90 s for this line, sized for the PyInstaller one-dir
 # bootloader paging thousands of files past Defender on a cold first launch.
 READY_TIMEOUT_S = 120.0
+
+# Importing BabelDOC takes 5-25 s on a cold interpreter; a frozen exe on a cold
+# disk pays Defender's scan of thousands of files on top.
+ENGINE_WARM_TIMEOUT_S = 180.0
+ENGINE_WARM_OK = "Translation engine warm in "
+ENGINE_WARM_FAILED = "Translation engine warm-up failed (non-fatal): "
 
 READY_RE = re.compile(r"^READY port=(\d+) token=(\S+)$")
 
@@ -75,6 +85,11 @@ class Sidecar:
     process: subprocess.Popen
     port: int
     token: str
+    data_dir: Path
+
+    @property
+    def log_file(self) -> Path:
+        return self.data_dir / "logs" / "app.log"
 
     def get(self, path: str, token: str | None = "") -> tuple[int, dict]:
         """`token=""` means "the real one"; `None` means send no header."""
@@ -101,7 +116,7 @@ def spawn(command: list[str], env_overrides: dict) -> subprocess.Popen:
     )
 
 
-def await_ready(process: subprocess.Popen) -> Sidecar:
+def await_ready(process: subprocess.Popen, data_dir: Path) -> Sidecar:
     """Block until the handshake line arrives.
 
     stdout is read on a thread: `readline()` has no timeout, so a sidecar that
@@ -130,7 +145,7 @@ def await_ready(process: subprocess.Popen) -> Sidecar:
             f"--- sidecar stderr ---\n{stderr}"
         )
 
-    return Sidecar(process, int(match.group(1)), match.group(2))
+    return Sidecar(process, int(match.group(1)), match.group(2), data_dir)
 
 
 def launch_args(mode: str, home: Path) -> tuple[list[str], dict]:
@@ -174,7 +189,7 @@ def sidecar(request, tmp_path_factory):
     home = tmp_path_factory.mktemp(f"home-{request.param}")
     command, env = launch_args(request.param, home)
     process = spawn(command, env)
-    started = await_ready(process)
+    started = await_ready(process, Path(env["PDFUSION_DATA_DIR"]))
     try:
         yield started
     finally:
@@ -240,6 +255,51 @@ def test_the_sidecar_is_still_running_after_serving_requests(sidecar: Sidecar):
     assert sidecar.process.poll() is None
 
 
+def test_the_translation_engine_imports_in_the_running_sidecar(sidecar: Sidecar):
+    """A frozen bundle can boot, serve every route above, and still be unable to
+    translate: BabelDOC is imported lazily, so a module the bundle is missing
+    surfaces only on the user's first Translate (#126: `No module named
+    'chardet.models._format__mypyc'`, and retrying never helps).
+
+    The lifespan's `engine-warm` thread performs that import at startup and
+    logs the outcome either way, so this reads the verdict from `app.log`
+    instead of paying for a real translation (which needs a key and a model).
+    The failure line carries the exception text, which is what names the
+    missing module in a CI log.
+
+    It proves the engine *imports*, not that it runs: the data root is fresh,
+    so the warm-up always takes its "layout model not installed" branch and
+    never loads the model. Only a real translation covers that.
+    """
+    deadline = time.monotonic() + ENGINE_WARM_TIMEOUT_S
+    while time.monotonic() < deadline:
+        try:
+            log = sidecar.log_file.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            log = ""
+        for line in log.splitlines():
+            if ENGINE_WARM_FAILED in line:
+                pytest.fail(
+                    "the sidecar cannot import the translation engine: "
+                    + line.split(ENGINE_WARM_FAILED, 1)[1]
+                )
+            if ENGINE_WARM_OK in line:
+                return
+        assert sidecar.process.poll() is None, "the sidecar exited during warm-up"
+        time.sleep(0.5)
+    # A hang, or a BaseException the warm-up's `except Exception` lets through,
+    # logs neither line; the log's tail is what says how far it got.
+    try:
+        log = sidecar.log_file.read_text(encoding="utf-8", errors="replace")
+        tail = "\n".join(log.splitlines()[-20:])
+    except OSError:
+        tail = "(no app.log)"
+    pytest.fail(
+        f"no engine warm-up outcome in {sidecar.log_file} "
+        f"within {ENGINE_WARM_TIMEOUT_S:.0f}s\n--- app.log tail ---\n{tail}"
+    )
+
+
 def test_the_token_never_appears_on_stderr(tmp_path: Path):
     """The token is `print`ed to stdout, not logged — `redact_ready_line` keeps
     it out of the Rust shell's stderr relay, and this keeps it out at the
@@ -250,7 +310,7 @@ def test_the_token_never_appears_on_stderr(tmp_path: Path):
     """
     command, env = launch_args("source", tmp_path)
     process = spawn(command, env)
-    started = await_ready(process)
+    started = await_ready(process, Path(env["PDFUSION_DATA_DIR"]))
     started.get("/auth/ping")
 
     process.kill()

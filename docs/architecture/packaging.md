@@ -310,13 +310,40 @@ translate dying in `_load_engine` with `cannot import name 'PDFProcessor' from
 desktop_pdf_translator.processors.processor` — because babeldoc's failed import
 left a half-initialised module behind for the second importer to find.
 
-**Which is why the smoke suite is not enough to sign off a prune.**
-`test_sidecar_smoke.py` proves the process boots and answers `/health`, and it
-stays green with cv2, skimage or hyperscan broken: babeldoc is imported inside
-the handler, not at startup. What catches these is a real translation through
-the frozen exe — spawn `dist/pdfusion-sidecar/pdfusion-sidecar.exe`, `POST
-/translate` with `service: "argos"` (offline, no API key) and watch the SSE
-stream terminate in `done` with `failed_paragraphs: 0`.
+A third reached users (#126, v1.3.0) without any prune at all. chardet is
+unpinned (babeldoc asks for `>=5.2.0`) and from 7.x compiles itself with
+mypyc. On Windows each compiled module is a stub `.pyd` that imports a sibling
+`<name>__mypyc` extension from C, which PyInstaller's analysis cannot see.
+The contrib `hook-chardet.py` only collects `chardet.pipeline`, so when 7.7.0
+compiled `chardet.models._format` the same way, the release build dropped its
+companion and every translate failed with "No module named
+'chardet.models._format__mypyc'". The spec now collects all of `chardet`. The
+build log did warn — `Hidden import "_format__mypyc" not found!` — but among a
+dozen identical, harmless warnings for the hook's own wrongly-named guesses.
+The Linux wheel puts all of it in one top-level `<hash>__mypyc.so` the hook
+does find. Dev envs never see it: one created before 7.x keeps a pure-Python
+chardet 5.
+
+**Which is why the smoke suite checks the engine import, and why that is still
+not enough to sign off a prune.** BabelDOC is imported inside the handler, not
+at startup, so a sidecar that boots and answers every route can still be
+unable to translate. `test_the_translation_engine_imports_in_the_running_sidecar`
+reads the `engine-warm` thread's verdict from `app.log` and fails on the
+warm-up warning, which catches all three of the above. Its first CI run also
+found a fourth, in source mode on both platforms: bitstring 5.0 removed
+`BitStream`, which babeldoc 0.5 imports while requiring only `>=4.3.0`, so
+v1.3.0 could not translate on Linux either. `requirements.txt` and
+`pyproject.toml` cap it below 5. CI's `python` job runs the smoke suite in
+source mode on every PR, so a dependency release that breaks the engine import
+in source fails the next PR. A frozen-only break like #126's does not. The
+frozen half runs only in the `frozen-sidecar` job, by hand, and `release.yml`
+installs dependencies fresh at tag time without running it, so dispatch
+`frozen-sidecar` on the commit you are about to tag. It proves the engine
+*imports*, not that it *runs*: a missing data file or model is only found by a
+real translation through the frozen exe — spawn
+`dist/pdfusion-sidecar/pdfusion-sidecar.exe`, `POST /translate` with `service:
+"argos"` (offline, no API key) and watch the SSE stream terminate in `done`
+with `failed_paragraphs: 0`.
 
 What is left is left on purpose: `babeldoc_assets` (228 MB) and `argos_pack`
 (67 MB) are the offline-first installer's whole point; `cv2.pyd` (71 MB),
