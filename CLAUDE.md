@@ -364,10 +364,11 @@ over-exclusion.
 Two things there look like dead weight and are not: `.pyi` stubs (skimage's `lazy_loader` parses
 `skimage/__init__.pyi` at import) and hyperscan's sibling `hyperscan.libs/`.
 Both fail as a *non-fatal* warm-up warning plus `cannot import name
-'PDFProcessor'` on the first translate. So does a module the bundle never
-collected — chardet's mypyc companions, collected whole since #126. The frozen
-smoke suite fails on that warm-up warning, so it catches what breaks the
-engine's *import*; only a real translate through the frozen exe proves it runs.
+'PDFProcessor'` on the first translate. A module the bundle never collected
+fails the same warm-up, though the translate error then names the module
+(chardet's mypyc companions, collected whole since #126). The frozen smoke
+suite fails on that warm-up warning, so it catches what breaks the engine's
+*import*; only a real translate through the frozen exe proves it runs.
 
 ## Conventions
 

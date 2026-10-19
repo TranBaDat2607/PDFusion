@@ -71,9 +71,12 @@ CI gates.
     twice — once against `python -m desktop_pdf_translator.api.server`, once
     against the staged PyInstaller exe, which *skips* when none is built. The
     frozen half is the only thing that can catch a `ModuleNotFoundError` from
-    the spec's `excludes` list, and it will also fail against a **stale**
-    staged exe, which reads identically. Check the exe's timestamp before
-    believing it.
+    the spec's `excludes` list, or a module the bundle never collected. Both
+    halves also wait for the `engine-warm` thread's verdict in `app.log` and
+    fail if BabelDOC cannot be imported (#126), which a sidecar that boots and
+    answers every route can still be. The frozen half passes against a
+    **stale** staged exe, which reads identically. Check the exe's timestamp
+    before believing it.
 - **`ruff` is the lint gate**, declared in
   `pyproject.toml [project.optional-dependencies].dev` and configured under
   `[tool.ruff]`. It runs its default rule set — pycodestyle errors plus

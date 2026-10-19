@@ -333,9 +333,12 @@ warm-up warning, which catches all three of the above. Its first CI run also
 found a fourth, in source mode on both platforms: bitstring 5.0 removed
 `BitStream`, which babeldoc 0.5 imports while requiring only `>=4.3.0`, so
 v1.3.0 could not translate on Linux either. `requirements.txt` and
-`pyproject.toml` cap it below 5. Because CI's `python` job runs the smoke suite
-in source mode on every PR, a dependency release that breaks the engine
-import now fails a PR instead of a release. It proves the engine
+`pyproject.toml` cap it below 5. CI's `python` job runs the smoke suite in
+source mode on every PR, so a dependency release that breaks the engine import
+in source fails the next PR. A frozen-only break like #126's does not. The
+frozen half runs only in the `frozen-sidecar` job, by hand, and `release.yml`
+installs dependencies fresh at tag time without running it, so dispatch
+`frozen-sidecar` on the commit you are about to tag. It proves the engine
 *imports*, not that it *runs*: a missing data file or model is only found by a
 real translation through the frozen exe — spawn
 `dist/pdfusion-sidecar/pdfusion-sidecar.exe`, `POST /translate` with `service:

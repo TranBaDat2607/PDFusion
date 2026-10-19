@@ -12,7 +12,8 @@ Pillow>=9.5.0,<11.0.0
 babeldoc>=0.5.20,<0.6.0
 # bitstring 5 removed `BitStream`, which babeldoc 0.5's PDF writer still imports
 # (document_il/backend/pdf_creater.py) while asking only for >=4.3.0, so a
-# fresh install could not translate at all (#126).
+# fresh install could not translate at all (found while fixing #126). Lift
+# the cap with a babeldoc that no longer imports it.
 bitstring>=4.3.0,<5.0.0
 
 # Offline / free translation backend (default when no LLM key is configured)

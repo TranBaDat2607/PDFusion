@@ -1,7 +1,7 @@
 """End-to-end: start a sidecar, read its READY line, use the token.
 
 `test_sidecar_boot.py` asserts the *import* graph stays cheap; this asserts the
-process actually comes up and answers. The two failures it exists to catch:
+process actually comes up and answers. The three failures it exists to catch:
 
 * a `ModuleNotFoundError` from the PyInstaller `excludes` list — invisible in a
   source run, fatal in the shipped `.msi`, and until now only discoverable by
@@ -9,7 +9,10 @@ process actually comes up and answers. The two failures it exists to catch:
 * a broken handshake. The Rust shell parses exactly one line of stdout and then
   waits out `READY_TIMEOUT` (90 s) plus `HEALTH_TIMEOUT` (30 s) before saying
   anything, so "the app sits on a spinner for two minutes" is what a regression
-  here looks like from the outside.
+  here looks like from the outside;
+* a bundle that boots but cannot import the translation engine. BabelDOC is
+  imported lazily, so every route above answers and the first Translate is
+  what fails (#126).
 
 **Marked `smoke` and excluded from the default run.** Every other suite in
 `tests/` is in-process and the whole set finishes in about a second; this one
@@ -45,7 +48,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 # bootloader paging thousands of files past Defender on a cold first launch.
 READY_TIMEOUT_S = 120.0
 
-# Importing BabelDOC takes 5-25 s on a warm interpreter; a frozen exe on a cold
+# Importing BabelDOC takes 5-25 s on a cold interpreter; a frozen exe on a cold
 # disk pays Defender's scan of thousands of files on top.
 ENGINE_WARM_TIMEOUT_S = 180.0
 ENGINE_WARM_OK = "Translation engine warm in "
@@ -263,6 +266,10 @@ def test_the_translation_engine_imports_in_the_running_sidecar(sidecar: Sidecar)
     instead of paying for a real translation (which needs a key and a model).
     The failure line carries the exception text, which is what names the
     missing module in a CI log.
+
+    It proves the engine *imports*, not that it runs: the data root is fresh,
+    so the warm-up always takes its "layout model not installed" branch and
+    never loads the model. Only a real translation covers that.
     """
     deadline = time.monotonic() + ENGINE_WARM_TIMEOUT_S
     while time.monotonic() < deadline:
@@ -280,9 +287,16 @@ def test_the_translation_engine_imports_in_the_running_sidecar(sidecar: Sidecar)
                 return
         assert sidecar.process.poll() is None, "the sidecar exited during warm-up"
         time.sleep(0.5)
+    # A hang, or a BaseException the warm-up's `except Exception` lets through,
+    # logs neither line; the log's tail is what says how far it got.
+    try:
+        log = sidecar.log_file.read_text(encoding="utf-8", errors="replace")
+        tail = "\n".join(log.splitlines()[-20:])
+    except OSError:
+        tail = "(no app.log)"
     pytest.fail(
         f"no engine warm-up outcome in {sidecar.log_file} "
-        f"within {ENGINE_WARM_TIMEOUT_S:.0f}s"
+        f"within {ENGINE_WARM_TIMEOUT_S:.0f}s\n--- app.log tail ---\n{tail}"
     )
 
 
