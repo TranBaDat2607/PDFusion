@@ -139,9 +139,16 @@ sentence-transformers.
 
 Releases are built by `.github/workflows/release.yml` on a `v*` tag, in two
 jobs — `windows-installer` and `linux-bundles` — each staging the offline
-assets, running `pnpm tauri build`, and attaching its artifacts to the same
-**draft** release. Two jobs rather than a matrix because only one of them has a
-signing step. Signing is opt-in and Windows-only — set the
+assets, running `pnpm tauri build`, and uploading its installer as a workflow
+artifact. A third, `release`, downloads both and creates the **draft** release
+in a single `gh release create`: files, description and GitHub's generated
+notes at once. Nothing else writes to the release. When the jobs each attached
+their own files through `softprops/action-gh-release`, its find-the-draft-by-tag
+lookup missed on v1.3.1, made a second draft for the description and then
+deleted that one as the duplicate, so the release went out with an empty body.
+The job refuses to run if a release for the tag already exists, rather than
+adding a second draft; delete the stale one and re-run it. Two build jobs
+rather than a matrix because only one of them has a signing step. Signing is opt-in and Windows-only — set the
 `WINDOWS_SIGN_COMMAND` secret (Azure Trusted Signing) or
 `bundle.windows.certificateThumbprint` (an OV cert in the runner's store); with
 neither, the job warns and ships unsigned, which is also what the Linux job
