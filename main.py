@@ -54,4 +54,13 @@ def main() -> int:
 
 
 if __name__ == "__main__":
+    # First, before main() can print READY or bind a port. A frozen sidecar is
+    # its own `sys.executable`, so every multiprocessing child BabelDOC starts
+    # (it saves PDFs in one) re-runs this exe with `--multiprocessing-fork`.
+    # Without this each child booted a whole second sidecar instead of doing
+    # its work, and every translate waited out the save's 120 s timeout.
+    # A no-op in a source run.
+    import multiprocessing
+
+    multiprocessing.freeze_support()
     sys.exit(main())
