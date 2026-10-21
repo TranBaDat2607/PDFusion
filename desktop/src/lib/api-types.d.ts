@@ -2082,6 +2082,7 @@ export interface operations {
                 authorization?: string | null;
             };
             path: {
+                /** @description A provider's id, as GET /providers lists them */
                 provider_id: string;
             };
             cookie?: never;
@@ -2119,6 +2120,7 @@ export interface operations {
                 authorization?: string | null;
             };
             path: {
+                /** @description A provider's id, as GET /providers lists them */
                 provider_id: string;
             };
             cookie?: never;
@@ -2154,6 +2156,7 @@ export interface operations {
                 authorization?: string | null;
             };
             path: {
+                /** @description A provider's id, as GET /providers lists them */
                 provider_id: string;
             };
             cookie?: never;
@@ -2187,6 +2190,7 @@ export interface operations {
                 authorization?: string | null;
             };
             path: {
+                /** @description A provider's id, as GET /providers lists them */
                 provider_id: string;
             };
             cookie?: never;

@@ -3111,6 +3111,7 @@
         "operationId": "update_provider_providers__provider_id__put",
         "parameters": [
           {
+            "description": "A provider's id, as GET /providers lists them",
             "in": "path",
             "name": "provider_id",
             "required": true,
@@ -3181,6 +3182,7 @@
         "operationId": "delete_provider_key_providers__provider_id__key_delete",
         "parameters": [
           {
+            "description": "A provider's id, as GET /providers lists them",
             "in": "path",
             "name": "provider_id",
             "required": true,
@@ -3240,6 +3242,7 @@
         "operationId": "provider_models_providers__provider_id__models_get",
         "parameters": [
           {
+            "description": "A provider's id, as GET /providers lists them",
             "in": "path",
             "name": "provider_id",
             "required": true,
@@ -3309,6 +3312,7 @@
         "operationId": "verify_provider_providers__provider_id__verify_post",
         "parameters": [
           {
+            "description": "A provider's id, as GET /providers lists them",
             "in": "path",
             "name": "provider_id",
             "required": true,
