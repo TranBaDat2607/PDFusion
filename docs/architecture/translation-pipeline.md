@@ -99,17 +99,55 @@ it into `babeldoc_chunk_error`.
 
 **What this does not fix, and why chunk size is a live question.** The layout model was never the largest per-chunk fixed cost.
 `FontMapper.__init__` sha3_256-verifies and loads **all 34 embedding fonts
-(~250 MB)** for `lang_out`, and nothing memoizes it — not `fontmap.py`, not
-`assets.py`. BabelDOC constructs one per stage: `ILCreater`, `ParagraphFinder`,
-`StylesAndFormulas`, `ILTranslator`, `Typesetting`, `PDFCreater`. Measured
-against the installed babeldoc on a warm cache: **1.02 s per `FontMapper`, ≈6 s
-per chunk**, none of which this cache touches. So "the reload is fixed" is not
-on its own a reason to shrink a chunk — shrinking one multiplies ~6 s by the
-extra chunks it creates, and on the Argos path (`_MAX_PARALLEL_CHUNKS_ARGOS = 2`)
-that can outweigh what the cache saves. `_PAGES_PER_CHUNK_ARGOS` is 1 today,
-like the LLM path; measure an end-to-end Argos run before trusting that, or
-before changing either constant. What a larger chunk buys is amortized
-per-chunk fixed overhead in general, not the ONNX reload specifically.
+(266 MB)** for `lang_out`, and BabelDOC memoizes neither — not `fontmap.py`, not
+`assets.py`. It constructs one per stage: `ILCreater`, `ParagraphFinder`,
+`StylesAndFormulas`, `ILTranslator` (a second inside `ILTranslatorLLMOnly`),
+`Typesetting`, `PDFCreater` (a second for scanned-page detection) — 7 per page
+on the Argos path, 8 on the LLM path. The hash is now remembered (next section);
+what is left is ~0.26 s per `FontMapper` of `pymupdf.Font` parsing, ≈2 s per
+chunk, which this cache does not touch either. So "the reload is fixed" is not
+on its own a reason to shrink a chunk — shrinking one multiplies that fixed cost
+by the extra chunks it creates, and on the Argos path
+(`_MAX_PARALLEL_CHUNKS_ARGOS = 2`) that can outweigh what the cache saves.
+`_PAGES_PER_CHUNK_ARGOS` is 1 today, like the LLM path; measure an end-to-end
+Argos run before trusting that, or before changing either constant. What a
+larger chunk buys is amortized per-chunk fixed overhead in general, not the ONNX
+reload specifically.
+
+## A font that passed its hash check is not hashed again
+
+A `FontMapper` took ~1.3 s, of which ~1.0 s was `assets.verify_file` hashing
+the 34 fonts (measured alone: 0.99 s; parsing them alone: 0.13 s; the ~0.26 s a
+mapper still costs with the hash remembered is that parse plus the rest of the
+constructor, under the contention of a real run). Traced over real one-page
+LLM-path runs on two different documents: **272 checks per page — 34 fonts × 8
+mappers (238 on Argos, with 7) — against the same 34 (file, expected hash)
+pairs**, none derived from the document; every pair passed,
+and every file was byte-identical before and after both runs. Only a process's
+first check can find anything (a missing or corrupt font, which BabelDOC then
+re-downloads); the rest re-hash unchanged bytes.
+
+`processors/font_verify_cache.py` replaces the module global
+`babeldoc.assets.assets.verify_file` with a memo — BabelDOC's asset functions
+call it by that global name, so that one attribute reaches every stage; re-check
+it when bumping babeldoc. Measured on a one-page run: **15.5 s → 7.9 s**, the
+`FontMapper` share 60% → 23%.
+
+- **Only a pass is remembered**, keyed on (path, expected hash) and tied to the
+  file's size and mtime as they stood both before and after the hash. A failure,
+  a font rewritten later (a re-download, the setup flow's offline restore) and a
+  font that changed mid-hash are all hashed again. Nothing persists across
+  processes. There is no single-flight: chunks that start together before the
+  warm thread has finished each hash the fonts once — extra work, never a wrong
+  answer.
+- **Installed in two places**, both idempotent: the `engine-warm` thread, and
+  `routes/translation.py:_load_engine` for a Translate click that beats it.
+- **The warm thread pre-checks the fonts on disk** (`preverify_cached_fonts`,
+  ~1 s), so the first page doesn't pay that round either. It calls `verify_file`
+  on existing files only, never `get_font_and_metadata`, which downloads — the
+  same rule that gates the layout-model load. It needs no `babeldoc_core_ready()`
+  gate for that reason, and has its own `try`, after the model, so a failure
+  never costs the larger warm-up.
 
 **Rolling-PDF pruning keeps two files, not one.** `cleanup_partial_artifacts`
 runs after every chunk now, not only on cancel, so a long run no longer piles

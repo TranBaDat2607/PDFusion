@@ -81,9 +81,13 @@ def _load_engine() -> tuple[type, type]:
     beats that thread — or a warm-up that failed, which it does silently —
     lands here instead. Callers must run it off the event loop.
     """
+    from ...processors import font_verify_cache
     from ...processors.events import EventType
     from ...processors.processor import PDFProcessor
 
+    # Normally done by the warm thread too; a click that beats it would
+    # otherwise re-hash every font in every stage of the first job.
+    font_verify_cache.install()
     return EventType, PDFProcessor
 
 
