@@ -126,7 +126,8 @@ def _warm_translation_engine() -> None:
     only ever warms what is already on disk.
 
     Importing BabelDOC is still unconditional — it touches no assets, and it is
-    the larger half of the cold-start cost.
+    the larger half of the cold-start cost. So is the font pre-check that
+    follows (`_preverify_babeldoc_fonts`), which only reads.
 
     A Translate click can still beat this thread, so the job path imports
     BabelDOC in a thread of its own rather than assuming this one won the race
@@ -149,7 +150,25 @@ def _warm_translation_engine() -> None:
     except Exception as exc:  # noqa: BLE001
         logger.warning("Translation engine warm-up failed (non-fatal): %s", exc)
         return
+    _preverify_babeldoc_fonts()
     logger.info("Translation engine warm in %.1fs", time.perf_counter() - started)
+
+
+def _preverify_babeldoc_fonts() -> None:
+    """Hash BabelDOC's cached fonts once now, so the first page doesn't.
+
+    Every stage of every page re-checks them; `font_verify_cache` remembers the
+    passes, and this pays for the first round (~1 s) before the user clicks.
+    Ungated by `babeldoc_core_ready()`, unlike the layout model: it only reads
+    fonts already on disk and never downloads. Its own try, after the model,
+    so a failure here never costs the larger warm-up.
+    """
+    try:
+        from ..processors import font_verify_cache
+
+        font_verify_cache.preverify_cached_fonts()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("BabelDOC font pre-check failed (non-fatal): %s", exc)
 
 
 def _sweep_orphan_translate_dirs(max_age_seconds: int = 3600) -> int:
