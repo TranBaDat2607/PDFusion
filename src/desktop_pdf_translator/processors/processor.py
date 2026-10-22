@@ -42,7 +42,12 @@ from .page_selection import (
     rolling_segments,
     selected_pages,
 )
-from .pdf_cache import compute_file_hash, get_pdf_cache, is_cacheable_artifact
+from .pdf_cache import (
+    compute_file_hash,
+    get_pdf_cache,
+    is_cacheable_artifact,
+    link_or_copy,
+)
 from .pdf_pages import (
     inspect_pdf,
     rebuild_rolling_pdf,
@@ -428,36 +433,22 @@ class PDFProcessor:
                     # output_dir is a fresh per-job temp dir, there are no
                     # stale leftovers to nuke.)
                     target = output_dir / f"{file_path.stem}_translated_v999.pdf"
-                    # Copy via .tmp + atomic rename so a concurrent reader
-                    # (PdfViewer, or another job hitting the same input) never
-                    # sees a half-written `target`. os.replace is atomic on
-                    # Windows and POSIX.
-                    tmp_target = target.with_suffix(target.suffix + ".tmp")
                     try:
-                        shutil.copyfile(hit.cached_path, tmp_target)
-                        os.replace(tmp_target, target)
+                        link_or_copy(hit.cached_path, target)
                     except FileNotFoundError as exc:
-                        # The cached file was evicted between lookup() and our
-                        # copyfile — most likely by another job's store()
+                        # The cached file was evicted between lookup() and the
+                        # link — most likely by another job's store()
                         # triggering an LRU sweep. Treat as a miss and fall
                         # through to the real pipeline.
                         logger.info(
                             "PDF cache entry evicted under us by a concurrent "
                             "store (%s); falling through to full pipeline", exc,
                         )
-                        try:
-                            tmp_target.unlink(missing_ok=True)
-                        except OSError:
-                            pass
                     except OSError as exc:
                         logger.warning(
                             "PDF cache hit but materialize failed (%s); "
                             "running full pipeline", exc,
                         )
-                        try:
-                            tmp_target.unlink(missing_ok=True)
-                        except OSError:
-                            pass
                     else:
                         logger.info(
                             "PDF cache HIT (cached_at=%s, hits=%d) → %s",
@@ -588,7 +579,7 @@ class PDFProcessor:
 
             # Persist into the PDF-level cache so the next translation of this
             # exact file (same service+model+langs) short-circuits. Run on a
-            # worker thread because store() hashes the input and copies the
+            # worker thread because store() hashes the input and links the
             # output — both blocking. Errors are non-fatal.
             #
             # What may be cached at all is `is_cacheable_artifact`'s call: the
@@ -604,7 +595,7 @@ class PDFProcessor:
             )
             if should_cache:
                 # Fire-and-forget: don't block CompletionEvent on store(). The
-                # SHA-256 + shutil.copyfile + SQLite INSERT + LRU sweep would
+                # SHA-256 + link (or copy) + SQLite INSERT + LRU sweep would
                 # otherwise add hundreds of ms (and sometimes seconds, on cap
                 # hits with big evictions) between BabelDOC finishing and the
                 # user seeing "done". Track the task in a module-level set so

@@ -30,6 +30,7 @@ Storage layout:
         files/<key>.pdf       -- content-addressed translated PDFs
 """
 
+import contextlib
 import hashlib
 import logging
 import os
@@ -77,6 +78,39 @@ def compute_file_hash(path: Path) -> str:
                 break
             h.update(chunk)
     return h.hexdigest()
+
+
+def link_or_copy(src: Path, dest: Path) -> None:
+    """Give `src`'s bytes the name `dest`, atomically.
+
+    A hard link, where the filesystem allows one: the job's temp output and
+    its cache entry hold the same bytes, so a second name saves a whole PDF
+    of disk and the time to copy it. Deleting either name — the next job's
+    rmtree, an LRU eviction — leaves the other intact. What a link does *not*
+    survive is a rewrite in place, which would reach both names; nothing
+    writes to an artifact once it exists (each rolling version and each job
+    dir is new), and that must stay true. Where links are refused (`EXDEV`
+    across filesystems, FAT/exFAT, some network shares) this copies.
+
+    Staged at `dest.tmp` and moved with `os.replace`, so a concurrent reader
+    (pdf.js, or another job materializing the same entry) never sees a
+    half-written `dest`. A missing `src` raises `FileNotFoundError` and
+    leaves nothing behind.
+    """
+    tmp = dest.with_suffix(dest.suffix + ".tmp")
+    try:
+        # A crash between link and rename leaves `tmp` sharing bytes with an
+        # earlier output; copying onto it would rewrite those in place.
+        tmp.unlink(missing_ok=True)
+        try:
+            os.link(src, tmp)
+        except OSError:
+            shutil.copyfile(src, tmp)
+        os.replace(tmp, dest)
+    except BaseException:
+        with contextlib.suppress(OSError):
+            tmp.unlink(missing_ok=True)
+        raise
 
 
 def _make_cache_key(
@@ -423,19 +457,10 @@ class PDFTranslationCache:
             pages,
         )
         dest = self.files_dir / f"{key}.pdf"
-        # Copy via .tmp then atomic rename so a concurrent reader (PdfViewer)
-        # or another `lookup()` materialize never sees a half-written file at
-        # `dest`. os.replace is atomic on Windows and POSIX.
-        tmp = dest.with_suffix(dest.suffix + ".tmp")
         try:
-            shutil.copyfile(translated_path, tmp)
-            os.replace(tmp, dest)
+            link_or_copy(translated_path, dest)
         except OSError as exc:
             logger.warning("PDF cache store: copy failed (%s)", exc)
-            try:
-                tmp.unlink(missing_ok=True)
-            except OSError:
-                pass
             return None
 
         try:
