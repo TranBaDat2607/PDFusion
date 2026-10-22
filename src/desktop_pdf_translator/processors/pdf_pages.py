@@ -106,6 +106,23 @@ def text_stats(
     return TextStats(paragraphs=paragraphs, cjk_chars=cjk, other_chars=other)
 
 
+def pages_without_text(path: Path, pages: Sequence[int]) -> frozenset[int]:
+    """The 1-indexed pages among `pages` that carry no text at all — blank,
+    scanned or image-only pages, which the translator has nothing to do with
+    and keeps as the original.
+
+    The bar is "nothing but whitespace", not `min_text_length`: BabelDOC finds
+    paragraphs its own way, so a page with any visible character goes to it,
+    and its "no paragraphs" error on that page is caught instead.
+    """
+    import fitz  # PyMuPDF
+
+    with fitz.open(path) as doc:
+        return frozenset(
+            number for number in pages if not doc[number - 1].get_text().strip()
+        )
+
+
 def split_into_chunks(
     input_path: Path,
     chunks_dir: Path,
