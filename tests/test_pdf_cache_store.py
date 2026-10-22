@@ -8,6 +8,9 @@ more than its line count suggests. What's covered:
   than served, and a store that fails leaves neither a row nor a stray `.tmp`;
 * the atomic copy, which is what stops a concurrent reader (pdf.js, or another
   job materializing the same entry) from seeing a half-written PDF;
+* that the "copy" is a hard link where the filesystem allows one, a real copy
+  where it doesn't, and that nothing the lifecycle does to the job's name
+  reaches the entry;
 * LRU eviction, and the size accounting it depends on;
 * the two rules that keep a page selection's entry from costing a user their
   whole-document ones — it is evicted first, and superseded outright once the
@@ -22,6 +25,8 @@ touched, so nothing reaches `~/AppData/Local/PDFusion/`.
 
 from __future__ import annotations
 
+import errno
+import os
 import shutil
 import sqlite3
 from datetime import datetime, timedelta
@@ -37,6 +42,7 @@ from desktop_pdf_translator.processors.pdf_cache import (
     _MIGRATIONS,
     _make_cache_key,
     compute_file_hash,
+    link_or_copy,
 )
 
 from conftest import MINIMAL_PDF
@@ -192,6 +198,110 @@ def test_the_cached_copy_outlives_the_job_output_dir(
     assert hit is not None and hit.cached_path.exists()
 
 
+def test_a_store_links_the_job_output_rather_than_copying_it(
+    cache: PDFTranslationCache, source_pdf: Path, translated_pdf: Path
+):
+    """The job's temp file and the cache entry hold the same bytes, so a second
+    name for them costs no disk and no copy time — a whole PDF's worth of each
+    on every translation otherwise."""
+    dest = put(cache, source_pdf, translated_pdf)
+
+    assert dest is not None
+    assert os.path.samefile(dest, translated_pdf)
+
+
+@pytest.mark.parametrize(
+    "refusal",
+    [
+        OSError(errno.EXDEV, "Invalid cross-device link"),  # a tmpfs /tmp
+        PermissionError(errno.EPERM, "Operation not permitted"),  # FAT, exFAT
+    ],
+)
+def test_a_filesystem_that_refuses_links_gets_a_copy(
+    cache: PDFTranslationCache,
+    source_pdf: Path,
+    translated_pdf: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    refusal: OSError,
+):
+    def refuse(*_a, **_kw):
+        raise refusal
+
+    monkeypatch.setattr(pdf_cache_module.os, "link", refuse)
+    dest = put(cache, source_pdf, translated_pdf)
+
+    assert dest is not None
+    assert dest.read_bytes() == translated_pdf.read_bytes()
+    assert look(cache, source_pdf) is not None
+
+
+def test_a_staging_file_left_by_a_crash_is_replaced_not_written_through(
+    cache: PDFTranslationCache,
+    source_pdf: Path,
+    translated_pdf: Path,
+    tmp_path: Path,
+):
+    """A store killed between link and rename leaves `<key>.pdf.tmp` sharing
+    bytes with that earlier run's output. Writing over it would rewrite those
+    bytes in place; the stale name has to go first."""
+    earlier = tmp_path / "earlier_job" / "paper_translated_v001.pdf"
+    earlier.parent.mkdir()
+    earlier.write_bytes(MINIMAL_PDF + b"% earlier run\n")
+    key = _make_cache_key(
+        compute_file_hash(source_pdf), "en", "vi", "openai", "gpt-4o",
+        PIPELINE_VERSION,
+    )
+    os.link(earlier, cache.files_dir / f"{key}.pdf.tmp")
+
+    dest = put(cache, source_pdf, translated_pdf)
+
+    assert dest is not None and os.path.samefile(dest, translated_pdf)
+    assert earlier.read_bytes() == MINIMAL_PDF + b"% earlier run\n"
+
+
+def test_replacing_the_job_output_leaves_the_cache_entry_alone(
+    cache: PDFTranslationCache, source_pdf: Path, translated_pdf: Path
+):
+    """What the lifecycle does to a job's file after the store — a new name
+    `os.replace`d over it, or the whole dir removed — only ever changes which
+    bytes a *name* points at, so the cache keeps its own."""
+    dest = put(cache, source_pdf, translated_pdf)
+    stored = dest.read_bytes()
+
+    newer = translated_pdf.with_name("newer.pdf")
+    newer.write_bytes(MINIMAL_PDF + b"% something else\n")
+    os.replace(newer, translated_pdf)
+
+    assert dest.read_bytes() == stored
+
+
+def test_a_hit_is_materialized_as_a_link(tmp_path: Path):
+    """The cache-hit path names the cached PDF inside the job dir."""
+    cached = tmp_path / "files" / "key.pdf"
+    cached.parent.mkdir()
+    cached.write_bytes(MINIMAL_PDF)
+    target = tmp_path / "job" / "paper_translated_v999.pdf"
+    target.parent.mkdir()
+
+    link_or_copy(cached, target)
+
+    assert os.path.samefile(cached, target)
+    assert [p.name for p in target.parent.iterdir()] == [target.name]
+
+
+def test_an_entry_evicted_before_it_is_materialized_raises_not_found(
+    tmp_path: Path,
+):
+    """`process_pdf` treats exactly this as a miss: another job's LRU sweep
+    deleted the file between `lookup()` and the link."""
+    target = tmp_path / "job" / "paper_translated_v999.pdf"
+    target.parent.mkdir()
+
+    with pytest.raises(FileNotFoundError):
+        link_or_copy(tmp_path / "files" / "gone.pdf", target)
+    assert list(target.parent.iterdir()) == []
+
+
 def test_a_hit_needs_every_key_field_to_match(
     cache: PDFTranslationCache, source_pdf: Path, translated_pdf: Path
 ):
@@ -275,8 +385,12 @@ def test_the_whole_document_answers_any_selection(
     """A full translation has every selected page translated too, so it is
     tried first and counts as one hit."""
     put(cache, source_pdf, translated_pdf)
-    translated_pdf.write_bytes(MINIMAL_PDF + b"% pages 1-20\n")
-    put(cache, source_pdf, translated_pdf, pages="1-20")
+    # A second run writes into a job dir of its own, never over the first
+    # run's file — which the cache entry may share bytes with.
+    partial = translated_pdf.parent.with_name("job2") / translated_pdf.name
+    partial.parent.mkdir()
+    partial.write_bytes(MINIMAL_PDF + b"% pages 1-20\n")
+    put(cache, source_pdf, partial, pages="1-20")
 
     hit = look(cache, source_pdf, pages="1-20")
     assert hit is not None and hit.pages is None
@@ -393,6 +507,8 @@ def test_a_failed_copy_leaves_no_row_and_no_temp_file(
     def deny(*_a, **_kw):
         raise PermissionError(13, "Access is denied")
 
+    # Both ways of placing the bytes: a link refused falls back to a copy.
+    monkeypatch.setattr(pdf_cache_module.os, "link", deny)
     monkeypatch.setattr(pdf_cache_module.shutil, "copyfile", deny)
 
     assert put(cache, source_pdf, translated_pdf) is None

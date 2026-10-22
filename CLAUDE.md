@@ -258,6 +258,10 @@ rule has, unless noted, a test. They are the things most easily undone by
 - Two caches (whole-PDF, paragraph), both SQLite, content-addressed, versioned
   via `storage/migrations.py`. `is_cacheable_artifact` decides what may be
   written.
+- A whole-PDF cache entry is a **hard link** to the job output it came from
+  (and a hit is linked back), via `pdf_cache.link_or_copy`, so **never rewrite
+  a translated PDF in place**. Write a new file and `os.replace` it, or the
+  write reaches the cache entry too.
 
 **Data and chat** → `data-and-chat.md`
 - Three stores under one root: `pdfusion.db` (system of record), `vectors/`

@@ -270,11 +270,28 @@ offset. A cache file written by a newer build is moved aside and started fresh
    that only held while the API pinned every request to `auto`. The LLM system
    prompts name the source explicitly, so `auto` and `en` must not collide —
    see the comment at `_make_cache_key`. A hit lets `process_pdf` **skip the entire BabelDOC
-   pipeline**, copy the cached PDF into the live output dir, and emit synthetic
+   pipeline**, link the cached PDF into the live output dir, and emit synthetic
    SSE `progress`/`done` events. LRU-evicted to `pdf_cache_max_size_mb` (default
    1000 MB). Bump `PIPELINE_VERSION` when any BabelDOC config field that changes
    output (font, watermark mode, etc.) changes, or how that output is
    post-processed before it is cached (v2: fonts subset per chunk).
+
+   **An entry and the job output it came from are one file under two names.**
+   Both directions — `store()` and materializing a hit — go through
+   `pdf_cache.link_or_copy`, a hard link staged at `.tmp` and `os.replace`d,
+   falling back to a copy where links are refused (`EXDEV` from a tmpfs
+   `/tmp`, FAT/exFAT, some network shares). That saves one PDF of disk and
+   the copy per translation. Removing or replacing either name is safe — the
+   next job's rmtree, an LRU eviction, a new file `os.replace`d over it — but
+   **nothing may rewrite an artifact in place** once it exists, or the write
+   reaches the other name too. That holds today because every rolling
+   version and every job dir is a fresh name, and anything that rewrites a
+   PDF (`subset_embedded_fonts`, `export_pdf`) stages a new file and renames
+   it. Two side effects: on Windows, an eviction while the viewer is
+   streaming the same bytes from the job's name can fail its unlink (a
+   warning; the row is gone and the next store of that key replaces the
+   file); and an evicted entry's space comes back only once the job's name
+   is gone too, at the next job.
 2. **Paragraph cache** (`translators/translation_cache.py`,
    `get_translation_cache()`). Keyed on `lang_in|lang_out|service|model|text`,
    with a TTL (`expires_at`). Memoizes individual `translate()` calls across all
