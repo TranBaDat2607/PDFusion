@@ -284,6 +284,29 @@ MuPDF's subsetter keeps glyph ids (these are Identity-H fonts addressed by id),
 so `loca`/`hmtx` stay full length and a subset CJK font is still ~400 KB of
 index; the outlines are what shrink (3.0 MB → 1.3 KB in the test fixture).
 
+## glibc's heap is trimmed after every chunk
+
+A 346-page document, one BabelDOC job per page and two at a time in the one
+sidecar process, ran a Linux machine out of memory at 7 GB. It was not a
+Python leak: forcing `malloc_trim` brought RSS back to ~780 MB every time.
+glibc keeps freed memory inside its arenas and returns it unprompted only from
+the very top of a heap, so each page's freed buffers stayed with the process.
+`MALLOC_ARENA_MAX=2` did not help (the arenas are fragmented, not too many).
+
+`run_one_chunk` therefore ends, success or failure, with
+`utils/memory.release_freed_memory`, off the loop: `malloc_trim(0)` on glibc,
+a no-op on Windows, macOS and musl. It does not lower the peak of two pages in
+flight; that is `processing.max_parallel_chunks`. If the trimmed baseline ever creeps
+across a long run, something is really leaking and trimming only hides it.
+
+The alternative weighed was recycling worker processes every N pages, which
+reclaims memory on any OS. It was not taken: concurrent chunks share paragraph
+batches, the provider's rate limiter and the loaded layout model, and splitting
+them across processes costs API calls, risks 429s and reloads the model per
+worker. Windows' heap returns large blocks as they are freed, so whether it
+needs anything at all is being measured, not assumed — revisit workers only
+if it does.
+
 ## Two-tier translation caching
 
 Two independent, persistent SQLite caches sit on the translation path. Both live

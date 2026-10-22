@@ -24,6 +24,7 @@ from ..translators.factory import TranslatorFactory
 from ..translators.argos_translator import ArgosTranslator
 from ..translators.base import describe_fatal_error
 from ..translators.capabilities import resolve_effective_service, resolve_languages
+from ..utils.memory import release_freed_memory
 from .events import (
     ProcessingEvent,
     ProgressEvent,
@@ -944,6 +945,10 @@ class PDFProcessor:
                     chunk_errors[idx] = exc
                 finally:
                     await completion_queue.put(idx)
+                    # Without this a long document runs a Linux machine out of
+                    # memory: glibc keeps each page's freed buffers, 346 pages
+                    # reached 7 GB against ~780 MB trimmed (utils/memory.py).
+                    await asyncio.to_thread(release_freed_memory)
 
             async def worker() -> None:
                 task = asyncio.current_task()
