@@ -140,7 +140,9 @@ _PAGES_PER_CHUNK = 1
 # streaming granularity as the LLM path.
 _PAGES_PER_CHUNK_ARGOS = 1
 
-# Argos-only cap on parallel chunks.
+# Argos-only cap on parallel chunks, set for memory when every page loaded all
+# of BabelDOC's fonts again. With them shared (`font_cache.py`), 4 in flight
+# translated 31 pages 13% faster than 2, at 0.25 GB more (one run each).
 _MAX_PARALLEL_CHUNKS_ARGOS = 2
 
 # Tag for the "stop now, the credentials are being rejected" item that
