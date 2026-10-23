@@ -265,6 +265,36 @@ What else the bump changed:
 - Speed is unchanged: 4.33/4.57 s a page before, 4.47/4.38 after. That was
   A-B-B-A, 46 pages each, and measured together with the trim below.
 
+## glibc's heap is trimmed after every page
+
+glibc keeps what Python frees inside its arenas, and gives memory back on its
+own only from the very top of a heap. Untrimmed, on PyMuPDF 1.27, a 129-page
+Argos run ended ~420 MB above what `malloc_trim` returned it to. A forced
+`gc.collect()` freed next to nothing: the memory was already free, just never
+returned.
+
+So the consumer loop in `_process_with_babeldoc` ends each finished page with
+`utils/memory.release_freed_memory`, off the event loop. That is
+`malloc_trim(0)` on glibc, and a no-op on Windows, macOS and musl.
+- **Where it sits.** After the rolling rebuild, so the rebuild's document is
+  freed too. After `chunk_ready`, so the viewer's swap never waits on it.
+- **What it buys.** The trim lowers the plateau by ~400 MB. It hardly changes
+  the slope: that was the PyMuPDF leak.
+- **What it costs.** 8–22 ms a page; speed is in the section above.
+  `gc.collect()` is deliberately not called: it cost ~277 ms a page and freed
+  nothing.
+- **What it does not lower.** The peak of two pages in flight. That is
+  `processing.max_parallel_chunks`.
+- **Watch the trimmed baseline.** If it ever creeps across a long run,
+  something really leaks, and trimming only hides it.
+
+Recycling worker processes every N pages was weighed: it reclaims memory on
+any OS. It was not taken, because concurrent chunks share paragraph batches,
+the provider's rate limiter and the loaded layout model. Splitting them costs
+API calls, risks 429s and reloads the model per worker. Windows' heap returns
+large blocks as they are freed, so whether Windows needs anything at all is
+being measured (#134), not assumed.
+
 ## Page ranges
 
 A translation covers the pages the toolbar's Pages box names (#33) — `1-20, 35`,

@@ -122,7 +122,7 @@ singleton with no job id, so it is polled via `GET /setup/status`.
 | `rag/` | `rag_chain.py` (`EnhancedRAGChain`), `conversation.py` (`ChatTurn`, stdlib-only), `ingest.py` (PDF → chunks, page kinds), `ocr.py`, `retrieval.py` (RRF, page evidence), `citations.py`, `page_images.py`, `vector_store.py`, `index_spec.py` (embedding model + `EmbeddingSpec`s), `onnx_embeddings.py`, `keyword_search.py` |
 | `benchmarks/rag/` | Corpus, questions with gold pages, harness (baseline from a `main` worktree), results — `README.md` there has the numbers |
 | `storage/` | `sqlite.py` (pragmas, per-thread connections), `migrations.py`, `records.py` (`pdfusion.db`) |
-| `utils/` | `encryption.py`, `file_export.py`, `logging_setup.py`, `paths.py` |
+| `utils/` | `encryption.py`, `file_export.py`, `logging_setup.py`, `memory.py` (glibc `malloc_trim`), `paths.py` |
 
 ### HTTP API
 
@@ -273,6 +273,10 @@ rule has, unless noted, a test. They are the things most easily undone by
   and `rebuild_rolling_pdf` re-inserts the whole document after every page:
   O(pages²) on a book, invisible to gc. `test_pdf_pages.py` fails on a version
   that leaks. Also keep it `<1.28`, which deprecates `fitz`.
+- **Each finished page ends with `release_freed_memory`** (`malloc_trim`,
+  glibc only), after its rebuild and `chunk_ready`. glibc kept ~420 MB of freed
+  heap otherwise. Never add `gc.collect()` there: ~277 ms a page, freed nothing.
+  (No unit test for the call site: it is in `processor.py`.)
 
 **Data and chat** → `data-and-chat.md`
 - Three stores under one root: `pdfusion.db` (system of record), `vectors/`
@@ -554,7 +558,7 @@ page images, multimodal and streamed `generate()` per SDK, the answer chain's
 image, citation, fence and conversation rules, answer ratings, the benchmark's
 interval statistics, chunking and rolling-PDF assembly (and that rebuilding it
 leaks nothing), BabelDOC's shared
-fonts, the data root per platform, packaging config agreement, and the viewer's
+fonts, handing freed heap back to glibc, the data root per platform, packaging config agreement, and the viewer's
 pure half.
 
 Not covered: `processors/processor.py` proper, chat quality with the real
