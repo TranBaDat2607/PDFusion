@@ -124,8 +124,26 @@ index (once per document, rag/ingest.py)            ask (rag/rag_chain.py)
   to be refused outright ("No text could be extracted"). OCR is slow — ~7 s a
   dense page on an i5 — and runs once, with per-page progress on the index job.
 - Text is NFKC-normalised (ligatures: "ﬁrmware" never matched "firmware")
-  and dehyphenated. `CHUNKER_VERSION` is "2", so every existing index is
-  rebuilt the next time chat opens its document.
+  and dehyphenated. Changing how a PDF becomes chunks means bumping
+  `CHUNKER_VERSION` (now "3"), which rebuilds every existing index the next
+  time chat opens its document.
+- **Line-break hyphens are joined by `ingest._join_broken_words`, not by
+  PyMuPDF.** `TEXT_DEHYPHENATE` stopped working in PyMuPDF 1.27, which the
+  translation memory fix requires (translation-pipeline.md, "PyMuPDF is at
+  least 1.27.2"). Without a replacement, 1,129 words on 278 of a 346-page
+  book's pages were indexed as halves ("trans- action"), which neither search
+  matches. The helper is the flag's rule reproduced exactly: a line ending in
+  "-" loses it and runs into the next, unless the line is only the dash.
+  Checked chunk for chunk, the ingestor's output on 1.25.5 is identical
+  before and after the change on all seven text documents in the benchmark,
+  so `CHUNKER_VERSION` stays and no index is rebuilt.
+  - The rule glues compounds ("Bose-" / "Einstein" → "BoseEinstein"). A
+    variant that joined only lowercase continuations was measured and lost two
+    questions on BERT, whose tables use "-" for an empty cell, so the exact
+    rule stayed.
+  - Retrieval-only hit@1, PyMuPDF 1.25.5 → 1.27: 0.857 → 0.838 with no join,
+    0.848 with the helper. The one question still lost (`p10`, ResNet) comes
+    from 1.27's table finder, not from the join.
 
 **Retrieval** (`EnhancedRAGChain.retrieve`) is local and costs one read of the
 index's chunks:

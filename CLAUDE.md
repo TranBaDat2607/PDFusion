@@ -308,6 +308,10 @@ rule has, unless noted, a test. They are the things most easily undone by
   embeds means editing `rag/index_spec.py`. How a model is run — ONNX file,
   pooling, its `query: `/`passage: ` prefixes — is its `EmbeddingSpec` there;
   a wrong one gives worse vectors and no error.
+- **Line-break hyphens are joined by `ingest._join_broken_words`, which
+  reproduces `TEXT_DEHYPHENATE` exactly** — PyMuPDF 1.27 ignores the flag. Keep
+  it exact: the parity test's expected text is what 1.25.5 indexed, and a
+  "smarter" rule sparing compounds lost two benchmark questions.
 - **A follow-up is searched for as its standalone rewrite, never fused with
   the question as typed** (the raw words outvote it). The rewrite prompt has no
   answer-language instruction; the history is the same document's last
