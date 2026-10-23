@@ -269,6 +269,10 @@ rule has, unless noted, a test. They are the things most easily undone by
   BabelDOC's, installed only on a babeldoc in `VERIFIED_BABELDOC`: re-check it
   against `fontmap.py` when bumping babeldoc. Sharing a font across pages relies
   on PyMuPDF never releasing the GIL; re-check that when bumping PyMuPDF.
+- **PyMuPDF stays ≥ 1.27.2.** Older ones leak a list per link in `insert_pdf`,
+  and `rebuild_rolling_pdf` re-inserts the whole document after every page:
+  O(pages²) on a book, invisible to gc. `test_pdf_pages.py` fails on a version
+  that leaks. Also keep it `<1.28`, which deprecates `fitz`.
 
 **Data and chat** → `data-and-chat.md`
 - Three stores under one root: `pdfusion.db` (system of record), `vectors/`
@@ -548,7 +552,8 @@ isolation (real ChromaDB under `tmp_path`), chat ingestion (real PDFs built with
 PyMuPDF), OCR respacing, rank fusion and page evidence, citation checking,
 page images, multimodal and streamed `generate()` per SDK, the answer chain's
 image, citation, fence and conversation rules, answer ratings, the benchmark's
-interval statistics, chunking and rolling-PDF assembly, BabelDOC's shared
+interval statistics, chunking and rolling-PDF assembly (and that rebuilding it
+leaks nothing), BabelDOC's shared
 fonts, the data root per platform, packaging config agreement, and the viewer's
 pure half.
 
