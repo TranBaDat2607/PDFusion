@@ -117,7 +117,7 @@ singleton with no job id, so it is polled via `GET /setup/status`.
 | `engine_assets.py` | Single source of truth for "the offline engine is installed" |
 | `config/` | `ConfigManager` + Pydantic `AppSettings` (`providers` map, `ModelRef`s) |
 | `providers/` | `registry.py` — one `ProviderSpec` per provider, the source of every per-provider rule (stdlib-only); `listing.py` — one model lister per protocol; `catalog.py` — the model catalog cache and `list_models` |
-| `processors/` | `PDFProcessor` (BabelDOC), `page_selection.py`, `pdf_pages.py`, `pdf_cache.py`, `doc_layout_cache.py` |
+| `processors/` | `PDFProcessor` (BabelDOC), `page_selection.py`, `pdf_pages.py`, `pdf_cache.py`, `doc_layout_cache.py`, `font_verify_cache.py`, `font_cache.py` |
 | `translators/` | `BaseTranslator` + OpenAI/Gemini/Anthropic/Argos, `factory.py`, `capabilities.py`, `rate_limiter.py`, `translation_cache.py`, `param_compat.py`, `usage_estimate.py` |
 | `rag/` | `rag_chain.py` (`EnhancedRAGChain`), `conversation.py` (`ChatTurn`, stdlib-only), `ingest.py` (PDF → chunks, page kinds), `ocr.py`, `retrieval.py` (RRF, page evidence), `citations.py`, `page_images.py`, `vector_store.py`, `index_spec.py` (embedding model + `EmbeddingSpec`s), `onnx_embeddings.py`, `keyword_search.py` |
 | `benchmarks/rag/` | Corpus, questions with gold pages, harness (baseline from a `main` worktree), results — `README.md` there has the numbers |
@@ -262,6 +262,13 @@ rule has, unless noted, a test. They are the things most easily undone by
   (and a hit is linked back), via `pdf_cache.link_or_copy`, so **never rewrite
   a translated PDF in place**. Write a new file and `os.replace` it, or the
   write reaches the cache entry too.
+- **BabelDOC's fonts are loaded once per process** (`processors/font_cache.py`).
+  BabelDOC builds a `FontMapper` per stage, 6–7 a page, and each loaded all 34
+  embedding fonts (266 MB) into reference cycles only a full GC frees — on a
+  book that ran the sidecar out of memory. The shared constructor is a copy of
+  BabelDOC's, installed only on a babeldoc in `VERIFIED_BABELDOC`: re-check it
+  against `fontmap.py` when bumping babeldoc. Sharing a font across pages relies
+  on PyMuPDF never releasing the GIL; re-check that when bumping PyMuPDF.
 
 **Data and chat** → `data-and-chat.md`
 - Three stores under one root: `pdfusion.db` (system of record), `vectors/`
@@ -537,9 +544,9 @@ isolation (real ChromaDB under `tmp_path`), chat ingestion (real PDFs built with
 PyMuPDF), OCR respacing, rank fusion and page evidence, citation checking,
 page images, multimodal and streamed `generate()` per SDK, the answer chain's
 image, citation, fence and conversation rules, answer ratings, the benchmark's
-interval statistics, chunking and rolling-PDF assembly,
-the data root per platform, packaging config agreement, and the viewer's pure
-half.
+interval statistics, chunking and rolling-PDF assembly, BabelDOC's shared
+fonts, the data root per platform, packaging config agreement, and the viewer's
+pure half.
 
 Not covered: `processors/processor.py` proper, chat quality with the real
 embedding/OCR models and a real LLM (that is what `benchmarks/rag/` measures —

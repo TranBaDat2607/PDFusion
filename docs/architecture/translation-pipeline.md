@@ -97,33 +97,31 @@ A failed load leaves the module global `None` rather than caching the failure,
 so the next chunk retries; `run_one_chunk`'s `except BaseException` still routes
 it into `babeldoc_chunk_error`.
 
-**What this does not fix, and why chunk size is a live question.** The layout model was never the largest per-chunk fixed cost.
+**What this does not fix, and why chunk size is a live question.** The layout
+model was never the largest per-chunk fixed cost: the fonts were.
 `FontMapper.__init__` sha3_256-verifies and loads **all 34 embedding fonts
 (266 MB)** for `lang_out`, and BabelDOC memoizes neither — not `fontmap.py`, not
 `assets.py`. It constructs one per stage: `ILCreater`, `ParagraphFinder`,
-`StylesAndFormulas`, `ILTranslator` (a second inside `ILTranslatorLLMOnly`),
-`Typesetting`, `PDFCreater` (a second for scanned-page detection) — 7 per page
-on the Argos path, 8 on the LLM path. The hash is now remembered (next section);
-what is left is ~0.26 s per `FontMapper` of `pymupdf.Font` parsing, ≈2 s per
-chunk, which this cache does not touch either. So "the reload is fixed" is not
-on its own a reason to shrink a chunk — shrinking one multiplies that fixed cost
-by the extra chunks it creates, and on the Argos path
-(`_MAX_PARALLEL_CHUNKS_ARGOS = 2`) that can outweigh what the cache saves.
-`_PAGES_PER_CHUNK_ARGOS` is 1 today, like the LLM path; measure an end-to-end
-Argos run before trusting that, or before changing either constant. What a
-larger chunk buys is amortized per-chunk fixed overhead in general, not the ONNX
-reload specifically.
+`StylesAndFormulas`, `ILTranslator`, `Typesetting`, `PDFCreater` (a second for
+scanned-page detection) — 6 per page on the Argos path, 7 on the LLM path,
+counted on real runs. The hash is now remembered and the fonts loaded once per
+process (the next two sections), but every chunk is still a whole BabelDOC run,
+with its own IR, rendering and PDF save. `_PAGES_PER_CHUNK_ARGOS` is 1 today,
+like the LLM path; measure an end-to-end Argos run before changing either
+constant. What a larger chunk buys is amortized per-chunk fixed overhead in
+general, not the ONNX reload specifically.
 
 ## A font that passed its hash check is not hashed again
 
 A `FontMapper` took ~1.3 s, of which ~1.0 s was `assets.verify_file` hashing
 the 34 fonts (measured alone: 0.99 s; parsing them alone: 0.13 s; the ~0.26 s a
-mapper still costs with the hash remembered is that parse plus the rest of the
-constructor, under the contention of a real run). Traced over real one-page
-LLM-path runs on two different documents: **272 checks per page — 34 fonts × 8
-mappers (238 on Argos, with 7) — against the same 34 (file, expected hash)
-pairs**, none derived from the document; every pair passed,
-and every file was byte-identical before and after both runs. Only a process's
+mapper still cost with the hash remembered was that parse plus the rest of the
+constructor, under the contention of a real run — a parse only a process's first
+mapper pays now, as the next section explains). That is **238 checks per page
+— 34 fonts × 7 mappers (204 on Argos, with 6) — against the same 34 (file,
+expected hash) pairs**, none derived from the document; traced over real
+one-page runs on two different documents, every pair passed, and every file was
+byte-identical before and after both runs. Only a process's
 first check can find anything (a missing or corrupt font, which BabelDOC then
 re-downloads); the rest re-hash unchanged bytes.
 
@@ -162,6 +160,67 @@ superseded version still bounds disk at two files. (On Windows the unlink
 usually loses that race and just logs, which is what makes the symptom
 intermittent rather than absent — do not read "it works here" as "the ordering
 is safe".)
+
+## Each font is loaded once per process
+
+A `FontMapper` also *loads* all 34 fonts, each into a `pymupdf.Font` that holds
+the whole file: 266 MB for any target language, because BabelDOC's
+`__add_fallback_to_font_family` appends every other family's fonts to each one.
+At 6 mappers a page (7 on the LLM path) that is 1.6 GB of fonts a page, and
+BabelDOC never gave it back on time. The constructor memoizes by wrapping bound
+methods in `lru_cache` — its own `has_char`/`map_in_type`, and every font's
+`has_glyph`/`char_lengths` — so each mapper and each font sits in a reference
+cycle that only CPython's full collection frees. Full collections are scheduled
+by counts of objects, which font buffers barely move, and nothing in BabelDOC,
+Argos or PDFusion calls `gc.collect()`.
+
+On a long document that was an out-of-memory kill, whatever the translator. A
+346-page book on Argos (2 pages in flight) took the sidecar to 12 GB, and the
+kernel killed it 238 pages in. Replayed through the real pipeline, four pages
+took the process from 0.26 GB to 6.5 GB with no full collection in between; the
+LLM path's 6 pages in flight (`cpu // 2` on 12 cores; a stub translator that
+returns its input, so no request was made) passed 6.5 GB before its first page
+finished. Two things about the numbers in BabelDOC's log: "Peak memory usage" is
+the whole sidecar and its children, not one sub-job, and on Linux it
+over-counts. Between its two-second PSS samples it adds up the RSS of the
+sidecar and of each forked PDF-save child, and a forked child's RSS includes
+every page it shares with the sidecar.
+
+`processors/font_cache.py` replaces `FontMapper.__init__` with a copy of
+BabelDOC's whose font loop takes each font from a process-wide cache, which gives
+a font BabelDOC's per-font attributes and memos once, at its first load. On the
+same book afterwards, its 301 pages with text went through in 23 minutes with
+the sidecar never above 2.4 GB — 1,806 mappers sharing one set of fonts — and a
+page translated before and after the change came out the same, every word in
+the same place. Memory still drifts up by about 1.7 MB a page: most likely the
+rolling PDF, rebuilt whole after every page (43.5 MB by the end), and per-page
+garbage that still waits for a full collection, such as the source PDF's own
+fonts, which `ILCreater` memoizes the same way.
+
+- **Sharing is safe because nothing writes to a font after construction.** The
+  stages only read a mapper (`has_char`, `map`, `fontid2font`, `base_font`,
+  `add_font`), and PyMuPDF never releases the GIL — neither `_mupdf.so` nor
+  `_extra.so` imports `PyEval_SaveThread` — so MuPDF calls from different pages
+  run one at a time. Python does run inside a call, in PyMuPDF's warning and
+  error callbacks, where threads can switch: the same exposure as the one MuPDF
+  context every page already shares. The shared memos are keyed by a character
+  (and, for `char_lengths`, a font size) and capped at 10,240 entries each;
+  `char_lengths` hands every caller the same list, which they only read.
+- **The fonts stay.** ~266 MB is resident from the first translation until the
+  sidecar exits. The cache is never pruned: every mapper wants all 34.
+- **It is a copy of BabelDOC 0.5.24's constructor**, so `install()` patches only
+  a BabelDOC whose version is in `VERIFIED_BABELDOC`; any other keeps its own
+  constructor and logs a warning. babeldoc is pinned to a range, and a copy that
+  no longer matches could break every stage, where an unpatched one only costs
+  the memory. `test_font_cache.py` compares the copy with the installed
+  constructor attribute by attribute, and fails by name on an unverified
+  version: re-check the copy against `fontmap.py` and extend the set when
+  bumping babeldoc. Re-check the GIL claim above when bumping PyMuPDF.
+- **Installed by `routes/translation.py:_load_engine`**, which every job runs
+  before BabelDOC builds anything. The class is patched, not the module's name
+  for it: each stage imported `FontMapper` by name.
+- **A failed load is not remembered**, so a font BabelDOC re-downloads is loaded
+  by the next mapper.
 
 ## Page ranges
 

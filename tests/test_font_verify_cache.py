@@ -1,7 +1,7 @@
 """BabelDOC re-hashes the same cached fonts on every pipeline stage.
 
 Every stage builds a font mapper, and every mapper runs `verify_file` over all
-34 fonts (266 MB, ~1 s) — 7-8 times per translated page. The fonts don't change
+34 fonts (266 MB, ~1 s) — 6-7 times per translated page. The fonts don't change
 between those checks, so `font_verify_cache` remembers a pass. The risky half is
 remembering too much: a failure, a font rewritten by a re-download, or a file
 changing mid-hash must each be re-checked, or BabelDOC would trust bytes it
@@ -23,7 +23,7 @@ from pathlib import Path
 
 import pytest
 
-from desktop_pdf_translator.processors import font_verify_cache
+from desktop_pdf_translator.processors import font_cache, font_verify_cache
 
 
 def _sha(data: bytes) -> str:
@@ -380,6 +380,9 @@ def test_the_job_path_installs_the_memo(monkeypatch):
     monkeypatch.setitem(sys.modules, "desktop_pdf_translator.processors.events", events)
     calls: list[int] = []
     monkeypatch.setattr(font_verify_cache, "install", lambda: calls.append(1))
+    # The job path installs the shared fonts too; for real, that would patch
+    # BabelDOC's FontMapper for the rest of the run.
+    monkeypatch.setattr(font_cache, "install", lambda: None)
 
     translation._load_engine()
 

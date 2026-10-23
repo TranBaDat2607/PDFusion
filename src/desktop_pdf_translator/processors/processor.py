@@ -130,8 +130,7 @@ def _schedule_temp_cleanup(path: Path) -> None:
 
 # Number of source pages per BabelDOC sub-job. 1 = page-by-page streaming: the
 # viewer hot-swaps every time a single page finishes its full BabelDOC pipeline
-# (translate → typeset → render → save). Combined with `_MAX_PARALLEL_CHUNKS`
-# below, this gives the user the maximum streaming feel.
+# (translate → typeset → render → save).
 _PAGES_PER_CHUNK = 1
 
 # Argos-only: pages per chunk when translating offline. Previously 3, to
@@ -141,26 +140,10 @@ _PAGES_PER_CHUNK = 1
 # streaming granularity as the LLM path.
 _PAGES_PER_CHUNK_ARGOS = 1
 
-# Argos-only cap on parallel chunks. Each in-flight BabelDOC sub-job peaks at
-# ~9 GB RAM on an academic paper (DocLayoutYOLO + IR + font maps). Four
-# parallel chunks = ~36 GB → swap thrashing on most desktops, which is what
-# produced the 120-second "PDF save timeout" warnings. Argos itself is the
-# bottleneck-side rate limiter and gains nothing from extra parallelism, so
-# we cap conservatively.
+# Argos-only cap on parallel chunks, set for memory when every page loaded all
+# of BabelDOC's fonts again. With them shared (`font_cache.py`), 4 in flight
+# translated 31 pages 13% faster than 2, at 0.25 GB more (one run each).
 _MAX_PARALLEL_CHUNKS_ARGOS = 2
-
-# How many BabelDOC sub-jobs may be in flight at once. BabelDOC's pipeline is
-# monolithic (you can't externally separate translate from render), but by
-# running multiple jobs concurrently we get natural pipelining: while job N is
-# in its typeset/render/save phase, jobs N+1..N+k can be in their translate
-# phase calling Argos. The shared `ArgosTranslator` instance has a single
-# batch queue, so the 4 BabelDOC worker threads from each job naturally feed
-# one Argos batch at a time — no double-buffering needed, no contention beyond
-# Argos's own CTranslate2 serialization.
-#
-# Higher values increase memory (each BabelDOC job holds its own IR/font maps)
-# but improve pipeline depth. 4 is a reasonable default for desktop machines.
-_MAX_PARALLEL_CHUNKS = 4
 
 # Tag for the "stop now, the credentials are being rejected" item that
 # `_handle_translation_failure` pushes onto the multiplexer queue.
@@ -171,15 +154,11 @@ def _effective_parallel_chunks(settings, translator=None) -> int:
     """Resolve the chunk-concurrency knob.
 
     `processing.max_parallel_chunks = 0` (default) means auto: roughly half the
-    CPU cores, clamped to [2, 8]. Each in-flight BabelDOC sub-job carries
-    ~150-300 MB of intermediate state on a typical academic paper, so we leave
-    half the cores (and roughly half the RAM headroom) to the rest of the app
-    plus the WebView2 renderer.
+    CPU cores, clamped to [2, 8], which leaves the other half to the rest of
+    the app plus the webview's renderer.
 
     When `translator` is an ArgosTranslator, the result is clamped down to
-    `_MAX_PARALLEL_CHUNKS_ARGOS` to control memory — Argos throughput
-    saturates at low parallelism anyway, and per-chunk RAM is ~9 GB on
-    formula-heavy papers.
+    `_MAX_PARALLEL_CHUNKS_ARGOS` to control memory.
     """
     try:
         configured = int(settings.processing.max_parallel_chunks)
@@ -747,22 +726,20 @@ class PDFProcessor:
 
         1. Split the selected pages (`file_metadata.selected_pages`, or all of
            them) into 1-page chunks up front.
-        2. Launch up to `_MAX_PARALLEL_CHUNKS` BabelDOC sub-jobs concurrently.
-           While chunk N is in its typeset/render/save phase, chunk N+1 can be
-           in its translate phase calling Argos.
+        2. Launch up to `_effective_parallel_chunks()` BabelDOC sub-jobs
+           concurrently. While chunk N is in its typeset/render/save phase,
+           chunk N+1 can be in its translate phase calling Argos.
         3. The single shared `ArgosTranslator` instance has one batch queue;
-           paragraphs from all concurrent chunks fill the same batches of 4,
-           and CTranslate2 serializes the actual NMT inference. Argos is the
-           natural rate limiter — extra parallelism doesn't make it faster,
-           but it does hide BabelDOC's per-chunk non-translate overhead.
+           paragraphs from all concurrent chunks fill the same batches, and
+           running chunks side by side hides BabelDOC's per-chunk
+           non-translate overhead.
         4. Completed chunks are merged into a rolling versioned PDF (in
            strict page order, even when chunks finish out of order; every
            other page comes from the original) and a `chunk_ready` SSE event
            is emitted so the viewer hot-swaps.
 
         The translator instance is reused across chunks so the Argos batch
-        queue and process-lifetime translation cache (argos_translator.py)
-        persist — repeated paragraphs across chunks translate for free.
+        queue persists.
         """
         chunk_tasks: list[asyncio.Task] = []
         max_parallel = _effective_parallel_chunks(self.settings, translator)
@@ -1231,13 +1208,11 @@ class PDFProcessor:
         logger.debug(f"  lang_out: {translator.lang_out}")
         logger.debug(f"  output_dir: {output_dir}")
         
-        # Per-translator overrides for heavy non-translation stages. Argos
-        # has no LLM available, so any flag that secretly triggers an LLM
-        # call (glossary extraction) is pure overhead — and skipping the
-        # SSIM scanned-page detector + the compatibility-enhancement pass
-        # both shave significant wall time on academic papers. LLM paths
-        # keep the previous behavior so glossary terms and OCR-quality
-        # detection still work for paid backends.
+        # Per-translator overrides for heavy non-translation stages. Skipping
+        # the SSIM scanned-page detector shaves significant wall time on
+        # academic papers, so Argos skips it. LLM paths keep it, and with
+        # `auto_enable_ocr_workaround` off a page it finds scanned raises
+        # BabelDOC's `ScannedPDFError`.
         is_argos = isinstance(translator, ArgosTranslator)
 
         # Configure for single translated PDF output only (no dual, no decompressed, no bounding boxes)
@@ -1266,9 +1241,9 @@ class PDFProcessor:
             short_line_split_factor=0.8,
             disable_rich_text_translate=True,
             dual_translate_first=False,
-            # `enhance_compatibility=True` forces extra typesetting passes
-            # that double-render text. Argos doesn't need them; LLMs benefit
-            # for tricky fonts.
+            # A no-op on both paths in babeldoc 0.5.24: it only turns on
+            # `skip_clean` and `disable_rich_text_translate`, both already on
+            # here, and `dual_translate_first`, which `no_dual` makes moot.
             enhance_compatibility=not is_argos,
             use_alternating_pages_dual=False,
             # Set watermark mode to NoWatermark to avoid bounding boxes
@@ -1287,9 +1262,9 @@ class PDFProcessor:
             glossaries=None,
             auto_enable_ocr_workaround=False,
             pool_max_workers=processing_settings.max_workers,
-            # Heaviest non-translation stage (weight 30 in BabelDOC). It
-            # invokes the translator with extraction prompts — Argos is an
-            # NMT model, can't follow those prompts, so the work is wasted.
+            # BabelDOC extracts terms only through a translator's
+            # `do_llm_translate`, which none of ours has, so the stage never
+            # runs on either path.
             auto_extract_glossary=not is_argos,
             primary_font_family=None,
             only_include_translated_page=False,
