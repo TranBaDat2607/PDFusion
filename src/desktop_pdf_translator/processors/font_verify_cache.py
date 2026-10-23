@@ -1,14 +1,14 @@
 """Remembers which of BabelDOC's cached assets have passed their hash check.
 
 BabelDOC builds a `FontMapper` in every pipeline stage — `ILCreater`,
-`ParagraphFinder`, `StylesAndFormulas`, `ILTranslator` (twice on the LLM path),
-`Typesetting`, `PDFCreater` (twice when scanned-page detection runs) — and each
-one runs `assets.verify_file` over every font of the target language: 34 files,
-266 MB of SHA3-256 for Vietnamese, ~1 s. Traced over two different documents on
-the LLM path, that is 272 checks per page (238 on Argos, which skips one
-mapper) against the same 34 (file, expected hash) pairs, none of them derived
-from the document, every file byte-identical before and after. Measured on a
-one-page run: 15.5 s → 7.9 s with the passes remembered.
+`ParagraphFinder`, `StylesAndFormulas`, `ILTranslator`, `Typesetting`,
+`PDFCreater` (twice when scanned-page detection runs) — and each one runs
+`assets.verify_file` over every font of the target language: 34 files, 266 MB
+of SHA3-256 for Vietnamese, ~1 s. That is 238 checks per page on the LLM path
+(204 on Argos, which skips scanned-page detection) against the same 34 (file,
+expected hash) pairs, none of them derived from the document, every file
+byte-identical before and after. Measured on a one-page run: 15.5 s → 7.9 s
+with the passes remembered.
 
 Only the first check in a process can find something new — a missing or corrupt
 font, which BabelDOC then re-downloads — so a pass is remembered and a failure

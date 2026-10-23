@@ -304,13 +304,11 @@ class ArgosTranslator(BaseTranslator):
         self.model = kwargs.get("model", "argostranslate")
 
         # Streaming/batching: BabelDOC's worker pool calls translate() from up
-        # to `pool_max_workers` threads concurrently across up to
-        # `max_parallel_chunks` BabelDOC sub-jobs (≈16 paragraphs in flight at
-        # peak with the qps throttle disabled — see processor.py). We coalesce
-        # them and feed the whole batch into one CTranslate2 translate_batch
-        # call so the underlying engine packs sentences across paragraphs.
-        # `batch_size=16` matches that peak; `batch_timeout=0.4s` keeps the
-        # tail of each chunk snappy without losing batching benefit.
+        # to `pool_max_workers` threads concurrently in every in-flight
+        # BabelDOC sub-job. We coalesce them and feed the whole batch into one
+        # CTranslate2 translate_batch call so the underlying engine packs
+        # sentences across paragraphs. A batch goes once it holds `batch_size`
+        # paragraphs, or `batch_timeout` after the last one joined.
         self.batch_size = max(1, int(kwargs.get("batch_size", 16)))
         self.batch_timeout = float(kwargs.get("batch_timeout", 0.4))
         self._batch_lock = threading.Lock()
@@ -330,8 +328,7 @@ class ArgosTranslator(BaseTranslator):
 
         # Pipeline batches across 2 workers: while one thread is mid-inference
         # on batch N, the other can start batch N+1's pre-processing /
-        # tokenization. CTranslate2 serializes the actual decode internally,
-        # but this overlapping cuts the inter-batch gap. ~15-30% throughput
+        # tokenization, which cuts the inter-batch gap. ~15-30% throughput
         # win on typical academic PDFs.
         self._batch_executor = ThreadPoolExecutor(
             max_workers=2, thread_name_prefix="argos-batch"
@@ -399,7 +396,7 @@ class ArgosTranslator(BaseTranslator):
 
         cached = _llm_cache_get(processed, "en", "vi", "argos", self.model)
         if cached is not None:
-            # Step 3 — served from the process-lifetime cache; no NMT call.
+            # Step 3 — served from the paragraph cache; no NMT call.
             _debug.record(
                 "3.cache_hit",
                 call=self.translate_call_count,
