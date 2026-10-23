@@ -255,6 +255,13 @@ rule has, unless noted, a test. They are the things most easily undone by
   are gone; a `config.toml` that still holds them is ignored and loses them on
   the next save). The Pages box only chooses *which* pages; the output is always
   the whole document, with unselected pages copied from the original.
+- **A page with no text is kept as the original, never fails the run**, with
+  every provider (BabelDOC only reads the text layer). `pdf_pages.pages_without_text`
+  screens pages before BabelDOC runs; catching `ExtractTextError` in
+  `run_one_chunk` is the backstop. Keep both. A skipped page still emits
+  `chunk_ready` (re-sending the latest rolling path, not rebuilding it), and a
+  run with every page skipped is an error. Only the screen has a test; the
+  processor half is checked by hand.
 - Two caches (whole-PDF, paragraph), both SQLite, content-addressed, versioned
   via `storage/migrations.py`. `is_cacheable_artifact` decides what may be
   written.
