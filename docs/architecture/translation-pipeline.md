@@ -192,10 +192,13 @@ a font BabelDOC's per-font attributes and memos once, at its first load. On the
 same book afterwards, its 301 pages with text went through in 23 minutes with
 the sidecar never above 2.4 GB — 1,806 mappers sharing one set of fonts — and a
 page translated before and after the change came out the same, every word in
-the same place. Memory still drifts up by about 1.7 MB a page: most likely the
-rolling PDF, rebuilt whole after every page (43.5 MB by the end), and per-page
-garbage that still waits for a full collection, such as the source PDF's own
-fonts, which `ILCreater` memoizes the same way.
+the same place. Memory still drifted up afterwards, by +1.25 MB a page past a
+~40-page warm-up. It was not garbage waiting for a full collection, which was
+the first guess: 29 full collections ran on their own over 129 pages, and a
+forced one at the end freed next to nothing. It had two causes: PyMuPDF
+leaking ~1,690 objects a page in the rolling-PDF rebuild (the next section),
+and glibc keeping ~410 MB of freed heap by the end of that run ("glibc's heap
+is trimmed after every page").
 
 - **Sharing is safe because nothing writes to a font after construction.** The
   stages only read a mapper (`has_char`, `map`, `fontid2font`, `base_font`,
@@ -215,12 +218,88 @@ fonts, which `ILCreater` memoizes the same way.
   the memory. `test_font_cache.py` compares the copy with the installed
   constructor attribute by attribute, and fails by name on an unverified
   version: re-check the copy against `fontmap.py` and extend the set when
-  bumping babeldoc. Re-check the GIL claim above when bumping PyMuPDF.
+  bumping babeldoc. Re-check the GIL claim above when bumping PyMuPDF (last
+  checked on 1.25.5 and 1.27.2.3).
 - **Installed by `routes/translation.py:_load_engine`**, which every job runs
   before BabelDOC builds anything. The class is patched, not the module's name
   for it: each stage imported `FontMapper` by name.
 - **A failed load is not remembered**, so a font BabelDOC re-downloads is loaded
   by the next mapper.
+- **The shared memos fill slowly and stop.** Over 129 pages the 34 fonts held
+  ~8,300 `has_glyph` / `char_lengths` entries, out of a 696,320 cap. That is
+  the few thousand lists that still appear on PyMuPDF 1.27. They are not a
+  leak, so don't chase them.
+
+## PyMuPDF is at least 1.27.2
+
+Before 1.27.2, PyMuPDF's C++ helper behind `annot_xrefs`
+(`_extra.JM_get_annot_xref_list`) leaks a list on every call. `Link.next`
+calls it twice per link, so `get_links()` on a page with 23 links leaked 46
+lists. `insert_pdf` copies every page's links through it.
+
+`rebuild_rolling_pdf` re-inserts the *whole* document after every page, so
+each rebuild leaked two lists for every link it copied. On the 346-page book
+that was ~2,120 lists (~150 KB) per rebuild while the book was still
+untranslated. Translated pages carry no links, so the count falls as they
+replace linked ones: ~1,690 live objects a page, averaged over a 129-page
+run. That is O(pages) per page and O(pages²) for a whole document. The lists
+carry one extra reference and no referrer, so gc never sees them as garbage.
+- 1.25.5 and 1.26.7 leak. 1.27.2.3 and 1.28.2 don't.
+- Measured after warm-up: +1.25 MB/page on 1.25.5, +0.18 on 1.27.2.3, and
+  live objects flat.
+- The slope is far bigger than the lists' own ~150 KB. The link between them
+  is the before/after measurement of the bump, not their size. Each leaked
+  list most likely keeps the memory around it from being returned — that
+  part is not measured.
+- `test_rebuilding_the_rolling_pdf_over_and_over_leaves_no_objects_behind`
+  guards it. 20 rebuilds of a 10-page, 40-link document left 1,278 objects on
+  1.25.5 and 0 on 1.27.2.3. Pages without links never leaked, which is why
+  the older rebuild tests could not catch it.
+- `<1.28` because 1.28 deprecates the `fitz` name every module imports.
+
+What else the bump changed:
+- `TEXT_DEHYPHENATE` is ignored, so chat joins line-break hyphens itself.
+  See data-and-chat.md.
+- `find_tables` reads more as tables. It turns ResNet's architecture figure
+  into half-empty two-column grids that the ingestor's mostly-empty guard lets
+  through, which costs one benchmark question.
+- `find_tables` prints a one-line `pymupdf_layout` notice to stdout once per
+  process. The shell drains stdout into shell.log.
+- The translation output was checked over 129 pages: it differs from 1.25.5
+  no more than two runs of 1.25.5 differ from each other. Argos's batching
+  depends on timing.
+- Speed is unchanged: 4.33/4.57 s a page before, 4.47/4.38 after. That was
+  A-B-B-A, 46 pages each, and measured together with the trim below.
+
+## glibc's heap is trimmed after every page
+
+glibc keeps what Python frees inside its arenas, and gives memory back on its
+own only from the very top of a heap. Untrimmed, on PyMuPDF 1.27, a 129-page
+Argos run ended ~420 MB above what `malloc_trim` returned it to. A forced
+`gc.collect()` freed next to nothing: the memory was already free, just never
+returned.
+
+So the consumer loop in `_process_with_babeldoc` ends each finished page with
+`utils/memory.release_freed_memory`, off the event loop. That is
+`malloc_trim(0)` on glibc, and a no-op on Windows, macOS and musl.
+- **Where it sits.** After the rolling rebuild, so the rebuild's document is
+  freed too. After `chunk_ready`, so the viewer's swap never waits on it.
+- **What it buys.** The trim lowers the plateau by ~420 MB. It hardly changes
+  the slope: that was the PyMuPDF leak.
+- **What it costs.** 8–22 ms a page; speed is in the section above.
+  `gc.collect()` is deliberately not called: it cost ~277 ms a page and freed
+  nothing.
+- **What it does not lower.** The peak of two pages in flight. That is
+  `processing.max_parallel_chunks`.
+- **Watch the trimmed baseline.** If it ever creeps across a long run,
+  something really leaks, and trimming only hides it.
+
+Recycling worker processes every N pages was weighed: it reclaims memory on
+any OS. It was not taken, because concurrent chunks share paragraph batches,
+the provider's rate limiter and the loaded layout model. Splitting them costs
+API calls, risks 429s and reloads the model per worker. Windows' heap returns
+large blocks as they are freed, so whether Windows needs anything at all is
+being measured (#134), not assumed.
 
 ## Page ranges
 

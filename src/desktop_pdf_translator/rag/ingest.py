@@ -144,6 +144,40 @@ def _union(rects: Iterable[Rect]) -> Rect:
     )
 
 
+# What `TEXT_DEHYPHENATE` took for a line-break hyphen, checked one by one on
+# 1.25.5: hyphen-minus, soft hyphen, hyphen, non-breaking hyphen. Never a dash.
+_LINE_BREAK_HYPHENS = ("-", "­", "‐", "‑")
+
+
+def _join_broken_words(lines: List[_Line]) -> List[_Line]:
+    """A word hyphenated across a line break, put back together.
+
+    PyMuPDF's `TEXT_DEHYPHENATE` did this up to 1.26 and is ignored from 1.27,
+    which split ~1,100 words of a 346-page book into halves that neither
+    search matches. This is that flag's rule, reproduced exactly: a line
+    ending in a hyphen loses it and runs into the next, unless the line is
+    nothing but the hyphen, which stays. That glues compounds too
+    ("BoseEinstein"), and is kept anyway: a rule that spared them moved two
+    benchmark questions off their page, and matching the flag keeps the
+    dehyphenated text of an index built before the upgrade the same as after.
+    """
+    merged: List[_Line] = []
+    for line in lines:
+        if merged and merged[-1].text.endswith(_LINE_BREAK_HYPHENS):
+            prev = merged[-1]
+            head = prev.text if prev.text.strip() in _LINE_BREAK_HYPHENS else prev.text[:-1]
+            merged[-1] = _Line(
+                text=head + line.text,
+                size=max(prev.size, line.size),
+                bbox=_union([prev.bbox, line.bbox]),
+                bold=prev.bold and line.bold,
+                horizontal=prev.horizontal and line.horizontal,
+            )
+            continue
+        merged.append(line)
+    return merged
+
+
 def _clip(rect: Rect, page: fitz.Rect) -> Rect:
     return (
         float(max(rect[0], page.x0)),
@@ -159,9 +193,10 @@ def _inside(rect: Rect, area: Rect) -> bool:
 
 
 def _read_page(page: fitz.Page) -> _Page:
-    # Ligatures expanded and line-break hyphens joined by PyMuPDF itself:
-    # without `TEXT_PRESERVE_LIGATURES`, and with `TEXT_DEHYPHENATE`.
-    flags = fitz.TEXT_PRESERVE_WHITESPACE | fitz.TEXT_MEDIABOX_CLIP | fitz.TEXT_DEHYPHENATE
+    # Ligatures expanded by PyMuPDF itself: without `TEXT_PRESERVE_LIGATURES`.
+    # Not `TEXT_DEHYPHENATE`: 1.27 ignores it, and `_join_broken_words` is the
+    # one place its rule lives now.
+    flags = fitz.TEXT_PRESERVE_WHITESPACE | fitz.TEXT_MEDIABOX_CLIP
     data = page.get_text("dict", flags=flags)
     result = _Page(number=page.number, rect=page.rect)
     for block in data.get("blocks", []):
@@ -183,7 +218,7 @@ def _read_page(page: fitz.Page) -> _Page:
                 horizontal=abs(direction[0] - 1.0) < 0.01 and abs(direction[1]) < 0.01,
             ))
         if lines:
-            result.blocks.append(_Block(lines=lines, bbox=tuple(block["bbox"])))
+            result.blocks.append(_Block(lines=_join_broken_words(lines), bbox=tuple(block["bbox"])))
     result.text_chars = sum(len(b.text.replace(" ", "")) for b in result.blocks)
 
     area = abs(page.rect) or 1.0

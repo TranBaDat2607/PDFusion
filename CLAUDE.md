@@ -122,7 +122,7 @@ singleton with no job id, so it is polled via `GET /setup/status`.
 | `rag/` | `rag_chain.py` (`EnhancedRAGChain`), `conversation.py` (`ChatTurn`, stdlib-only), `ingest.py` (PDF → chunks, page kinds), `ocr.py`, `retrieval.py` (RRF, page evidence), `citations.py`, `page_images.py`, `vector_store.py`, `index_spec.py` (embedding model + `EmbeddingSpec`s), `onnx_embeddings.py`, `keyword_search.py` |
 | `benchmarks/rag/` | Corpus, questions with gold pages, harness (baseline from a `main` worktree), results — `README.md` there has the numbers |
 | `storage/` | `sqlite.py` (pragmas, per-thread connections), `migrations.py`, `records.py` (`pdfusion.db`) |
-| `utils/` | `encryption.py`, `file_export.py`, `logging_setup.py`, `paths.py` |
+| `utils/` | `encryption.py`, `file_export.py`, `logging_setup.py`, `memory.py` (glibc `malloc_trim`), `paths.py` |
 
 ### HTTP API
 
@@ -269,6 +269,14 @@ rule has, unless noted, a test. They are the things most easily undone by
   BabelDOC's, installed only on a babeldoc in `VERIFIED_BABELDOC`: re-check it
   against `fontmap.py` when bumping babeldoc. Sharing a font across pages relies
   on PyMuPDF never releasing the GIL; re-check that when bumping PyMuPDF.
+- **PyMuPDF stays ≥ 1.27.2.** Older ones leak two lists per link in `insert_pdf`,
+  and `rebuild_rolling_pdf` re-inserts the whole document after every page:
+  O(pages²) on a book, invisible to gc. `test_pdf_pages.py` fails on a version
+  that leaks. Also keep it `<1.28`, which deprecates `fitz`.
+- **Each finished page ends with `release_freed_memory`** (`malloc_trim`,
+  glibc only), after its rebuild and `chunk_ready`. glibc kept ~420 MB of freed
+  heap otherwise. Never add `gc.collect()` there: ~277 ms a page, freed nothing.
+  (No unit test for the call site: it is in `processor.py`.)
 
 **Data and chat** → `data-and-chat.md`
 - Three stores under one root: `pdfusion.db` (system of record), `vectors/`
@@ -308,6 +316,10 @@ rule has, unless noted, a test. They are the things most easily undone by
   embeds means editing `rag/index_spec.py`. How a model is run — ONNX file,
   pooling, its `query: `/`passage: ` prefixes — is its `EmbeddingSpec` there;
   a wrong one gives worse vectors and no error.
+- **Line-break hyphens are joined by `ingest._join_broken_words`, which
+  reproduces `TEXT_DEHYPHENATE` exactly** — PyMuPDF 1.27 ignores the flag. Keep
+  it exact: the parity test's expected text is what 1.25.5 indexed, and a
+  "smarter" rule sparing compounds lost two benchmark questions.
 - **A follow-up is searched for as its standalone rewrite, never fused with
   the question as typed** (the raw words outvote it). The rewrite prompt has no
   answer-language instruction; the history is the same document's last
@@ -544,8 +556,9 @@ isolation (real ChromaDB under `tmp_path`), chat ingestion (real PDFs built with
 PyMuPDF), OCR respacing, rank fusion and page evidence, citation checking,
 page images, multimodal and streamed `generate()` per SDK, the answer chain's
 image, citation, fence and conversation rules, answer ratings, the benchmark's
-interval statistics, chunking and rolling-PDF assembly, BabelDOC's shared
-fonts, the data root per platform, packaging config agreement, and the viewer's
+interval statistics, chunking and rolling-PDF assembly (and that rebuilding it
+leaks nothing), BabelDOC's shared
+fonts, handing freed heap back to glibc, the data root per platform, packaging config agreement, and the viewer's
 pure half.
 
 Not covered: `processors/processor.py` proper, chat quality with the real

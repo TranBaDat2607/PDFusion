@@ -18,7 +18,7 @@ import fitz
 import pytest
 from PIL import Image, ImageDraw
 
-from desktop_pdf_translator.rag.ingest import PdfIngestor
+from desktop_pdf_translator.rag.ingest import PdfIngestor, _join_broken_words, _Line
 
 PAGE_W, PAGE_H = 595.0, 842.0
 
@@ -194,6 +194,62 @@ def test_word_hyphenated_across_a_line_break_is_joined(tmp_path: Path) -> None:
     text = _all_text(chunks)
     assert "performance" in text
     assert "perfor-" not in text
+
+
+# What `TEXT_DEHYPHENATE` made of each line pair on PyMuPDF 1.25.5, read off the
+# ingestor as it stood then: the text every index built before the upgrade holds.
+_PYMUPDF_125_DEHYPHENATED = [
+    ("Cooled atoms form a Bose-<br>Einstein condensate below a critical point.",
+     "Cooled atoms form a BoseEinstein condensate below a critical point."),
+    ("Cases rose in the COVID-<br>19 wave of that winter.",
+     "Cases rose in the COVID19 wave of that winter."),
+    ("Human - -<br>82.3 91.2 were the scores reported.",
+     "Human - 82.3 91.2 were the scores reported."),
+    ("The cost was 2.5k<br>-<br>Pre-OpenAI SOTA in that table.",
+     "The cost was 2.5k -Pre-OpenAI SOTA in that table."),
+    # The flag knew the Unicode hyphens too, which word processors export.
+    ("Records survive the trans‐<br>action log of every node.",
+     "Records survive the transaction log of every node."),
+    ("Records survive the trans‑<br>action log of every node.",
+     "Records survive the transaction log of every node."),
+    ("The cost was 2.5k<br>‐<br>Pre-OpenAI SOTA in that table.",
+     "The cost was 2.5k ‐Pre-OpenAI SOTA in that table."),
+    # Joined by neither: guards against a rule that takes any dash for a hyphen.
+    ("The pause ends with a dash—<br>and the next line starts here.",
+     "The pause ends with a dash— and the next line starts here."),
+]
+
+
+@pytest.mark.parametrize("html, indexed", _PYMUPDF_125_DEHYPHENATED)
+def test_line_break_hyphens_are_joined_as_pymupdf_joined_them(
+    tmp_path: Path, html: str, indexed: str
+) -> None:
+    """PyMuPDF 1.27 ignores `TEXT_DEHYPHENATE`, so the ingestor joins the
+    lines itself, exactly as the flag did — even where that glues a compound
+    ("BoseEinstein"). Keeping such compounds apart was measured, and it moved
+    two benchmark questions off their page; matching the old text keeps the
+    dehyphenated text of an index built before the upgrade the same as after."""
+    doc = fitz.open()
+    _text_page(doc, [html])
+    path = _save(doc, tmp_path)
+
+    _, chunks = _ingest(path)
+
+    assert _all_text(chunks) == indexed
+
+
+def test_a_soft_hyphen_at_a_line_break_joins_like_a_hyphen() -> None:
+    """No portable PDF puts U+00AD in the extracted text: base-14 fonts read
+    it back as "-", and PyMuPDF's built-in fonts drop it. These are the lines
+    1.25.5 extracted from a page set in DejaVu Sans, and the text it indexed."""
+    def line(text: str, top: float) -> _Line:
+        return _Line(text=text, size=11.0, bbox=(72.0, top, 300.0, top + 12.0))
+
+    merged = _join_broken_words(
+        [line("Records survive the trans­", 62.0), line("action log of every node.", 76.0)]
+    )
+
+    assert [m.text for m in merged] == ["Records survive the transaction log of every node."]
 
 
 def test_runs_of_whitespace_collapse_to_one_space(tmp_path: Path) -> None:

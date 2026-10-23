@@ -14,7 +14,12 @@ CI gates.
   `generate()` per SDK and the answer chain's image and citation rules
   (`test_rag_*.py`, `test_multimodal_generate.py`).
   Splitting a document into chunks and assembling the rolling PDF are covered
-  against real PDFs (`test_pdf_pages.py`).
+  against real PDFs (`test_pdf_pages.py`), including that rebuilding a linked
+  document's rolling PDF again and again leaves no objects alive. The
+  PyMuPDF < 1.27.2 leak failed exactly that. `test_memory_release.py` covers
+  the glibc trim helper: it trims where glibc is, and is a no-op off Linux,
+  on musl and without a loadable libc. The call after each page is in
+  `processor.py` and is checked by hand.
   Cross-platform (#69), `test_storage_paths.py` covers the data root per
   platform — the marked cases run only where they apply, the shell-override
   ones run everywhere — `test_config_security.py` covers the keystore scheme

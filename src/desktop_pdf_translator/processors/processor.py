@@ -23,6 +23,7 @@ from ..translators.factory import TranslatorFactory
 from ..translators.argos_translator import ArgosTranslator
 from ..translators.base import describe_fatal_error
 from ..translators.capabilities import resolve_effective_service, resolve_languages
+from ..utils.memory import release_freed_memory
 from .events import (
     ProcessingEvent,
     ProgressEvent,
@@ -1080,6 +1081,13 @@ class PDFProcessor:
                         progress_percent=global_progress,
                         message=f"{pages_label} translated",
                     )
+                    # glibc keeps freed heap in its arenas: untrimmed, a
+                    # 129-page run ended ~420 MB above where malloc_trim
+                    # returns it. Here, after the rebuild, so its document is
+                    # freed too, and after chunk_ready, so the viewer's swap
+                    # never waits on it. Never gc.collect(): ~277 ms a page,
+                    # and it freed nothing (utils/memory.py).
+                    await asyncio.to_thread(release_freed_memory)
             finally:
                 # Stop the ticker; completion_task is already done by sentinel.
                 ticker_task.cancel()

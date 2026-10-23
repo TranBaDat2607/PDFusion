@@ -8,6 +8,7 @@ be read back from its text.
 
 from __future__ import annotations
 
+import gc
 import struct
 import os
 from pathlib import Path
@@ -222,6 +223,58 @@ def test_a_segment_without_its_translation_is_a_bug(source: Path, tmp_path: Path
     segments = rolling_segments(10, [(1, 1)], [True])
     with pytest.raises(ValueError):
         rebuild_rolling_pdf(tmp_path / "out.pdf", source, segments, [None])
+
+
+def _write_linked_pdf(path: Path, pages: int, links_per_page: int) -> Path:
+    with fitz.open() as doc:
+        for n in range(1, pages + 1):
+            page = doc.new_page()
+            page.insert_text((72, 72), f"original {n}")
+            for k in range(links_per_page):
+                top = 100 + 30 * k
+                page.insert_link(
+                    {
+                        "kind": fitz.LINK_URI,
+                        "from": fitz.Rect(72, top, 300, top + 20),
+                        "uri": f"https://example.com/{n}/{k}",
+                    }
+                )
+        doc.save(path)
+    # Guard the fixture: without links this test proves nothing about them.
+    with fitz.open(path) as doc:
+        assert all(len(page.get_links()) == links_per_page for page in doc)
+    return path
+
+
+def test_rebuilding_the_rolling_pdf_over_and_over_leaves_no_objects_behind(
+    tmp_path: Path,
+):
+    """A run rebuilds the rolling PDF after every chunk in one long-lived
+    process, so anything a rebuild leaves alive piles up with the page count.
+    Pages with links are the case that matters: a book is full of them
+    (contents, cross-references, URLs), and a leaking `insert_pdf` leaves two
+    lists behind for every link it copies."""
+    linked = _write_linked_pdf(tmp_path / "linked.pdf", pages=10, links_per_page=4)
+    chunks = split_into_chunks(linked, tmp_path / "in", contiguous_runs([3, 4, 8], 1))
+    results = [_translate(chunks[0][0], tmp_path), None, _translate(chunks[2][0], tmp_path)]
+    segments = rolling_segments(
+        10, [r for _, r in chunks], [r is not None for r in results]
+    )
+    rebuilds = 20
+
+    # The first call may fill caches that are meant to outlive it.
+    rebuild_rolling_pdf(tmp_path / "warmup.pdf", linked, segments, results)
+    gc.collect()
+    before = len(gc.get_objects())
+
+    for n in range(rebuilds):
+        rebuild_rolling_pdf(tmp_path / f"rolling_{n}.pdf", linked, segments, results)
+    gc.collect()
+    growth = len(gc.get_objects()) - before
+
+    assert growth < rebuilds, (
+        f"{growth} objects left alive after {rebuilds} rebuilds of a linked PDF"
+    )
 
 
 # ---------------------------------------------------------------------------
