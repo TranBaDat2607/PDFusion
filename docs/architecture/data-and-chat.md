@@ -132,11 +132,17 @@ index (once per document, rag/ingest.py)            ask (rag/rag_chain.py)
   translation memory fix requires (translation-pipeline.md, "PyMuPDF is at
   least 1.27.2"). Without a replacement, 1,129 words on 278 of a 346-page
   book's pages were indexed as halves ("trans- action"), which neither search
-  matches. The helper is the flag's rule reproduced exactly: a line ending in
-  "-" loses it and runs into the next, unless the line is only the dash.
-  Checked chunk for chunk, the ingestor's output on 1.25.5 is identical
-  before and after the change on all seven text documents in the benchmark,
-  so `CHUNKER_VERSION` stays and no index is rebuilt.
+  matches. The helper is the flag's rule reproduced exactly:
+  - A line ending in a hyphen loses it and runs into the next, unless the
+    line is only the hyphen.
+  - A hyphen is "-", U+00AD, U+2010 or U+2011, each checked against 1.25.5.
+    Word processors export the Unicode ones, and the benchmark has none.
+  - Checked chunk for chunk, the ingestor's output on 1.25.5 is identical
+    before and after the change on all seven text documents in the benchmark.
+  - `CHUNKER_VERSION` stays, even though 1.27's `find_tables` changes some
+    chunks (ResNet, below). An index built on 1.25.5 keeps working, and it was
+    the better of the two on that document. Rebuilding every user's index,
+    OCR included, for a one-question difference would cost more than it buys.
   - The rule glues compounds ("Bose-" / "Einstein" → "BoseEinstein"). A
     variant that joined only lowercase continuations was measured and lost two
     questions on BERT, whose tables use "-" for an empty cell, so the exact

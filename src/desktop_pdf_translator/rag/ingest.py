@@ -144,23 +144,28 @@ def _union(rects: Iterable[Rect]) -> Rect:
     )
 
 
+# What `TEXT_DEHYPHENATE` took for a line-break hyphen, checked one by one on
+# 1.25.5: hyphen-minus, soft hyphen, hyphen, non-breaking hyphen. Never a dash.
+_LINE_BREAK_HYPHENS = ("-", "­", "‐", "‑")
+
+
 def _join_broken_words(lines: List[_Line]) -> List[_Line]:
     """A word hyphenated across a line break, put back together.
 
     PyMuPDF's `TEXT_DEHYPHENATE` did this up to 1.26 and is ignored from 1.27,
     which split ~1,100 words of a 346-page book into halves that neither
     search matches. This is that flag's rule, reproduced exactly: a line
-    ending in "-" loses it and runs into the next, unless the line is nothing
-    but the dash, which stays. That glues compounds too ("BoseEinstein"), and
-    is kept anyway: a rule that spared them moved two benchmark questions off
-    their page, and matching the flag keeps every index built before the
-    upgrade the same text as one built after (CHUNKER_VERSION unchanged).
+    ending in a hyphen loses it and runs into the next, unless the line is
+    nothing but the hyphen, which stays. That glues compounds too
+    ("BoseEinstein"), and is kept anyway: a rule that spared them moved two
+    benchmark questions off their page, and matching the flag keeps the
+    dehyphenated text of an index built before the upgrade the same as after.
     """
     merged: List[_Line] = []
     for line in lines:
-        if merged and merged[-1].text.endswith("-"):
+        if merged and merged[-1].text.endswith(_LINE_BREAK_HYPHENS):
             prev = merged[-1]
-            head = prev.text if prev.text.strip() == "-" else prev.text[:-1]
+            head = prev.text if prev.text.strip() in _LINE_BREAK_HYPHENS else prev.text[:-1]
             merged[-1] = _Line(
                 text=head + line.text,
                 size=max(prev.size, line.size),

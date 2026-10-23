@@ -18,7 +18,7 @@ import fitz
 import pytest
 from PIL import Image, ImageDraw
 
-from desktop_pdf_translator.rag.ingest import PdfIngestor
+from desktop_pdf_translator.rag.ingest import PdfIngestor, _join_broken_words, _Line
 
 PAGE_W, PAGE_H = 595.0, 842.0
 
@@ -207,6 +207,14 @@ _PYMUPDF_125_DEHYPHENATED = [
      "Human - 82.3 91.2 were the scores reported."),
     ("The cost was 2.5k<br>-<br>Pre-OpenAI SOTA in that table.",
      "The cost was 2.5k -Pre-OpenAI SOTA in that table."),
+    # The flag knew the Unicode hyphens too, which word processors export.
+    ("Records survive the trans‐<br>action log of every node.",
+     "Records survive the transaction log of every node."),
+    ("Records survive the trans‑<br>action log of every node.",
+     "Records survive the transaction log of every node."),
+    ("The cost was 2.5k<br>‐<br>Pre-OpenAI SOTA in that table.",
+     "The cost was 2.5k ‐Pre-OpenAI SOTA in that table."),
+    # Joined by neither: guards against a rule that takes any dash for a hyphen.
     ("The pause ends with a dash—<br>and the next line starts here.",
      "The pause ends with a dash— and the next line starts here."),
 ]
@@ -219,8 +227,8 @@ def test_line_break_hyphens_are_joined_as_pymupdf_joined_them(
     """PyMuPDF 1.27 ignores `TEXT_DEHYPHENATE`, so the ingestor joins the
     lines itself, exactly as the flag did — even where that glues a compound
     ("BoseEinstein"). Keeping such compounds apart was measured, and it moved
-    two benchmark questions off their page; matching the old text also keeps
-    an index built before the upgrade the same as one built after."""
+    two benchmark questions off their page; matching the old text keeps the
+    dehyphenated text of an index built before the upgrade the same as after."""
     doc = fitz.open()
     _text_page(doc, [html])
     path = _save(doc, tmp_path)
@@ -228,6 +236,20 @@ def test_line_break_hyphens_are_joined_as_pymupdf_joined_them(
     _, chunks = _ingest(path)
 
     assert _all_text(chunks) == indexed
+
+
+def test_a_soft_hyphen_at_a_line_break_joins_like_a_hyphen() -> None:
+    """No portable PDF puts U+00AD in the extracted text: base-14 fonts read
+    it back as "-", and PyMuPDF's built-in fonts drop it. These are the lines
+    1.25.5 extracted from a page set in DejaVu Sans, and the text it indexed."""
+    def line(text: str, top: float) -> _Line:
+        return _Line(text=text, size=11.0, bbox=(72.0, top, 300.0, top + 12.0))
+
+    merged = _join_broken_words(
+        [line("Records survive the trans­", 62.0), line("action log of every node.", 76.0)]
+    )
+
+    assert [m.text for m in merged] == ["Records survive the transaction log of every node."]
 
 
 def test_runs_of_whitespace_collapse_to_one_space(tmp_path: Path) -> None:
