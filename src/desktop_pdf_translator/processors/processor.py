@@ -13,6 +13,7 @@ import uuid
 from pathlib import Path
 from typing import AsyncGenerator, Optional, Sequence
 
+from babeldoc.babeldoc_exception.BabelDOCException import ExtractTextError
 from babeldoc.format.pdf.high_level import async_translate as babeldoc_translate
 from babeldoc.format.pdf.translation_config import TranslationConfig as BabelDOCConfig
 from babeldoc.format.pdf.translation_config import WatermarkOutputMode as BabelDOCWatermarkMode
@@ -50,6 +51,7 @@ from .pdf_cache import (
 )
 from .pdf_pages import (
     inspect_pdf,
+    pages_without_text,
     rebuild_rolling_pdf,
     split_into_chunks,
     subset_embedded_fonts,
@@ -148,6 +150,11 @@ _MAX_PARALLEL_CHUNKS_ARGOS = 2
 # Tag for the "stop now, the credentials are being rejected" item that
 # `_handle_translation_failure` pushes onto the multiplexer queue.
 _FATAL_KIND = "fatal"
+
+_NOTHING_TO_TRANSLATE = (
+    "None of the selected pages has text to translate. They look scanned or "
+    "image-only, and only a PDF's text layer can be translated."
+)
 
 
 def _effective_parallel_chunks(settings, translator=None) -> int:
@@ -789,6 +796,17 @@ class PDFProcessor:
                 ),
             )
 
+            # BabelDOC fails a chunk it finds no paragraphs in, so a blank,
+            # scanned or image-only page used to end the whole run. Such a page
+            # is kept as the original instead — with every provider, since
+            # BabelDOC only ever translates the text layer. Screening here
+            # spares those pages a full BabelDOC run (layout model and all);
+            # the `ExtractTextError` catch in `run_one_chunk` is the backstop
+            # for pages whose text BabelDOC still can't use.
+            textless = await asyncio.to_thread(pages_without_text, file_path, pages)
+            if len(textless) == pages_to_translate:
+                raise BabelDOCError(_NOTHING_TO_TRANSLATE)
+
             # Priority-driven scheduling. Up to `max_parallel` workers run
             # concurrently, each picking the **pending** chunk whose first
             # page is closest to the current `_priority_anchor` (the page the
@@ -800,6 +818,9 @@ class PDFProcessor:
             chunk_first_page = [page_range[0] - 1 for _, page_range in chunks]
             chunk_results: list[Optional[Path]] = [None] * total_chunks
             chunk_errors: list[Optional[BaseException]] = [None] * total_chunks
+            chunk_skipped: list[bool] = [False] * total_chunks
+            skipped_seen = 0
+            latest_rolling: Optional[Path] = None
             pending: set[int] = set(range(total_chunks))
             completion_queue: asyncio.Queue[int] = asyncio.Queue()
             assert self._priority_lock is not None  # set in process_pdf()
@@ -824,6 +845,12 @@ class PDFProcessor:
             async def run_one_chunk(idx: int) -> None:
                 chunk_path, page_range = chunks[idx]
                 try:
+                    if all(
+                        page in textless
+                        for page in range(page_range[0], page_range[1] + 1)
+                    ):
+                        chunk_skipped[idx] = True
+                        return
                     chunk_out_dir = chunks_out_root / f"chunk_{idx:03d}"
                     chunk_out_dir.mkdir(parents=True, exist_ok=True)
                     doc_layout_model = await asyncio.to_thread(get_shared_doc_layout_model)
@@ -836,6 +863,21 @@ class PDFProcessor:
                     )
                     async for event in babeldoc_translate(config):
                         etype = event["type"]
+                        # BabelDOC hands over the exception itself, not just
+                        # its message, so this needs no string matching.
+                        if etype == "error" and isinstance(
+                            event.get("error"), ExtractTextError
+                        ):
+                            logger.warning(
+                                "Chunk %d/%d (page %d): no text BabelDOC can "
+                                "translate (%s); keeping the original",
+                                idx + 1, total_chunks, page_range[0],
+                                event["error"],
+                            )
+                            # Not `return`: `async_translate` ends by itself
+                            # after an error, once BabelDOC's thread is done.
+                            chunk_skipped[idx] = True
+                            continue
                         if etype == "error":
                             raise BabelDOCError(
                                 message=(
@@ -850,6 +892,8 @@ class PDFProcessor:
                                 idx + 1, total_chunks, page_range[0],
                             )
                             break
+                    if chunk_skipped[idx]:
+                        return
                     translated = self._find_translated_file(
                         chunk_out_dir, chunk_path.stem
                     )
@@ -998,6 +1042,8 @@ class PDFProcessor:
                         raise babeldoc_chunk_error(idx + 1, err)
 
                     _, page_range = chunks[idx]
+                    if chunk_skipped[idx]:
+                        skipped_seen += 1
                     rolling_path = (
                         output_dir
                         / f"{file_path.stem}_translated_v{completed_count:03d}.pdf"
@@ -1007,33 +1053,46 @@ class PDFProcessor:
                     # other requests aren't stalled per chunk. The plan and a
                     # copy of the results are taken here, on the loop, where
                     # no other chunk can land in between.
-                    segments = rolling_segments(
-                        file_metadata.page_count,
-                        [page_range for _, page_range in chunks],
-                        [result is not None for result in chunk_results],
-                    )
-                    await asyncio.to_thread(
-                        rebuild_rolling_pdf,
-                        rolling_path,
-                        file_path,
-                        segments,
-                        list(chunk_results),
-                    )
-                    # Bound disk usage during the run. keep=2, not 1: the
-                    # viewer is still on v{N-1} until it processes the
-                    # chunk_ready below — see cleanup_partial_artifacts.
-                    await asyncio.to_thread(self.cleanup_partial_artifacts, 2)
+                    #
+                    # A skipped chunk changes no page: the latest file already
+                    # has the original there. Sending its path again lifts the
+                    # viewer's mask for those pages without a reload — on a
+                    # mostly scanned document, rebuilding per skipped page was
+                    # hundreds of full copies queued ahead of the real pages.
+                    if chunk_skipped[idx] and latest_rolling is not None:
+                        rolling_path = latest_rolling
+                    else:
+                        segments = rolling_segments(
+                            file_metadata.page_count,
+                            [page_range for _, page_range in chunks],
+                            [result is not None for result in chunk_results],
+                        )
+                        await asyncio.to_thread(
+                            rebuild_rolling_pdf,
+                            rolling_path,
+                            file_path,
+                            segments,
+                            list(chunk_results),
+                        )
+                        latest_rolling = rolling_path
+                        # Bound disk usage during the run. keep=2, not 1: the
+                        # viewer is still on v{N-1} until it processes the
+                        # chunk_ready below — see cleanup_partial_artifacts.
+                        await asyncio.to_thread(self.cleanup_partial_artifacts, 2)
 
                     global_progress = 50.0 + chunk_weight * completed_count
 
-                    # ETA: need ≥2 completed chunks for a stable rate.
+                    # ETA: need ≥2 completed chunks for a stable rate. A
+                    # skipped chunk finishes at once, so counting it would
+                    # make a run that starts on blank pages look fast.
                     elapsed: Optional[float] = None
                     pages_per_second: Optional[float] = None
                     eta_seconds: Optional[float] = None
+                    translated_count = completed_count - skipped_seen
                     if job_start_time is not None:
                         elapsed = time.time() - job_start_time
-                        if completed_count >= 2 and elapsed and elapsed > 0:
-                            pages_per_second = completed_count / elapsed
+                        if translated_count >= 2 and elapsed and elapsed > 0:
+                            pages_per_second = translated_count / elapsed
                             remaining_chunks = total_chunks - completed_count
                             if pages_per_second > 0 and remaining_chunks > 0:
                                 eta_seconds = remaining_chunks / pages_per_second
@@ -1078,11 +1137,27 @@ class PDFProcessor:
                         current_step=3,
                         total_steps=4,
                         progress_percent=global_progress,
-                        message=f"{pages_label} translated",
+                        message=(
+                            f"{pages_label}: no text to translate, kept the original"
+                            if chunk_skipped[idx]
+                            else f"{pages_label} translated"
+                        ),
                     )
             finally:
                 # Stop the ticker; completion_task is already done by sentinel.
                 ticker_task.cancel()
+
+            # Otherwise the run would hand back — and cache — a "translation"
+            # identical to the source.
+            if all(chunk_skipped):
+                raise BabelDOCError(_NOTHING_TO_TRANSLATE)
+            skipped_pages = sum(
+                last - first + 1
+                for (_, (first, last)), skipped in zip(chunks, chunk_skipped)
+                if skipped
+            )
+            if skipped_pages:
+                logger.info("Kept %d page(s) with no text unchanged", skipped_pages)
 
             yield ProgressEvent(
                 type=EventType.PROGRESS_UPDATE,
@@ -1093,7 +1168,11 @@ class PDFProcessor:
                 current_step=3,
                 total_steps=4,
                 progress_percent=90.0,
-                message="All pages translated",
+                message=(
+                    f"Done; kept {skipped_pages} page(s) with no text to translate"
+                    if skipped_pages
+                    else "All pages translated"
+                ),
             )
 
         except (BabelDOCError, TranslationProcessError):

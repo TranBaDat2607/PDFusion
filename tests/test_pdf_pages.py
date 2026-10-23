@@ -22,6 +22,7 @@ from desktop_pdf_translator.processors.page_selection import (
 )
 from desktop_pdf_translator.processors.pdf_pages import (
     inspect_pdf,
+    pages_without_text,
     rebuild_rolling_pdf,
     split_into_chunks,
     subset_embedded_fonts,
@@ -147,6 +148,85 @@ def test_cjk_text_is_counted_as_such(tmp_path: Path):
         doc.save(pdf)
     stats = text_stats(pdf, None, 0)
     assert (stats.paragraphs, stats.cjk_chars, stats.other_chars) == (1, 4, 0)
+
+
+# ---------------------------------------------------------------------------
+# pages_without_text
+# ---------------------------------------------------------------------------
+
+
+def _write_mixed_pdf(path: Path, builders: list) -> Path:
+    """One page per builder, each given its page to draw on (or leave alone)."""
+    with fitz.open() as doc:
+        for build in builders:
+            build(doc.new_page())
+        doc.save(path)
+    return path
+
+
+def _with_text(text: str):
+    return lambda page: page.insert_text((72, 72), text)
+
+
+def _blank(page) -> None:
+    pass
+
+
+def _image_only(page) -> None:
+    pix = fitz.Pixmap(fitz.csRGB, fitz.IRect(0, 0, 20, 20), False)
+    page.insert_image(fitz.Rect(72, 72, 172, 172), pixmap=pix)
+
+
+def test_a_page_with_text_is_not_returned(tmp_path: Path):
+    pdf = _write_mixed_pdf(tmp_path / "text.pdf", [_with_text("a whole sentence")])
+    assert pages_without_text(pdf, [1]) == frozenset()
+
+
+def test_a_blank_page_is_returned(tmp_path: Path):
+    pdf = _write_mixed_pdf(tmp_path / "blank.pdf", [_blank])
+    assert pages_without_text(pdf, [1]) == frozenset({1})
+
+
+def test_an_image_only_page_is_returned(tmp_path: Path):
+    """A scan: ink on the page, but nothing for the translator to read."""
+    pdf = _write_mixed_pdf(tmp_path / "scan.pdf", [_image_only])
+    assert pages_without_text(pdf, [1]) == frozenset({1})
+
+
+def test_a_page_whose_only_text_is_whitespace_is_returned(tmp_path: Path):
+    pdf = _write_mixed_pdf(tmp_path / "spaces.pdf", [_with_text("   \t  ")])
+    # Guard the fixture: the page must carry a text object, or this is just
+    # the blank-page test again.
+    with fitz.open(pdf) as doc:
+        assert doc[0].get_text() != ""
+        assert doc[0].get_text().strip() == ""
+    assert pages_without_text(pdf, [1]) == frozenset({1})
+
+
+def test_only_the_requested_pages_are_inspected(tmp_path: Path):
+    pdf = _write_mixed_pdf(
+        tmp_path / "three.pdf", [_with_text("first"), _blank, _with_text("third")]
+    )
+    assert pages_without_text(pdf, [1, 2, 3]) == frozenset({2})
+    assert pages_without_text(pdf, [1, 3]) == frozenset()
+
+
+def test_an_ocred_scan_is_not_returned(tmp_path: Path):
+    """A scan with an invisible OCR layer has text BabelDOC translates; a
+    screen that looked only at visible text would skip every such page."""
+
+    def ocred(page) -> None:
+        _image_only(page)
+        page.insert_text((72, 72), "recognised words", render_mode=3)
+
+    pdf = _write_mixed_pdf(tmp_path / "ocred.pdf", [ocred])
+    assert pages_without_text(pdf, [1]) == frozenset()
+
+
+def test_a_single_visible_character_is_enough_to_keep_a_page(tmp_path: Path):
+    """A page number alone is still text BabelDOC gets to try."""
+    pdf = _write_mixed_pdf(tmp_path / "numbered.pdf", [_with_text("7")])
+    assert pages_without_text(pdf, [1]) == frozenset()
 
 
 # ---------------------------------------------------------------------------

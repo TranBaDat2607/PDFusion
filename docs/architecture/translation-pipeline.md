@@ -275,6 +275,48 @@ The Pages box resets when a different document opens (`setOriginalPdfPath`).
 Accepting the offer writes the chosen pages back into it, so Re-translate and
 Retry ask for the same pages.
 
+## A page with no text is kept, not failed
+
+BabelDOC raises `ExtractTextError` ("The document contains no paragraphs.") on
+a chunk it finds no text in, and a chunk is one page, so a single blank,
+scanned or image-only page used to end the whole run as `BabelDOC chunk N
+failed`. BabelDOC only translates the text layer, with every provider, so
+such a page is now kept as the original, for Argos and the LLMs alike. Two
+layers, and neither replaces the other:
+
+- **The pre-screen**, `pdf_pages.pages_without_text`, runs once before the
+  workers start and marks a page skipped when PyMuPDF extracts nothing from it
+  but whitespace. It spares that page a whole BabelDOC run (layout model,
+  render, save). The bar is "no visible character", not `min_text_length`,
+  because BabelDOC finds paragraphs its own way and must get every page that
+  might have one. An OCR'd scan's invisible text layer counts as text, and a
+  test holds that, since a "visible text only" screen would skip every such
+  page. What it does skip is text nobody sees either: an optional-content
+  layer that is switched off, or text outside the CropBox.
+- **The backstop**: `run_one_chunk` matches an error event whose `error` is an
+  `ExtractTextError` instance (BabelDOC passes the exception, not only its
+  message) and marks the chunk skipped. That covers what the screen can't
+  see: text BabelDOC still finds no paragraph in, and its "too many CID"
+  refusals for garbled fonts. The loop runs on to the generator's end rather
+  than returning, so BabelDOC's thread finishes its cleanup first. BabelDOC
+  never collects that thread's future, so asyncio logs "Future exception was
+  never retrieved" for each page skipped here. That is noise, and the
+  pre-screen keeps it out of the common case.
+
+A skipped chunk still emits `chunk_ready`, so "N of M pages" reaches M and the
+viewer's mask lifts for that page. It **re-sends the latest rolling path rather
+than rebuilding**: the file already has the original there, and the store
+widens the mask for an unchanged path without reloading it. Rebuilding per
+skipped page put hundreds of full copies of a mostly scanned document ahead of
+the pages being translated. It is left out of the ETA's rate, since it
+finishes at once (counted as the loop consumes it, not when flagged). A run
+with *every* page skipped is an error, since it would otherwise return, and
+cache, a copy of the source labelled as a translation: refused before any
+worker starts when the screen covers the selection, and after the loop when
+the backstop does. Only the helper has a unit test. The processor half (`processor.py`
+has no harness) was exercised by hand on Argos and Gemini, with the screen on
+and off.
+
 ## Each chunk's fonts are subset before it is merged
 
 BabelDOC subsets fonts only in its clean step, and PDFusion passes
