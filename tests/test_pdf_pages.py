@@ -252,7 +252,8 @@ def test_rebuilding_the_rolling_pdf_over_and_over_leaves_no_objects_behind(
     """A run rebuilds the rolling PDF after every chunk in one long-lived
     process, so anything a rebuild leaves alive piles up with the page count.
     Pages with links are the case that matters: a book is full of them
-    (contents, cross-references, URLs) and each one is an object per link."""
+    (contents, cross-references, URLs), and a leaking `insert_pdf` leaves two
+    lists behind for every link it copies."""
     linked = _write_linked_pdf(tmp_path / "linked.pdf", pages=10, links_per_page=4)
     chunks = split_into_chunks(linked, tmp_path / "in", contiguous_runs([3, 4, 8], 1))
     results = [_translate(chunks[0][0], tmp_path), None, _translate(chunks[2][0], tmp_path)]

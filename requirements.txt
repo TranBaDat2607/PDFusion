@@ -6,11 +6,11 @@ tomlkit>=0.12.0,<1.0.0
 python-dotenv>=1.0.0,<2.0.0
 cryptography>=41.0.0,<43.0.0
 
-# Before 1.27.2 the helper behind `get_links` leaks a list per call, and
-# `insert_pdf` copies every link through it; the rolling PDF re-inserts the
-# whole document after each page, so a 346-page book leaked ~2,100 lists a
-# page, invisible to gc (tests/test_pdf_pages.py guards it). <1.28: 1.28
-# deprecates the `fitz` name every module imports.
+# Before 1.27.2 the helper behind `get_links` leaks two lists per link,
+# and `insert_pdf` copies every link through it; the rolling PDF re-inserts
+# the whole document after each page, so a 346-page book leaked ~1,700
+# objects a page, invisible to gc (tests/test_pdf_pages.py guards it).
+# <1.28: 1.28 deprecates the `fitz` name every module imports.
 PyMuPDF>=1.27.2,<1.28
 Pillow>=9.5.0,<11.0.0
 
