@@ -295,6 +295,11 @@ class BaseTranslator(ABC):
                   max_qps: Optional[float]
                     Overrides the shared rate limiter's default for this
                     backend's service. None keeps the built-in default.
+                  instructions: Optional[str]
+                    The user's translation instructions, added after the
+                    fixed rules of every paragraph's prompt and part of its
+                    paragraph-cache key. Given only for translation, never
+                    for chat (`capabilities.translation_instructions`).
                   provider_id: Optional[str]
                     The registry provider this instance serves, which names
                     its rate limiter. One class serves several providers —
@@ -328,6 +333,7 @@ class BaseTranslator(ABC):
             "cancel_event", None
         )
         self.max_qps: Optional[float] = kwargs.pop("max_qps", None)
+        self.instructions: Optional[str] = kwargs.pop("instructions", None)
         provider_id: Optional[str] = kwargs.pop("provider_id", None)
         if provider_id is not None and self._SERVICE_NAME is not None:
             self._SERVICE_NAME = provider_id
@@ -590,6 +596,22 @@ class BaseTranslator(ABC):
             f"- The text may contain placeholders: {formula} stands for a formula, "
             f"and {styled} marks styled text. Copy every placeholder through "
             f"unchanged, keeping the words a {styled} pair wraps inside that pair."
+        ) + self._user_instructions_block()
+
+    def _user_instructions_block(self) -> str:
+        """The user's instructions, after every fixed rule and fenced, so the
+        prompt can say which wins: a user asking for notes, or another
+        language, would otherwise print them into the PDF. Empty without any,
+        leaving the prompt exactly as it was before instructions existed."""
+        if not self.instructions:
+            return ""
+        target_lang = LANGUAGE_DISPLAY_NAMES.get(self.lang_out, self.lang_out)
+        return (
+            "\n\nThe user gave these instructions for translating this document. "
+            "Follow them, except where they conflict with the rules above: the "
+            f"translation is always in {target_lang}, the reply is the translation "
+            "alone, and every placeholder is copied through.\n"
+            f"<user-instructions>\n{self.instructions}\n</user-instructions>"
         )
 
     def get_formular_placeholder(self, placeholder_id: int) -> tuple[str, str]:

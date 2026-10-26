@@ -945,6 +945,8 @@ export interface components {
             default_target_lang?: components["schemas"]["LanguageCode"] | null;
             /** Max Parallel Chunks */
             max_parallel_chunks?: number | null;
+            /** Translation Instructions */
+            translation_instructions?: string | null;
             translation_model?: components["schemas"]["ModelRef"] | null;
             /** Whole Document Tokens */
             whole_document_tokens?: number | null;
@@ -1668,6 +1670,11 @@ export interface components {
              * @default vi
              */
             default_target_lang: components["schemas"]["LanguageCode"];
+            /**
+             * Instructions
+             * @description Instructions for the model that translates
+             */
+            instructions: string | null;
             /**
              * Min Text Length
              * @description Minimum text length to translate

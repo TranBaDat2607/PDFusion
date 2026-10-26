@@ -12,6 +12,10 @@ interface EstimateInput {
   /** The Pages box, parsed; `null` for every page. */
   ranges: PageRange[] | null;
   targetLang: string | null;
+  /** The saved translation instructions. Not sent — the sidecar reads them
+   *  from config — but each paragraph's prompt carries them, so a new set is a
+   *  new question; without it the count went stale for the session. */
+  instructions: string | null;
   /** Only while an LLM will run: Argos costs nothing to call. */
   enabled: boolean;
 }
@@ -21,18 +25,19 @@ const FILE_PATH = 2;
 
 /**
  * Roughly how many tokens translating these pages would take (#33). The file,
- * pages and language are the whole question, so an answer is kept for the
- * session; while a new one loads, the previous one for *this document* stays
- * on screen.
+ * pages, language and instructions are the whole question, so an answer is
+ * kept for the session; while a new one loads, the previous one for *this
+ * document* stays on screen.
  */
 export function useTranslationEstimate({
   filePath,
   ranges,
   targetLang,
+  instructions,
   enabled,
 }: EstimateInput) {
   return useQuery({
-    queryKey: ["translate", "estimate", filePath, ranges, targetLang],
+    queryKey: ["translate", "estimate", filePath, ranges, targetLang, instructions],
     queryFn: () => {
       const body: EstimateRequest = {
         file_path: filePath as string,

@@ -76,7 +76,8 @@ class OpenAITranslator(BaseTranslator):
                 return text
 
             cached = _llm_cache_get(
-                processed_text, self.lang_in, self.lang_out, self._SERVICE_NAME, self.model
+                processed_text, self.lang_in, self.lang_out, self._SERVICE_NAME, self.model,
+                instructions=self.instructions,
             )
             if cached is not None:
                 self._fire_paragraph_callback(processed_text, cached)
@@ -116,7 +117,8 @@ class OpenAITranslator(BaseTranslator):
             # paragraph is — the same name behind two cards would serve each
             # other's text.
             _llm_cache_set(
-                processed_text, result, self.lang_in, self.lang_out, self._SERVICE_NAME, self.model
+                processed_text, result, self.lang_in, self.lang_out, self._SERVICE_NAME, self.model,
+                instructions=self.instructions,
             )
             self._fire_paragraph_callback(processed_text, result)
             return result

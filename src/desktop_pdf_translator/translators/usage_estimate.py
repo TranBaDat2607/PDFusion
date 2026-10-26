@@ -45,8 +45,19 @@ def text_tokens(cjk_chars: int, other_chars: int) -> int:
     return cjk_chars + math.ceil(other_chars / CHARS_PER_TOKEN)
 
 
-def prompt_tokens(target_lang: str) -> int:
-    return PROMPT_TOKENS_VIETNAMESE if target_lang == "vi" else PROMPT_TOKENS_OTHER
+# The lead-in and fence `BaseTranslator._user_instructions_block` puts around
+# the user's instructions, at CHARS_PER_TOKEN: 300 characters as measured for
+# Vietnamese, the target it names in full.
+INSTRUCTIONS_WRAPPER_TOKENS = 75
+
+
+def prompt_tokens(target_lang: str, instructions: str | None = None) -> int:
+    fixed = PROMPT_TOKENS_VIETNAMESE if target_lang == "vi" else PROMPT_TOKENS_OTHER
+    if not instructions:
+        return fixed
+    return fixed + INSTRUCTIONS_WRAPPER_TOKENS + text_tokens(
+        count_cjk(instructions), len(instructions) - count_cjk(instructions)
+    )
 
 
 @dataclass(frozen=True)
@@ -56,11 +67,17 @@ class TokenEstimate:
 
 
 def estimate_tokens(
-    *, paragraphs: int, cjk_chars: int, other_chars: int, target_lang: str
+    *,
+    paragraphs: int,
+    cjk_chars: int,
+    other_chars: int,
+    target_lang: str,
+    instructions: str | None = None,
 ) -> TokenEstimate:
-    """Tokens sent (text plus one prompt per paragraph) and received."""
+    """Tokens sent (text plus one prompt per paragraph, the user's
+    instructions included) and received."""
     text = text_tokens(cjk_chars, other_chars)
     return TokenEstimate(
-        input_tokens=text + paragraphs * prompt_tokens(target_lang),
+        input_tokens=text + paragraphs * prompt_tokens(target_lang, instructions),
         output_tokens=math.ceil(text * OUTPUT_RATIO),
     )

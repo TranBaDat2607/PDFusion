@@ -23,7 +23,11 @@ from ..providers.registry import provider
 from ..translators.factory import TranslatorFactory
 from ..translators.argos_translator import ArgosTranslator
 from ..translators.base import describe_fatal_error
-from ..translators.capabilities import resolve_effective_service, resolve_languages
+from ..translators.capabilities import (
+    resolve_effective_service,
+    resolve_languages,
+    translation_instructions,
+)
 from ..utils.memory import release_freed_memory
 from .events import (
     ProcessingEvent,
@@ -280,6 +284,11 @@ class PDFProcessor:
             requested_service = translation_service
             translation_service = self._resolve_effective_service(translation_service)
             fell_back = translation_service != requested_service
+            # Asked once, of the service that will really run, and handed to
+            # the translator and both ends of the PDF cache alike: a cache
+            # keyed on other instructions than the prompt used would serve the
+            # wrong translation.
+            instructions = translation_instructions(self.settings, translation_service)
 
             # Log the actual languages being used
             logger.info(f"Using languages - Source: {source_lang}, Target: {target_lang}")
@@ -408,6 +417,7 @@ class PDFProcessor:
                     model_id,
                     input_file_hash,
                     pages=selection_key,
+                    instructions=instructions,
                 )
                 if hit is not None:
                     # Use the highest-int name in the rolling-version family
@@ -522,6 +532,7 @@ class PDFProcessor:
                 on_paragraph_translated=self._handle_paragraph,
                 on_translation_failed=self._handle_translation_failure,
                 cancel_event=self._cancel_event,
+                instructions=instructions,
             )
             
             yield ProgressEvent(
@@ -598,6 +609,7 @@ class PDFProcessor:
                         self._resolve_model_id(translation_service),
                         input_file_hash,
                         selection_key,
+                        instructions,
                     )
                 )
                 _pending_cache_writes.add(store_task)

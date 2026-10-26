@@ -242,6 +242,76 @@ def test_a_zero_whole_document_budget_means_always_retrieve(client: TestClient):
 
 
 # ---------------------------------------------------------------------------
+# translation instructions
+# ---------------------------------------------------------------------------
+
+
+def test_translation_instructions_are_unset_until_saved(client: TestClient):
+    assert client.get("/config", headers=AUTH).json()["translation"]["instructions"] is None
+
+
+def test_saved_translation_instructions_are_trimmed_returned_and_persisted(
+    client: TestClient, manager: ConfigManager
+):
+    response = put(client, {"translation_instructions": "  Keep index in English\n"})
+
+    assert response.status_code == 200
+    assert response.json()["translation"]["instructions"] == "Keep index in English"
+    assert (
+        client.get("/config", headers=AUTH).json()["translation"]["instructions"]
+        == "Keep index in English"
+    )
+    reloaded = ConfigManager(config_dir=manager.config_dir).load_settings()
+    assert reloaded.translation.instructions == "Keep index in English"
+
+
+def test_a_save_that_leaves_translation_instructions_out_keeps_them(client: TestClient):
+    assert put(client, {"translation_instructions": "Keep index in English"}).status_code == 200
+
+    response = put(client, {"chat_enabled": False})
+
+    assert response.json()["translation"]["instructions"] == "Keep index in English"
+
+
+@pytest.mark.parametrize("cleared", [None, "", "   "])
+def test_null_or_blank_translation_instructions_clear_them(client: TestClient, cleared):
+    """`null` has to mean "clear" even though a left-out field is also None
+    inside the model; the two are told apart by what the body carried."""
+    assert put(client, {"translation_instructions": "Keep index in English"}).status_code == 200
+
+    response = put(client, {"translation_instructions": cleared})
+
+    assert response.status_code == 200
+    assert response.json()["translation"]["instructions"] is None
+    assert client.get("/config", headers=AUTH).json()["translation"]["instructions"] is None
+
+
+def test_translation_instructions_may_be_exactly_2000_characters(client: TestClient):
+    response = put(client, {"translation_instructions": "z" * 2000})
+
+    assert response.status_code == 200
+    assert response.json()["translation"]["instructions"] == "z" * 2000
+
+
+def test_translation_instructions_are_measured_after_trimming(client: TestClient):
+    """The box counts the trimmed text and `config.toml` stores it, so a
+    trailing newline must not turn a full-length instruction into a 422."""
+    response = put(client, {"translation_instructions": "z" * 2000 + "\n"})
+
+    assert response.status_code == 200
+    assert response.json()["translation"]["instructions"] == "z" * 2000
+
+
+def test_translation_instructions_over_2000_characters_are_refused(
+    client: TestClient, manager: ConfigManager
+):
+    assert put(client, {"translation_instructions": "kept"}).status_code == 200
+
+    assert put(client, {"translation_instructions": "z" * 2001}).status_code == 422
+    assert manager.settings.translation.instructions == "kept"
+
+
+# ---------------------------------------------------------------------------
 # no translation limits
 # ---------------------------------------------------------------------------
 

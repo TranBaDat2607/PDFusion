@@ -39,8 +39,14 @@ def _make_cache_key(
     lang_out: str,
     service: str,
     model: Optional[str],
+    instructions: Optional[str] = None,
 ) -> str:
     payload = f"{lang_in}|{lang_out}|{service}|{model or ''}|{source_text}"
+    # Appended only when there are some, so every entry stored before they
+    # existed still matches a run without any. Without them in the key, a
+    # changed instruction would be answered from the old one's translations.
+    if instructions:
+        payload += f"|instructions={instructions}"
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
@@ -152,9 +158,10 @@ class TranslationCache:
         lang_out: str,
         service: str,
         model: Optional[str] = None,
+        instructions: Optional[str] = None,
     ) -> Optional[str]:
         """Return cached translation or None. Records hit/miss stats."""
-        key = _make_cache_key(source_text, lang_in, lang_out, service, model)
+        key = _make_cache_key(source_text, lang_in, lang_out, service, model, instructions)
         try:
             conn = self._conn()
             row = conn.execute(
@@ -196,11 +203,12 @@ class TranslationCache:
         lang_out: str,
         service: str,
         model: Optional[str] = None,
+        instructions: Optional[str] = None,
     ) -> bool:
         """Insert or replace a cache entry. Returns True on success."""
         if not translated_text:
             return False
-        key = _make_cache_key(source_text, lang_in, lang_out, service, model)
+        key = _make_cache_key(source_text, lang_in, lang_out, service, model, instructions)
         now = now_ms()
         expires_at = now + self.ttl_days * 86_400_000
         try:
@@ -363,6 +371,7 @@ def llm_cache_get(
     lang_out: str,
     service: str,
     model: Optional[str],
+    instructions: Optional[str] = None,
 ) -> Optional[str]:
     """Cache lookup wrapper for LLM translators. Silently bypasses when caching
     is disabled in settings, so translator code stays clean."""
@@ -375,6 +384,7 @@ def llm_cache_get(
             lang_out=lang_out,
             service=service,
             model=model,
+            instructions=instructions,
         )
     except Exception as e:
         logger.warning("llm_cache_get failed: %s", e)
@@ -388,6 +398,7 @@ def llm_cache_set(
     lang_out: str,
     service: str,
     model: Optional[str],
+    instructions: Optional[str] = None,
 ) -> None:
     if not _cache_enabled():
         return
@@ -399,6 +410,7 @@ def llm_cache_set(
             lang_out=lang_out,
             service=service,
             model=model,
+            instructions=instructions,
         )
     except Exception as e:
         logger.warning("llm_cache_set failed: %s", e)

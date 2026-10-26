@@ -24,7 +24,7 @@ import logging
 from typing import Dict, FrozenSet, List, Optional, Set, Tuple, Union
 
 from ..config import LanguageCode, TranslationService
-from ..providers.registry import PROVIDERS
+from ..providers.registry import PROVIDERS, provider
 
 logger = logging.getLogger(__name__)
 
@@ -176,3 +176,19 @@ def resolve_effective_service(
         return requested
     logger.info("No API key for %s — falling back to Argos for this run", requested)
     return TranslationService.ARGOS
+
+
+def translation_instructions(
+    settings, service: TranslationService
+) -> Optional[str]:
+    """The user's translation instructions, for the service that will run.
+
+    Pass the *effective* service (`resolve_effective_service`): an LLM with no
+    key runs as Argos. Argos has no prompt to carry them, and handing them on
+    anyway would key its caches on text that changes nothing. The processor
+    asks once and gives the answer to the translator and to both ends of the
+    PDF cache, so the three can never disagree.
+    """
+    if not provider(TranslationService(service).value).is_llm:
+        return None
+    return settings.translation.instructions

@@ -4,6 +4,7 @@ import { Database, FileText, Loader2, RefreshCw, Sparkles, Trash2 } from "lucide
 
 import { ChatIndexTab } from "@/components/settings/ChatIndexTab";
 import { ModelsTab } from "@/components/settings/ModelsTab";
+import { TranslationTab } from "@/components/settings/TranslationTab";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -45,7 +46,7 @@ import { useConfig, useUpdateConfig } from "@/hooks/useConfig";
 import type { OpenedFrom } from "@/lib/provider-draft";
 import { cn } from "@/lib/utils";
 
-type TabValue = "models" | "cache" | "chat";
+type TabValue = "models" | "translation" | "cache" | "chat";
 
 interface SettingsSheetProps {
   open: boolean;
@@ -84,14 +85,19 @@ export function SettingsSheet({
 
         <div className="flex-1 overflow-y-auto px-4">
           <Tabs value={tab} onValueChange={(v) => setTab(v as TabValue)}>
-            <TabsList className="grid w-full grid-cols-3">
+            <TabsList className="grid w-full grid-cols-4">
               <TabsTrigger value="models">Models</TabsTrigger>
+              <TabsTrigger value="translation">Translation</TabsTrigger>
               <TabsTrigger value="cache">Cache</TabsTrigger>
               <TabsTrigger value="chat">Chat</TabsTrigger>
             </TabsList>
 
             <TabsContent value="models" className="mt-4">
               <ModelsTab focusProvider={focusProvider} openedFrom={openedFrom} />
+            </TabsContent>
+
+            <TabsContent value="translation" className="mt-4">
+              <TranslationTab />
             </TabsContent>
 
             <TabsContent value="cache" className="mt-4">

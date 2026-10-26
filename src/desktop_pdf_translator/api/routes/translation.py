@@ -24,6 +24,7 @@ from ...processors.pdf_pages import inspect_pdf, text_stats
 from ...translators.capabilities import (
     resolve_effective_service,
     resolve_languages,
+    translation_instructions,
     unsupported_reason,
 )
 from ...translators.usage_estimate import estimate_tokens
@@ -237,6 +238,11 @@ def _measure(payload: EstimateRequest, settings) -> TranslationEstimate:
         cjk_chars=stats.cjk_chars,
         other_chars=stats.other_chars,
         target_lang=target_lang.value,
+        # The configured model's, not the effective one's: the toolbar shows
+        # an estimate only for an LLM that can run.
+        instructions=translation_instructions(
+            settings, settings.translation.model.provider
+        ),
     )
     return TranslationEstimate(
         page_count=info.page_count,

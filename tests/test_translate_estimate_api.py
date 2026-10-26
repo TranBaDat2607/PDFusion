@@ -17,9 +17,12 @@ from fastapi.testclient import TestClient
 
 from desktop_pdf_translator.api import auth
 from desktop_pdf_translator.api.routes import translation as translation_routes
-from desktop_pdf_translator.config import AppSettings, LanguageCode, TranslationService
+from desktop_pdf_translator.config import AppSettings, LanguageCode, ModelRef
 from desktop_pdf_translator.processors.pdf_pages import PdfInfo
-from desktop_pdf_translator.translators.usage_estimate import estimate_tokens
+from desktop_pdf_translator.translators.usage_estimate import (
+    CHARS_PER_TOKEN,
+    estimate_tokens,
+)
 
 TOKEN = "test-token-for-translate-estimate"
 LINE = "A sentence that a translator would be sent on its own."
@@ -28,7 +31,10 @@ LINE = "A sentence that a translator would be sent on its own."
 class _FakeTranslationSettings:
     default_source_lang = LanguageCode.ENGLISH
     default_target_lang = LanguageCode.VIETNAMESE
-    preferred_service = TranslationService.OPENAI
+    # What real settings carry since #88; the route asks the model's provider
+    # whether the user's instructions apply.
+    model = ModelRef(provider="openai", model="gpt-4.1")
+    instructions = None
     min_text_length = 5
 
 
@@ -101,6 +107,45 @@ def test_the_target_language_changes_the_prompt(client, book, settings):
     japanese = _estimate(client, book, target_lang="ja").json()
     assert japanese["input_tokens"] < vietnamese["input_tokens"]
     assert japanese["output_tokens"] == vietnamese["output_tokens"]
+
+
+def _llm_settings(instructions):
+    from desktop_pdf_translator.config import ModelRef
+
+    settings = AppSettings()
+    settings.translate_with(ModelRef(provider="openai", model="gpt-4.1"))
+    settings.translation.instructions = instructions
+    return settings
+
+
+def test_instructions_add_to_the_input_estimate_of_an_llm_run(client, book, monkeypatch):
+    """Each paragraph is sent with them, so the figure the toolbar shows before
+    a run would understate the bill by exactly that much."""
+    instructions = "Keep programming terms such as index in English. " * 4
+    monkeypatch.setattr(translation_routes, "get_settings", lambda: _llm_settings(None))
+    without = _estimate(client, book).json()
+    monkeypatch.setattr(
+        translation_routes, "get_settings", lambda: _llm_settings(instructions)
+    )
+    with_instructions = _estimate(client, book).json()
+
+    assert with_instructions["input_tokens"] - without["input_tokens"] >= 6 * (
+        len(instructions) // CHARS_PER_TOKEN
+    )
+    assert with_instructions["output_tokens"] == without["output_tokens"]
+
+
+def test_instructions_do_not_change_the_estimate_of_an_argos_run(client, book, monkeypatch):
+    """Argos has no prompt; the toolbar doesn't show an estimate for it, but
+    the number must not move if it is asked for."""
+    plain = AppSettings()
+    monkeypatch.setattr(translation_routes, "get_settings", lambda: plain)
+    without = _estimate(client, book).json()
+    with_text = AppSettings()
+    with_text.translation.instructions = "Keep index in English"
+    monkeypatch.setattr(translation_routes, "get_settings", lambda: with_text)
+
+    assert _estimate(client, book).json() == without
 
 
 def test_a_large_file_is_estimated_like_any_other(client, book, monkeypatch):

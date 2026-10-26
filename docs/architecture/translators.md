@@ -55,6 +55,35 @@ notice; and a disabled Radix `SelectItem` sets `pointer-events: none`, so the
 Broadening Argos beyond en→vi means shipping more language packs, not editing
 its spec's `supported_pairs` alone.
 
+## Translation instructions
+
+Settings → Translation saves free text, `translation.instructions` (at most
+2,000 characters, trimmed, blank stored as `None`), telling the model how to
+translate: register, terms to keep in English, how to render names.
+
+- **They go in our prompt, not BabelDOC's.** `TranslationConfig.custom_system_prompt`
+  looks like the hook, but BabelDOC reads it only on the `do_llm_translate`
+  path, which none of our translators has (see the plug-in interface below),
+  so it would be inert. `BaseTranslator._user_instructions_block` appends them
+  to `_translation_instructions`, after every fixed rule, inside a
+  `<user-instructions>` fence, and says the fixed rules win where they
+  conflict: the target language, the translation alone, the placeholders. With
+  none saved the prompt is byte-for-byte what it was before.
+- **Both caches key on them.** `translation_cache._make_cache_key` and
+  `pdf_cache._make_cache_key` append `|instructions=<text>` only when there are
+  some, the way `pages=` already works, so no existing key moved and no
+  migration was needed. Without this a changed instruction was answered from
+  the old one's translations.
+- **Translation only, LLM only.** `capabilities.translation_instructions(settings,
+  service)` returns them for an `is_llm` provider and `None` for Argos; the
+  processor asks it once, of the *effective* service, and gives the answer to
+  the translator and to both ends of the PDF cache. Chat, verify and pre-warm
+  build translators without them.
+- **They are paid per paragraph.** `usage_estimate.prompt_tokens(target,
+  instructions)` adds them and their wrapper to every paragraph's prompt, so
+  `/translate/estimate` counts them; `test_usage_estimate.py` holds the
+  estimate to the real prompt with a 300-character instruction.
+
 ## Translator failures are counted, not swallowed
 
 `BaseTranslator._handle_translation_error` is the funnel every backend's

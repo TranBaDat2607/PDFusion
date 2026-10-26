@@ -230,3 +230,20 @@ def test_two_translators_for_the_same_provider_do_share_the_cache(
     assert first_result == "Bản dịch OpenAI (first)"
     assert second_result == "Bản dịch OpenAI (first)"
     assert len(second.client.completions.calls) == 0
+
+
+def test_a_translator_built_by_the_factory_carries_no_instructions(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """Chat, key checks and pre-warm all build through the factory; only the
+    processor adds the user's translation instructions, so they can never
+    reach a chat answer's prompt."""
+    settings = _settings(openai={"api_key": "sk-test"})
+    settings.translation.instructions = "Keep index in English"
+    monkeypatch.setattr(factory_module, "get_settings", lambda: settings)
+
+    translator = TranslatorFactory.create_translator(
+        service="openai", lang_in="en", lang_out="vi"
+    )
+
+    assert translator.instructions is None

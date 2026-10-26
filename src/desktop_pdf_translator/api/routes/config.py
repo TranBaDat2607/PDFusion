@@ -72,6 +72,8 @@ async def update_config(payload: ConfigUpdateRequest) -> ConfigResponse:
         current["translation"]["default_source_lang"] = payload.default_source_lang.value
     if payload.default_target_lang is not None:
         current["translation"]["default_target_lang"] = payload.default_target_lang.value
+    if "translation_instructions" in payload.model_fields_set:
+        current["translation"]["instructions"] = payload.translation_instructions
     if payload.chat_enabled is not None:
         current["rag"]["chat_enabled"] = payload.chat_enabled
     if payload.whole_document_tokens is not None:

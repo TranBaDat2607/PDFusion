@@ -166,6 +166,27 @@ def test_a_page_selection_separates_the_key():
     assert _make_cache_key(*args, "1-20") != _make_cache_key(*args, "1-21")
 
 
+def test_instructions_separate_the_key():
+    """Instructions change what the model writes, so the same document under
+    other instructions is not the same translation."""
+    args = ("abc", "en", "vi", "openai", "gpt-4o", PIPELINE_VERSION)
+    plain = _make_cache_key(*args)
+    keep_code = _make_cache_key(*args, instructions="Keep code in English")
+    other = _make_cache_key(*args, instructions="Use formal tone")
+    assert len({plain, keep_code, other}) == 3
+    assert _make_cache_key(*args, "1-20", instructions="Use formal tone") != _make_cache_key(
+        *args, "1-20", instructions="Keep code in English"
+    )
+
+
+def test_no_instructions_keeps_every_existing_key():
+    """The entries already on disk were stored without the field; they have to
+    keep matching for anyone who never writes instructions."""
+    args = ("abc", "en", "vi", "openai", "gpt-4o", PIPELINE_VERSION)
+    assert _make_cache_key(*args, instructions=None) == _make_cache_key(*args)
+    assert _make_cache_key(*args, "1-20", instructions=None) == _make_cache_key(*args, "1-20")
+
+
 # ---------------------------------------------------------------------------
 # lookup / store
 # ---------------------------------------------------------------------------
@@ -358,6 +379,54 @@ def test_a_precomputed_hash_is_honoured(
     digest = compute_file_hash(source_pdf)
     put(cache, source_pdf, translated_pdf, file_hash=digest)
     assert look(cache, source_pdf, file_hash=digest) is not None
+
+
+def test_a_translation_is_a_miss_under_other_instructions(
+    cache: PDFTranslationCache, source_pdf: Path, translated_pdf: Path
+):
+    put(cache, source_pdf, translated_pdf, instructions="Keep code in English")
+    assert look(cache, source_pdf, instructions="Use formal tone") is None
+    assert look(cache, source_pdf) is None
+
+
+def test_a_translation_is_a_hit_under_the_same_instructions(
+    cache: PDFTranslationCache, source_pdf: Path, translated_pdf: Path
+):
+    put(cache, source_pdf, translated_pdf, instructions="Keep code in English")
+
+    hit = look(cache, source_pdf, instructions="Keep code in English")
+    assert hit is not None
+    assert hit.cached_path.read_bytes() == translated_pdf.read_bytes()
+
+
+def test_a_translation_stored_without_instructions_is_found_with_none(
+    cache: PDFTranslationCache, source_pdf: Path, translated_pdf: Path
+):
+    put(cache, source_pdf, translated_pdf)
+
+    assert look(cache, source_pdf, instructions=None) is not None
+    assert look(cache, source_pdf, instructions="Keep code in English") is None
+
+
+def test_instructions_also_separate_page_selections(
+    cache: PDFTranslationCache, source_pdf: Path, translated_pdf: Path
+):
+    put(cache, source_pdf, translated_pdf, pages="1-20", instructions="Keep code in English")
+
+    assert look(cache, source_pdf, pages="1-20", instructions="Keep code in English") is not None
+    assert look(cache, source_pdf, pages="1-20", instructions="Use formal tone") is None
+    assert look(cache, source_pdf, pages="1-20") is None
+
+
+def test_a_whole_document_under_other_instructions_does_not_answer_a_selection(
+    cache: PDFTranslationCache, source_pdf: Path, translated_pdf: Path
+):
+    """A selection tries the whole document's entry first. That entry was
+    written under other instructions, so it must not be served."""
+    put(cache, source_pdf, translated_pdf, instructions="Keep code in English")
+
+    assert look(cache, source_pdf, pages="1-20", instructions="Use formal tone") is None
+    assert look(cache, source_pdf, pages="1-20", instructions="Keep code in English") is not None
 
 
 def test_a_partial_translation_is_never_served_as_the_whole_document(

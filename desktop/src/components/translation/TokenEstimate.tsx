@@ -5,6 +5,7 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
+import { useConfig } from "@/hooks/useConfig";
 import { useTranslationEstimate } from "@/hooks/useTranslationEstimate";
 import { parsePageRanges } from "@/lib/page-range";
 import { useAppStore } from "@/lib/store";
@@ -44,11 +45,13 @@ export function TokenEstimate({ filePath, targetLang }: TokenEstimateProps) {
     return () => window.clearTimeout(timer);
   }, [filePath, text]);
 
+  const { data: config } = useConfig();
   const parsed = parsePageRanges(pages, pageCount);
   const estimate = useTranslationEstimate({
     filePath,
     ranges: parsed.ok ? parsed.ranges : null,
     targetLang,
+    instructions: config?.translation.instructions ?? null,
     enabled: parsed.ok,
   });
   // `enabled: false` does not hide what is already cached, and an unreadable
