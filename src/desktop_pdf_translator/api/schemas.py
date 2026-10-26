@@ -15,7 +15,11 @@ from ..config import (
     RAGSettings,
     TranslationSettings,
 )
-from ..config.models import WholeDocumentTokens, normalize_base_url
+from ..config.models import (
+    TranslationInstructions,
+    WholeDocumentTokens,
+    normalize_base_url,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -81,6 +85,8 @@ class ConfigUpdateRequest(BaseModel):
     answer_model: Optional[ModelRef] = None
     default_source_lang: Optional[LanguageCode] = None
     default_target_lang: Optional[LanguageCode] = None
+    # Left out: unchanged. `null` or blank: cleared.
+    translation_instructions: TranslationInstructions = None
     chat_enabled: Optional[bool] = None
     whole_document_tokens: Optional[WholeDocumentTokens] = None
     # Performance / cache toggles

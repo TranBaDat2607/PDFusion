@@ -47,6 +47,32 @@ def test_each_paragraph_carries_a_prompt():
     assert ten.output_tokens == one.output_tokens
 
 
+def test_instructions_make_every_paragraphs_prompt_longer():
+    """They ride in each paragraph's system prompt, so a long instruction
+    times a long book is a real part of the bill."""
+    instructions = "Keep programming terms such as index in English. " * 6
+    plain = prompt_tokens("vi")
+
+    assert prompt_tokens("vi", instructions) >= plain + len(instructions) // CHARS_PER_TOKEN
+    assert prompt_tokens("vi", None) == plain
+
+    ten = estimate_tokens(
+        paragraphs=10, cjk_chars=0, other_chars=400, target_lang="vi", instructions=instructions
+    )
+    ten_plain = estimate_tokens(paragraphs=10, cjk_chars=0, other_chars=400, target_lang="vi")
+    assert ten.input_tokens - ten_plain.input_tokens >= 10 * (
+        len(instructions) // CHARS_PER_TOKEN
+    )
+    assert ten.output_tokens == ten_plain.output_tokens
+
+
+def test_instructions_cost_nothing_when_there_is_nothing_to_translate():
+    estimate = estimate_tokens(
+        paragraphs=0, cjk_chars=0, other_chars=0, target_lang="vi", instructions="x" * 400
+    )
+    assert (estimate.input_tokens, estimate.output_tokens) == (0, 0)
+
+
 def test_a_translation_comes_back_longer_than_its_source():
     estimate = estimate_tokens(paragraphs=1, cjk_chars=0, other_chars=4000, target_lang="vi")
     assert estimate.output_tokens > text_tokens(0, 4000)
@@ -57,9 +83,10 @@ def test_nothing_to_translate_costs_nothing():
     assert (estimate.input_tokens, estimate.output_tokens) == (0, 0)
 
 
-def _prompt_chars(translator_cls, target_lang: str) -> int:
+def _prompt_chars(translator_cls, target_lang: str, instructions=None) -> int:
     translator = translator_cls.__new__(translator_cls)
     translator.lang_in, translator.lang_out = "en", target_lang
+    translator.instructions = instructions
     prompt = translator._create_translation_prompt("")
     if isinstance(prompt, list):  # OpenAI: chat messages
         return sum(len(message["content"]) for message in prompt)
@@ -82,3 +109,17 @@ def test_the_prompt_constants_match_the_prompts(module, name, target_lang):
     )
     measured = _prompt_chars(cls, target_lang) / usage_estimate.CHARS_PER_TOKEN
     assert prompt_tokens(target_lang) == pytest.approx(measured, rel=0.1)
+
+    # Instructions are the one part of the prompt the user writes, so the same
+    # hold is put on them: a 300-character one is ~75 tokens on a ~190-token
+    # prompt, well outside the tolerance if the estimate ignored it.
+    instructions = (
+        "Keep programming terms such as index, cache and pointer in English. "
+        "Translate formally and address the reader as 'ban'. Leave product names "
+        "alone. Prefer short sentences. Do not add notes of your own. "
+    ) * 2
+    instructions = instructions[:300]
+    assert len(instructions) == 300
+    measured = _prompt_chars(cls, target_lang, instructions) / usage_estimate.CHARS_PER_TOKEN
+    assert prompt_tokens(target_lang, instructions) == pytest.approx(measured, rel=0.1)
+

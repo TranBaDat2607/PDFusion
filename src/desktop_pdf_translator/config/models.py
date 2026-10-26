@@ -12,6 +12,7 @@ from pydantic import (
     ConfigDict,
     Field,
     AfterValidator,
+    BeforeValidator,
     ValidationInfo,
     field_validator,
     model_validator,
@@ -226,6 +227,29 @@ WHOLE_DOCUMENT_MAX_TOKENS = 80_000
 WholeDocumentTokens = Annotated[int, Field(ge=0, le=WHOLE_DOCUMENT_MAX_TOKENS)]
 
 
+# The instructions ride in every paragraph's prompt, so their length is paid
+# once per paragraph: 2,000 characters is ~500 tokens on a ~190-token prompt,
+# room for a page of style and terminology rules without tripling the bill.
+MAX_TRANSLATION_INSTRUCTIONS_CHARS = 2000
+
+
+def _blank_is_unset(value):
+    # One spelling of "none", so the cache keys built from it can't tell a
+    # cleared box from a never-used one. Trimmed before the length check, so
+    # `PUT /config`, `config.toml` and the box all measure the same text.
+    if isinstance(value, str):
+        return value.strip() or None
+    return value
+
+
+# The bound sits on the `str`: on the `Optional`, validating an assignment of
+# `None` tried to measure it and failed the whole `update_settings`.
+TranslationInstructions = Annotated[
+    Optional[Annotated[str, Field(max_length=MAX_TRANSLATION_INSTRUCTIONS_CHARS)]],
+    BeforeValidator(_blank_is_unset),
+]
+
+
 class TranslationSettings(BaseModel):
     """Translation-specific settings."""
     
@@ -259,6 +283,13 @@ class TranslationSettings(BaseModel):
     )
     preserve_formatting: bool = Field(True, description="Preserve PDF formatting")
     min_text_length: int = Field(5, ge=0, description="Minimum text length to translate")
+    # How the user wants the document translated, added to the end of every
+    # LLM translator's prompt (`BaseTranslator._translation_instructions`).
+    # Argos takes none (`capabilities.translation_instructions`). Over the
+    # limit in a hand-edited file, the load path drops this field alone.
+    instructions: TranslationInstructions = Field(
+        None, description="Instructions for the model that translates"
+    )
 
 class GUISettings(BaseModel):
     """GUI-specific settings.

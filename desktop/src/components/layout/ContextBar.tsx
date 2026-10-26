@@ -1,4 +1,13 @@
-import { ArrowRight, FilePlus, Loader2, Lock, MessageSquare, RefreshCw, Sparkles } from "lucide-react";
+import {
+  ArrowRight,
+  FilePlus,
+  Loader2,
+  Lock,
+  MessageSquare,
+  NotebookPen,
+  RefreshCw,
+  Sparkles,
+} from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -38,6 +47,7 @@ import {
   isSourceSupported,
 } from "@/lib/translate-request";
 import { useAppStore } from "@/lib/store";
+import { instructionsApply } from "@/lib/translation-instructions";
 import { cn } from "@/lib/utils";
 
 /** Warm the backend the user just selected. The value is passed in rather than
@@ -289,6 +299,22 @@ export function ContextBar({
             }
           }}
         />
+      )}
+
+      {/* Instructions live in Settings, out of sight of the button they change
+          the output of, so the toolbar says when they will be sent. */}
+      {config && providers && instructionsApply(config, providers) && (
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <span className="flex items-center gap-1.5 rounded-md bg-primary/10 px-2 py-1 text-xs text-primary">
+              <NotebookPen className="h-3.5 w-3.5" />
+              Instructions on
+            </span>
+          </TooltipTrigger>
+          <TooltipContent className="max-w-xs whitespace-pre-wrap">
+            {config.translation.instructions}
+          </TooltipContent>
+        </Tooltip>
       )}
 
       {/* What an LLM run would cost, roughly. Argos costs nothing to call. */}

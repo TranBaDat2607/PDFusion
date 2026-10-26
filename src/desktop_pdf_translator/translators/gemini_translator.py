@@ -88,7 +88,10 @@ class GeminiTranslator(BaseTranslator):
             if not processed_text.strip():
                 return text
 
-            cached = _llm_cache_get(processed_text, self.lang_in, self.lang_out, "gemini", self.model_name)
+            cached = _llm_cache_get(
+                processed_text, self.lang_in, self.lang_out, "gemini", self.model_name,
+                instructions=self.instructions,
+            )
             if cached is not None:
                 self._fire_paragraph_callback(processed_text, cached)
                 return cached
@@ -126,7 +129,10 @@ class GeminiTranslator(BaseTranslator):
                 )
 
             result = self._postprocess_text(translated_text)
-            _llm_cache_set(processed_text, result, self.lang_in, self.lang_out, "gemini", self.model_name)
+            _llm_cache_set(
+                processed_text, result, self.lang_in, self.lang_out, "gemini", self.model_name,
+                instructions=self.instructions,
+            )
             self._fire_paragraph_callback(processed_text, result)
             return result
 

@@ -6,7 +6,8 @@ paragraphs.
 
 Cache key = sha256(file_hash | lang_in | lang_out | service | model | pipeline_version)
 where file_hash is sha256 of the input PDF bytes. A translation of some of the
-document's pages adds `| pages=<selection>`. A hit lets `process_pdf`
+document's pages adds `| pages=<selection>`, and translation instructions
+add `| instructions=<text>`. A hit lets `process_pdf`
 skip the entire BabelDOC pipeline (layout / typeset / render / save) by
 copying the cached PDF into the live output directory and emitting synthetic
 SSE events.
@@ -121,6 +122,7 @@ def _make_cache_key(
     model: Optional[str],
     pipeline_version: str,
     pages: Optional[str] = None,
+    instructions: Optional[str] = None,
 ) -> str:
     # Source language IS part of the key. It used to be excluded, on the
     # premise that output bytes are independent of what the user picked as
@@ -142,6 +144,11 @@ def _make_cache_key(
     # partial translation can never be served as the whole document's.
     if pages is not None:
         payload += f"|pages={pages}"
+    # The user's translation instructions, the same way: only when there are
+    # some, so no existing key moves, and a changed instruction is a miss
+    # rather than the old one's PDF.
+    if instructions:
+        payload += f"|instructions={instructions}"
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
@@ -330,6 +337,7 @@ class PDFTranslationCache:
         model: Optional[str],
         file_hash: Optional[str] = None,
         pages: Optional[str] = None,
+        instructions: Optional[str] = None,
     ) -> Optional[CacheHit]:
         """Return a CacheHit or None. Bumps hit_count + last_used on hit.
 
@@ -359,7 +367,7 @@ class PDFTranslationCache:
             for selection in candidates:
                 key = _make_cache_key(
                     file_hash, source_lang, target_lang, service, model,
-                    PIPELINE_VERSION, selection,
+                    PIPELINE_VERSION, selection, instructions,
                 )
                 hit = self._hit(conn, key, selection)
                 if hit is not None:
@@ -430,6 +438,7 @@ class PDFTranslationCache:
         model: Optional[str],
         file_hash: Optional[str] = None,
         pages: Optional[str] = None,
+        instructions: Optional[str] = None,
     ) -> Optional[Path]:
         """Copy `translated_path` into the cache; insert/replace the row.
         Returns the cached file path on success, None on failure (non-fatal).
@@ -454,7 +463,7 @@ class PDFTranslationCache:
 
         key = _make_cache_key(
             file_hash, source_lang, target_lang, service, model, PIPELINE_VERSION,
-            pages,
+            pages, instructions,
         )
         dest = self.files_dir / f"{key}.pdf"
         try:

@@ -36,6 +36,12 @@ interface AppState {
   pageRangeText: string;
   setPageRangeText: (text: string) => void;
 
+  /** Settings → Translation's instructions box while it differs from what is
+   *  saved; `null` when untouched. Here rather than in the tab because the
+   *  sheet unmounts a tab it leaves, and an unsaved draft went with it. */
+  instructionsDraft: string | null;
+  setInstructionsDraft: (draft: string | null) => void;
+
   /** Dimensions of the original PDF's first page (CSS points, scale=1). Used
    *  to render a blank placeholder in the translated panel before a
    *  translation exists. */
@@ -160,6 +166,9 @@ export const useAppStore = create<AppState>((set) => ({
 
   pageRangeText: "",
   setPageRangeText: (pageRangeText) => set({ pageRangeText }),
+
+  instructionsDraft: null,
+  setInstructionsDraft: (instructionsDraft) => set({ instructionsDraft }),
 
   originalFirstPageSize: null,
   setOriginalFirstPageSize: (size) => set({ originalFirstPageSize: size }),

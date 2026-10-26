@@ -89,6 +89,27 @@ def test_a_missing_model_is_not_the_same_as_an_empty_one():
     )
 
 
+def test_instructions_separate_the_key():
+    """A paragraph translated under one set of instructions must not be served
+    to a run with another: the cache would hand back text that ignores them."""
+    plain = _make_cache_key("Hello", "en", "vi", "openai", "gpt-4o")
+    keep_code = _make_cache_key(
+        "Hello", "en", "vi", "openai", "gpt-4o", instructions="Keep code in English"
+    )
+    other = _make_cache_key(
+        "Hello", "en", "vi", "openai", "gpt-4o", instructions="Use formal tone"
+    )
+    assert len({plain, keep_code, other}) == 3
+
+
+def test_no_instructions_keeps_the_key_every_existing_entry_was_stored_under():
+    """Adding the field must not orphan the whole cache of anyone who never
+    writes instructions."""
+    assert _make_cache_key(
+        "Hello", "en", "vi", "openai", "gpt-4o", instructions=None
+    ) == _make_cache_key("Hello", "en", "vi", "openai", "gpt-4o")
+
+
 # ---------------------------------------------------------------------------
 # get / set
 # ---------------------------------------------------------------------------
@@ -108,6 +129,27 @@ def test_a_hit_needs_every_field_to_match(cache: TranslationCache):
     assert fetch(cache, "Hello", service="gemini") is None
     assert fetch(cache, "Hello", model="gpt-4o-mini") is None
     assert fetch(cache, "Hello", lang_out="ja") is None
+
+
+def test_a_paragraph_is_a_miss_under_other_instructions(cache: TranslationCache):
+    store(cache, "Hello", "Xin chào", instructions="Keep code in English")
+    assert fetch(cache, "Hello", instructions="Use formal tone") is None
+    assert fetch(cache, "Hello") is None
+
+
+def test_a_paragraph_is_a_hit_under_the_same_instructions(cache: TranslationCache):
+    store(cache, "Hello", "Xin chào", instructions="Keep code in English")
+    assert fetch(cache, "Hello", instructions="Keep code in English") == "Xin chào"
+
+
+def test_an_entry_stored_without_instructions_is_found_with_none(
+    cache: TranslationCache,
+):
+    """The call shape from before instructions existed, which is every entry
+    already on a user's disk."""
+    store(cache, "Hello", "Xin chào")
+    assert fetch(cache, "Hello", instructions=None) == "Xin chào"
+    assert fetch(cache, "Hello", instructions="Keep code in English") is None
 
 
 def test_restoring_the_same_paragraph_overwrites_rather_than_duplicates(
@@ -296,6 +338,23 @@ def test_the_wrappers_round_trip_through_the_cache(wired: TranslationCache):
     assert llm_cache_get("Hello", "en", "vi", "openai", "gpt-4o") == "Xin chào"
 
 
+def test_the_wrappers_key_on_instructions(wired: TranslationCache):
+    llm_cache_set(
+        "Hello", "Xin chào", "en", "vi", "openai", "gpt-4o", instructions="Keep code in English"
+    )
+    assert (
+        llm_cache_get(
+            "Hello", "en", "vi", "openai", "gpt-4o", instructions="Keep code in English"
+        )
+        == "Xin chào"
+    )
+    assert (
+        llm_cache_get("Hello", "en", "vi", "openai", "gpt-4o", instructions="Formal")
+        is None
+    )
+    assert llm_cache_get("Hello", "en", "vi", "openai", "gpt-4o") is None
+
+
 def test_a_disabled_cache_never_writes(
     wired: TranslationCache, monkeypatch: pytest.MonkeyPatch
 ):
@@ -430,3 +489,168 @@ def test_an_upgraded_cache_opens_again_as_it_is(tmp_path: Path):
     assert again._conn().execute("PRAGMA user_version").fetchone()[0] == 1
     assert fetch(again, "Hello") == "Xin chào"
     assert again.stats()["entries"] == 1
+
+
+# ---------------------------------------------------------------------------
+# a translator keys its paragraphs on its instructions
+# ---------------------------------------------------------------------------
+
+
+class _CountingCompletions:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def create(self, **kwargs):
+        from types import SimpleNamespace
+
+        self.calls += 1
+        return SimpleNamespace(
+            choices=[
+                SimpleNamespace(
+                    message=SimpleNamespace(content="Xin chào"), finish_reason="stop"
+                )
+            ]
+        )
+
+
+def _openai_with(instructions, completions: _CountingCompletions):
+    from types import SimpleNamespace
+
+    from desktop_pdf_translator.translators.openai_translator import OpenAITranslator
+
+    translator = OpenAITranslator(
+        lang_in="en",
+        lang_out="vi",
+        api_key="sk-test",
+        model="gpt-test",
+        instructions=instructions,
+    )
+    translator.client = SimpleNamespace(chat=SimpleNamespace(completions=completions))
+    return translator
+
+
+def test_a_paragraph_cached_under_some_instructions_is_not_served_under_others(
+    wired: TranslationCache, monkeypatch: pytest.MonkeyPatch
+):
+    """The cache would otherwise hand back text written without the new
+    instructions, and the setting would appear to do nothing until the cache
+    expired."""
+    from desktop_pdf_translator.translators import rate_limiter
+
+    monkeypatch.setattr(rate_limiter, "_LIMITERS", {})
+    completions = _CountingCompletions()
+
+    assert _openai_with("A", completions).translate("Hello") == "Xin chào"
+    assert completions.calls == 1
+
+    _openai_with("A", completions).translate("Hello")
+    assert completions.calls == 1  # same instructions: served from the cache
+
+    _openai_with("B", completions).translate("Hello")
+    assert completions.calls == 2  # other instructions: translated again
+
+
+@pytest.mark.parametrize(
+    "module, name, extra",
+    [
+        ("openai_translator", "OpenAITranslator", {"model": "gpt-test"}),
+        ("anthropic_translator", "AnthropicTranslator", {}),
+        ("gemini_translator", "GeminiTranslator", {}),
+    ],
+)
+def test_every_llm_translator_looks_its_paragraphs_up_under_its_instructions(
+    module, name, extra, monkeypatch: pytest.MonkeyPatch
+):
+    import importlib
+
+    translators = importlib.import_module(f"desktop_pdf_translator.translators.{module}")
+    lookups: list = []
+
+    def recording_get(*args, **kwargs):
+        lookups.append(kwargs)
+        return "Xin chào"
+
+    monkeypatch.setattr(translators, "_llm_cache_get", recording_get)
+    translator = getattr(translators, name)(
+        lang_in="en", lang_out="vi", api_key="test-key", instructions="Keep code in English", **extra
+    )
+
+    assert translator.translate("Hello") == "Xin chào"
+    assert lookups and lookups[0].get("instructions") == "Keep code in English"
+
+
+def test_no_instructions_hash_the_payload_every_existing_entry_was_keyed_on():
+    """Pinned to the format, not to the function: entries already on disk
+    were keyed this way, and a key that moved would orphan all of them."""
+    import hashlib
+
+    expected = hashlib.sha256(b"en|vi|openai|gpt-4o|Hello").hexdigest()
+    assert _make_cache_key("Hello", "en", "vi", "openai", "gpt-4o") == expected
+    assert _make_cache_key("Hello", "en", "vi", "openai", "gpt-4o", None) == expected
+
+
+def _complete_client(module: str):
+    """A client answering every paragraph in full, per SDK."""
+    from types import SimpleNamespace
+
+    if module == "openai_translator":
+        response = SimpleNamespace(
+            choices=[
+                SimpleNamespace(
+                    message=SimpleNamespace(content="Xin chào"), finish_reason="stop"
+                )
+            ]
+        )
+        return SimpleNamespace(
+            chat=SimpleNamespace(completions=SimpleNamespace(create=lambda **kw: response))
+        )
+    if module == "anthropic_translator":
+        response = SimpleNamespace(
+            content=[SimpleNamespace(type="text", text="Xin chào")], stop_reason="end_turn"
+        )
+        return SimpleNamespace(messages=SimpleNamespace(create=lambda **kw: response))
+    response = SimpleNamespace(
+        text="Xin chào",
+        candidates=[
+            SimpleNamespace(content=object(), finish_reason=SimpleNamespace(name="STOP"))
+        ],
+    )
+    return SimpleNamespace(models=SimpleNamespace(generate_content=lambda **kw: response))
+
+
+@pytest.mark.parametrize(
+    "module, name, extra",
+    [
+        ("openai_translator", "OpenAITranslator", {"model": "gpt-test"}),
+        ("anthropic_translator", "AnthropicTranslator", {}),
+        ("gemini_translator", "GeminiTranslator", {}),
+    ],
+)
+def test_every_llm_translator_stores_its_paragraphs_under_its_instructions(
+    module, name, extra, monkeypatch: pytest.MonkeyPatch
+):
+    """The store side: written under the plain key, an instructed translation
+    would be served to a later run that has no instructions."""
+    import importlib
+    import inspect
+
+    from desktop_pdf_translator.translators import rate_limiter
+
+    translators = importlib.import_module(f"desktop_pdf_translator.translators.{module}")
+    stored: list = []
+
+    def recording_set(*args, **kwargs):
+        # Positional or keyword, the call must carry them.
+        bound = inspect.signature(llm_cache_set).bind(*args, **kwargs)
+        stored.append(bound.arguments.get("instructions"))
+
+    monkeypatch.setattr(translators, "_llm_cache_get", lambda *a, **k: None)
+    monkeypatch.setattr(translators, "_llm_cache_set", recording_set)
+    monkeypatch.setattr(rate_limiter, "_LIMITERS", {})
+    translator = getattr(translators, name)(
+        lang_in="en", lang_out="vi", api_key="test-key", instructions="Keep code in English", **extra
+    )
+    translator.client = _complete_client(module)
+
+    assert translator.translate("Hello") == "Xin chào"
+    assert stored == ["Keep code in English"]

@@ -197,3 +197,46 @@ def test_cache_key_separates_target_languages():
 
 def test_cache_key_is_stable_for_identical_inputs():
     assert _key("en", "vi") == _key("en", "vi")
+
+
+# ---------------------------------------------------------------------------
+# translation instructions
+# ---------------------------------------------------------------------------
+
+
+def _settings_with_instructions(text):
+    from types import SimpleNamespace
+
+    return SimpleNamespace(translation=SimpleNamespace(instructions=text))
+
+
+def _services(*, llm: bool):
+    from desktop_pdf_translator.providers.registry import PROVIDERS
+
+    return [TranslationService(spec.id) for spec in PROVIDERS if spec.is_llm == llm]
+
+
+@pytest.mark.parametrize("service", _services(llm=True))
+def test_every_llm_translates_with_the_saved_instructions(service):
+    from desktop_pdf_translator.translators.capabilities import translation_instructions
+
+    settings = _settings_with_instructions("Keep index in English")
+    assert translation_instructions(settings, service) == "Keep index in English"
+
+
+@pytest.mark.parametrize("service", _services(llm=False))
+def test_a_translator_that_is_no_llm_never_gets_instructions(service):
+    """Argos has no prompt to put them in; passing them on would also key its
+    caches on text that changes nothing."""
+    from desktop_pdf_translator.translators.capabilities import translation_instructions
+
+    settings = _settings_with_instructions("Keep index in English")
+    assert translation_instructions(settings, service) is None
+    assert TranslationService.ARGOS in _services(llm=False)
+
+
+@pytest.mark.parametrize("service", list(TranslationService))
+def test_unset_instructions_are_none_for_every_service(service):
+    from desktop_pdf_translator.translators.capabilities import translation_instructions
+
+    assert translation_instructions(_settings_with_instructions(None), service) is None

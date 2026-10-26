@@ -350,6 +350,57 @@ def test_an_unknown_enum_value_drops_only_that_field(manager: ConfigManager):
     assert settings.translation.model.provider == TranslationService.GEMINI
 
 
+def test_translation_instructions_over_the_limit_drop_only_that_field(
+    manager: ConfigManager,
+):
+    """A hand-edited file can carry any length; one over the cap used to be
+    the kind of failure that discards every setting beside it."""
+    from desktop_pdf_translator.config.models import MAX_TRANSLATION_INSTRUCTIONS_CHARS
+
+    write_config(
+        manager,
+        {
+            "translation": {
+                "default_target_lang": "ja",
+                "instructions": "x" * (MAX_TRANSLATION_INSTRUCTIONS_CHARS + 1),
+            }
+        },
+    )
+    settings = manager.load_settings()
+
+    assert settings.translation.instructions is None
+    assert settings.translation.default_target_lang == LanguageCode.JAPANESE
+
+
+@pytest.mark.parametrize(
+    "saved, expected",
+    [
+        ("  Keep code terms in English \n", "Keep code terms in English"),
+        ("   \n\t ", None),
+        ("", None),
+    ],
+)
+def test_translation_instructions_are_trimmed_and_blank_means_unset(
+    manager: ConfigManager, saved: str, expected
+):
+    write_config(manager, {"translation": {"instructions": saved}})
+
+    assert manager.load_settings().translation.instructions == expected
+
+
+def test_translation_instructions_default_to_unset_and_allow_exactly_the_limit(
+    manager: ConfigManager,
+):
+    from desktop_pdf_translator.config.models import MAX_TRANSLATION_INSTRUCTIONS_CHARS
+
+    assert MAX_TRANSLATION_INSTRUCTIONS_CHARS == 2000
+    assert manager.load_settings().translation.instructions is None
+
+    at_limit = "y" * 2000
+    write_config(manager, {"translation": {"instructions": at_limit}})
+    assert manager.load_settings().translation.instructions == at_limit
+
+
 def test_several_bad_fields_across_sections_are_all_dropped(manager: ConfigManager):
     write_config(
         manager,

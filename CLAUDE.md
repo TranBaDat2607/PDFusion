@@ -154,7 +154,8 @@ Non-obvious bits of the contract:
   per-job temp dir.
 - Keys, endpoints and a provider's models change only through `/providers`;
   `PUT /config` takes the models chosen (`translation_model`, `answer_model`)
-  and refuses the per-service blocks and `preferred_service` retired in #88.
+  and `translation_instructions` (omitted is unchanged, `null` or blank
+  clears), and refuses the per-service blocks and `preferred_service` retired in #88.
   A provider id is a plain string on the wire, checked against the registry.
 
 ## Invariants
@@ -251,6 +252,12 @@ rule has, unless noted, a test. They are the things most easily undone by
   `providers.md`'s "Adding a provider" and fix the design, not the checklist,
   if it needs more. `default_base_url` is *sent* when no endpoint is saved
   (`registry.endpoint_for`), which is what lets OpenRouter reuse OpenAI's SDK.
+- **Translation instructions go in our prompt, after the fixed rules** —
+  BabelDOC's `custom_system_prompt` is inert without `do_llm_translate`. They
+  are part of both cache keys (appended only when set), reach LLM translation
+  only (`capabilities.translation_instructions`, asked of the effective
+  service), and never chat. (The processor's wiring — one value to the
+  translator and both ends of the PDF cache — is checked by hand.)
 - Translation has **no page or file-size limit** (`max_pages` / `max_file_size_mb`
   are gone; a `config.toml` that still holds them is ignored and loses them on
   the next save). The Pages box only chooses *which* pages; the output is always

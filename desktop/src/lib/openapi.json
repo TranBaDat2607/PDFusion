@@ -762,6 +762,18 @@
             ],
             "title": "Max Parallel Chunks"
           },
+          "translation_instructions": {
+            "anyOf": [
+              {
+                "maxLength": 2000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Translation Instructions"
+          },
           "translation_model": {
             "anyOf": [
               {
@@ -2368,6 +2380,19 @@
             "default": "vi",
             "description": "Default target language (Vietnamese priority)"
           },
+          "instructions": {
+            "anyOf": [
+              {
+                "maxLength": 2000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Instructions for the model that translates",
+            "title": "Instructions"
+          },
           "min_text_length": {
             "default": 5,
             "description": "Minimum text length to translate",
@@ -2404,7 +2429,8 @@
           "cache_translated_pdfs",
           "pdf_cache_max_size_mb",
           "preserve_formatting",
-          "min_text_length"
+          "min_text_length",
+          "instructions"
         ],
         "title": "TranslationConfig",
         "type": "object"
